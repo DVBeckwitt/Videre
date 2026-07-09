@@ -4,5 +4,5 @@ class TestPlayerCubit extends PlayerCubit {
   TestPlayerCubit(super.initialState, super.settings);
 
   @override
-  onReady() {}
+  Future<void> onReady() async {}
 }

@@ -16,6 +16,12 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
+### Homepage tab navigation
+
+Status: available in the current source and covered by an automated widget test.
+
+On phones, the Home, Subscriptions, Playlists, and History pages can be changed with the bottom navigation bar or a horizontal swipe. Swipes track the finger, snap to one page at a time, and bounce only at the first and last pages. Tablet and TV navigation behavior is unchanged. The feature uses the existing tab routes and requires no setting, data migration, or user action.
+
 ## How it works
 
 Videre does not talk to YouTube directly as a normal YouTube app. Instead, it connects to an Invidious instance selected by the user. That instance retrieves and exposes YouTube content through the Invidious API, and Videre provides the Android, tablet, and TV interface on top of it.
@@ -38,6 +44,7 @@ Videre does not require a YouTube account. If you use an Invidious account for s
 - Video and audio download
 - Video filtering
 - Return YouTube Dislikes support
+- Swipe navigation between phone homepage tabs
 
 ## Installation
 
@@ -182,6 +189,12 @@ Alternatively, run the tests directly inside the Nix environment:
 
 ```bash
 nix-shell --run './submodules/flutter/bin/flutter test'
+```
+
+The phone homepage swipe regression test is self-contained and does not require the local Invidious test server:
+
+```bash
+./submodules/flutter/bin/flutter test test/widget_test.dart
 ```
 
 ### Translations

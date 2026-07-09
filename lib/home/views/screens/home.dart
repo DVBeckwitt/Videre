@@ -27,15 +27,15 @@ class MainContentScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainContentScreen> {
-  openSettings(BuildContext context) {
+  void openSettings(BuildContext context) {
     AutoRouter.of(context).push(const SettingsRoute());
   }
 
-  openSubscriptionManagement(BuildContext context) {
+  void openSubscriptionManagement(BuildContext context) {
     AutoRouter.of(context).push(const ManageSubscriptionsRoute());
   }
 
-  openLayoutEditor(BuildContext context) {
+  void openLayoutEditor(BuildContext context) {
     var app = context.read<AppCubit>();
     AutoRouter.of(context)
         .push(const EditHomeLayoutRoute())
@@ -128,7 +128,10 @@ class _MainScreenState extends State<MainContentScreen> {
               key: ValueKey(appState.server?.url),
               homeIndex: selectedIndex,
               routes: allowedPages.map((e) => e.route!).toList(),
-              physics: const NeverScrollableScrollPhysics(),
+              physics: deviceType == DeviceType.phone
+                  ? const BouncingScrollPhysics(
+                      parent: AlwaysScrollableScrollPhysics())
+                  : const NeverScrollableScrollPhysics(),
               builder: (context, child, controller) {
                 final tabsRouter = AutoTabsRouter.of(context);
                 final selectedPage = allowedPages[tabsRouter.activeIndex];
@@ -147,7 +150,11 @@ class _MainScreenState extends State<MainContentScreen> {
                       title: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(selectedPage.getLabel(locals)),
+                          Flexible(
+                              child: Text(
+                            selectedPage.getLabel(locals),
+                            overflow: TextOverflow.ellipsis,
+                          )),
                           if (selectedPage == HomeDataSource.home)
                             IconButton(
                                 iconSize: 15,
