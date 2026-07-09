@@ -386,7 +386,7 @@ abstract class AppLocalizations {
   /// button label to start using the app
   ///
   /// In en, this message translates to:
-  /// **'Start using Clipious'**
+  /// **'Start using Videre'**
   String get startUsingClipious;
 
   /// Pop up message when a video was added to a playlist
@@ -1761,7 +1761,7 @@ abstract class AppLocalizations {
   /// Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications
   ///
   /// In en, this message translates to:
-  /// **'In order to send notification Clipious needs to run a background service. For it to run smoothly it is required that Clipious is given unrestricted battery usage, tapping ok will open the battery optimization settings.'**
+  /// **'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.'**
   String get askForDisableBatteryOptimizationContent;
 
   /// If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them
@@ -1773,7 +1773,7 @@ abstract class AppLocalizations {
   /// If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them
   ///
   /// In en, this message translates to:
-  /// **'To get notifications, Clipious notifications need to be enabled, press OK to enable it.'**
+  /// **'To get notifications, Videre notifications need to be enabled, press OK to enable it.'**
   String get askToEnableBackgroundServiceContent;
 
   /// Title for settings section in the notification settings

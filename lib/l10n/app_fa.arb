@@ -27,7 +27,7 @@
   "@appLogs": {
     "description": "Title for settings that leads to application logs"
   },
-  "askToEnableBackgroundServiceContent": "جهت دریافت اطلاع‌رسانی، لازم است که گزینهٔ اطلاع‌رسانی Clipious فعال باشد. برای فعال کردن روی تایید ضربه بزنید.",
+  "askToEnableBackgroundServiceContent": "جهت دریافت اطلاع‌رسانی، لازم است که گزینهٔ اطلاع‌رسانی Videre فعال باشد. برای فعال کردن روی تایید ضربه بزنید.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -43,7 +43,7 @@
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
   },
-  "askForDisableBatteryOptimizationContent": "جهت ارسال اطلاعیه، Clipious نیاز دارد تا یک سرویس در پس‌زمینه اجرا کند. برای این که این سرویس بدون مشکل اجرا شود، لازم است که Clipious دسترسی نامحدود به مصرف باتری داشته باشد. ضربه روی تایید، شما را به تنظیمات بهینه‌سازی منتقل خواهد کرد.",
+  "askForDisableBatteryOptimizationContent": "جهت ارسال اطلاعیه، Videre نیاز دارد تا یک سرویس در پس‌زمینه اجرا کند. برای این که این سرویس بدون مشکل اجرا شود، لازم است که Videre دسترسی نامحدود به مصرف باتری داشته باشد. ضربه روی تایید، شما را به تنظیمات بهینه‌سازی منتقل خواهد کرد.",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
@@ -67,7 +67,7 @@
   "@subscribe": {
     "description": "Label for user to subscribe to a channel"
   },
-  "startUsingClipious": "آغاز استفاده از Clipious",
+  "startUsingClipious": "آغاز استفاده از Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

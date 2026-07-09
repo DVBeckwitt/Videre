@@ -132,7 +132,7 @@ class AppLocalizationsTa extends AppLocalizations {
       'பொது சேவையகத்தைத் தேர்ந்தெடுக்கவும் அல்லது உங்கள் சொந்தத்தைச் சேர்க்கவும். (பின்னர் அமைப்புகளில் மாற்றலாம்)';
 
   @override
-  String get startUsingClipious => 'கிளிபியசைப் பயன்படுத்தத் தொடங்குங்கள்';
+  String get startUsingClipious => 'Videre பயன்படுத்தத் தொடங்குங்கள்';
 
   @override
   String get videoAddedToPlaylist => 'பிளேலிச்ட்டில் வீடியோ சேர்க்கப்பட்டது';
@@ -954,14 +954,14 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'அறிவிப்பை அனுப்ப, பின்னணி சேவையை இயக்க கிளிப்பியச் தேவைகள். இது சீராக இயங்குவதற்கு, கிளிபியசுக்கு கட்டுப்பாடற்ற பேட்டரி பயன்பாடு வழங்கப்பட வேண்டும், சரி தட்டுவது பேட்டரி உகப்பாக்கம் அமைப்புகளைத் திறக்கும்.';
+      'அறிவிப்பை அனுப்ப, பின்னணி சேவையை இயக்க Videre தேவைகள். இது சீராக இயங்குவதற்கு, Videreக்கு கட்டுப்பாடற்ற பேட்டரி பயன்பாடு வழங்கப்பட வேண்டும், சரி தட்டுவது பேட்டரி உகப்பாக்கம் அமைப்புகளைத் திறக்கும்.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'அறிவிப்புகள் அணைக்கப்பட்டன';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'அறிவிப்புகளைப் பெற, கிளிப்பிய அறிவிப்புகள் இயக்கப்பட வேண்டும், அதை இயக்க சரி என்பதை அழுத்தவும்.';
+      'அறிவிப்புகளைப் பெற, Videre அறிவிப்புகள் இயக்கப்பட வேண்டும், அதை இயக்க சரி என்பதை அழுத்தவும்.';
 
   @override
   String get otherNotifications => 'பிற அறிவிப்புகள் ஆதாரங்கள் (பெல் ஐகான்கள்)';

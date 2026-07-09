@@ -148,7 +148,7 @@
   "@videoAddedToPlaylist": {
     "description": "Pop up message when a video was added to a playlist"
   },
-  "startUsingClipious": "Clipious istifadə etməyə başla",
+  "startUsingClipious": "Videre istifadə etməyə başla",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

@@ -945,14 +945,14 @@ class AppLocalizationsNl extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'Om meldingen te kunnen sturen moet Clipious een achtergrondservice uitvoeren. Voor een betrouwbare werking moet Clipious onbeperkt batterijgebruik krijgen. Door op ok te tikken, worden de instellingen voor batterijoptimalisatie geopend.';
+      'Om meldingen te kunnen sturen moet Videre een achtergrondservice uitvoeren. Voor een betrouwbare werking moet Videre onbeperkt batterijgebruik krijgen. Door op ok te tikken, worden de instellingen voor batterijoptimalisatie geopend.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Meldingen uit­geschakeld';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'Om meldingen te ontvangen, moeten Clipious-meldingen zijn ingeschakeld. Druk op OK om deze meldingen in te schakelen.';
+      'Om meldingen te ontvangen, moeten Videre-meldingen zijn ingeschakeld. Druk op OK om deze meldingen in te schakelen.';
 
   @override
   String get otherNotifications => 'Andere meldingbronnen (bel pictogrammen)';

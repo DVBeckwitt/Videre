@@ -131,7 +131,7 @@ class AppLocalizationsFa extends AppLocalizations {
       'یک سرویس دهندهٔ عمومی انتخاب کنید یا سرویس دهندهٔ خودتان را وارد کنید. (می‌توانید بعدا در تنظیمات تغییر دهید)';
 
   @override
-  String get startUsingClipious => 'آغاز استفاده از Clipious';
+  String get startUsingClipious => 'آغاز استفاده از Videre';
 
   @override
   String get videoAddedToPlaylist => 'ویدیو به فهرست پخش افزوده شد';
@@ -943,14 +943,14 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'جهت ارسال اطلاعیه، Clipious نیاز دارد تا یک سرویس در پس‌زمینه اجرا کند. برای این که این سرویس بدون مشکل اجرا شود، لازم است که Clipious دسترسی نامحدود به مصرف باتری داشته باشد. ضربه روی تایید، شما را به تنظیمات بهینه‌سازی منتقل خواهد کرد.';
+      'جهت ارسال اطلاعیه، Videre نیاز دارد تا یک سرویس در پس‌زمینه اجرا کند. برای این که این سرویس بدون مشکل اجرا شود، لازم است که Videre دسترسی نامحدود به مصرف باتری داشته باشد. ضربه روی تایید، شما را به تنظیمات بهینه‌سازی منتقل خواهد کرد.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'اطلاع‌رسانی‌ها خاموش است';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'جهت دریافت اطلاع‌رسانی، لازم است که گزینهٔ اطلاع‌رسانی Clipious فعال باشد. برای فعال کردن روی تایید ضربه بزنید.';
+      'جهت دریافت اطلاع‌رسانی، لازم است که گزینهٔ اطلاع‌رسانی Videre فعال باشد. برای فعال کردن روی تایید ضربه بزنید.';
 
   @override
   String get otherNotifications => 'منابع دیگر اطلاع‌رسانی (bell icons)';

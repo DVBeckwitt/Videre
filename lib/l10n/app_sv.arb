@@ -64,7 +64,7 @@
   "@recommended": {
     "description": "Recommended label"
   },
-  "startUsingClipious": "Börja använda Clipious",
+  "startUsingClipious": "Börja använda Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -1009,7 +1009,7 @@
   "@askToEnableBackgroundServiceTitle": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
-  "askToEnableBackgroundServiceContent": "För att erhålla meddelanden behöver Clipious bli beviljad att skicka meddelanden, tryck på OK för att aktivera det.",
+  "askToEnableBackgroundServiceContent": "För att erhålla meddelanden behöver Videre bli beviljad att skicka meddelanden, tryck på OK för att aktivera det.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -1295,7 +1295,7 @@
   "@askForDisableBatteryOptimizationTitle": {
     "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
-  "askForDisableBatteryOptimizationContent": "För att kunna skicka meddelande så behöver Clipious kunna köra tjänster i bakgrunden. För att dessa skall kunna köras smidigt så krävs det att Clipious ges obegränsad batterianvändning, klicka på ok för att öppna upp inställningar för batterioptimering.",
+  "askForDisableBatteryOptimizationContent": "För att kunna skicka meddelande så behöver Videre kunna köra tjänster i bakgrunden. För att dessa skall kunna köras smidigt så krävs det att Videre ges obegränsad batterianvändning, klicka på ok för att öppna upp inställningar för batterioptimering.",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },

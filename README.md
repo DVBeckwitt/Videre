@@ -1,66 +1,116 @@
-# Clipious
+# Videre
 
-[![license agpl v3](https://shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
-Android client application for [invidious](https://invidious.io), the privacy focused youtube front end
+[![License: AGPL v3](https://shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
 
-[![Build Status](https://drone.ftpix.com/api/badges/lamarios/clipious/status.svg)](https://drone.ftpix.com/lamarios/clipious)
+Videre is an Android client for [Invidious](https://invidious.io), the privacy-focused YouTube frontend.
 
-## Community
+Videre is a fork of [Clipious](https://github.com/lamarios/clipious) by Paul Fauchon and contributors. This fork is maintained independently by DVBeckwitt and contributors.
 
-[Join the matrix channel](https://matrix.to/#/#clipious:matrix.org)
+Videre is not affiliated with Google, YouTube, the Invidious project, or the original Clipious maintainers.
 
-## License
+## Status
 
-Copyright (C) 2023 Paul Fauchon
+Videre is an independent fork of Clipious.
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published
-by the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Official Videre APKs are not published yet. When the first APK is ready, it will be published from this repository under [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases).
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
+Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
-You should have received a copy of the GNU Affero General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+## Rename Status
+
+The user-facing app name has been updated to Videre across app metadata, in-app labels, store metadata, documentation, generated localization values, and project banner assets.
+
+Compatibility identifiers are intentionally still using the inherited Clipious values until a migration is planned. This includes the Dart package name, Android and Apple bundle identifiers, Linux application ID, auth callback scheme, local database filename, notification channel ID, and background task unique name.
+
+Known status:
+
+- APK release: pending; build from source for now.
+- Thumbnail troubleshooting link: still points to the upstream Clipious wiki until Videre has its own wiki content.
+- Automated tests: the existing suite currently requires a local Invidious test environment and has unrelated failures outside the rename work.
+- Android release build: not verified in this workspace because no Android SDK is configured.
+
+## How it works
+
+Videre does not talk to YouTube directly as a normal YouTube app. Instead, it connects to an Invidious instance selected by the user. That instance retrieves and exposes YouTube content through the Invidious API, and Videre provides the Android, tablet, and TV interface on top of it.
+
+You can use your own Invidious instance or a public one. Privacy and reliability depend partly on the instance you choose, because the instance operator controls the server that Videre connects to.
+
+Videre does not require a YouTube account. If you use an Invidious account for subscriptions or preferences, that account belongs to the Invidious instance you choose.
 
 ## Features
 
-- Use own or public  server
+- Use your own or a public Invidious instance
 - Subscription management
-- SponsorBlock + DeArrow (click bait removal)
-- Video view/progress tracking
+- SponsorBlock and DeArrow support
+- Video view and progress tracking
 - Playlists
-- background playback
+- Background playback
 - Live stream support
-- Android TV ui
+- Android TV interface
 - Audio playback
-- Video / audio download
+- Video and audio download
 - Video filtering
-- Return YouTube dislikes
+- Return YouTube Dislikes support
 
 ## Installation
-The best way to install is to get it directly from the release page. Using [Obtainium](https://github.com/ImranR98/Obtainium) can help keeping the app up to date.
 
-It is also available on F-Droid, IzzyOnDroid, and Accrescent:
+### Download APK
 
-[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
-     alt="Get it on F-Droid"
-     height="80">](https://f-droid.org/packages/com.github.lamarios.clipious/)
-[<img src="https://accrescent.app/badges/get-it-on.png"
-      alt='Get it on Accrescent'
-      height="80">](https://accrescent.app/app/com.github.lamarios.clipious)
+No official Videre APK is published yet. When available, download the latest APK from the [Videre Releases page](https://github.com/DVBeckwitt/Videre/releases).
 
-Or download the latest APK from the [Releases Section](https://github.com/lamarios/clipious/releases/latest).
+On Android, you may need to allow installation from unknown sources for the browser or file manager you use to open the APK.
+
+### Updates
+
+If you use [Obtainium](https://github.com/ImranR98/Obtainium), add this repository as a GitHub source:
+
+```text
+https://github.com/DVBeckwitt/Videre
+```
+
+Obtainium can then track new Videre releases from GitHub after releases are published.
+
+Android can update an installed APK only when the new APK is signed with the same signing key as the installed version. Release notes should mention any signing-key changes.
 
 ### TV
 
-For TV users it is recommended to use [Accrescent](https://accrescent.app) as it works well enough on TV and allows updates.
+For TV users, build from source until a Videre APK release is published. Store-specific recommendations from Clipious do not apply to Videre unless Videre is published through that store.
+
+### Build from source
+
+To build manually:
+
+```bash
+git clone --recurse-submodules https://github.com/DVBeckwitt/Videre.git
+cd Videre
+```
+
+If the Flutter submodule was not cloned, initialize it manually:
+
+```bash
+git submodule init
+git submodule update
+```
+
+Then install dependencies and build with the pinned Flutter version:
+
+```bash
+./submodules/flutter/bin/flutter pub get
+./submodules/flutter/bin/flutter build apk
+```
+
+The APK should be created under:
+
+```text
+build/app/outputs/flutter-apk/
+```
 
 ## Screenshots
+
+Screenshots are inherited from Clipious and may not yet reflect Videre branding.
+
 ### Phone
+
 [![Home](./screenshots/mobile-home_small.png)](./screenshots/mobile-home.png)
 [![Video](./screenshots/mobile-video_small.png)](./screenshots/mobile-video.png)
 [![Channel](./screenshots/mobile-channel_small.png)](./screenshots/mobile-channel_small.png)
@@ -83,75 +133,133 @@ For TV users it is recommended to use [Accrescent](https://accrescent.app) as it
 [![Playlist](./screenshots/tv-playlist_small.png)](./screenshots/tv-playlist_small.png)
 [![Playlist](./screenshots/tv-playlist-2_small.png)](./screenshots/tv-playlist_small-2.png)
 
-## Facing an issue ? 
+## Facing an issue?
 
-- Check the [Common issue wiki page](https://github.com/lamarios/clipious/wiki/Common-Issues)
-- Open an issue
+Open an issue in this repository: <https://github.com/DVBeckwitt/Videre/issues>
+
+When reporting a bug, include:
+
+- Device model
+- Android version
+- Videre version or commit
+- Invidious instance used
+- Steps to reproduce the issue
+- Logs, screenshots, or screen recordings when useful
+
+If the issue also affects upstream Clipious, mention that in the report.
+
+## Community
+
+Videre does not currently have a separate community chat.
+
+For upstream Clipious discussion, see the original Matrix channel: <https://matrix.to/#/#clipious:matrix.org>
 
 ## Contribute
 
 ### Code
 
-To get started, you'll need to create a fork of the repo and might run:
-```
+To get started, create a fork of this repository and run:
+
+```bash
 git submodule init
 git submodule update
-#enable git pre commit hooks for auto formatting
+# Enable Git pre-commit hooks for auto-formatting.
 ./submodules/flutter/bin/dart run tools/setup_git_hooks.dart
 ```
-or using nix that will handle all the above plus starting a working invidious instance with user test and password test.
-```
-nix-shell
-```
-Flutter itself is used as a submodule of this repo in order to pin the version I want to use to enable reproducible build on f-droid
 
-You'll need to also set up your android SDK and a device / emulator to run the app on.
+Or use Nix, which handles the setup above and starts a working local Invidious instance with user `test` and password `test`:
 
-#### Tests
-
-The app has some tests and they expect to have a locally running invidious server, with a test user (password test).
-
-The easy way it to use [nix](https://nixos.org) and run 
-
-```
+```bash
 nix-shell
 ```
 
-That will spin a postgres DB, an invidious server and the required user (this is how the tests are run in the ci/cd).
+Flutter is used as a submodule in this repository so the project can pin the Flutter version used for builds. This structure is inherited from Clipious and helps keep builds reproducible.
 
-Nothing keeps you to run your own user docker or other ways.
+You will also need an Android SDK and a device or emulator to run the app.
 
-Alternatively, you can directly run the tests with its environment:
+### Tests
+
+The app has tests that expect a locally running Invidious server with a test user whose password is `test`.
+
+The easiest way is to use [Nix](https://nixos.org):
+
+```bash
+nix-shell
 ```
+
+That starts a PostgreSQL database, an Invidious server, and the required test user. This is how the tests are run in CI/CD.
+
+You can also run your own test environment with Docker or another setup.
+
+Alternatively, run the tests directly inside the Nix environment:
+
+```bash
 nix-shell --run './submodules/flutter/bin/flutter test'
 ```
 
 ### Translations
 
+Videre currently inherits translations from Clipious. The badge below tracks the upstream Clipious translation project.
+
 ![Translation status](https://hosted.weblate.org/widgets/clipious/-/app-translation/multi-auto.svg)
 
-The translations are done via [weblate](https://hosted.weblate.org/projects/clipious/app-translation/).
+Upstream translations are handled through [Weblate](https://hosted.weblate.org/projects/clipious/app-translation/).
+
+## Relationship to Clipious
+
+Videre is derived from Clipious.
+
+Original project:
+
+- Clipious: <https://github.com/lamarios/clipious>
+- Original author: Paul Fauchon
+- Original license: GNU AGPL v3.0 or later
+
+Videre changes:
+
+- Project renamed from Clipious to Videre
+- README updated to describe Videre as an independent fork
+- Installation instructions updated for Videre APK releases
+- Future Videre-specific changes will be tracked in this repository
+
+## License
+
+Videre is free software licensed under the GNU Affero General Public License v3.0 or later. See [LICENSE](./LICENSE).
+
+Original Clipious code:
+
+```text
+Copyright (C) 2023 Paul Fauchon
+```
+
+Videre modifications:
+
+```text
+Copyright (C) 2026 DVBeckwitt and Videre contributors
+```
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or, at your option, any later version.
+
+This program is distributed without any warranty, including without the implied warranty of merchantability or fitness for a particular purpose. See the GNU Affero General Public License for details.
+
+You should have received a copy of the GNU Affero General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 ## Liability
 
-We take no responsibility for the use of our tool, or external instances
-provided by third parties. We strongly recommend you abide by the valid
-official regulations in your country. Furthermore, we refuse liability
-for any inappropriate use of Invidious, such as illegal downloading.
-This tool is provided to you in the spirit of free, open software.
+Videre is a client for user-selected Invidious instances. Users are responsible for complying with laws and terms that apply to them.
+
+This notice does not add restrictions beyond the GNU Affero General Public License.
 
 You may view the LICENSE in which this software is provided to you [here](./LICENSE).
 
->   16. Limitation of Liability.
+> 16. Limitation of Liability.
 >
 > IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
-WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
-THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
-GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
-USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
-DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
-PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
-EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
-SUCH DAMAGES.
->
-
+> WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MODIFIES AND/OR CONVEYS
+> THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES, INCLUDING ANY
+> GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE
+> USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED TO LOSS OF
+> DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY YOU OR THIRD
+> PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER PROGRAMS),
+> EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF
+> SUCH DAMAGES.

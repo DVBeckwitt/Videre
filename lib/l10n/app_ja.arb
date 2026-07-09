@@ -31,7 +31,7 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "startUsingClipious": "Clipious の使用を開始",
+  "startUsingClipious": "Videre の使用を開始",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -1049,7 +1049,7 @@
   "@foregroundServiceUpdatingPlaylist": {
     "description": "Foreground service notification text when checking for new playlist videos"
   },
-  "askToEnableBackgroundServiceContent": "通知を利用するにはClipious の通知を有効化する必要があります。OKで有効化にします。",
+  "askToEnableBackgroundServiceContent": "通知を利用するにはVidere の通知を有効化する必要があります。OKで有効化にします。",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -1057,7 +1057,7 @@
   "@askForDisableBatteryOptimizationTitle": {
     "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
-  "askForDisableBatteryOptimizationContent": "通知を送信するには、Clipiousがバックグラウンドサービスを実行する必要があります。円滑な動作のためには、電池の使用を制限しないでください。OKで電池の最適化の設定を開きます。",
+  "askForDisableBatteryOptimizationContent": "通知を送信するには、Videreがバックグラウンドサービスを実行する必要があります。円滑な動作のためには、電池の使用を制限しないでください。OKで電池の最適化の設定を開きます。",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },

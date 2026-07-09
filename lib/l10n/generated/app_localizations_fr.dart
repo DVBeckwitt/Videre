@@ -132,7 +132,7 @@ class AppLocalizationsFr extends AppLocalizations {
       'Sélectionnez un serveur public ou ajoutez le vôtre. (Peut être modifié plus tard dans les paramètres.)';
 
   @override
-  String get startUsingClipious => 'Commencer à utiliser Clipious';
+  String get startUsingClipious => 'Commencer à utiliser Videre';
 
   @override
   String get videoAddedToPlaylist => 'Vidéo ajoutée à la liste de lecture';
@@ -955,14 +955,14 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'Pour pouvoir envoyer des notifications, Clipious doit exécuter un service en arrière-plan. Pour être exécuté sans problème, il est requis pour Clipious d\'avoir accés a l\'utilisation de la batterie sans restriction. Appuyer sur ok va ouvrir les paramètres d\'optimisation de la batterie.';
+      'Pour pouvoir envoyer des notifications, Videre doit exécuter un service en arrière-plan. Pour être exécuté sans problème, il est requis pour Videre d\'avoir accés a l\'utilisation de la batterie sans restriction. Appuyer sur ok va ouvrir les paramètres d\'optimisation de la batterie.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications désactivées';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'Pour avoir les notifications, les notifications Clipious doivent être activées, appuyez sur OK pour les activer.';
+      'Pour avoir les notifications, les notifications Videre doivent être activées, appuyez sur OK pour les activer.';
 
   @override
   String get otherNotifications =>

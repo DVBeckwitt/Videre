@@ -96,7 +96,7 @@
   "@wizardIntro": {
     "description": "Welcome message on frst time use"
   },
-  "startUsingClipious": "Clipious használatának megkezdése",
+  "startUsingClipious": "Videre használatának megkezdése",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

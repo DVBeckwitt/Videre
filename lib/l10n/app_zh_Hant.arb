@@ -128,7 +128,7 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "startUsingClipious": "開始使用 Clipious",
+  "startUsingClipious": "開始使用 Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -359,7 +359,7 @@
   "@appLogs": {
     "description": "Title for settings that leads to application logs"
   },
-  "askToEnableBackgroundServiceContent": "要取得通知，需要啟用 Clipious 通知，按確定以啟用。",
+  "askToEnableBackgroundServiceContent": "要取得通知，需要啟用 Videre 通知，按確定以啟用。",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -375,7 +375,7 @@
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
   },
-  "askForDisableBatteryOptimizationContent": "為了傳送通知，Clipious 需要執行一個背景服務。為了使其順暢執行，需要給予 Clipious 不受限制的電池使用權，點選確定將開啟電池最佳化設定。",
+  "askForDisableBatteryOptimizationContent": "為了傳送通知，Videre 需要執行一個背景服務。為了使其順暢執行，需要給予 Videre 不受限制的電池使用權，點選確定將開啟電池最佳化設定。",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },

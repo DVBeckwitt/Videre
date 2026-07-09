@@ -129,7 +129,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get wizardIntro => '公開サーバーから選ぶか、独自のものを追加します。(設定からも変更可能)';
 
   @override
-  String get startUsingClipious => 'Clipious の使用を開始';
+  String get startUsingClipious => 'Videre の使用を開始';
 
   @override
   String get videoAddedToPlaylist => '動画を再生リストに追加しました';
@@ -909,14 +909,14 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      '通知を送信するには、Clipiousがバックグラウンドサービスを実行する必要があります。円滑な動作のためには、電池の使用を制限しないでください。OKで電池の最適化の設定を開きます。';
+      '通知を送信するには、Videreがバックグラウンドサービスを実行する必要があります。円滑な動作のためには、電池の使用を制限しないでください。OKで電池の最適化の設定を開きます。';
 
   @override
   String get askToEnableBackgroundServiceTitle => '通知は無効になっています';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      '通知を利用するにはClipious の通知を有効化する必要があります。OKで有効化にします。';
+      '通知を利用するにはVidere の通知を有効化する必要があります。OKで有効化にします。';
 
   @override
   String get otherNotifications => 'ほかの通知対象 (鐘のアイコン)';

@@ -108,7 +108,7 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "startUsingClipious": "Clipious 시작하기",
+  "startUsingClipious": "Videre 시작하기",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

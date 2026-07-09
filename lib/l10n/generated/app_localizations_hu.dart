@@ -131,7 +131,7 @@ class AppLocalizationsHu extends AppLocalizations {
       'Válasszon ki egy nyilvános szervert vagy adjon hozzá egy sajátot. (Később meg tudja változtatni a beállításoknál.)';
 
   @override
-  String get startUsingClipious => 'Clipious használatának megkezdése';
+  String get startUsingClipious => 'Videre használatának megkezdése';
 
   @override
   String get videoAddedToPlaylist => 'Videó hozzáadva a listához';
@@ -939,14 +939,14 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'In order to send notification Clipious needs to run a background service. For it to run smoothly it is required that Clipious is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
+      'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications turned off';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'To get notifications, Clipious notifications need to be enabled, press OK to enable it.';
+      'To get notifications, Videre notifications need to be enabled, press OK to enable it.';
 
   @override
   String get otherNotifications => 'Other notifications sources (bell icons)';

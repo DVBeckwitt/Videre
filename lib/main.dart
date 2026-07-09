@@ -251,7 +251,7 @@ class MyApp extends StatelessWidget {
               themeMode: ThemeMode.values.firstWhere(
                   (element) => element.name == themeMode.name,
                   orElse: () => ThemeMode.system),
-              title: 'Clipious',
+              title: 'Videre',
               theme: ThemeData(
                   useMaterial3: true,
                   colorScheme: lightColorScheme,

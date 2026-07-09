@@ -33,7 +33,7 @@
   "@servers": {
     "description": "Server management settings category"
   },
-  "startUsingClipious": "Inizia a usare Clipious",
+  "startUsingClipious": "Inizia a usare Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

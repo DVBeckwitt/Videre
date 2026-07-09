@@ -126,7 +126,7 @@ class TvHomeScreen extends StatelessWidget {
                                                 padding: const EdgeInsets.only(
                                                     left: 16.0),
                                                 child: MenuItemText(
-                                                  'Clipious',
+                                                  'Videre',
                                                   style: textTheme.titleLarge!
                                                       .copyWith(
                                                           color:

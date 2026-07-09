@@ -1,4 +1,4 @@
-<i>Clipious</i> is a client for Invidious, the privacy focused YouTube front end.
+<i>Videre</i> is a client for Invidious, the privacy focused YouTube front end.
 <b>Features:</b>
 <ul>
 <li>Use own or public server</li>

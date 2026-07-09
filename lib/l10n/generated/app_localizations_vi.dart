@@ -131,7 +131,7 @@ class AppLocalizationsVi extends AppLocalizations {
       'Chọn một máy chủ công cộng hoặc thêm máy chủ của riêng bạn. (Có thể thay đổi sau trong cài đặt)';
 
   @override
-  String get startUsingClipious => 'Bắt đầu sử dụng Clipious';
+  String get startUsingClipious => 'Bắt đầu sử dụng Videre';
 
   @override
   String get videoAddedToPlaylist => 'Đã thêm video vào danh sách';
@@ -938,14 +938,14 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'Để gửi thông báo, Clipious cần chạy dịch vụ nền. Để ứng dụng chạy trơn tru, Clipious cần được cung cấp mức sử dụng pin không hạn chế, nhấn ok sẽ mở cài đặt tối ưu hóa pin.';
+      'Để gửi thông báo, Videre cần chạy dịch vụ nền. Để ứng dụng chạy trơn tru, Videre cần được cung cấp mức sử dụng pin không hạn chế, nhấn ok sẽ mở cài đặt tối ưu hóa pin.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Đã tắt thông báo';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'Để nhận thông báo, bạn cần bật thông báo Clipious, nhấn OK để bật.';
+      'Để nhận thông báo, bạn cần bật thông báo Videre, nhấn OK để bật.';
 
   @override
   String get otherNotifications =>

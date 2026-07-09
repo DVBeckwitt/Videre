@@ -129,7 +129,7 @@ class AppLocalizationsKo extends AppLocalizations {
   String get wizardIntro => '공개 서버를 선택하거나 직접 추가하세요. (나중에 설정에서 변경 가능)';
 
   @override
-  String get startUsingClipious => 'Clipious 시작하기';
+  String get startUsingClipious => 'Videre 시작하기';
 
   @override
   String get videoAddedToPlaylist => '동영상을 재생목록에 추가했습니다';
@@ -935,14 +935,14 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'In order to send notification Clipious needs to run a background service. For it to run smoothly it is required that Clipious is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
+      'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications turned off';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'To get notifications, Clipious notifications need to be enabled, press OK to enable it.';
+      'To get notifications, Videre notifications need to be enabled, press OK to enable it.';
 
   @override
   String get otherNotifications => 'Other notifications sources (bell icons)';

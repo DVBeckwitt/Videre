@@ -48,7 +48,7 @@ class WelcomeWizardScreen extends StatelessWidget {
                         const SizedBox(
                             width: 150, height: 150, child: AppIcon()),
                         Text(
-                          'Clipious',
+                          'Videre',
                           style: textTheme.displaySmall
                               ?.copyWith(color: colors.primary),
                         ),

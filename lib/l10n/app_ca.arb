@@ -111,7 +111,7 @@
     "@loadMore": {
         "description": "CTA to load more"
     },
-    "startUsingClipious": "Comença a usar el Clipious",
+    "startUsingClipious": "Comença a usar el Videre",
     "@startUsingClipious": {
         "description": "button label to start using the app"
     },

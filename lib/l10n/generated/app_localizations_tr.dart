@@ -132,7 +132,7 @@ class AppLocalizationsTr extends AppLocalizations {
       'Ortak bir sunucu seçin veya kendinizinkini ekleyin. (Daha sonra ayarlarda değiştirilebilir)';
 
   @override
-  String get startUsingClipious => 'Clipious\'u kullanmaya başlayın';
+  String get startUsingClipious => 'Videre\'yi kullanmaya başlayın';
 
   @override
   String get videoAddedToPlaylist => 'Video oynatma listesine eklendi';
@@ -946,14 +946,14 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'Clipious bildirimi göndermek için bir arka plan hizmeti çalıştırmanız gerekir. Sorunsuz çalışması için Clipiousa sınırsız pil kullanımı verilmesi gerekir, tamama dokunmak pil optimizasyon ayarlarını açacaktır.';
+      'Videre bildirimi göndermek için bir arka plan hizmeti çalıştırmanız gerekir. Sorunsuz çalışması için Videreye sınırsız pil kullanımı verilmesi gerekir, tamama dokunmak pil optimizasyon ayarlarını açacaktır.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Bildirimler kapalı';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'Bildirim almak için Küçük bildirimlerin etkinleştirilmesi gerekir, etkinleştirmek için Tamam\'a basın.';
+      'Bildirim almak için Videre bildirimlerinin etkinleştirilmesi gerekir, etkinleştirmek için Tamam\'a basın.';
 
   @override
   String get otherNotifications => 'Diğer bildirim kaynakları (zil simgeleri)';

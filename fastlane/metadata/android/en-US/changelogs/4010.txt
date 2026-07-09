@@ -3,7 +3,7 @@ Mobile: Playback notification is now working as expected
 Mobile: Headset controls should now work
 Mobile: Downloading a video will show a dialogue where user can select quality and audio only or not
 Mobile: Links will now be parsed in comments as well
-Mobile: clicking a video link in a video description and comments will now open the video in clipious instead of the browser
+Mobile: clicking a video link in a video description and comments will now open the video in Videre instead of the browser
 Mobile: clickable timestamp in video description and comments
 Mobile: fix issue that prevented to infinite scroll in video lists if some videos were filtered by a remove from feed video filter
 Mobile: Fix top bar not always black when the user selected Black background for oled

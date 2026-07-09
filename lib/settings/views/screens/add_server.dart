@@ -1,4 +1,3 @@
-import 'package:auto_route/annotations.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -62,6 +61,11 @@ class AddServerScreen extends StatelessWidget {
     var locals = AppLocalizations.of(context)!;
     const wikiUrl =
         'https://github.com/lamarios/clipious/wiki/Common-Issues#video-thumbnails-not-working';
+    final errorMessage = e is WrongThumbnailUrl && isTv
+        ? '${e.getLabel(locals)}\n\n$wikiUrl'
+        : e is CannotAddServerError
+            ? e.getLabel(locals)
+            : e.toString();
     List<Widget> actions = [
       if (e is WrongThumbnailUrl && !isTv)
         TextButton(
@@ -73,21 +77,8 @@ class AddServerScreen extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(), child: Text(locals.ok))
     ];
 
-    List<Widget> body = [
-      if (!isTv)
-        e is CannotAddServerError
-            ? Text(e.getLabel(locals))
-            : Text(e.toString()),
-      if (isTv) ...[
-        e is WrongThumbnailUrl
-            ? Text('${e.getLabel(locals)}\n\n$wikiUrl')
-            : e is CannotAddServerError
-                ? Text(e.getLabel(locals))
-                : Text(e.toString())
-      ]
-    ];
-
-    showAlertDialog(context, locals.error, body, actions: actions);
+    showAlertDialog(context, locals.error, [Text(errorMessage)],
+        actions: actions);
   }
 
   @override
@@ -203,8 +194,9 @@ class AddServerScreen extends StatelessWidget {
                                       AutoRouter.of(context).maybePop(server);
                                     }
                                   } catch (e) {
-                                    if (context.mounted)
+                                    if (context.mounted) {
                                       handleError(context, e);
+                                    }
                                   }
                                 },
                           child: state.loading

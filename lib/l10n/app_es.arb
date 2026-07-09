@@ -115,7 +115,7 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "startUsingClipious": "Empieza a usar Clipious",
+  "startUsingClipious": "Empieza a usar Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -1017,7 +1017,7 @@
   "@notifications": {
     "description": "Notification settings title"
   },
-  "askToEnableBackgroundServiceContent": "Para recibir las notificaciones, es necesario activar las notificaciones en Clipious, pulse de acuerdo para activarlo.",
+  "askToEnableBackgroundServiceContent": "Para recibir las notificaciones, es necesario activar las notificaciones en Videre, pulse de acuerdo para activarlo.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -1025,7 +1025,7 @@
   "@askForDisableBatteryOptimizationTitle": {
     "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
-  "askForDisableBatteryOptimizationContent": "Para enviar notificaciones Clipious necesita ejecutar un servicio en segundo plano. Para que funcione sin problemas es necesario que Clipious tenga un uso de la batería sin restricciones, pulsando en de acuerdo se abrirá la configuración de optimización de la batería.",
+  "askForDisableBatteryOptimizationContent": "Para enviar notificaciones Videre necesita ejecutar un servicio en segundo plano. Para que funcione sin problemas es necesario que Videre tenga un uso de la batería sin restricciones, pulsando en de acuerdo se abrirá la configuración de optimización de la batería.",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },

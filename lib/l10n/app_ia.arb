@@ -263,7 +263,7 @@
   "@couldntLoadVideo": {
     "description": "Message to display when a video can't be loaded"
   },
-  "startUsingClipious": "Comenciar usante Clipious",
+  "startUsingClipious": "Comenciar usante Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

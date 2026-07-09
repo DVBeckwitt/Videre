@@ -131,7 +131,7 @@ class AppLocalizationsSv extends AppLocalizations {
       'Välj en publik eller lägg till din egen. (Kan ändras senare i inställningar)';
 
   @override
-  String get startUsingClipious => 'Börja använda Clipious';
+  String get startUsingClipious => 'Börja använda Videre';
 
   @override
   String get videoAddedToPlaylist => 'Filmen har lagts till i din spellista';
@@ -949,14 +949,14 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'För att kunna skicka meddelande så behöver Clipious kunna köra tjänster i bakgrunden. För att dessa skall kunna köras smidigt så krävs det att Clipious ges obegränsad batterianvändning, klicka på ok för att öppna upp inställningar för batterioptimering.';
+      'För att kunna skicka meddelande så behöver Videre kunna köra tjänster i bakgrunden. För att dessa skall kunna köras smidigt så krävs det att Videre ges obegränsad batterianvändning, klicka på ok för att öppna upp inställningar för batterioptimering.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Meddelanden är inaktiverade';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'För att erhålla meddelanden behöver Clipious bli beviljad att skicka meddelanden, tryck på OK för att aktivera det.';
+      'För att erhålla meddelanden behöver Videre bli beviljad att skicka meddelanden, tryck på OK för att aktivera det.';
 
   @override
   String get otherNotifications =>

@@ -51,7 +51,7 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "startUsingClipious": "Begynn å bruke Clipious",
+  "startUsingClipious": "Begynn å bruke Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

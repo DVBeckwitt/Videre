@@ -128,7 +128,7 @@
     "@wizardIntro": {
         "description": "Welcome message on frst time use"
     },
-    "startUsingClipious": "ਕਲਿੱਪੀਅਸ ਵਰਤਣਾ ਸ਼ੁਰੂ ਕਰੋ",
+    "startUsingClipious": "Videre ਵਰਤਣਾ ਸ਼ੁਰੂ ਕਰੋ",
     "@startUsingClipious": {
         "description": "button label to start using the app"
     },

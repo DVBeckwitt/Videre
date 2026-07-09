@@ -120,7 +120,7 @@
   "@wizardIntro": {
     "description": "Welcome message on frst time use"
   },
-  "startUsingClipious": "开始使用Clipious",
+  "startUsingClipious": "开始使用Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

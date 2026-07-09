@@ -6,7 +6,7 @@
 , ci ? false}:
 
 let
-  clipiousNix = import  ./nix/clipious.nix {
+  videreNix = import ./nix/videre.nix {
     ci = ci;
     pkgs = pkgs;
   };
@@ -27,14 +27,14 @@ let
 in
 pkgs.mkShell {
   buildInputs = with pkgs; builtins.concatLists [
-    clipiousNix.packages
+    videreNix.packages
     [ flutter git ]
   ];
 
   # What to run when the shell starts
-  # clipiousNix.prepareShell is a helper function to sort things properly. It returns a string so it's possible to just concatenate stuff afterwards
+  # videreNix.prepareShell is a helper function to sort things properly. It returns a string so it's possible to just concatenate stuff afterwards
   # to run CI or DB migrations
-  shellHook = (clipiousNix.prepareShell {}) + ''
+  shellHook = (videreNix.prepareShell {}) + ''
 
   echo "Setting up submodules"
   git submodule init

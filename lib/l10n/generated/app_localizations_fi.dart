@@ -131,7 +131,7 @@ class AppLocalizationsFi extends AppLocalizations {
       'Valitse julkinen palvelin tai lisää oma. (Voidaan muuttaa myöhemmin asetuksissa)';
 
   @override
-  String get startUsingClipious => 'Aloita Clipiousin käyttö';
+  String get startUsingClipious => 'Aloita Videren käyttö';
 
   @override
   String get videoAddedToPlaylist => 'Video lisätty soittolistaan';
@@ -939,7 +939,7 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'Clipious pitää taustapalvelua käynnissä, jotta se voi lähettää ilmoituksia. Taustapalvelun käyttö vaatii rajoittamattoman akun käytön. Painamalla OK avataan akun optimointiasetukset.';
+      'Videre pitää taustapalvelua käynnissä, jotta se voi lähettää ilmoituksia. Taustapalvelun käyttö vaatii rajoittamattoman akun käytön. Painamalla OK avataan akun optimointiasetukset.';
 
   @override
   String get askToEnableBackgroundServiceTitle =>
@@ -947,7 +947,7 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'Saadaksesi ilmoituksia, Clipiouksen ilmoitukset tulee olla käytössä. Paina OK ottaaksesi ne käyttöön.';
+      'Saadaksesi ilmoituksia, Videren ilmoitukset tulee olla käytössä. Paina OK ottaaksesi ne käyttöön.';
 
   @override
   String get otherNotifications => 'Muut ilmoituslähteet (kellon kuvakkeet)';

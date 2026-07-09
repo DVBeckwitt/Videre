@@ -8,8 +8,12 @@ assignees: ''
 ---
 
 <!--
-Your thumbnails are not working ? check: https://github.com/lamarios/clipious/wiki/Common-Issues#video-thumbnails-not-working
-Having issues with channel subscriptions or playlist management ? check: https://github.com/lamarios/clipious/wiki/Common-Issues#cant-subscribe-to-channel-add-video-to-a-playlist-and-similar-issues
+Before filing, check existing Videre issues:
+https://github.com/DVBeckwitt/Videre/issues
+
+Upstream Clipious troubleshooting may still apply to inherited behavior:
+https://github.com/lamarios/clipious/wiki/Common-Issues#video-thumbnails-not-working
+https://github.com/lamarios/clipious/wiki/Common-Issues#cant-subscribe-to-channel-add-video-to-a-playlist-and-similar-issues
 -->
 
 

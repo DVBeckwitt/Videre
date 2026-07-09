@@ -131,7 +131,7 @@ class AppLocalizationsOr extends AppLocalizations {
       'ଏକ ସାର୍ବଜନୀନ ସର୍ଭର ବାଛନ୍ତୁ କିମ୍ବା ଆପଣଙ୍କର ନିଜର ଯୋଗ କରନ୍ତୁ । (ପରେ ସେଟିଂସମୂହରେ ପରିବର୍ତ୍ତନ କରାଯାଇପାରିବ)';
 
   @override
-  String get startUsingClipious => 'କ୍ଲିପିଆସ୍ ବ୍ୟବହାର କରିବା ଆରମ୍ଭ କରନ୍ତୁ';
+  String get startUsingClipious => 'Videre ବ୍ୟବହାର କରିବା ଆରମ୍ଭ କରନ୍ତୁ';
 
   @override
   String get videoAddedToPlaylist => 'ଭିଡିଓ ପ୍ଲେଲିଷ୍ଟରେ ଯୋଡା ଯାଇଛି';
@@ -943,7 +943,7 @@ class AppLocalizationsOr extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'ବିଜ୍ଞପ୍ତି ପଠାଇବା ପାଇଁ Clipious କୁ ଗୋଟିଏ ପୃଷ୍ଠଭୂମି ସର୍ଭିସ ଚଳାଇବା ଆବଶ୍ୟକ । ଏହାକୁ ସୁଗମ ଭାବରେ ଚଲାଇବା ପାଇଁ କ୍ଲିପିଆସକୁ ଅନଲିମିଟେଡ ବ୍ୟାଟେରୀ ବ୍ୟବହାର ଦେବା ଆବଶ୍ୟକ, ଓକେ ଟ୍ୟାପ୍ କରିବା ଦ୍ୱାରା ବ୍ୟାଟେରୀ ଅପ୍ଟିମାଇଜେସନ ସେଟିଙ୍ଗ ଖୋଲିବ ।';
+      'ବିଜ୍ଞପ୍ତି ପଠାଇବା ପାଇଁ Videre କୁ ଗୋଟିଏ ପୃଷ୍ଠଭୂମି ସର୍ଭିସ ଚଳାଇବା ଆବଶ୍ୟକ । ଏହାକୁ ସୁଗମ ଭାବରେ ଚଲାଇବା ପାଇଁ Videre କୁ ଅନଲିମିଟେଡ ବ୍ୟାଟେରୀ ବ୍ୟବହାର ଦେବା ଆବଶ୍ୟକ, ଓକେ ଟ୍ୟାପ୍ କରିବା ଦ୍ୱାରା ବ୍ୟାଟେରୀ ଅପ୍ଟିମାଇଜେସନ ସେଟିଙ୍ଗ ଖୋଲିବ ।';
 
   @override
   String get askToEnableBackgroundServiceTitle =>
@@ -951,7 +951,7 @@ class AppLocalizationsOr extends AppLocalizations {
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ପାଇବା ପାଇଁ, କ୍ଲିପୀୟ ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ସକ୍ରିୟ କରିବା ଆବଶ୍ୟକ, ଏହାକୁ ସକ୍ରିୟ କରିବା ପାଇଁ OK ଦବାନ୍ତୁ ।';
+      'ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ପାଇବା ପାଇଁ, Videre ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ସକ୍ରିୟ କରିବା ଆବଶ୍ୟକ, ଏହାକୁ ସକ୍ରିୟ କରିବା ପାଇଁ OK ଦବାନ୍ତୁ ।';
 
   @override
   String get otherNotifications => 'ଅନ୍ୟ ବିଜ୍ଞପ୍ତି ଉତ୍ସ (ଘଣ୍ଟି ଚିତ୍ରସଂକେତ)';

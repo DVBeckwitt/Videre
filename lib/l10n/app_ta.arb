@@ -406,7 +406,7 @@
       }
     }
   },
-  "askForDisableBatteryOptimizationContent": "அறிவிப்பை அனுப்ப, பின்னணி சேவையை இயக்க கிளிப்பியச் தேவைகள். இது சீராக இயங்குவதற்கு, கிளிபியசுக்கு கட்டுப்பாடற்ற பேட்டரி பயன்பாடு வழங்கப்பட வேண்டும், சரி தட்டுவது பேட்டரி உகப்பாக்கம் அமைப்புகளைத் திறக்கும்.",
+  "askForDisableBatteryOptimizationContent": "அறிவிப்பை அனுப்ப, பின்னணி சேவையை இயக்க Videre தேவைகள். இது சீராக இயங்குவதற்கு, Videreக்கு கட்டுப்பாடற்ற பேட்டரி பயன்பாடு வழங்கப்பட வேண்டும், சரி தட்டுவது பேட்டரி உகப்பாக்கம் அமைப்புகளைத் திறக்கும்.",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
@@ -414,7 +414,7 @@
   "@askToEnableBackgroundServiceTitle": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
-  "askToEnableBackgroundServiceContent": "அறிவிப்புகளைப் பெற, கிளிப்பிய அறிவிப்புகள் இயக்கப்பட வேண்டும், அதை இயக்க சரி என்பதை அழுத்தவும்.",
+  "askToEnableBackgroundServiceContent": "அறிவிப்புகளைப் பெற, Videre அறிவிப்புகள் இயக்கப்பட வேண்டும், அதை இயக்க சரி என்பதை அழுத்தவும்.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -742,7 +742,7 @@
   "@wizardIntro": {
     "description": "Welcome message on frst time use"
   },
-  "startUsingClipious": "கிளிபியசைப் பயன்படுத்தத் தொடங்குங்கள்",
+  "startUsingClipious": "Videre பயன்படுத்தத் தொடங்குங்கள்",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },

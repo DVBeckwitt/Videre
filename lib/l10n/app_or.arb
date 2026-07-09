@@ -132,7 +132,7 @@
   "@noVideoInPlayList": {
     "description": "When no videos in the playlist"
   },
-  "startUsingClipious": "କ୍ଲିପିଆସ୍ ବ୍ୟବହାର କରିବା ଆରମ୍ଭ କରନ୍ତୁ",
+  "startUsingClipious": "Videre ବ୍ୟବହାର କରିବା ଆରମ୍ଭ କରନ୍ତୁ",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -1009,7 +1009,7 @@
   "@navigationBarStyle": {
     "description": "Label for settings on customizing navigation bar style"
   },
-  "askToEnableBackgroundServiceContent": "ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ପାଇବା ପାଇଁ, କ୍ଲିପୀୟ ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ସକ୍ରିୟ କରିବା ଆବଶ୍ୟକ, ଏହାକୁ ସକ୍ରିୟ କରିବା ପାଇଁ OK ଦବାନ୍ତୁ ।",
+  "askToEnableBackgroundServiceContent": "ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ପାଇବା ପାଇଁ, Videre ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକୁ ସକ୍ରିୟ କରିବା ଆବଶ୍ୟକ, ଏହାକୁ ସକ୍ରିୟ କରିବା ପାଇଁ OK ଦବାନ୍ତୁ ।",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
@@ -1017,7 +1017,7 @@
   "@askForDisableBatteryOptimizationTitle": {
     "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
-  "askForDisableBatteryOptimizationContent": "ବିଜ୍ଞପ୍ତି ପଠାଇବା ପାଇଁ Clipious କୁ ଗୋଟିଏ ପୃଷ୍ଠଭୂମି ସର୍ଭିସ ଚଳାଇବା ଆବଶ୍ୟକ । ଏହାକୁ ସୁଗମ ଭାବରେ ଚଲାଇବା ପାଇଁ କ୍ଲିପିଆସକୁ ଅନଲିମିଟେଡ ବ୍ୟାଟେରୀ ବ୍ୟବହାର ଦେବା ଆବଶ୍ୟକ, ଓକେ ଟ୍ୟାପ୍ କରିବା ଦ୍ୱାରା ବ୍ୟାଟେରୀ ଅପ୍ଟିମାଇଜେସନ ସେଟିଙ୍ଗ ଖୋଲିବ ।",
+  "askForDisableBatteryOptimizationContent": "ବିଜ୍ଞପ୍ତି ପଠାଇବା ପାଇଁ Videre କୁ ଗୋଟିଏ ପୃଷ୍ଠଭୂମି ସର୍ଭିସ ଚଳାଇବା ଆବଶ୍ୟକ । ଏହାକୁ ସୁଗମ ଭାବରେ ଚଲାଇବା ପାଇଁ Videre କୁ ଅନଲିମିଟେଡ ବ୍ୟାଟେରୀ ବ୍ୟବହାର ଦେବା ଆବଶ୍ୟକ, ଓକେ ଟ୍ୟାପ୍ କରିବା ଦ୍ୱାରା ବ୍ୟାଟେରୀ ଅପ୍ଟିମାଇଜେସନ ସେଟିଙ୍ଗ ଖୋଲିବ ।",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },

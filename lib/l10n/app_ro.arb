@@ -297,7 +297,7 @@
   "@recommended": {
     "description": "Recommended label"
   },
-  "startUsingClipious": "Începeți să folosești Clipious",
+  "startUsingClipious": "Începeți să folosești Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -1133,7 +1133,7 @@
   "@askForDisableBatteryOptimizationTitle": {
     "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
-  "askForDisableBatteryOptimizationContent": "Pentru a trimite notificări, Clipious trebuie să ruleze un serviciu în fundal. Pentru ca acesta să funcționeze fără probleme, este necesar ca Clipious să aibă acces nerestricționat la baterie. Apăsând pe OK se vor deschide setările de optimizare a bateriei.",
+  "askForDisableBatteryOptimizationContent": "Pentru a trimite notificări, Videre trebuie să ruleze un serviciu în fundal. Pentru ca acesta să funcționeze fără probleme, este necesar ca Videre să aibă acces nerestricționat la baterie. Apăsând pe OK se vor deschide setările de optimizare a bateriei.",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
@@ -1141,7 +1141,7 @@
   "@askToEnableBackgroundServiceTitle": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
-  "askToEnableBackgroundServiceContent": "Pentru a primi notificări, trebuie să activezi notificările Clipious, apasă OK pentru a le activa.",
+  "askToEnableBackgroundServiceContent": "Pentru a primi notificări, trebuie să activezi notificările Videre, apasă OK pentru a le activa.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },

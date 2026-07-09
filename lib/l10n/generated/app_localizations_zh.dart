@@ -129,7 +129,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get wizardIntro => '选择公共服务实例或添加您自己的实例。 （稍后可以在设置中更改。）';
 
   @override
-  String get startUsingClipious => '开始使用Clipious';
+  String get startUsingClipious => '开始使用Videre';
 
   @override
   String get videoAddedToPlaylist => '视频成功添加到播放列表';
@@ -918,14 +918,14 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'In order to send notification Clipious needs to run a background service. For it to run smoothly it is required that Clipious is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
+      'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications turned off';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'To get notifications, Clipious notifications need to be enabled, press OK to enable it.';
+      'To get notifications, Videre notifications need to be enabled, press OK to enable it.';
 
   @override
   String get otherNotifications => 'Other notifications sources (bell icons)';
@@ -1356,7 +1356,7 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get wizardIntro => '選擇一個公開伺服器或新增您自己的伺服器。（可以稍後在設定中更改。）';
 
   @override
-  String get startUsingClipious => '開始使用 Clipious';
+  String get startUsingClipious => '開始使用 Videre';
 
   @override
   String get videoAddedToPlaylist => '影片已新增至播放清單';
@@ -2130,14 +2130,14 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      '為了傳送通知，Clipious 需要執行一個背景服務。為了使其順暢執行，需要給予 Clipious 不受限制的電池使用權，點選確定將開啟電池最佳化設定。';
+      '為了傳送通知，Videre 需要執行一個背景服務。為了使其順暢執行，需要給予 Videre 不受限制的電池使用權，點選確定將開啟電池最佳化設定。';
 
   @override
   String get askToEnableBackgroundServiceTitle => '通知已關閉';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      '要取得通知，需要啟用 Clipious 通知，按確定以啟用。';
+      '要取得通知，需要啟用 Videre 通知，按確定以啟用。';
 
   @override
   String get otherNotifications => '其他通知來源（鈴鐺圖示）';

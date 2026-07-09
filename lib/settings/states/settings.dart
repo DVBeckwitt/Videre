@@ -455,7 +455,7 @@ class SettingsCubit extends Cubit<SettingsState> {
       body +=
           '\n[Android] Version: ${androidInfo.release}.${androidInfo.incremental} (${androidInfo.codename})';
       body +=
-          '\n[Clipious] Version: ${state.packageInfo.version} Build: ${state.packageInfo.buildNumber}';
+          '\n[Videre] Version: ${state.packageInfo.version} Build: ${state.packageInfo.buildNumber}';
 
       body += '\n\n\n**Feedback:**\n${feedback.text}\n\n\n';
 
@@ -464,7 +464,7 @@ class SettingsCubit extends Cubit<SettingsState> {
       body += '\n**Screenshot:**\n![app screenshot]($screenshotUrl)';
 
       final url =
-          'https://github.com/lamarios/clipious/issues/new?title=${Uri.encodeComponent('[App Feedback] $firstLine')}&body=${Uri.encodeComponent(body)}';
+          'https://github.com/DVBeckwitt/Videre/issues/new?title=${Uri.encodeComponent('[App Feedback] $firstLine')}&body=${Uri.encodeComponent(body)}';
       await launchUrl(Uri.parse(url));
     } catch (err) {
       _log.severe("Issue while submitting feedback", err);

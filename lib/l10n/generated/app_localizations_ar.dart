@@ -131,7 +131,7 @@ class AppLocalizationsAr extends AppLocalizations {
       'حدد خادماً عاماً أو أضف خادمك الخاص. (يمكن تغييرها لاحقا في الإعدادات)';
 
   @override
-  String get startUsingClipious => 'ابدأ باستخدام كِلبّيوس';
+  String get startUsingClipious => 'ابدأ باستخدام Videre';
 
   @override
   String get videoAddedToPlaylist => 'تمت إضافة الفيديو إلى قائمة التشغيل';
@@ -937,14 +937,14 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get askForDisableBatteryOptimizationContent =>
-      'من أجل إرسال الإشعارات يحتاج Clipious إلى تشغيل خدمة في الخلفية. ولكي تعمل بسلاسة، يجب أن يتم منح Clipious استخدامًا غير مقيّد للبطارية دون قيود، وسيؤدي النقر على موافق إلى فتح إعدادات تحسين البطارية.';
+      'من أجل إرسال الإشعارات يحتاج Videre إلى تشغيل خدمة في الخلفية. ولكي تعمل بسلاسة، يجب أن يتم منح Videre استخدامًا غير مقيّد للبطارية دون قيود، وسيؤدي النقر على موافق إلى فتح إعدادات تحسين البطارية.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'تم إيقاف تشغيل الإشعارات';
 
   @override
   String get askToEnableBackgroundServiceContent =>
-      'للحصول على إشعارات، يجب تمكين إشعارات Clipious، اضغط على موافق لتمكينها.';
+      'للحصول على إشعارات، يجب تمكين إشعارات Videre، اضغط على موافق لتمكينها.';
 
   @override
   String get otherNotifications => 'مصادر الإشعارات الأخرى (أيقونات الجرس)';

@@ -140,7 +140,7 @@
   "@wizardIntro": {
     "description": "Welcome message on frst time use"
   },
-  "startUsingClipious": "Начать использовать Clipious",
+  "startUsingClipious": "Начать использовать Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
   },
@@ -957,7 +957,7 @@
   "@askForDisableBatteryOptimizationTitle": {
     "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
-  "askForDisableBatteryOptimizationContent": "Для того чтобы присылать уведомления Clipious требуется запускать фоновые сервисы. Для стабильной работы необходимо чтобы Clipious имел доступ к неограниченному расходу батареи, нажатие на ОК откроет настройки оптимизации расхода батареи.",
+  "askForDisableBatteryOptimizationContent": "Для того чтобы присылать уведомления Videre требуется запускать фоновые сервисы. Для стабильной работы необходимо чтобы Videre имел доступ к неограниченному расходу батареи, нажатие на ОК откроет настройки оптимизации расхода батареи.",
   "@askForDisableBatteryOptimizationContent": {
     "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
@@ -985,7 +985,7 @@
   "@enableNotificationDescriptions": {
     "description": ""
   },
-  "askToEnableBackgroundServiceContent": "Для того чтобы получать оповещения, уведомления Clipious должны быть включены, чтобы это сделать нажмите ОК.",
+  "askToEnableBackgroundServiceContent": "Для того чтобы получать оповещения, уведомления Videre должны быть включены, чтобы это сделать нажмите ОК.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
