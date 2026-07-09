@@ -12,25 +12,9 @@ Videre is not affiliated with Google, YouTube, the Invidious project, or the ori
 
 Videre is an independent fork of Clipious.
 
-Official Videre APKs are not published yet. When the first APK is ready, it will be published from this repository under [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases).
+Official Videre APKs are published from this repository under [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases). Download builds only from the official Videre releases page unless another distribution channel is explicitly listed here.
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
-
-## Rename Status
-
-The user-facing app name has been updated to Videre across app metadata, in-app labels, store metadata, documentation, generated localization values, and project banner assets.
-
-Compatibility identifiers are intentionally still using the inherited Clipious values until a migration is planned. This includes the Dart package name, Android and Apple bundle identifiers, Linux application ID, auth callback scheme, local database filename, notification channel ID, and background task unique name.
-
-Current status as of 2026-07-09:
-
-- APK release: pending; build from source for now.
-- Review fix: completed for the rename docs pass. Release links no longer imply a published APK, thumbnail troubleshooting uses the live upstream Clipious wiki, and the privacy policy now describes user-initiated feedback data.
-- Migration status: no package, bundle ID, auth scheme, database, notification channel, or background task identifier migration has been started.
-- CI/CD status: inherited GitHub workflows still exist, but no new release automation was added for this rename patch.
-- Test status: `dart format` and `dart analyze --no-fatal-warnings ./lib` pass locally; full Flutter tests require a local Invidious test environment and currently have unrelated failures outside the rename work.
-- Android release build: not verified in this workspace because no Android SDK is configured.
-- Launch status: not ready for a public Videre APK until release signing, Android build verification, and release artifact upload are confirmed.
 
 ## How it works
 
@@ -59,7 +43,7 @@ Videre does not require a YouTube account. If you use an Invidious account for s
 
 ### Download APK
 
-No official Videre APK is published yet. When available, download the latest APK from the [Videre Releases page](https://github.com/DVBeckwitt/Videre/releases).
+Download the latest APK from the [Videre Releases page](https://github.com/DVBeckwitt/Videre/releases/latest).
 
 On Android, you may need to allow installation from unknown sources for the browser or file manager you use to open the APK.
 
@@ -71,13 +55,13 @@ If you use [Obtainium](https://github.com/ImranR98/Obtainium), add this reposito
 https://github.com/DVBeckwitt/Videre
 ```
 
-Obtainium can then track new Videre releases from GitHub after releases are published.
+Obtainium can then track new Videre releases from GitHub.
 
 Android can update an installed APK only when the new APK is signed with the same signing key as the installed version. Release notes should mention any signing-key changes.
 
 ### TV
 
-For TV users, build from source until a Videre APK release is published. Store-specific recommendations from Clipious do not apply to Videre unless Videre is published through that store.
+For TV users, install the APK from the Videre Releases page or track releases with Obtainium. Store-specific recommendations from Clipious do not apply to Videre unless Videre is published through that store.
 
 ### Build from source
 
