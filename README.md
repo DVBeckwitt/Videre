@@ -22,12 +22,15 @@ The user-facing app name has been updated to Videre across app metadata, in-app 
 
 Compatibility identifiers are intentionally still using the inherited Clipious values until a migration is planned. This includes the Dart package name, Android and Apple bundle identifiers, Linux application ID, auth callback scheme, local database filename, notification channel ID, and background task unique name.
 
-Known status:
+Current status as of 2026-07-09:
 
 - APK release: pending; build from source for now.
-- Thumbnail troubleshooting link: still points to the upstream Clipious wiki until Videre has its own wiki content.
-- Automated tests: the existing suite currently requires a local Invidious test environment and has unrelated failures outside the rename work.
+- Review fix: completed for the rename docs pass. Release links no longer imply a published APK, thumbnail troubleshooting uses the live upstream Clipious wiki, and the privacy policy now describes user-initiated feedback data.
+- Migration status: no package, bundle ID, auth scheme, database, notification channel, or background task identifier migration has been started.
+- CI/CD status: inherited GitHub workflows still exist, but no new release automation was added for this rename patch.
+- Test status: `dart format` and `dart analyze --no-fatal-warnings ./lib` pass locally; full Flutter tests require a local Invidious test environment and currently have unrelated failures outside the rename work.
 - Android release build: not verified in this workspace because no Android SDK is configured.
+- Launch status: not ready for a public Videre APK until release signing, Android build verification, and release artifact upload are confirmed.
 
 ## How it works
 
