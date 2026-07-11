@@ -24,7 +24,11 @@ import 'test_app_cubit.dart';
 import 'test_player_cubit.dart';
 import 'test_settings_cubit.dart';
 
-class _EmptyService extends Service {
+class _TestService extends Service {
+  _TestService({required this.videos});
+
+  final List<Video> videos;
+
   @override
   void syncHistory() {}
 
@@ -32,10 +36,10 @@ class _EmptyService extends Service {
   Future<bool> isLoggedIn() async => true;
 
   @override
-  Future<List<Video>> getTrending({String? type}) async => [];
+  Future<List<Video>> getTrending({String? type}) async => videos;
 
   @override
-  Future<List<Video>> getPopular() async => [];
+  Future<List<Video>> getPopular() async => videos;
 
   @override
   Future<UserFeed> getUserFeed(
@@ -94,10 +98,7 @@ ScrollPosition _tabPosition(WidgetTester tester) {
   return tester
       .stateList<ScrollableState>(find.byType(Scrollable))
       .map((state) => state.position)
-      .singleWhere((position) =>
-          position.axis == Axis.horizontal &&
-          (position.maxScrollExtent - position.viewportDimension * 3).abs() <
-              0.01);
+      .singleWhere((position) => position is PageMetrics);
 }
 
 void main() {
@@ -105,7 +106,18 @@ void main() {
 
   setUp(() async {
     app_main.isTv = false;
-    globals.service = _EmptyService();
+    globals.service = _TestService(
+      videos: List.generate(
+        6,
+        (index) => Video(
+          videoId: 'video-$index',
+          title: 'Video $index',
+          author: 'Channel $index',
+          authorId: 'channel-$index',
+          lengthSeconds: 60,
+        ),
+      ),
+    );
     globals.packageInfo = PackageInfo(
         appName: 'Videre',
         packageName: 'com.github.lamarios.clipious',
@@ -147,7 +159,8 @@ void main() {
 
     expectSelectedTab(0);
 
-    final leadingEdgeDrag = await tester.startGesture(const Offset(40, 400));
+    final leadingEdgeDrag =
+        await tester.startGesture(tester.getCenter(find.text('Trending')));
     await leadingEdgeDrag.moveBy(const Offset(120, 0));
     await tester.pump();
     expect(tabPosition.pixels, lessThan(0));
@@ -155,7 +168,8 @@ void main() {
     await tester.pumpAndSettle();
     expectSelectedTab(0);
 
-    final pageDrag = await tester.startGesture(const Offset(350, 400));
+    final pageDrag =
+        await tester.startGesture(tester.getCenter(find.text('Trending')));
     await pageDrag.moveBy(const Offset(-120, 0));
     await tester.pump();
     expect(
@@ -183,6 +197,44 @@ void main() {
     expectSelectedTab(1);
     await swipeRight();
     expectSelectedTab(0);
+  });
+
+  testWidgets('phone homepage preserves horizontal carousel gestures',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+
+    final firstCarouselVideo = find.byKey(const ValueKey('video-0-true'));
+    expect(firstCarouselVideo, findsOneWidget);
+
+    final carousel = find.ancestor(
+      of: firstCarouselVideo,
+      matching: find.byType(GridView),
+    );
+    final carouselScrollable = find.descendant(
+      of: carousel,
+      matching: find.byType(Scrollable),
+    );
+    final carouselPosition =
+        tester.state<ScrollableState>(carouselScrollable).position;
+
+    expect(carouselPosition.pixels, 0);
+
+    await tester.drag(firstCarouselVideo, const Offset(-200, 0));
+    await tester.pumpAndSettle();
+
+    expect(carouselPosition.pixels, greaterThan(0));
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      0,
+    );
+
+    await tester.dragFrom(const Offset(350, 400), const Offset(-320, 0));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      1,
+    );
   });
 
   testWidgets('tablet homepage tabs ignore horizontal swipes', (tester) async {

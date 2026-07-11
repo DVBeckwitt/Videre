@@ -16,6 +16,15 @@ on:
 
   # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
+  release-script:
+    name: release script safety tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Windows release script
+        shell: pwsh
+        run: ./tools/build_android_release.Tests.ps1
+
   # This workflow contains a single job called "build"
   build:
     name: flutter analyze and build
