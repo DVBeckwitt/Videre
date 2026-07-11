@@ -239,3 +239,5 @@ finally {
 if ($FailedTests -gt 0) {
     throw "$FailedTests release script test(s) failed."
 }
+
+exit 0
