@@ -10,7 +10,7 @@ Videre is not affiliated with Google, YouTube, the Invidious project, or the ori
 
 ## Status
 
-Videre is an independent fork of Clipious.
+Videre is an independent fork of Clipious. I plan on maintaining it for myself but will also be happy to hear bugs from others and address them. 
 
 Official Videre APKs are published from this repository under [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases). Download builds only from the official Videre releases page unless another distribution channel is explicitly listed here.
 
@@ -253,12 +253,6 @@ Original project:
 - Original author: Paul Fauchon
 - Original license: GNU AGPL v3.0 or later
 
-Videre changes:
-
-- Project renamed from Clipious to Videre
-- README updated to describe Videre as an independent fork
-- Installation instructions updated for Videre APK releases
-- Future Videre-specific changes will be tracked in this repository
 
 ## License
 
