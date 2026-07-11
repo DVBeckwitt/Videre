@@ -51,7 +51,7 @@ class Thumbnail extends StatelessWidget {
                       return CachedNetworkImage(
                         key: ValueKey(url),
                         cacheKey: url,
-                        httpHeaders: server.data?.customHeaders,
+                        httpHeaders: server.data!.headersForUrl(url),
                         errorListener: (value) => cubit.onThumbnailFailed(),
                         imageBuilder: (context, imageProvider) =>
                             AnimatedContainer(

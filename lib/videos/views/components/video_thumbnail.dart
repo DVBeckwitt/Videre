@@ -16,17 +16,23 @@ class VideoThumbnailView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ColorScheme colors = Theme.of(context).colorScheme;
+    final colors = Theme.of(context).colorScheme;
     return AspectRatio(
       aspectRatio: 16 / 9,
-      child: Thumbnail(
-          thumbnails: thumbnails,
-          decoration: decoration != null
-              ? decoration!
-              : BoxDecoration(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Thumbnail(
+            thumbnails: thumbnails,
+            decoration: decoration ??
+                BoxDecoration(
                   color: colors.secondaryContainer,
-                  borderRadius: BorderRadius.circular(10)),
-          child: child),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+          ),
+          if (child != null) child!,
+        ],
+      ),
     );
   }
 }

@@ -22,6 +22,12 @@ Status: available in the current source and covered by an automated widget test.
 
 On phones, the Home, Subscriptions, Playlists, and History pages can be changed with the bottom navigation bar or a horizontal swipe. Swipes track the finger, snap to one page at a time, and bounce only at the first and last pages. Horizontal drags that start on a Home carousel scroll that carousel; start the gesture elsewhere in the page to change tabs. Tablet and TV navigation behavior is unchanged. The feature uses the existing tab routes and requires no setting, data migration, or user action.
 
+### Thumbnail privacy and fallback
+
+Status: fixed in the current source and covered by offline regression tests.
+
+Videre sends instance authentication headers only to the selected instance's exact HTTP(S) origin, including its effective port. External, lookalike-host, scheme-mismatched, and port-mismatched thumbnail URLs still load, but without instance credentials. Video cards prefer an exact `maxres` thumbnail before the existing fallback order, and their foreground controls remain usable while thumbnails load or fail. The fix requires no setting, data migration, or user action.
+
 ## How it works
 
 Videre does not talk to YouTube directly as a normal YouTube app. Instead, it connects to an Invidious instance selected by the user. That instance retrieves and exposes YouTube content through the Invidious API, and Videre provides the Android, tablet, and TV interface on top of it.
@@ -229,10 +235,10 @@ Alternatively, run the tests directly inside the Nix environment:
 nix-shell --run './submodules/flutter/bin/flutter test'
 ```
 
-The phone homepage swipe regression test is self-contained and does not require the local Invidious test server:
+The homepage and thumbnail regression tests are self-contained and do not require the local Invidious test server:
 
 ```bash
-./submodules/flutter/bin/flutter test test/widget_test.dart
+./submodules/flutter/bin/flutter test test/widget_test.dart test/utils/image_object_test.dart
 ```
 
 ### Translations

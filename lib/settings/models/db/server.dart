@@ -22,8 +22,17 @@ sealed class Server with _$Server {
   const Server._();
 
   Map<String, String>? headersForUrl(String url) {
-    var useHeaders = url.startsWith(this.url);
-    _log.fine('need header for $url ? $useHeaders');
+    final serverUri = Uri.tryParse(this.url);
+    final targetUri = Uri.tryParse(url);
+    final useHeaders = serverUri != null &&
+        targetUri != null &&
+        (serverUri.scheme == 'http' || serverUri.scheme == 'https') &&
+        targetUri.scheme == serverUri.scheme &&
+        serverUri.host.isNotEmpty &&
+        targetUri.host == serverUri.host &&
+        targetUri.port == serverUri.port;
+
+    _log.fine('Use server headers: $useHeaders');
     return useHeaders ? customHeaders : null;
   }
 

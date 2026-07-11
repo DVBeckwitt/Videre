@@ -18,7 +18,16 @@ class ImageObject {
 
   static List<String> getThumbnailUrlsByPreferredOrder(
       List<ImageObject>? images) {
-    return _getThumbnailsByPreferredORder(images).map((i) => i.url).toList();
+    final thumbnails = _getThumbnailsByPreferredORder(images);
+    final maxresIndex =
+        thumbnails.indexWhere((thumbnail) => thumbnail.quality == 'maxres');
+
+    if (maxresIndex > 0) {
+      final maxres = thumbnails.removeAt(maxresIndex);
+      thumbnails.insert(0, maxres);
+    }
+
+    return thumbnails.map((thumbnail) => thumbnail.url).toList();
   }
 
   static List<ImageObject> _getThumbnailsByPreferredORder(
