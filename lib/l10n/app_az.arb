@@ -68,10 +68,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Oynatma siyahıları yoxdur",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "Kanallar",
   "@channels": {
     "description": "Channels label"
@@ -128,10 +124,6 @@
   "@popular": {
     "description": "Popular videos title"
   },
-  "wizardIntro": "İctimai server seç və ya öz serverinizi əlavə edin.(Daha sonra tənzimləmələrdə dəyişdirilə bilər)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "errorAddingVideoToPlaylist": "Oynatma siyahısına video əlavə edilərkən xəta",
   "@errorAddingVideoToPlaylist": {
     "description": "Error while adding video to playlist"
@@ -160,10 +152,6 @@
   "@sponsorBlockSettingsQuickDescription": {
     "description": "Small description of what the sponsor block settings do"
   },
-  "pressDownToShowSettings": "Tənzimləmələri göstərmək üçün aşağı bas",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "searchHistoryDescription": "Axtarış tarixçəsi tənzimləmələri",
   "@searchHistoryDescription": {
     "description": "Description for search history settings"
@@ -171,10 +159,6 @@
   "itemlistErrorGeneric": "Məlumat əldə etmək alınmadı",
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
-  },
-  "publicServersError": "İctimai serverlərin siyahısın əldə etmək olmadı. Təkrar sınamaq üçün toxun.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "videoAddedToQueue": "Video növbəyə əlavə edildi",
   "@videoAddedToQueue": {
@@ -197,10 +181,6 @@
   "topSorting": "Ən yaxşı",
   "@topSorting": {
     "description": "Content sorting: top"
-  },
-  "whenAppStartsShow": "Tətbiq başlayanda, göstər…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "Serverlər",
   "@servers": {
@@ -230,14 +210,6 @@
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
   },
-  "invalidInvidiousServer": "Etibarsız Invidious Serveri",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
-  "addServerHelpText": "Öz serverlərinizi əlavə etmək üçün + düyməsin istifadə edin və ya ictimai serverə toxunun və onu əlavə edin.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
   "streamIsLive": "Canlı",
   "@streamIsLive": {
     "description": "Label when a video is a live stream"
@@ -253,10 +225,6 @@
   "country": "Ölkə",
   "@country": {
     "description": "Country label"
-  },
-  "useSponsorBlock": "SponsorBlock İstifadə Et",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "currentServer": "{current} hazırda istifadə edilir",
   "@currentServer": {
@@ -287,10 +255,6 @@
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
   },
-  "tapToAddServer": "Siyahınıza server əlavə etmək üçün toxun",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
   "appearance": "Görünüş",
   "@appearance": {
     "description": "Settings category title"
@@ -306,10 +270,6 @@
   "delete": "Sil",
   "@delete": {
     "description": "Delete label"
-  },
-  "loadingPublicServer": "İctimai serverlər yüklənilir",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "share": "Paylaşım",
   "@share": {
@@ -331,10 +291,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Tətbiq başlayanda nə göstəriləcəyini seçin",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "manageServers": "Serverləri idarə et",
   "@manageServers": {
     "description": "Settings to manage servers"
@@ -342,10 +298,6 @@
   "logIn": "Daxil ol",
   "@logIn": {
     "description": "CTA to log in to server"
-  },
-  "publicServers": "İctimai serverlər",
-  "@publicServers": {
-    "description": "Public servers label"
   },
   "redirectInvidiousLink": "Invidious Yönləndirmə linkin paylaş",
   "@redirectInvidiousLink": {
@@ -439,20 +391,8 @@
   "@addToPlaylist": {
     "description": "Label to add a video to a playlist"
   },
-  "malformedStatsEndpoint": "/api/v1/status gözlənildiyi kimi deyil",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "serverIsNotReachable": "Server əlçatan deyil",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "error": "Xəta",
   "@error": {},
-  "malformedStatsEndpointDescription": "Server statistikasının son çıxışı gözlənilən faydalı yükləmə cavabı vermədi, \"software.name\" açarı \"invidious\"a bərabər olmalıdır.\nServerdən cavab:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
   "authentication": "Təsdiqləmə",
   "@authentication": {
     "description": "Label for server settings related to authentications"

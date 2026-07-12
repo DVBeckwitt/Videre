@@ -1,5 +1,3 @@
-library app.globals;
-
 import 'package:flutter/animation.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/utils/file_db.dart';
@@ -8,11 +6,6 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'utils/models/country.dart';
 
-// const BROADCAST_SERVER_CHANGED = 'server-changed';
-// const BROADCAST_STOP_PLAYING = 'stop-playing';
-// const BROADCAST_STOP_MINI_PLAYER = 'stop-mini-player';
-// const BROADCAST_MOVE_MINI_PLAYER = 'move-mini-player';
-// const NAVIGATOR_KEY = 1;
 const youtubeHosts = [
   'youtube.com',
   'www.youtube.com',

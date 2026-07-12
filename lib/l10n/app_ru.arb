@@ -112,10 +112,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Нет плейлистов",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "Каналы",
   "@channels": {
     "description": "Channels label"
@@ -135,10 +131,6 @@
   "couldntFetchVideos": "Не удалось получить видео. Нажмите, чтобы повторить попытку.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Выберите общедоступный сервер или добавьте свой собственный. (можно изменить позже в настройках)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "startUsingClipious": "Начать использовать Videre",
   "@startUsingClipious": {
@@ -198,10 +190,6 @@
   "@country": {
     "description": "Country label"
   },
-  "whenAppStartsShow": "Когда приложение запускается, показывать…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "servers": "Сервера",
   "@servers": {
     "description": "Server management settings category"
@@ -246,10 +234,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "Неверный сервер Invidious",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "Ваши сервера",
   "@yourServers": {
     "description": "Your servers label"
@@ -257,22 +241,6 @@
   "notLoggedIn": "Вы не авторизованы",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "Используйте кнопку + для добавления своих собственных серверов или нажмите на общедоступный сервер и добавьте его.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Публичные сервера",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Загрузка публичных серверов",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Нажмите, чтобы добавить сервер в список",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "appearance": "Внешний вид",
   "@appearance": {
@@ -308,10 +276,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Выберите, что показывать при запуске приложения",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "currentServer": "Сейчас используется {current}",
   "@currentServer": {
     "description": "Which server the user is currently using",
@@ -321,17 +285,9 @@
       }
     }
   },
-  "useSponsorBlock": "Использовать SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "sponsorBlockDescription": "Пропускать спонсорские сегменты, представленные сообществом",
   "@sponsorBlockDescription": {
     "description": "Sponsorblock setting description"
-  },
-  "publicServersError": "Не удалось получить список публичных серверов. Нажмите, чтобы повторить попытку.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "loggedIn": "Вы вошли на сервер",
   "@loggedIn": {
@@ -479,10 +435,6 @@
   "@sponsorBlockCategoryFillerDescription": {
     "description": "Sponsorblock 'Filler' Category description"
   },
-  "pressDownToShowSettings": "Нажмите вниз для отображения настроек",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "quality": "Качество",
   "@quality": {
     "description": "Name of TV ui video settings"
@@ -550,10 +502,6 @@
   "followSystem": "Как в системе",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Требуется перезапуск приложения",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "Язык приложения",
   "@appLanguage": {
@@ -835,10 +783,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Подписок нет, ищите видео и подписывайтесь на любые понравившиеся вам каналы.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Позже вы сможете снова подписаться на этот канал",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -869,10 +813,6 @@
   "@history": {
     "description": "User view history label"
   },
-  "logsCopied": "Логи скопированы в буфер обмена",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
-  },
   "lockFullScreenToLandscape": "Блокировка полноэкранной ориентации к пропорциям видео",
   "@lockFullScreenToLandscape": {
     "description": "Title to force full screen to landscape"
@@ -900,10 +840,6 @@
   "videoFiltered": "Видео отфильтровано по следующим причинам:",
   "@videoFiltered": {
     "description": "Label shown on video list when it is filtered out"
-  },
-  "library": "Библиотека",
-  "@library": {
-    "description": "Name for user library"
   },
   "navigationBarStyle": "Стиль панели навигации",
   "@navigationBarStyle": {
@@ -952,14 +888,6 @@
   "distractionFreeModeDescription": "Отключить комментарии и рекомендации",
   "@distractionFreeModeDescription": {
     "description": "Description for distraction free mode"
-  },
-  "askForDisableBatteryOptimizationTitle": "Необходимо выключить оптимизацию расхода батареи",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "Для того чтобы присылать уведомления Videre требуется запускать фоновые сервисы. Для стабильной работы необходимо чтобы Videre имел доступ к неограниченному расходу батареи, нажатие на ОК откроет настройки оптимизации расхода батареи.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "notificationsDescription": "Включите и рассмотрите, о чём вас уведомляют",
   "@notificationsDescription": {
@@ -1031,10 +959,6 @@
       }
     }
   },
-  "videoFilterApplyDateToFilter": "Фильтровать видео в выбранное время",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "to": "До",
   "@to": {
     "description": "To word as in 'From xx To xx')"
@@ -1046,10 +970,6 @@
   "videoFilterDayOfWeekDescription": "Вы можете выборочно настроить дни недели и время, в которые будут применяться фильтры, например, для того, чтобы не узнать результаты спортивных мероприятий заранее.",
   "@videoFilterDayOfWeekDescription": {
     "description": ""
-  },
-  "videoFilterStartTime": "Время начала",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "deletePlaylistNotificationContent": "Вы больше не будете получать уведомления от этого плейлиста.",
   "@deletePlaylistNotificationContent": {
@@ -1095,14 +1015,6 @@
   "@deletePlaylistNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
   },
-  "videoFilterEndTime": "Время конца",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
-  "foregroundServiceUpdatingSubscriptions": "Проверяются подписки...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
   "secondsShortForm": "с",
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
@@ -1125,10 +1037,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "Мониторинг видео",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "otherNotifications": "Другие источники уведомлений (значки с колокольчиком)",
   "@otherNotifications": {
     "description": "Title for settings section in the notification settings"
@@ -1149,17 +1057,9 @@
       "format": "compact"
     }
   },
-  "foregroundServiceUpdatingChannels": "Проверяются каналы...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
-  },
   "notificationFrequencySettingsDescription": "Насколько часто приложение будет проверять наличие новых видео",
   "@notificationFrequencySettingsDescription": {
     "description": "Description for frequency settings"
-  },
-  "foregroundServiceUpdatingPlaylist": "Проверяются плейлисты...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "subscriptionNotificationContent": "В ваших подписках {count, plural, =0{нет новых видео} =1{появилось 1 новое видео} other{появилось {count} новых видео}}",
   "@subscriptionNotificationContent": {
@@ -1207,10 +1107,6 @@
   "@skipStepDescription": {
     "description": "Title for the settings to set the skipping step"
   },
-  "serverIsNotReachable": "Сервер недоступен",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "nFilters": "{count, plural, =0{Нет видео} =1{1 фильтр} other{{count} фильтров}}",
   "@nFilters": {
     "description": "One or more video filters",
@@ -1220,14 +1116,6 @@
         "format": "compact"
       }
     }
-  },
-  "malformedStatsEndpointDescription": "Конечная точка статистики сервера не ответила на ожидаемую нагрузку, ключ \"software.name\" должен быть равен \"invidious\".\nОтвет от сервера:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats не такое, как ожидалось",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
   },
   "skipStep": "Перемотка двойным нажатием",
   "@skipStep": {
@@ -1367,8 +1255,6 @@
   "@retry": {},
   "addBasicAuth": "Добавить Базовую Аутентификацию",
   "@addBasicAuth": {},
-  "addBasicAuthExplanation": "Если ваш сервер требует базовой HTTP-аутентификации, добавьте информацию сдесь. Это не информация о вашем аккаунте invidious",
-  "@addBasicAuthExplanation": {},
   "addHeader": "Добавить заголовок",
   "@addHeader": {},
   "advancedConfiguration": "Расширенная Конфигурация",
@@ -1403,12 +1289,6 @@
   "@screenControlsExplanation": {},
   "wrongThumbnailConfiguration": "Сервер работает, но сконфигурирован некорректно, миниатюры видео и каналов не будут отображаться правильно. Выключите проверку конфигурации сервера если вы согласны с этим, в противном случая починить свой сервер",
   "@wrongThumbnailConfiguration": {},
-  "noPublicServers": "Нет общедоступных серверов",
-  "@noPublicServers": {},
-  "tapToSeeHow": "Нажмите чтобы увидеть, как хостить свой",
-  "@tapToSeeHow": {},
-  "referToInvidiousWebsiteForHostingInstructions": "Обратитесь к сайту Invidious за инструкциями по размещению invidious",
-  "@referToInvidiousWebsiteForHostingInstructions": {},
   "forceTvUi": "Принудительный интерфейс телевизора",
   "@forceTvUi": {},
   "forceTvUiExplanation": "Принудительное использование интерфейса телевизора, что может быть полезно для устройств, не имеющих системной конфигурации leanback. Требуется перезапуск",

@@ -109,9 +109,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String get noChannels => 'Nu există canale';
 
   @override
-  String get noPlaylists => 'Nu există Playlisturi';
-
-  @override
   String get channels => 'Canale';
 
   @override
@@ -126,10 +123,6 @@ class AppLocalizationsRo extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'Nu s-au putut prelua videoclipuri. Atingeți pentru a încerca din nou.';
-
-  @override
-  String get wizardIntro =>
-      'Selectați un server public sau adăugați unul propriu. (Poate fi modificat ulterior în setări)';
 
   @override
   String get startUsingClipious => 'Începeți să folosești Videre';
@@ -193,9 +186,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String get selectBrowsingCountry => 'Selectați țara de navigare';
 
   @override
-  String get showOnStart => 'Selectați ce să afișați când pornește aplicația';
-
-  @override
   String get settings => 'Setări';
 
   @override
@@ -203,9 +193,6 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get country => 'Țară';
-
-  @override
-  String get whenAppStartsShow => 'Când aplicația pornește, arată…';
 
   @override
   String get servers => 'Servere';
@@ -217,9 +204,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String currentServer(String current) {
     return 'În prezent se utilizează $current';
   }
-
-  @override
-  String get useSponsorBlock => 'Utilizați SponsorBlock';
 
   @override
   String get sponsorBlockDescription =>
@@ -253,9 +237,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String get delete => 'Șterge';
 
   @override
-  String get invalidInvidiousServer => 'Server Invidious nevalid';
-
-  @override
   String get yourServers => 'Serverele tale';
 
   @override
@@ -263,23 +244,6 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Nu ești conectat';
-
-  @override
-  String get addServerHelpText =>
-      'Folosiți butonul + pentru a vă adăuga propriile servere sau apăsați pe un server public și adăugați-l.';
-
-  @override
-  String get publicServers => 'Servere publice';
-
-  @override
-  String get loadingPublicServer => 'Se încarcă servere publice';
-
-  @override
-  String get tapToAddServer => 'Atinge pentru a adăuga server la lista';
-
-  @override
-  String get publicServersError =>
-      'Nu s-a putut prelua lista de servere publice. Apasă pentru a reîncerca.';
 
   @override
   String get appearance => 'Aspect';
@@ -343,17 +307,6 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get error => 'Eroare';
-
-  @override
-  String get malformedStatsEndpoint =>
-      '/api/v1/stats nu este așa cum se aștepta';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'Serverul stats endpoint nu a răspuns un payload așteptat, cheia \"software.name” ar trebui să fie egală cu \"invidious”.\nRăspuns de la server:';
-
-  @override
-  String get serverIsNotReachable => 'Serverul nu este accesibil';
 
   @override
   String get videoQueue => 'Coadă video';
@@ -444,9 +397,6 @@ class AppLocalizationsRo extends AppLocalizations {
       'Prin proxy fluxurile video de pe server, puteți ocoli blocările regionale sau blocarea ISP-ului YouTube';
 
   @override
-  String get pressDownToShowSettings => 'Apasă în jos pentru a afișa setările';
-
-  @override
   String get quality => 'Calitate';
 
   @override
@@ -493,9 +443,6 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get followSystem => 'Urmărește sistemul';
-
-  @override
-  String get requiresRestart => 'Necesită repornirea aplicației';
 
   @override
   String get appLanguage => 'Limba aplicației';
@@ -622,9 +569,6 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Copiază în clipboard';
-
-  @override
-  String get logsCopied => 'Jurnalele copiate în clipboard';
 
   @override
   String get rememberSubtitleLanguage => 'Reține limba subtitrărilor';
@@ -805,10 +749,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String get manageSubscriptions => 'Gestionează abonamentele';
 
   @override
-  String get noSubscriptions =>
-      'Fără abonamente, caută videoclipuri și abonează-te la orice canal îți place.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'Te poți abona la acest canal mai târziu';
 
@@ -838,9 +778,6 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get home => 'Acasă';
-
-  @override
-  String get library => 'Bibliotecă';
 
   @override
   String get customizeAppLayout => 'Personalizează secțiunile aplicației';
@@ -873,22 +810,12 @@ class AppLocalizationsRo extends AppLocalizations {
   String get secondsShortForm => 'sec';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'Filtrează videoclipurile după anumite intervale de timp';
-
-  @override
   String get videoFilterDayOfWeek =>
       'Selectează zilele pentru a aplica filtrele';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'Poți alege în selectiv zilele săptămânii și ora la care se aplică filtrele, de exemplu, pentru a evita spoilerele evenimentelor sportive.';
-
-  @override
-  String get videoFilterStartTime => 'Începutul timpului';
-
-  @override
-  String get videoFilterEndTime => 'Sfârșitul timpului';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -944,14 +871,6 @@ class AppLocalizationsRo extends AppLocalizations {
     );
     return 'Există  $_temp0 în fluxul abonamentului tău';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Dezactivarea optimizării bateriei necesară';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'Pentru a trimite notificări, Videre trebuie să ruleze un serviciu în fundal. Pentru ca acesta să funcționeze fără probleme, este necesar ca Videre să aibă acces nerestricționat la baterie. Apăsând pe OK se vor deschide setările de optimizare a bateriei.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notificări dezactivate';
@@ -1024,9 +943,6 @@ class AppLocalizationsRo extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Monitorizare video';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1038,17 +954,6 @@ class AppLocalizationsRo extends AppLocalizations {
     );
     return 'Va verifica pentru videoclipuri noi o dată la $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Se verifică abonamentele...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist =>
-      'Se verifică listele de redare...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Se verifică canalele...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1169,10 +1074,6 @@ class AppLocalizationsRo extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1255,14 +1156,4 @@ class AppLocalizationsRo extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

@@ -108,9 +108,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get noChannels => 'Inga kanaler';
 
   @override
-  String get noPlaylists => 'Inga spellistor';
-
-  @override
   String get channels => 'Kanaler';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsSv extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'Kunde inte få tag på filmen. Tryck för att försöka igen.';
-
-  @override
-  String get wizardIntro =>
-      'Välj en publik eller lägg till din egen. (Kan ändras senare i inställningar)';
 
   @override
   String get startUsingClipious => 'Börja använda Videre';
@@ -192,10 +185,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get selectBrowsingCountry => 'Välj utforskningsland';
 
   @override
-  String get showOnStart =>
-      'Välj vad som skall visas när applikationen startas';
-
-  @override
   String get settings => 'Inställningar';
 
   @override
@@ -203,9 +192,6 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get country => 'Land';
-
-  @override
-  String get whenAppStartsShow => 'När applikationen startar, visa…';
 
   @override
   String get servers => 'Servrar';
@@ -217,9 +203,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String currentServer(String current) {
     return 'För stunden används $current';
   }
-
-  @override
-  String get useSponsorBlock => 'Använd AnnonseringsBlockerare';
 
   @override
   String get sponsorBlockDescription =>
@@ -253,9 +236,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get delete => 'Ta bort';
 
   @override
-  String get invalidInvidiousServer => 'Ogiltig Invidious-server';
-
-  @override
   String get yourServers => 'Dina servrar';
 
   @override
@@ -263,24 +243,6 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Inte inloggad';
-
-  @override
-  String get addServerHelpText =>
-      'Tryck på \"+\" för att lägga till din egen server, eller tryck på en publik server för att använda den.';
-
-  @override
-  String get publicServers => 'Publika servrar';
-
-  @override
-  String get loadingPublicServer => 'Laddar listan med publika servrar';
-
-  @override
-  String get tapToAddServer =>
-      'Tryck för att lägga till servern till din lista';
-
-  @override
-  String get publicServersError =>
-      'Misslyckades med att hämta listan över publika servrar. Tryck för att försöka igen.';
 
   @override
   String get appearance => 'Utseende';
@@ -344,16 +306,6 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get error => 'Fel';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats är inte som förväntat';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'Serverstatistikens slutpunkt motsvarade inte det förväntade avslutet, nyckeln \"software.name\" borde motsvara \"invidious\".\nSvaret från servern var:';
-
-  @override
-  String get serverIsNotReachable => 'Servern går ej att nå';
 
   @override
   String get videoQueue => 'Videokö';
@@ -445,10 +397,6 @@ class AppLocalizationsSv extends AppLocalizations {
       'Genom att se filmer från servern via ombud kan du gå förbi regionala blockeringar eller internetleverantörer som blockerar YouTube';
 
   @override
-  String get pressDownToShowSettings =>
-      'Visa inställningar genom att trycka neråt';
-
-  @override
   String get quality => 'Kvalitet';
 
   @override
@@ -494,9 +442,6 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get followSystem => 'Följ systemet';
-
-  @override
-  String get requiresRestart => 'Kräver omstart av app';
 
   @override
   String get appLanguage => 'Språk';
@@ -622,9 +567,6 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Kopiera till urklippshanteraren';
-
-  @override
-  String get logsCopied => 'Journal kopierad till urklippshanteraren';
 
   @override
   String get rememberSubtitleLanguage => 'Kom ihåg språk för undertexter';
@@ -804,10 +746,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get manageSubscriptions => 'Hantera Prenumerationer';
 
   @override
-  String get noSubscriptions =>
-      'Inga prenumerationer, sök upp filmer och prenumerera på valfri kanal som faller dig i smaken.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'Du kan åter välja att prenumerera på denna kanal igen vid ett senare tillfälle';
 
@@ -839,9 +777,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get home => 'Hem';
 
   @override
-  String get library => 'Bibliotek';
-
-  @override
   String get customizeAppLayout => 'Anpassa appsektioner';
 
   @override
@@ -871,22 +806,12 @@ class AppLocalizationsSv extends AppLocalizations {
   String get secondsShortForm => 'sek.';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'Filtrera filmer under specifika tider';
-
-  @override
   String get videoFilterDayOfWeek =>
       'Ange dagar som filtren skall appliceras på';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'Du kan selektivt välja vilka dagar och tider på veckan som du vill att filtren skall gälla för, för att som exempel motverka att avslöja resultat av sportevent i förtid.';
-
-  @override
-  String get videoFilterStartTime => 'Starttid';
-
-  @override
-  String get videoFilterEndTime => 'Sluttid';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -942,14 +867,6 @@ class AppLocalizationsSv extends AppLocalizations {
     );
     return 'Det finns $_temp0 i flödet av prenumererat material';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Inaktivering av batterioptimering krävs';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'För att kunna skicka meddelande så behöver Videre kunna köra tjänster i bakgrunden. För att dessa skall kunna köras smidigt så krävs det att Videre ges obegränsad batterianvändning, klicka på ok för att öppna upp inställningar för batterioptimering.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Meddelanden är inaktiverade';
@@ -1023,9 +940,6 @@ class AppLocalizationsSv extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Övervakning av filmer';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1038,16 +952,6 @@ class AppLocalizationsSv extends AppLocalizations {
     );
     return 'Leta efter nya filmer $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Kontrollerar prenumerationer...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => 'Kontrollerar spellistor...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Kontrollerar kanaler...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1169,10 +1073,6 @@ class AppLocalizationsSv extends AppLocalizations {
   String get addBasicAuth => 'Lägg till Grundläggande Autentisering';
 
   @override
-  String get addBasicAuthExplanation =>
-      'Om din server kräver grundläggande HTTP autentisering så lägger du till detaljerna nedan. Dessa är inte detaljerna för ditt incidious-konto';
-
-  @override
   String get addHeader => 'Lägg till rubrik';
 
   @override
@@ -1256,15 +1156,4 @@ class AppLocalizationsSv extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Tvinga gränssnittet att vara TV-upplevelsen, kan vara användbart för vissa enheter som inte har leanback-systemkonfiguration. Omstart av appen krävs';
-
-  @override
-  String get noPublicServers => 'Inga publika servrar är tillgängliga';
-
-  @override
-  String get tapToSeeHow =>
-      'Tryck för att se hur du kan vara värd för din egen';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Se Invidious webbsida för instruktioner om hur man är värd för invidious';
 }

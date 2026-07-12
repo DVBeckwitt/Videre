@@ -300,12 +300,6 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   @override
   selectVideoTrack(int index) {}
 
-  bool supportsPip() {
-    return false;
-  }
-
-  void enterPip() {}
-
   @override
   bool isMuted() {
     return (audioPlayer?.volume ?? 0) == 0;

@@ -113,27 +113,27 @@ Screenshots are inherited from Clipious and may not yet reflect Videre branding.
 
 ### Phone
 
-[![Home](./screenshots/mobile-home_small.png)](./screenshots/mobile-home.png)
-[![Video](./screenshots/mobile-video_small.png)](./screenshots/mobile-video.png)
-[![Channel](./screenshots/mobile-channel_small.png)](./screenshots/mobile-channel_small.png)
-[![Playlist](./screenshots/mobile-playlist_small.png)](./screenshots/mobile-playlist_small.png)
+[![Home](./screenshots/mobile-home_small.png)](./fastlane/metadata/android/en-US/images/phoneScreenshots/1.png)
+[![Video](./screenshots/mobile-video_small.png)](./fastlane/metadata/android/en-US/images/phoneScreenshots/2.png)
+[![Channel](./screenshots/mobile-channel_small.png)](./fastlane/metadata/android/en-US/images/phoneScreenshots/3.png)
+[![Playlist](./screenshots/mobile-playlist_small.png)](./fastlane/metadata/android/en-US/images/phoneScreenshots/4.png)
 
 ### Tablet
 
-[![Home](./screenshots/tablet-home_small.png)](./screenshots/tablet-home.png)
-[![Video](./screenshots/tablet-video_small.png)](./screenshots/tablet-video.png)
-[![Channel](./screenshots/tablet-channel_small.png)](./screenshots/tablet-channel_small.png)
-[![Playlist](./screenshots/tablet-playlist_small.png)](./screenshots/tablet-playlist_small.png)
+[![Home](./screenshots/tablet-home_small.png)](./fastlane/metadata/android/en-US/images/tenInchScreenshots/1.png)
+[![Video](./screenshots/tablet-video_small.png)](./fastlane/metadata/android/en-US/images/tenInchScreenshots/2.png)
+[![Channel](./screenshots/tablet-channel_small.png)](./fastlane/metadata/android/en-US/images/tenInchScreenshots/3.png)
+[![Playlist](./screenshots/tablet-playlist_small.png)](./fastlane/metadata/android/en-US/images/tenInchScreenshots/4.png)
 
 ### TV
 
-[![Home](./screenshots/tv-home_small.png)](./screenshots/tv-home.png)
-[![Home](./screenshots/tv-home-2_small.png)](./screenshots/tv-home-2.png)
-[![Video](./screenshots/tv-video_small.png)](./screenshots/tv-video.png)
-[![Video](./screenshots/tv-video-2_small.png)](./screenshots/tv-video-2.png)
-[![Channel](./screenshots/tv-channel_small.png)](./screenshots/tv-channel_small.png)
-[![Playlist](./screenshots/tv-playlist_small.png)](./screenshots/tv-playlist_small.png)
-[![Playlist](./screenshots/tv-playlist-2_small.png)](./screenshots/tv-playlist_small-2.png)
+[![Home](./screenshots/tv-home_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/1.png)
+[![Home](./screenshots/tv-home-2_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/2.png)
+[![Video](./screenshots/tv-video_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/3.png)
+[![Video](./screenshots/tv-video-2_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/4.png)
+[![Channel](./screenshots/tv-channel_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/5.png)
+[![Playlist](./screenshots/tv-playlist_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/6.png)
+[![Playlist](./screenshots/tv-playlist-2_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/7.png)
 
 ## Facing an issue?
 

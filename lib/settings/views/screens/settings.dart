@@ -49,25 +49,6 @@ class SettingsScreen extends StatelessWidget {
     AutoRouter.of(context).push(const AppearanceSettingsRoute());
   }
 
-/*
-  selectOnOpen(BuildContext context, SettingsState controller) {
-    var categories = getCategories(context);
-    var locals = AppLocalizations.of(context)!;
-    var cubit = context.read<SettingsCubit>();
-
-    SelectDialog.showModal<String>(
-      context,
-      label: locals.showOnStart,
-      selectedValue: categories[controller.onOpen],
-      showSearchBox: false,
-      items: categories,
-      onChange: (String selected) {
-        cubit.selectOnOpen(selected, categories);
-      },
-    );
-  }
-*/
-
   @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;

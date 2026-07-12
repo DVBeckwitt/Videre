@@ -109,9 +109,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get noChannels => 'Không có kênh';
 
   @override
-  String get noPlaylists => 'Không có danh sách phát';
-
-  @override
   String get channels => 'Các kênh';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get couldntFetchVideos => 'Không thể tải video, nhấn để thử lại.';
-
-  @override
-  String get wizardIntro =>
-      'Chọn một máy chủ công cộng hoặc thêm máy chủ của riêng bạn. (Có thể thay đổi sau trong cài đặt)';
 
   @override
   String get startUsingClipious => 'Bắt đầu sử dụng Videre';
@@ -192,9 +185,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get selectBrowsingCountry => 'Chọn quốc gia duyệt';
 
   @override
-  String get showOnStart => 'Chọn nội dung sẽ hiển thị khi ứng dụng khởi động';
-
-  @override
   String get settings => 'Cài đặt';
 
   @override
@@ -202,9 +192,6 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get country => 'Quốc gia';
-
-  @override
-  String get whenAppStartsShow => 'Khi mở ứng dụng, hiển thị…';
 
   @override
   String get servers => 'Máy chủ';
@@ -216,9 +203,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String currentServer(String current) {
     return 'Đang dùng server $current';
   }
-
-  @override
-  String get useSponsorBlock => 'Dùng chặn tài trợ';
 
   @override
   String get sponsorBlockDescription =>
@@ -252,9 +236,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get delete => 'Xoá';
 
   @override
-  String get invalidInvidiousServer => 'Máy chủ không hợp lệ';
-
-  @override
   String get yourServers => 'Máy chủ';
 
   @override
@@ -262,23 +243,6 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Chưa đăng nhập';
-
-  @override
-  String get addServerHelpText =>
-      'Sử dụng nút + để thêm máy chủ của riêng bạn hoặc nhấn vào máy chủ công cộng và thêm nó.';
-
-  @override
-  String get publicServers => 'Máy chủ công cộng';
-
-  @override
-  String get loadingPublicServer => 'Đang tải máy chủ công cộng';
-
-  @override
-  String get tapToAddServer => 'Nhấn để thêm máy chủ vào danh sách của bạn';
-
-  @override
-  String get publicServersError =>
-      'Không thể tìm nạp danh sách máy chủ công cộng. Chạm để thử lại.';
 
   @override
   String get appearance => 'Vẻ bề ngoài';
@@ -342,16 +306,6 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get error => 'Lỗi';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats không như mong đợi';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'Điểm cuối thống kê máy chủ không phản hồi tải trọng dự kiến, khóa \"software.name\" phải bằng \"invidious\". \nPhản hồi từ máy chủ:';
-
-  @override
-  String get serverIsNotReachable => 'Máy chủ không thể truy cập được';
 
   @override
   String get videoQueue => 'Hàng đợi video';
@@ -440,9 +394,6 @@ class AppLocalizationsVi extends AppLocalizations {
       'Bằng cách ủy quyền các luồng video từ máy chủ, bạn có thể bỏ qua các khối khu vực hoặc ISP chặn YouTube';
 
   @override
-  String get pressDownToShowSettings => 'Nhấn xuống để hiển thị cài đặt';
-
-  @override
   String get quality => 'Chất lượng';
 
   @override
@@ -489,9 +440,6 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get followSystem => 'Theo hệ thống';
-
-  @override
-  String get requiresRestart => 'Yêu cầu khởi động lại ứng dụng';
 
   @override
   String get appLanguage => 'Ngôn ngữ ứng dụng';
@@ -617,9 +565,6 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Sao chép vào bộ nhớ tạm';
-
-  @override
-  String get logsCopied => 'Nhật ký được sao chép vào bộ nhớ tạm';
 
   @override
   String get rememberSubtitleLanguage => 'Ghi nhớ ngôn ngữ phụ đề';
@@ -797,10 +742,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get manageSubscriptions => 'Quản lý các mục đăng kí';
 
   @override
-  String get noSubscriptions =>
-      'Không đăng ký, duyệt video và đăng ký bất kỳ kênh nào bạn thích.';
-
-  @override
   String get youCanSubscribeAgainLater => 'Bạn có thể đăng ký lại kênh này sau';
 
   @override
@@ -831,9 +772,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get home => 'Trang chủ';
 
   @override
-  String get library => 'Thư viện';
-
-  @override
   String get customizeAppLayout => 'Tùy chỉnh các phần ứng dụng';
 
   @override
@@ -862,21 +800,11 @@ class AppLocalizationsVi extends AppLocalizations {
   String get secondsShortForm => 'giây';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'Lọc video vào những thời điểm nhất định';
-
-  @override
   String get videoFilterDayOfWeek => 'Chọn ngày để áp dụng bộ lọc';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'Bạn có thể chọn lọc các ngày trong tuần và thời gian áp dụng bộ lọc, chẳng hạn như tránh tiết lộ thông tin về các sự kiện thể thao.';
-
-  @override
-  String get videoFilterStartTime => 'Thời gian bắt đầu';
-
-  @override
-  String get videoFilterEndTime => 'Thời gian kết thúc';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -931,14 +859,6 @@ class AppLocalizationsVi extends AppLocalizations {
     );
     return 'Có $_temp0 trong kênh đăng ký của bạn';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Cần phải tắt tính năng tối ưu hóa pin';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'Để gửi thông báo, Videre cần chạy dịch vụ nền. Để ứng dụng chạy trơn tru, Videre cần được cung cấp mức sử dụng pin không hạn chế, nhấn ok sẽ mở cài đặt tối ưu hóa pin.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Đã tắt thông báo';
@@ -1010,9 +930,6 @@ class AppLocalizationsVi extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Video giám sát';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1024,17 +941,6 @@ class AppLocalizationsVi extends AppLocalizations {
     );
     return 'Sẽ kiểm tra video mới $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Đang kiểm tra đăng ký...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist =>
-      'Đang kiểm tra danh sách phát...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Đang kiểm tra kênh...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1155,10 +1061,6 @@ class AppLocalizationsVi extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1241,14 +1143,4 @@ class AppLocalizationsVi extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

@@ -49,10 +49,6 @@
   "@home": {
     "description": "Label for Home browsing tab"
   },
-  "videoFilterStartTime": "ആരംഭ സമയം",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
   "secondsShortForm": "നിമി",
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
@@ -187,10 +183,6 @@
   "@enabled": {
     "description": "Sort channel videos by popularity"
   },
-  "videoFilterEndTime": "അവസാന സമയം",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "videoFilterOperationHigherThan": "അതിലും ഉയർന്നത്",
   "@videoFilterOperationHigherThan": {
     "description": "Label for video filter operation Higher than"
@@ -218,10 +210,6 @@
   "subtitles": "ഉപശീർഷകങ്ങൾ",
   "@subtitles": {
     "description": "Name of TV ui subtitles settings"
-  },
-  "useSponsorBlock": "SponsorBlock ഉപയോഗിക്കുക",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "videoListed": "പരസ്യമായ",
   "@videoListed": {
@@ -297,10 +285,6 @@
   "followSystem": "വ്യവസ്ഥിതിയെ പിന്തുടരുക",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "പ്രയോഗം പുനരാരംഭിക്കേണ്ടതുണ്ട്",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "distractionFreeModeDescription": "വീഡിയോ അഭിപ്രായങ്ങളും ശുപാർശകളും പ്രവർത്തനരഹിതമാക്കുക",
   "@distractionFreeModeDescription": {

@@ -176,10 +176,6 @@
   "@shareLinkWithTimestamp": {
     "description": "asking user to share link along with timestamp"
   },
-  "wizardIntro": "Wybierz serwer publiczny lub dodaj własny. (Możesz to zmienić później w ustawieniach)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "startUsingClipious": "Zacznij używać Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
@@ -268,10 +264,6 @@
   "@shareYoutubeLink": {
     "description": "asking user to share youtube link"
   },
-  "noPlaylists": "Brak playlist",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "Kanały",
   "@channels": {
     "description": "Channels label"
@@ -309,14 +301,6 @@
   "browsing": "Przeglądanie",
   "@browsing": {
     "description": "video browsing preferences"
-  },
-  "whenAppStartsShow": "Po uruchomieniu aplikacji pokaż…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
-  "useSponsorBlock": "Używaj SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "Pomiń segmenty sponsorowane, zgłoszone przez społeczność",
   "@sponsorBlockDescription": {
@@ -359,10 +343,6 @@
   "@streamIsLive": {
     "description": "Label when a video is a live stream"
   },
-  "showOnStart": "Wybierz, co ma być wyświetlane po uruchomieniu aplikacji",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "servers": "Serwery",
   "@servers": {
     "description": "Server management settings category"
@@ -391,10 +371,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "Niepoprawny serwer Invidious",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "Twoje serwery",
   "@yourServers": {
     "description": "Your servers label"
@@ -402,18 +378,6 @@
   "notLoggedIn": "Wylogowano",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "Użyj przycisku +, aby dodać własne serwery lub stuknij na serwer publiczny i dodaj go.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "tapToAddServer": "Stuknij, aby dodać serwer do twojej listy",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Nie można załadować listy publicznych serwerów. Stuknij, aby ponowić próbę.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "useDashDescription": "Strumieniowanie adaptacyjne DASH może być czasami problematyczne, Youtube może je dławić.",
   "@useDashDescription": {
@@ -467,10 +431,6 @@
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
   },
-  "publicServers": "Serwery publiczne",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
   "useDynamicTheme": "Dynamiczne kolory",
   "@useDynamicTheme": {
     "description": ""
@@ -478,10 +438,6 @@
   "videoIsFamilyFriendly": "Przyjazny dla rodziny",
   "@videoIsFamilyFriendly": {
     "description": "Displayed only when a video is family friendly"
-  },
-  "loadingPublicServer": "Wczytywanie publicznych serwerów",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "appearance": "Wygląd",
   "@appearance": {
@@ -573,10 +529,6 @@
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"
   },
-  "pressDownToShowSettings": "Naciśnij przycisk w dół, aby wyświetlić ustawienia",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "playbackSpeed": "Prędkość odtwarzania",
   "@playbackSpeed": {
     "description": "Name of TV ui Playback speed"
@@ -596,10 +548,6 @@
   "copyToClipBoard": "Kopiuj do schowka",
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
-  },
-  "logsCopied": "Logi skopiowane do schowka",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "rememberSubtitleLanguage": "Zapamiętaj język napisów",
   "@rememberSubtitleLanguage": {
@@ -676,10 +624,6 @@
   "enableSearchHistory": "Włącz historię wyszukiwania",
   "@enableSearchHistory": {
     "description": "Settings label for enabling search history"
-  },
-  "requiresRestart": "Wymaga uruchomienia ponownie aplikacji",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "nVideos": "{count, plural, =0{Brak filmów} =1{1 film} other{{count} filmów}}",
   "@nVideos": {
@@ -879,10 +823,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Bez subskrypcji. Przeglądaj filmy i zasubskrybuj kanał, który polubisz.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Możesz zasubskrybować ten kanał ponownie później",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -925,10 +865,6 @@
   "@share": {
     "description": "asking user if to share"
   },
-  "malformedStatsEndpoint": "/api/v1/stats jest niespodziewane",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
   "channelNotificationTitle": "Nowe filmy z {channel}",
   "@channelNotificationTitle": {
     "description": "Title for the channel notifications when there are new videos",
@@ -938,10 +874,6 @@
         "example": "MKBHD"
       }
     }
-  },
-  "serverIsNotReachable": "Serwer jest niedostępny",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "searchUploadDateHour": "Ostatnia godzina",
   "@searchUploadDateHour": {
@@ -974,14 +906,6 @@
   "searchUploadDateAny": "Dowolna data",
   "@searchUploadDateAny": {
     "description": "Do not filter search result by upload date"
-  },
-  "library": "Biblioteka",
-  "@library": {
-    "description": "Name for user library"
-  },
-  "videoFilterStartTime": "Czas rozpoczęcia",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "from": "Od",
   "@from": {
@@ -1016,10 +940,6 @@
   "layoutEditorAddVideoSource": "Dodaj źródło filmu",
   "@layoutEditorAddVideoSource": {
     "description": "Label for button to allow user to add more video sources to the home screen"
-  },
-  "videoFilterEndTime": "Czas zakończenia",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "notifications": "Powiadomienia",
   "@notifications": {

@@ -112,10 +112,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "لا توجد قوائم تشغيل",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "couldntLoadVideo": "تعذر تحميل الفيديو",
   "@couldntLoadVideo": {
     "description": "Message to display when a video can't be loaded"
@@ -143,10 +139,6 @@
   "errorAddingVideoToPlaylist": "حدث خطأ أثناء إضافة الفيديو إلى قائمة التشغيل",
   "@errorAddingVideoToPlaylist": {
     "description": "Error while adding video to playlist"
-  },
-  "wizardIntro": "حدد خادماً عاماً أو أضف خادمك الخاص. (يمكن تغييرها لاحقا في الإعدادات)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "startUsingClipious": "ابدأ باستخدام Videre",
   "@startUsingClipious": {
@@ -194,10 +186,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "اختر ما تريد إظهاره عند بدء تشغيل التطبيق",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "الإعدادات",
   "@settings": {
     "description": "Settings title"
@@ -209,10 +197,6 @@
   "country": "البلد",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "عند بدء تشغيل التطبيق ، أظهر …",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "الخوادم",
   "@servers": {
@@ -231,17 +215,9 @@
       }
     }
   },
-  "useSponsorBlock": "استخدم حجب فقرة الراعي",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "itemlistErrorGeneric": "تعذر جلب البيانات",
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
-  },
-  "publicServers": "الخوادم العامة",
-  "@publicServers": {
-    "description": "Public servers label"
   },
   "logout": "تسجيل الخروج",
   "@logout": {
@@ -337,10 +313,6 @@
   "@layoutEditorAddVideoSource": {
     "description": "Label for button to allow user to add more video sources to the home screen"
   },
-  "library": "‌المكتبة",
-  "@library": {
-    "description": "Name for user library"
-  },
   "navigationBarLabelAlwaysShowing": "تظهر التسمية دائمًا",
   "@navigationBarLabelAlwaysShowing": {
     "description": "Label always showing option for navigation bar"
@@ -349,10 +321,6 @@
   "@distractionFreeModeDescription": {
     "description": "Description for distraction free mode"
   },
-  "videoFilterApplyDateToFilter": "تصفية مقاطع الفيديو في أوقات محددة",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "otherNotifications": "مصادر الإشعارات الأخرى (أيقونات الجرس)",
   "@otherNotifications": {
     "description": "Title for settings section in the notification settings"
@@ -360,10 +328,6 @@
   "deletePlaylistNotificationTitle": "إشعار حذف قائمة التشغيل؟",
   "@deletePlaylistNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
-  },
-  "foregroundServiceNotificationTitle": "المراقبة بالفيديو",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
   },
   "deArrowWarning": "يمكن أن يؤدي تمكين DeArrow إلى تقليل سرعة تصفح التطبيق بشكل كبير حيث يلزم وجود طلبات http إضافية لكل مقطع فيديو واحد",
   "@deArrowWarning": {
@@ -448,10 +412,6 @@
   "sponsorBlockCategoryInteraction": "تذكير التفاعل (اشتراك)",
   "@sponsorBlockCategoryInteraction": {
     "description": "Sponsor block 'Interaction' Category"
-  },
-  "pressDownToShowSettings": "اضغط لأسفل لإظهار الإعدادات",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
   },
   "videoFilterAllChannels": "جميع القنوات",
   "@videoFilterAllChannels": {
@@ -599,21 +559,9 @@
   "@addServer": {
     "description": "Add server label"
   },
-  "invalidInvidiousServer": "خادم غير صالح غير صالح",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "notLoggedIn": "لم يتم تسجيل الدخول",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "استخدم زر + لإضافة خوادمك الخاصة أو انقر على خادم عام وأضفه.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServersError": "تعذر جلب قائمة الخوادم العامة. انقر لإعادة المحاولة.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "secondsShortForm": "ثوانٍ",
   "@secondsShortForm": {
@@ -638,14 +586,6 @@
   "tokenLoginDescription": "الطريقة الموصى بها لتسجيل الدخول",
   "@tokenLoginDescription": {
     "description": "Recommended way to log in"
-  },
-  "malformedStatsEndpointDescription": "لم تستجب نقطة نهاية إحصائيات الخادم حمولة متوقعة، يجب أن يكون المفتاح \"software.name\" يساوي \"غير صالح\".\nالاستجابة من الخادم:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "serverIsNotReachable": "لا يمكن الوصول إلى الخادم",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "sponsorBlockCategoryUnpaidSelfPromo": "ترقية ذاتية/بدون أجر",
   "@sponsorBlockCategoryUnpaidSelfPromo": {
@@ -769,10 +709,6 @@
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
   },
-  "noSubscriptions": "لا توجد اشتراكات، تصفح مقاطع الفيديو واشترك في أي قناة تريدها.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "layoutEditorExplanation": "يمكنك تحديد ما ستعرضه على شاشتك الرئيسية، يمكنك الحصول على ما يصل إلى عرضين صغيرين مع تمرير أفقي ومصدر واحد كبير.",
   "@layoutEditorExplanation": {
     "description": "text to explain the home layout editor"
@@ -800,10 +736,6 @@
   "subscriptionNotification": "إشعارات الاشتراك",
   "@subscriptionNotification": {
     "description": "Title for subscriptions notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "من أجل إرسال الإشعارات يحتاج Videre إلى تشغيل خدمة في الخلفية. ولكي تعمل بسلاسة، يجب أن يتم منح Videre استخدامًا غير مقيّد للبطارية دون قيود، وسيؤدي النقر على موافق إلى فتح إعدادات تحسين البطارية.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "askToEnableBackgroundServiceContent": "للحصول على إشعارات، يجب تمكين إشعارات Videre، اضغط على موافق لتمكينها.",
   "@askToEnableBackgroundServiceContent": {
@@ -865,14 +797,6 @@
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
   },
-  "loadingPublicServer": "تحميل الخوادم العامة",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "انقر لإضافة خادم إلى قائمتك",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
   "useDynamicTheme": "–ألوان ديناميكية",
   "@useDynamicTheme": {
     "description": ""
@@ -933,10 +857,6 @@
   "@search": {
     "description": "search title"
   },
-  "requiresRestart": "يتطلب إعادة تشغيل التطبيق",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "appLanguage": "لغة التطبيق",
   "@appLanguage": {
     "description": "Select app language"
@@ -985,10 +905,6 @@
   "@quality": {
     "description": "Name of TV ui video settings"
   },
-  "videoFilterEndTime": "وقت الانتهاء",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "searchUploadDateAny": "أي تاريخ",
   "@searchUploadDateAny": {
     "description": "Do not filter search result by upload date"
@@ -1024,10 +940,6 @@
   "searchSortRelevance": "الصلة بالموضوع",
   "@searchSortRelevance": {
     "description": "Sort search by relevance"
-  },
-  "logsCopied": "السجلات المنسوخة إلى الحافظة",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "videoFilters": "فلاتر الفيديو",
   "@videoFilters": {
@@ -1077,10 +989,6 @@
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
   },
-  "videoFilterStartTime": "وقت البدء",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
   "videoFilterAppliedOn": "تطبق على {selectedDays}",
   "@videoFilterAppliedOn": {
     "description": "Readable text on when the filter should apply",
@@ -1125,10 +1033,6 @@
   "@subscriptionNotificationTitle": {
     "description": "Title for the notification showing that there are new videos from the subscription feed"
   },
-  "askForDisableBatteryOptimizationTitle": "مطلوب تعطيل تحسين البطارية المعطلة",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "askToEnableBackgroundServiceTitle": "تم إيقاف تشغيل الإشعارات",
   "@askToEnableBackgroundServiceTitle": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
@@ -1154,18 +1058,6 @@
         "example": "MKBHD"
       }
     }
-  },
-  "foregroundServiceUpdatingSubscriptions": "التحقق من الاشتراكات...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingPlaylist": "التحقق من قوائم التشغيل...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
-  "foregroundServiceUpdatingChannels": "التحقق من القنوات...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsTitle": "تردد فحص الفيديو الجديد",
   "@notificationFrequencySettingsTitle": {

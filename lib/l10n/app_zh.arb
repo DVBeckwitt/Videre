@@ -116,10 +116,6 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "wizardIntro": "选择公共服务实例或添加您自己的实例。 （稍后可以在设置中更改。）",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "startUsingClipious": "开始使用Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
@@ -174,10 +170,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "选择应用程序启动时显示的内容",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "设置",
   "@settings": {
     "description": "Settings title"
@@ -189,10 +181,6 @@
   "country": "国家/地区",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "应用程序启动时，显示…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "服务实例",
   "@servers": {
@@ -210,10 +198,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "使用 SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "跳过公众提交的赞助商部分",
   "@sponsorBlockDescription": {
@@ -251,10 +235,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "无效的Invidious实例",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "您的服务实例",
   "@yourServers": {
     "description": "Your servers label"
@@ -262,18 +242,6 @@
   "loggedIn": "已登入",
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
-  },
-  "addServerHelpText": "使用 + 按钮添加您自己的服务实例或点击公共实例并添加它。",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "loadingPublicServer": "正在加载公共服务实例",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "点击以将服务实例添加到您的列表",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "useDynamicTheme": "动态色彩",
   "@useDynamicTheme": {
@@ -307,10 +275,6 @@
   "@videos": {
     "description": "Videos label"
   },
-  "noPlaylists": "无播放列表",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "videoAddedToPlaylist": "视频成功添加到播放列表",
   "@videoAddedToPlaylist": {
     "description": "Pop up message when a video was added to a playlist"
@@ -326,14 +290,6 @@
   "notLoggedIn": "未登录",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "publicServersError": "无法获取公共服务实例列表。点击重试。",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
-  },
-  "publicServers": "公共服务实例",
-  "@publicServers": {
-    "description": "Public servers label"
   },
   "addToQueueList": "添加到队列",
   "@addToQueueList": {
@@ -495,10 +451,6 @@
   "@blackBackground": {
     "description": "Settings name for black background"
   },
-  "pressDownToShowSettings": "按下显示设置项",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "quality": "画质",
   "@quality": {
     "description": "Name of TV ui video settings"
@@ -555,10 +507,6 @@
   "@followSystem": {
     "description": "Follow system label"
   },
-  "requiresRestart": "需要重启应用",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "appLanguage": "应用语言",
   "@appLanguage": {
     "description": "Select app language"
@@ -603,10 +551,6 @@
   "@addToPlaylist": {
     "description": "Label to add a video to a playlist"
   },
-  "serverIsNotReachable": "无法连接到服务器",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "shorts": "短视频",
   "@shorts": {
     "description": "Youtube shorts"
@@ -638,10 +582,6 @@
   "videoFilters": "视频筛选",
   "@videoFilters": {
     "description": "Title for video filter settings"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats 有未知问题",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
   },
   "autoplayVideoOnLoad": "边加载边自动播放",
   "@autoplayVideoOnLoad": {
@@ -678,10 +618,6 @@
   "shareLinkWithTimestamp": "分享带时间戳的链接",
   "@shareLinkWithTimestamp": {
     "description": "asking user to share link along with timestamp"
-  },
-  "malformedStatsEndpointDescription": "服务器在接收端中没有得到一个预期的数据包，”应用包名“应该在invidious之后。\n服务器反馈：",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "searchUploadDateHour": "上一个小时",
   "@searchUploadDateHour": {
@@ -728,10 +664,6 @@
   "copyToClipBoard": "复制到剪贴板",
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
-  },
-  "logsCopied": "复制日志到剪贴板",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "rememberSubtitleLanguage": "记住字幕语言",
   "@rememberSubtitleLanguage": {

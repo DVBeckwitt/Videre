@@ -43,10 +43,6 @@
   "@streamIsLive": {
     "description": "Label when a video is a live stream"
   },
-  "showOnStart": "アプリの起動時に表示する内容を選択",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "設定",
   "@settings": {
     "description": "Settings title"
@@ -63,10 +59,6 @@
         "type": "String"
       }
     }
-  },
-  "whenAppStartsShow": "アプリ起動時の表示…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "サーバー",
   "@servers": {
@@ -125,26 +117,6 @@
   "logIn": "ログイン",
   "@logIn": {
     "description": "CTA to log in to server"
-  },
-  "publicServers": "公開サーバー",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "公開サーバーを読み込み中",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "addServerHelpText": "公開サーバーから選ぶか、+ ボタンからサーバーを追加します。",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "tapToAddServer": "タップでサーバーを一覧に追加",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "公開サーバーの一覧を取得できませんでした。タップで再試行。",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "外観",
   "@appearance": {
@@ -209,10 +181,6 @@
   "@selectPlaylist": {
     "description": "Title when users wants to add a video to a playlist"
   },
-  "useSponsorBlock": "SponsorBlock を使用",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "yourServers": "使用するサーバー",
   "@yourServers": {
     "description": "Your servers label"
@@ -224,10 +192,6 @@
   "useThisServer": "このサーバーを使用",
   "@useThisServer": {
     "description": "Use this server label"
-  },
-  "noPlaylists": "再生リストなし",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
   },
   "latestVideos": "最新の動画",
   "@latestVideos": {
@@ -246,10 +210,6 @@
         "format": "compact"
       }
     }
-  },
-  "invalidInvidiousServer": "無効な Invidious サーバー",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
   },
   "version": "バージョン",
   "@version": {
@@ -439,10 +399,6 @@
   "@returnYoutubeDislikeDescription": {
     "description": "ReturnYoutubeDislike setting description"
   },
-  "wizardIntro": "公開サーバーから選ぶか、独自のものを追加します。(設定からも変更可能)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "topSorting": "高評価",
   "@topSorting": {
     "description": "Content sorting: top"
@@ -478,10 +434,6 @@
   "useProxy": "動画視聴にプロキシを経由",
   "@useProxy": {
     "description": "label for settings switch to proxy videos from server"
-  },
-  "pressDownToShowSettings": "下を押して、設定を表示",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
   },
   "quality": "画質",
   "@quality": {
@@ -615,17 +567,9 @@
   "@themeBrightness": {
     "description": "Ask the user to user dark / light / system theme"
   },
-  "requiresRestart": "アプリの再起動が必要",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "sponsorBlockCategoryMusicOffTopicDescription": "ミュージックビデオが対象です。他のカテゴリーに分類できないミュージックビデオのシーンにのみ使用されます。",
   "@sponsorBlockCategoryMusicOffTopicDescription": {
     "description": "Only for use in music videos. This only should be used for sections of music videos that aren't already covered by another category."
-  },
-  "logsCopied": "ログをクリップボードにコピー",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "appLogs": "アプリのログ",
   "@appLogs": {
@@ -871,10 +815,6 @@
       }
     }
   },
-  "noSubscriptions": "登録チャンネルなし。動画を探し、好きなチャンネルを登録できます。",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "unSubscribeQuestion": "登録を解除しますか？",
   "@unSubscribeQuestion": {
     "description": "Title for dialog if a user wants to unsubscribe in the subscribtion management screen"
@@ -949,17 +889,9 @@
   "@distractionFreeMode": {
     "description": "title for distraction free mode settings"
   },
-  "library": "ライブラリ",
-  "@library": {
-    "description": "Name for user library"
-  },
   "from": "開始",
   "@from": {
     "description": "From word (as in 'From xx To xx')"
-  },
-  "videoFilterApplyDateToFilter": "指定日時に動画をフィルター",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
   },
   "to": "終了",
   "@to": {
@@ -968,10 +900,6 @@
   "videoFilterDayOfWeekDescription": "絞り込む曜日と時間を選択できます。スポーツの結果のネタバレを避けたりできます。",
   "@videoFilterDayOfWeekDescription": {
     "description": ""
-  },
-  "videoFilterStartTime": "開始時間",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "videoFilterTimeOfDayFromTo": "開始 {from} 終了 {to}",
   "@videoFilterTimeOfDayFromTo": {
@@ -990,10 +918,6 @@
   "videoFilterDayOfWeek": "絞り込む時間帯を選択",
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
-  },
-  "videoFilterEndTime": "終了時間",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "secondsShortForm": "秒",
   "@secondsShortForm": {
@@ -1029,37 +953,17 @@
   "@enableNotificationDescriptions": {
     "description": ""
   },
-  "foregroundServiceUpdatingSubscriptions": "登録チャンネルを確認中...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
   "subtitlesBackground": "字幕の背景",
   "@subtitlesBackground": {
     "description": "Title for settings to set black background  for subtitles"
-  },
-  "foregroundServiceUpdatingChannels": "チャンネルを確認中...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsDescription": "アプリが新しい動画を確認する頻度",
   "@notificationFrequencySettingsDescription": {
     "description": "Description for frequency settings"
   },
-  "foregroundServiceUpdatingPlaylist": "再生リストを確認中...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
   "askToEnableBackgroundServiceContent": "通知を利用するにはVidere の通知を有効化する必要があります。OKで有効化にします。",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
-  },
-  "askForDisableBatteryOptimizationTitle": "電池の最適化を無効にしてください",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "通知を送信するには、Videreがバックグラウンドサービスを実行する必要があります。円滑な動作のためには、電池の使用を制限しないでください。OKで電池の最適化の設定を開きます。",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "playlistNotificationTitle": "再生リスト {playlist} に新着動画",
   "@playlistNotificationTitle": {
@@ -1137,10 +1041,6 @@
   "@deleteChannelNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete channel notifications"
   },
-  "foregroundServiceNotificationTitle": "動画の監視",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "otherNotifications": "ほかの通知対象 (鐘のアイコン)",
   "@otherNotifications": {
     "description": "Title for settings section in the notification settings"
@@ -1202,18 +1102,6 @@
   "copySettingsAsJson": "設定を JSON としてコピー",
   "@copySettingsAsJson": {
     "description": "title for settings sections to allow users to copy their settings as json to make debugging easier"
-  },
-  "serverIsNotReachable": "サーバーに到達できません",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
-  "malformedStatsEndpointDescription": "サーバーのデータの終点は期待されたペイロードで応答しませんでした。キー software.name は invidious であるべきです。\nサーバーからの応答:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats は予想通りではありません",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
   },
   "searchSortBy": "並び替え",
   "@searchSortBy": {
@@ -1373,8 +1261,6 @@
   "@openWikiLink": {},
   "addBasicAuth": "ベーシック認証を追加",
   "@addBasicAuth": {},
-  "addBasicAuthExplanation": "サーバーにベーシック認証が必要なら、以下に設定を追加します。これらはInvidiousアカウントのものではありません",
-  "@addBasicAuthExplanation": {},
   "alsoTestServerConfig": "サムネイルが適切に表示されるかなど、サーバーの設定をテスト",
   "@alsoTestServerConfig": {},
   "wrongThumbnailConfiguration": "サーバーには到達していますが、設定が正しくないため、動画とチャンネルのサムネイルが正しく表示されません。問題がなければサーバーテストを無効にし、そうでなければサーバーを修正してください",
@@ -1406,11 +1292,5 @@
   "forceTvUiExplanation": "表示を強制的にテレビ用にすることで、リーンバックシステム設定がない一部の端末でも役立ちます。アプリの再起動が必要",
   "@forceTvUiExplanation": {},
   "forceTvUi": "強制的にテレビ向けの表示",
-  "@forceTvUi": {},
-  "noPublicServers": "利用可能な公開サーバーなし",
-  "@noPublicServers": {},
-  "referToInvidiousWebsiteForHostingInstructions": "Invidiousサーバーをホストする方法は、Invidiousのサイトをご覧ください",
-  "@referToInvidiousWebsiteForHostingInstructions": {},
-  "tapToSeeHow": "タップで、自分でホストする方法を表示",
-  "@tapToSeeHow": {}
+  "@forceTvUi": {}
 }

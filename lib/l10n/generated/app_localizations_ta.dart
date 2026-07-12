@@ -109,9 +109,6 @@ class AppLocalizationsTa extends AppLocalizations {
   String get noChannels => 'சேனல்கள் இல்லை';
 
   @override
-  String get noPlaylists => 'பிளேலிச்ட்கள் இல்லை';
-
-  @override
   String get channels => 'சேனல்கள்';
 
   @override
@@ -126,10 +123,6 @@ class AppLocalizationsTa extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'வீடியோக்களைப் பெற முடியவில்லை. மீண்டும் முயற்சிக்க தட்டவும்.';
-
-  @override
-  String get wizardIntro =>
-      'பொது சேவையகத்தைத் தேர்ந்தெடுக்கவும் அல்லது உங்கள் சொந்தத்தைச் சேர்க்கவும். (பின்னர் அமைப்புகளில் மாற்றலாம்)';
 
   @override
   String get startUsingClipious => 'Videre பயன்படுத்தத் தொடங்குங்கள்';
@@ -193,10 +186,6 @@ class AppLocalizationsTa extends AppLocalizations {
   String get selectBrowsingCountry => 'உலாவல் நாட்டைத் தேர்ந்தெடுக்கவும்';
 
   @override
-  String get showOnStart =>
-      'பயன்பாடு தொடங்கும் போது என்ன காண்பிக்க வேண்டும் என்பதைத் தேர்ந்தெடுக்கவும்';
-
-  @override
   String get settings => 'அமைப்புகள்';
 
   @override
@@ -204,9 +193,6 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get country => 'நாடு';
-
-  @override
-  String get whenAppStartsShow => 'பயன்பாடு தொடங்கும் போது, காட்டு…';
 
   @override
   String get servers => 'சேவையகங்கள்';
@@ -218,9 +204,6 @@ class AppLocalizationsTa extends AppLocalizations {
   String currentServer(String current) {
     return 'தற்போது $current பயன்படுத்துகிறது';
   }
-
-  @override
-  String get useSponsorBlock => 'ஒப்புரவாளர் பிளாக் பயன்படுத்தவும்';
 
   @override
   String get sponsorBlockDescription =>
@@ -254,9 +237,6 @@ class AppLocalizationsTa extends AppLocalizations {
   String get delete => 'நீக்கு';
 
   @override
-  String get invalidInvidiousServer => 'தவறான அகாத சேவையகம்';
-
-  @override
   String get yourServers => 'உங்கள் சேவையகங்கள்';
 
   @override
@@ -264,24 +244,6 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'உள்நுழையவில்லை';
-
-  @override
-  String get addServerHelpText =>
-      'உங்கள் சொந்த சேவையகங்களைச் சேர்க்க + பொத்தானைப் பயன்படுத்தவும் அல்லது பொது சேவையகத்தில் தட்டவும், சேர்க்கவும்.';
-
-  @override
-  String get publicServers => 'பொது சேவையகங்கள்';
-
-  @override
-  String get loadingPublicServer => 'பொது சேவையகங்களை ஏற்றுகிறது';
-
-  @override
-  String get tapToAddServer =>
-      'உங்கள் பட்டியலில் சேவையகத்தைச் சேர்க்க தட்டவும்';
-
-  @override
-  String get publicServersError =>
-      'பொது சேவையகங்களின் பட்டியலைப் பெற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.';
 
   @override
   String get appearance => 'தோற்றம்';
@@ -345,17 +307,6 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get error => 'பிழை';
-
-  @override
-  String get malformedStatsEndpoint =>
-      '/API/V1/புள்ளிவிவரங்கள் எதிர்பார்த்தபடி இல்லை';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'சேவையக புள்ளிவிவரங்கள் இறுதிப்புள்ளி எதிர்பார்க்கப்படும் பேலோடிற்கு பதிலளிக்கவில்லை, முக்கிய \"மென்பொருள். பெயர்\" \"வெகுவாக\" சமமாக இருக்க வேண்டும்.\n சேவையகத்திலிருந்து பதில்:';
-
-  @override
-  String get serverIsNotReachable => 'சேவையகம் அடைய முடியாது';
 
   @override
   String get videoQueue => 'வீடியோ வரிசை';
@@ -446,9 +397,6 @@ class AppLocalizationsTa extends AppLocalizations {
       'சேவையகத்திலிருந்து வீடியோ ச்ட்ரீம்களை வளர்ப்பதன் மூலம், நீங்கள் பிராந்திய தொகுதிகள் அல்லது ஐ.எச்.பி தடுக்கும் யூடியூப்பைத் தவிர்ப்பது';
 
   @override
-  String get pressDownToShowSettings => 'அமைப்புகளைக் காட்ட கீழே அழுத்தவும்';
-
-  @override
   String get quality => 'தகுதி';
 
   @override
@@ -495,9 +443,6 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get followSystem => 'அமைப்பைப் பின்தொடரவும்';
-
-  @override
-  String get requiresRestart => 'பயன்பாட்டு மறுதொடக்கம் தேவை';
 
   @override
   String get appLanguage => 'பயன்பாட்டு மொழி';
@@ -623,9 +568,6 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'கிளிப்போர்டுக்கு நகலெடுக்கவும்';
-
-  @override
-  String get logsCopied => 'கிளிப்போர்டுக்கு நகலெடுக்கப்பட்ட பதிவுகள்';
 
   @override
   String get rememberSubtitleLanguage =>
@@ -808,10 +750,6 @@ class AppLocalizationsTa extends AppLocalizations {
   String get manageSubscriptions => 'சந்தாக்களை நிர்வகிக்கவும்';
 
   @override
-  String get noSubscriptions =>
-      'சந்தாக்கள் இல்லை, வீடியோக்களை உலாவவும், நீங்கள் விரும்பும் எந்த சேனலுக்கும் குழுசேரவும்.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'இந்த சேனலுக்கு பின்னர் மீண்டும் குழுசேரலாம்';
 
@@ -841,9 +779,6 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get home => 'வீடு';
-
-  @override
-  String get library => 'நூலகம்';
 
   @override
   String get customizeAppLayout => 'பயன்பாட்டு பிரிவுகளைத் தனிப்பயனாக்குங்கள்';
@@ -876,22 +811,12 @@ class AppLocalizationsTa extends AppLocalizations {
   String get secondsShortForm => 'நொடி';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'கொடுக்கப்பட்ட நேரங்களில் வீடியோக்களை வடிகட்டவும்';
-
-  @override
   String get videoFilterDayOfWeek =>
       'வடிப்பான்களைப் பயன்படுத்த நாட்களைத் தேர்ந்தெடுக்கவும்';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'வடிப்பான்கள் பொருந்தும் வாரத்தின் நாட்களையும் நேரத்தையும் நீங்கள் தேர்வு செய்யலாம், எடுத்துக்காட்டாக, விளையாட்டு நிகழ்வுகள் ச்பாய்லர்களைத் தவிர்க்கவும்.';
-
-  @override
-  String get videoFilterStartTime => 'தொடக்க நேரம்';
-
-  @override
-  String get videoFilterEndTime => 'இறுதி நேரம்';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -947,14 +872,6 @@ class AppLocalizationsTa extends AppLocalizations {
     );
     return 'There are  $_temp0 in your subscription feed';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'பேட்டரி தேர்வுமுறை முடக்குதல் தேவை';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'அறிவிப்பை அனுப்ப, பின்னணி சேவையை இயக்க Videre தேவைகள். இது சீராக இயங்குவதற்கு, Videreக்கு கட்டுப்பாடற்ற பேட்டரி பயன்பாடு வழங்கப்பட வேண்டும், சரி தட்டுவது பேட்டரி உகப்பாக்கம் அமைப்புகளைத் திறக்கும்.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'அறிவிப்புகள் அணைக்கப்பட்டன';
@@ -1025,9 +942,6 @@ class AppLocalizationsTa extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'வீடியோ கண்காணிப்பு';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1039,18 +953,6 @@ class AppLocalizationsTa extends AppLocalizations {
     );
     return 'Will check for new videos once $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'சந்தாக்களை சரிபார்க்கிறது ...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist =>
-      'பிளேலிச்ட்களை சரிபார்க்கிறது ...';
-
-  @override
-  String get foregroundServiceUpdatingChannels =>
-      'சேனல்களைச் சரிபார்க்கிறது ...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1172,10 +1074,6 @@ class AppLocalizationsTa extends AppLocalizations {
   String get addBasicAuth => 'அடிப்படை அங்கீகாரத்தைச் சேர்க்கவும்';
 
   @override
-  String get addBasicAuthExplanation =>
-      'உங்கள் சேவையகத்திற்கு அடிப்படை HTTP ஏற்பு தேவைப்பட்டால், கீழே உள்ள விவரங்களைச் சேர்க்கவும். இவை உங்கள் வன்கவர்வு கணக்கு விவரங்கள் அல்ல';
-
-  @override
   String get addHeader => 'தலைப்புச் சேர்க்கவும்';
 
   @override
@@ -1259,14 +1157,4 @@ class AppLocalizationsTa extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

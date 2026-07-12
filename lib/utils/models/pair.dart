@@ -4,10 +4,3 @@ class Pair<E> {
 
   const Pair(this.first, this.last);
 }
-
-class Couple<E, M> {
-  final E first;
-  final M last;
-
-  const Couple(this.first, this.last);
-}

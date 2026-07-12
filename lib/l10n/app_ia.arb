@@ -63,10 +63,6 @@
   "@ok": {
     "description": "Ok"
   },
-  "noPlaylists": "Necun listas de reproduction",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "nSubscribers": "{count, select, no{Necun subscriptores} other{{count} subscribers}}",
   "@nSubscribers": {
     "description": "number of subscribers",
@@ -164,10 +160,6 @@
   "@enabled": {
     "description": "Text to show something is enabled"
   },
-  "tapToAddServer": "Tocca pro adder un servitor a tu lista",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
   "appearance": "Apparentia",
   "@appearance": {
     "description": "Settings category title"
@@ -243,10 +235,6 @@
   "@settings": {
     "description": "Settings title"
   },
-  "publicServers": "Servitores public",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
   "newSorting": "Nove",
   "@newSorting": {
     "description": "Content sorting: new"
@@ -266,10 +254,6 @@
   "startUsingClipious": "Comenciar usante Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
-  },
-  "invalidInvidiousServer": "Servitor de Invidious non valide",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
   },
   "package": "Pacchetto",
   "@package": {
@@ -295,14 +279,6 @@
   "@yourServers": {
     "description": "Your servers label"
   },
-  "whenAppStartsShow": "Quando se initia le application, monstrar…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
-  "useSponsorBlock": "Usar SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "nReplies": "{count, plural, =0{Nulle responsas} =1{1 responsa} other{{count} responsas}}",
   "@nReplies": {
     "description": "number of replies to a comment",
@@ -312,10 +288,6 @@
         "format": "compact"
       }
     }
-  },
-  "loadingPublicServer": "Cargante servitores public",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "videoAddedToPlaylist": "Video addite al lista de reproduction",
   "@videoAddedToPlaylist": {
@@ -340,10 +312,6 @@
   "sponsorSkipped": "Sponsor saltate",
   "@sponsorSkipped": {
     "description": "When a sponsor segment is skipped thanks to sponsor block"
-  },
-  "showOnStart": "Selige que monstrar quando le application es initiate",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
   },
   "sponsorBlockDescription": "Saltar le segmentos de sponsors inviate per le communitate",
   "@sponsorBlockDescription": {

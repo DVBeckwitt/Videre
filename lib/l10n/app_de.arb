@@ -88,10 +88,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Keine Wiedergabelisten",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "comments": "Kommentare",
   "@comments": {
     "description": "Comments label"
@@ -103,10 +99,6 @@
   "couldntFetchVideos": "Videos konnten nicht abgerufen werden. Zum erneuten Versuch antippen.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Einen öffentlichen Server auswählen oder einen eigenen hinzufügen. (Kann später in den Einstellungen geändert werden)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "startUsingClipious": "Videre jetzt nutzen",
   "@startUsingClipious": {
@@ -182,10 +174,6 @@
   "@newSorting": {
     "description": "Content sorting: new"
   },
-  "showOnStart": "Auswählen, was beim Starten der App angezeigt werden soll",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "loadMore": "Mehr laden",
   "@loadMore": {
     "description": "CTA to load more"
@@ -205,14 +193,6 @@
   "about": "Über",
   "@about": {
     "description": "About"
-  },
-  "invalidInvidiousServer": "Ungültiger Invidious-Server",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
-  "addServerHelpText": "Verwenden Sie die Taste +, um Ihre eigenen Server hinzuzufügen, oder tippen Sie auf einen öffentlichen Server und fügen Sie ihn hinzu.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
   },
   "name": "Name",
   "@name": {
@@ -258,22 +238,6 @@
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
   },
-  "publicServers": "Öffentliche Server",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Öffentliche Server werden geladen",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Tippen Sie auf, um einen Server zu Ihrer Liste hinzuzufügen",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Die Liste der öffentlichen Server konnte nicht abgerufen werden. Zum erneuten Versuch antippen.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
-  },
   "appearance": "Aussehen",
   "@appearance": {
     "description": "Settings category title"
@@ -310,10 +274,6 @@
   "@country": {
     "description": "Country label"
   },
-  "whenAppStartsShow": "Wenn die App startet, zeigen …",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "servers": "Servers",
   "@servers": {
     "description": "Server management settings category"
@@ -330,10 +290,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "SponsorBlock verwenden",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "useDash": "DASH verwenden",
   "@useDash": {
@@ -531,10 +487,6 @@
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
   },
-  "logsCopied": "Protokolle wurden in die Zwischenablage kopiert",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
-  },
   "searchSortRelevance": "Relevanz",
   "@searchSortRelevance": {
     "description": "Sort search by relevance"
@@ -615,10 +567,6 @@
   "@followSystem": {
     "description": "Follow system label"
   },
-  "requiresRestart": "Erfordert Neustart der App",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "appLanguage": "Anwendungssprache",
   "@appLanguage": {
     "description": "Select app language"
@@ -634,10 +582,6 @@
   "sponsorBlockCategoryMusicOffTopicDescription": "Nur zur Verwendung in Musikvideos. Dies sollte nur für Abschnitte von Musikvideos verwendet werden, die nicht bereits durch eine andere Kategorie abgedeckt sind.",
   "@sponsorBlockCategoryMusicOffTopicDescription": {
     "description": "Only for use in music videos. This only should be used for sections of music videos that aren't already covered by another category."
-  },
-  "pressDownToShowSettings": "Nach unten drücken, um Einstellungen anzuzeigen",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
   },
   "save": "Speichern",
   "@save": {
@@ -863,10 +807,6 @@
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
   },
-  "askForDisableBatteryOptimizationTitle": "Deaktivierung der Batterieoptimierung erforderlich",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "navigationBarLabelNeverShow": "Bezeichnung nie anzeigen",
   "@navigationBarLabelNeverShow": {
     "description": "Never show label option for navigation bar"
@@ -911,10 +851,6 @@
   "@navigationBarLabelAlwaysShowing": {
     "description": "Label always showing option for navigation bar"
   },
-  "videoFilterApplyDateToFilter": "Videos nach bestimmten Zeiten filtern",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "to": "An",
   "@to": {
     "description": "To word as in 'From xx To xx')"
@@ -927,17 +863,9 @@
   "@notifications": {
     "description": "Notification settings title"
   },
-  "library": "Bibliothek",
-  "@library": {
-    "description": "Name for user library"
-  },
   "subscriptionNotification": "Abonnement-Benachrichtigungen",
   "@subscriptionNotification": {
     "description": "Title for subscriptions notifications"
-  },
-  "videoFilterStartTime": "Startzeit",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "distractionFreeModeDescription": "Videokommentare und -empfehlungen deaktivieren",
   "@distractionFreeModeDescription": {
@@ -969,16 +897,8 @@
   "@history": {
     "description": "User view history label"
   },
-  "videoFilterEndTime": "Endzeit",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "clearHistoryQuestion": "Verlauf löschen?",
   "@clearHistoryQuestion": {},
-  "foregroundServiceUpdatingSubscriptions": "Abonnements werden überprüft...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
   "secondsShortForm": "Sek.",
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
@@ -1001,10 +921,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "Videoüberwachung",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "otherNotifications": "Andere Benachrichtigungsquellen (Glockensymbole)",
   "@otherNotifications": {
     "description": "Title for settings section in the notification settings"
@@ -1017,14 +933,6 @@
   "@navigationBarStyle": {
     "description": "Label for settings on customizing navigation bar style"
   },
-  "foregroundServiceUpdatingChannels": "Kanäle werden überprüft...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
-  },
-  "foregroundServiceUpdatingPlaylist": "Wiedergabelisten werden überprüft...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
   "askToEnableBackgroundServiceTitle": "Benachrichtigungen ausgeschaltet",
   "@askToEnableBackgroundServiceTitle": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
@@ -1036,10 +944,6 @@
   "askToEnableBackgroundServiceContent": "Um Benachrichtigungen zu erhalten, müssen die Videre-Benachrichtigungen aktiviert werden. OK drücken, um sie zu aktivieren.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
-  },
-  "askForDisableBatteryOptimizationContent": "Um Benachrichtigungen senden zu können, muss Videre einen Hintergrunddienst ausführen. Für einen reibungslosen Betrieb ist es erforderlich, dass Videre eine uneingeschränkte Akkunutzung erhält. Tippen Sie auf OK, um die Einstellungen für die Akkuoptimierung zu öffnen.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "deArrowWarning": "Die Aktivierung von DeArrow kann die Browsing-Geschwindigkeit der App erheblich verringern, da für jedes einzelne Video zusätzliche HTTP-Anfragen erforderlich sind",
   "@deArrowWarning": {
@@ -1056,10 +960,6 @@
   "customizeAppLayout": "App-Bereiche anpassen",
   "@customizeAppLayout": {
     "description": "Settings label for the settings to allow the user to set up the app sections themselves"
-  },
-  "noSubscriptions": "Keine Abonnements, Sie können Videos durchsuchen und jeden Kanal abonnieren, der Ihnen gefällt.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
   },
   "clearHistoryQuestionExplanation": "Dadurch wird der Verlauf Ihres Kontos auf der von Ihnen verwendeten Invidious-Instanz gelöscht. Dies kann nicht rückgängig gemacht werden.",
   "@clearHistoryQuestionExplanation": {
@@ -1203,14 +1103,6 @@
       }
     }
   },
-  "serverIsNotReachable": "Server ist nicht erreichbar",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats ist nicht wie erwartet",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
   "searchSortBy": "Sortieren nach",
   "@searchSortBy": {
     "description": "Search sorting option"
@@ -1309,10 +1201,6 @@
       }
     }
   },
-  "malformedStatsEndpointDescription": "Der Stats-Endpunkt des Servers hat nicht die erwartete Nutzlast übermittelt, der Schlüssel \"software.name\" sollte gleich \"invidious\" sein.\nAntwort vom Server:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
   "submitFeedback": "Feedback einreichen",
   "@submitFeedback": {
     "description": "Title for settings to submit feed back through the app"
@@ -1399,12 +1287,8 @@
   "@copyToDownloadFolder": {},
   "fileCopiedToDownloadFolder": "Datei in den Download-Ordner kopiert",
   "@fileCopiedToDownloadFolder": {},
-  "addBasicAuthExplanation": "Wenn ihr Server einfache HTTP Authentifizierung benötigt, fügen Sie die Details unten hinzu. Dies sind nicht ihre invidious Kontodaten",
-  "@addBasicAuthExplanation": {},
   "screenControlsExplanation": "Beim Anschauen eines Videos im Vollbildmodus passt das vertikale Ziehen von links oder rechts wird die Helligkeit bzw. Lautstärke an",
   "@screenControlsExplanation": {},
-  "noPublicServers": "Es sind keine öffentlichen Server verfügbar",
-  "@noPublicServers": {},
   "forceTvUi": "TV-Oberfläche erzwingen",
   "@forceTvUi": {}
 }

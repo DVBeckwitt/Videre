@@ -108,9 +108,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get noChannels => 'لا توجد قنوات';
 
   @override
-  String get noPlaylists => 'لا توجد قوائم تشغيل';
-
-  @override
   String get channels => 'قنوات';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'تعذر جلب مقاطع الفيديو. انقر للمحاولة مرة أخرى.';
-
-  @override
-  String get wizardIntro =>
-      'حدد خادماً عاماً أو أضف خادمك الخاص. (يمكن تغييرها لاحقا في الإعدادات)';
 
   @override
   String get startUsingClipious => 'ابدأ باستخدام Videre';
@@ -192,9 +185,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get selectBrowsingCountry => 'حدد بلد التصفح';
 
   @override
-  String get showOnStart => 'اختر ما تريد إظهاره عند بدء تشغيل التطبيق';
-
-  @override
   String get settings => 'الإعدادات';
 
   @override
@@ -202,9 +192,6 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get country => 'البلد';
-
-  @override
-  String get whenAppStartsShow => 'عند بدء تشغيل التطبيق ، أظهر …';
 
   @override
   String get servers => 'الخوادم';
@@ -216,9 +203,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String currentServer(String current) {
     return 'يتم استخدام $current حالياً';
   }
-
-  @override
-  String get useSponsorBlock => 'استخدم حجب فقرة الراعي';
 
   @override
   String get sponsorBlockDescription => 'تخطي مقاطع الراعي المقدمة من المجتمع';
@@ -251,9 +235,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get delete => 'حذف';
 
   @override
-  String get invalidInvidiousServer => 'خادم غير صالح غير صالح';
-
-  @override
   String get yourServers => 'خوادمك';
 
   @override
@@ -261,23 +242,6 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'لم يتم تسجيل الدخول';
-
-  @override
-  String get addServerHelpText =>
-      'استخدم زر + لإضافة خوادمك الخاصة أو انقر على خادم عام وأضفه.';
-
-  @override
-  String get publicServers => 'الخوادم العامة';
-
-  @override
-  String get loadingPublicServer => 'تحميل الخوادم العامة';
-
-  @override
-  String get tapToAddServer => 'انقر لإضافة خادم إلى قائمتك';
-
-  @override
-  String get publicServersError =>
-      'تعذر جلب قائمة الخوادم العامة. انقر لإعادة المحاولة.';
 
   @override
   String get appearance => 'المظهر';
@@ -341,16 +305,6 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get error => 'خطأ';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats is not as expected';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'لم تستجب نقطة نهاية إحصائيات الخادم حمولة متوقعة، يجب أن يكون المفتاح \"software.name\" يساوي \"غير صالح\".\nالاستجابة من الخادم:';
-
-  @override
-  String get serverIsNotReachable => 'لا يمكن الوصول إلى الخادم';
 
   @override
   String get videoQueue => 'قائمة انتظار الفيديو';
@@ -438,9 +392,6 @@ class AppLocalizationsAr extends AppLocalizations {
       'من خلال استخدام البروكسي لبث الفيديو من الخادم، يمكنك تجاوز الحظر الإقليمي أو حجب مزود خدمة الإنترنت ليوتيوب';
 
   @override
-  String get pressDownToShowSettings => 'اضغط لأسفل لإظهار الإعدادات';
-
-  @override
   String get quality => 'الجودة';
 
   @override
@@ -486,9 +437,6 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get followSystem => 'اتبع النظام';
-
-  @override
-  String get requiresRestart => 'يتطلب إعادة تشغيل التطبيق';
 
   @override
   String get appLanguage => 'لغة التطبيق';
@@ -614,9 +562,6 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'نسخ إلى الحافظة';
-
-  @override
-  String get logsCopied => 'السجلات المنسوخة إلى الحافظة';
 
   @override
   String get rememberSubtitleLanguage => 'تذكر لغة الترجمة';
@@ -794,10 +739,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get manageSubscriptions => 'إدارة الاشتراكات';
 
   @override
-  String get noSubscriptions =>
-      'لا توجد اشتراكات، تصفح مقاطع الفيديو واشترك في أي قناة تريدها.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'يمكنك الاشتراك في هذه القناة مرة أخرى لاحقاً';
 
@@ -829,9 +770,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get home => '‌الصفحة الرئيسية';
 
   @override
-  String get library => '‌المكتبة';
-
-  @override
   String get customizeAppLayout => 'تخصيص أقسام التطبيق';
 
   @override
@@ -861,21 +799,11 @@ class AppLocalizationsAr extends AppLocalizations {
   String get secondsShortForm => 'ثوانٍ';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'تصفية مقاطع الفيديو في أوقات محددة';
-
-  @override
   String get videoFilterDayOfWeek => 'حدد أيام لتطبيق الفلاتر';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'يمكنك اختيار أيام الأسبوع والوقت الذي تنطبق عليه الفلاتر بشكل انتقائي، على سبيل المثال، تجنب إفساد الأحداث الرياضية.';
-
-  @override
-  String get videoFilterStartTime => 'وقت البدء';
-
-  @override
-  String get videoFilterEndTime => 'وقت الانتهاء';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -930,14 +858,6 @@ class AppLocalizationsAr extends AppLocalizations {
     );
     return 'There are  $_temp0 in your subscription feed';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'مطلوب تعطيل تحسين البطارية المعطلة';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'من أجل إرسال الإشعارات يحتاج Videre إلى تشغيل خدمة في الخلفية. ولكي تعمل بسلاسة، يجب أن يتم منح Videre استخدامًا غير مقيّد للبطارية دون قيود، وسيؤدي النقر على موافق إلى فتح إعدادات تحسين البطارية.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'تم إيقاف تشغيل الإشعارات';
@@ -1008,9 +928,6 @@ class AppLocalizationsAr extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'المراقبة بالفيديو';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1022,16 +939,6 @@ class AppLocalizationsAr extends AppLocalizations {
     );
     return 'Will check for new videos once $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'التحقق من الاشتراكات...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => 'التحقق من قوائم التشغيل...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'التحقق من القنوات...';
 
   @override
   String get notificationFrequencySettingsTitle => 'تردد فحص الفيديو الجديد';
@@ -1150,10 +1057,6 @@ class AppLocalizationsAr extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1236,14 +1139,4 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

@@ -77,15 +77,7 @@ class VideoInfo extends StatelessWidget {
                       height: 40,
                       decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(20)),
-                    ) /*Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(20),
-                        color: colorScheme.onSurface,
-                        image: DecorationImage(image: NetworkImage(ImageObject.getBestThumbnail(video?.authorThumbnails)?.url ?? ''), fit: BoxFit.cover)),
-                  )*/
-                    ,
+                    ),
                   ),
                 ),
                 Expanded(

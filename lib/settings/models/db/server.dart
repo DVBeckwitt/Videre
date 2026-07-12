@@ -13,9 +13,6 @@ sealed class Server with _$Server {
       {required String url,
       String? authToken,
       String? sidCookie,
-      @JsonKey(includeFromJson: false, includeToJson: false) Duration? ping,
-      @JsonKey(includeFromJson: false, includeToJson: false) String? flag,
-      @JsonKey(includeFromJson: false, includeToJson: false) String? region,
       @Default({}) Map<String, String> customHeaders,
       @Default(false) bool inUse}) = _Server;
 

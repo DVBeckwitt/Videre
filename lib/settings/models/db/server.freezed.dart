@@ -17,12 +17,6 @@ mixin _$Server {
   String get url;
   String? get authToken;
   String? get sidCookie;
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  Duration? get ping;
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  String? get flag;
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  String? get region;
   Map<String, String> get customHeaders;
   bool get inUse;
 
@@ -46,9 +40,6 @@ mixin _$Server {
                 other.authToken == authToken) &&
             (identical(other.sidCookie, sidCookie) ||
                 other.sidCookie == sidCookie) &&
-            (identical(other.ping, ping) || other.ping == ping) &&
-            (identical(other.flag, flag) || other.flag == flag) &&
-            (identical(other.region, region) || other.region == region) &&
             const DeepCollectionEquality()
                 .equals(other.customHeaders, customHeaders) &&
             (identical(other.inUse, inUse) || other.inUse == inUse));
@@ -56,12 +47,12 @@ mixin _$Server {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(runtimeType, url, authToken, sidCookie, ping,
-      flag, region, const DeepCollectionEquality().hash(customHeaders), inUse);
+  int get hashCode => Object.hash(runtimeType, url, authToken, sidCookie,
+      const DeepCollectionEquality().hash(customHeaders), inUse);
 
   @override
   String toString() {
-    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, ping: $ping, flag: $flag, region: $region, customHeaders: $customHeaders, inUse: $inUse)';
+    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, inUse: $inUse)';
   }
 }
 
@@ -74,9 +65,6 @@ abstract mixin class $ServerCopyWith<$Res> {
       {String url,
       String? authToken,
       String? sidCookie,
-      @JsonKey(includeFromJson: false, includeToJson: false) Duration? ping,
-      @JsonKey(includeFromJson: false, includeToJson: false) String? flag,
-      @JsonKey(includeFromJson: false, includeToJson: false) String? region,
       Map<String, String> customHeaders,
       bool inUse});
 }
@@ -96,9 +84,6 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
     Object? url = null,
     Object? authToken = freezed,
     Object? sidCookie = freezed,
-    Object? ping = freezed,
-    Object? flag = freezed,
-    Object? region = freezed,
     Object? customHeaders = null,
     Object? inUse = null,
   }) {
@@ -114,18 +99,6 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
       sidCookie: freezed == sidCookie
           ? _self.sidCookie
           : sidCookie // ignore: cast_nullable_to_non_nullable
-              as String?,
-      ping: freezed == ping
-          ? _self.ping
-          : ping // ignore: cast_nullable_to_non_nullable
-              as Duration?,
-      flag: freezed == flag
-          ? _self.flag
-          : flag // ignore: cast_nullable_to_non_nullable
-              as String?,
-      region: freezed == region
-          ? _self.region
-          : region // ignore: cast_nullable_to_non_nullable
               as String?,
       customHeaders: null == customHeaders
           ? _self.customHeaders
@@ -230,25 +203,16 @@ extension ServerPatterns on Server {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(
-            String url,
-            String? authToken,
-            String? sidCookie,
-            @JsonKey(includeFromJson: false, includeToJson: false)
-            Duration? ping,
-            @JsonKey(includeFromJson: false, includeToJson: false) String? flag,
-            @JsonKey(includeFromJson: false, includeToJson: false)
-            String? region,
-            Map<String, String> customHeaders,
-            bool inUse)?
+    TResult Function(String url, String? authToken, String? sidCookie,
+            Map<String, String> customHeaders, bool inUse)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _Server() when $default != null:
-        return $default(_that.url, _that.authToken, _that.sidCookie, _that.ping,
-            _that.flag, _that.region, _that.customHeaders, _that.inUse);
+        return $default(_that.url, _that.authToken, _that.sidCookie,
+            _that.customHeaders, _that.inUse);
       case _:
         return orElse();
     }
@@ -269,24 +233,15 @@ extension ServerPatterns on Server {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(
-            String url,
-            String? authToken,
-            String? sidCookie,
-            @JsonKey(includeFromJson: false, includeToJson: false)
-            Duration? ping,
-            @JsonKey(includeFromJson: false, includeToJson: false) String? flag,
-            @JsonKey(includeFromJson: false, includeToJson: false)
-            String? region,
-            Map<String, String> customHeaders,
-            bool inUse)
+    TResult Function(String url, String? authToken, String? sidCookie,
+            Map<String, String> customHeaders, bool inUse)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _Server():
-        return $default(_that.url, _that.authToken, _that.sidCookie, _that.ping,
-            _that.flag, _that.region, _that.customHeaders, _that.inUse);
+        return $default(_that.url, _that.authToken, _that.sidCookie,
+            _that.customHeaders, _that.inUse);
     }
   }
 
@@ -304,24 +259,15 @@ extension ServerPatterns on Server {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(
-            String url,
-            String? authToken,
-            String? sidCookie,
-            @JsonKey(includeFromJson: false, includeToJson: false)
-            Duration? ping,
-            @JsonKey(includeFromJson: false, includeToJson: false) String? flag,
-            @JsonKey(includeFromJson: false, includeToJson: false)
-            String? region,
-            Map<String, String> customHeaders,
-            bool inUse)?
+    TResult? Function(String url, String? authToken, String? sidCookie,
+            Map<String, String> customHeaders, bool inUse)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _Server() when $default != null:
-        return $default(_that.url, _that.authToken, _that.sidCookie, _that.ping,
-            _that.flag, _that.region, _that.customHeaders, _that.inUse);
+        return $default(_that.url, _that.authToken, _that.sidCookie,
+            _that.customHeaders, _that.inUse);
       case _:
         return null;
     }
@@ -335,9 +281,6 @@ class _Server extends Server {
       {required this.url,
       this.authToken,
       this.sidCookie,
-      @JsonKey(includeFromJson: false, includeToJson: false) this.ping,
-      @JsonKey(includeFromJson: false, includeToJson: false) this.flag,
-      @JsonKey(includeFromJson: false, includeToJson: false) this.region,
       final Map<String, String> customHeaders = const {},
       this.inUse = false})
       : _customHeaders = customHeaders,
@@ -350,15 +293,6 @@ class _Server extends Server {
   final String? authToken;
   @override
   final String? sidCookie;
-  @override
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  final Duration? ping;
-  @override
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  final String? flag;
-  @override
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  final String? region;
   final Map<String, String> _customHeaders;
   @override
   @JsonKey()
@@ -397,9 +331,6 @@ class _Server extends Server {
                 other.authToken == authToken) &&
             (identical(other.sidCookie, sidCookie) ||
                 other.sidCookie == sidCookie) &&
-            (identical(other.ping, ping) || other.ping == ping) &&
-            (identical(other.flag, flag) || other.flag == flag) &&
-            (identical(other.region, region) || other.region == region) &&
             const DeepCollectionEquality()
                 .equals(other._customHeaders, _customHeaders) &&
             (identical(other.inUse, inUse) || other.inUse == inUse));
@@ -407,12 +338,12 @@ class _Server extends Server {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(runtimeType, url, authToken, sidCookie, ping,
-      flag, region, const DeepCollectionEquality().hash(_customHeaders), inUse);
+  int get hashCode => Object.hash(runtimeType, url, authToken, sidCookie,
+      const DeepCollectionEquality().hash(_customHeaders), inUse);
 
   @override
   String toString() {
-    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, ping: $ping, flag: $flag, region: $region, customHeaders: $customHeaders, inUse: $inUse)';
+    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, inUse: $inUse)';
   }
 }
 
@@ -426,9 +357,6 @@ abstract mixin class _$ServerCopyWith<$Res> implements $ServerCopyWith<$Res> {
       {String url,
       String? authToken,
       String? sidCookie,
-      @JsonKey(includeFromJson: false, includeToJson: false) Duration? ping,
-      @JsonKey(includeFromJson: false, includeToJson: false) String? flag,
-      @JsonKey(includeFromJson: false, includeToJson: false) String? region,
       Map<String, String> customHeaders,
       bool inUse});
 }
@@ -448,9 +376,6 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
     Object? url = null,
     Object? authToken = freezed,
     Object? sidCookie = freezed,
-    Object? ping = freezed,
-    Object? flag = freezed,
-    Object? region = freezed,
     Object? customHeaders = null,
     Object? inUse = null,
   }) {
@@ -466,18 +391,6 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
       sidCookie: freezed == sidCookie
           ? _self.sidCookie
           : sidCookie // ignore: cast_nullable_to_non_nullable
-              as String?,
-      ping: freezed == ping
-          ? _self.ping
-          : ping // ignore: cast_nullable_to_non_nullable
-              as Duration?,
-      flag: freezed == flag
-          ? _self.flag
-          : flag // ignore: cast_nullable_to_non_nullable
-              as String?,
-      region: freezed == region
-          ? _self.region
-          : region // ignore: cast_nullable_to_non_nullable
               as String?,
       customHeaders: null == customHeaders
           ? _self._customHeaders

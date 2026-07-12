@@ -108,9 +108,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get noChannels => '无频道';
 
   @override
-  String get noPlaylists => '无播放列表';
-
-  @override
   String get channels => '频道';
 
   @override
@@ -124,9 +121,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get couldntFetchVideos => '无法获取视频。点击重试.';
-
-  @override
-  String get wizardIntro => '选择公共服务实例或添加您自己的实例。 （稍后可以在设置中更改。）';
 
   @override
   String get startUsingClipious => '开始使用Videre';
@@ -188,9 +182,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get selectBrowsingCountry => '选择浏览国家/地区';
 
   @override
-  String get showOnStart => '选择应用程序启动时显示的内容';
-
-  @override
   String get settings => '设置';
 
   @override
@@ -198,9 +189,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get country => '国家/地区';
-
-  @override
-  String get whenAppStartsShow => '应用程序启动时，显示…';
 
   @override
   String get servers => '服务实例';
@@ -212,9 +200,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String currentServer(String current) {
     return '正使用 $current 实例';
   }
-
-  @override
-  String get useSponsorBlock => '使用 SponsorBlock';
 
   @override
   String get sponsorBlockDescription => '跳过公众提交的赞助商部分';
@@ -247,9 +232,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get delete => '删除';
 
   @override
-  String get invalidInvidiousServer => '无效的Invidious实例';
-
-  @override
   String get yourServers => '您的服务实例';
 
   @override
@@ -257,21 +239,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get notLoggedIn => '未登录';
-
-  @override
-  String get addServerHelpText => '使用 + 按钮添加您自己的服务实例或点击公共实例并添加它。';
-
-  @override
-  String get publicServers => '公共服务实例';
-
-  @override
-  String get loadingPublicServer => '正在加载公共服务实例';
-
-  @override
-  String get tapToAddServer => '点击以将服务实例添加到您的列表';
-
-  @override
-  String get publicServersError => '无法获取公共服务实例列表。点击重试。';
 
   @override
   String get appearance => '外观';
@@ -333,16 +300,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get error => '错误';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats 有未知问题';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      '服务器在接收端中没有得到一个预期的数据包，”应用包名“应该在invidious之后。\n服务器反馈：';
-
-  @override
-  String get serverIsNotReachable => '无法连接到服务器';
 
   @override
   String get videoQueue => '已在队列中';
@@ -428,9 +385,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get useProxyDescription => '通过服务实例代理视频流，可以解除区域和网络服务商的YouTube限制';
 
   @override
-  String get pressDownToShowSettings => '按下显示设置项';
-
-  @override
   String get quality => '画质';
 
   @override
@@ -475,9 +429,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get followSystem => '跟随系统';
-
-  @override
-  String get requiresRestart => '需要重启应用';
 
   @override
   String get appLanguage => '应用语言';
@@ -598,9 +549,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get copyToClipBoard => '复制到剪贴板';
-
-  @override
-  String get logsCopied => '复制日志到剪贴板';
 
   @override
   String get rememberSubtitleLanguage => '记住字幕语言';
@@ -775,10 +723,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get manageSubscriptions => 'Manage Subscriptions';
 
   @override
-  String get noSubscriptions =>
-      'No subscriptions, browse videos and subscribe to any channel you like.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'You can subscribe to this channel again later';
 
@@ -810,9 +754,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get home => 'Home';
 
   @override
-  String get library => 'Library';
-
-  @override
   String get customizeAppLayout => 'Customize app sections';
 
   @override
@@ -842,20 +783,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get secondsShortForm => 'secs';
 
   @override
-  String get videoFilterApplyDateToFilter => 'Filter videos on given times';
-
-  @override
   String get videoFilterDayOfWeek => 'Select days to apply filters';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'You can selectively choose days of the week and time to which the filters apply to, for example, avoid sport events spoilers.';
-
-  @override
-  String get videoFilterStartTime => 'Start time';
-
-  @override
-  String get videoFilterEndTime => 'End time';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -911,14 +843,6 @@ class AppLocalizationsZh extends AppLocalizations {
     );
     return 'There are  $_temp0 in your subscription feed';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Disabling battery optimization required';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications turned off';
@@ -990,9 +914,6 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Video monitoring';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1004,16 +925,6 @@ class AppLocalizationsZh extends AppLocalizations {
     );
     return 'Will check for new videos once $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Checking subscriptions...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => 'Checking playlists...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Checking channels...';
 
   @override
   String get notificationFrequencySettingsTitle => 'New video check frequency';
@@ -1133,10 +1044,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1219,16 +1126,6 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hant`).
@@ -1335,9 +1232,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get noChannels => '無頻道';
 
   @override
-  String get noPlaylists => '無播放清單';
-
-  @override
   String get channels => '頻道';
 
   @override
@@ -1351,9 +1245,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get couldntFetchVideos => '無法取得影片。點選以再試一次。';
-
-  @override
-  String get wizardIntro => '選擇一個公開伺服器或新增您自己的伺服器。（可以稍後在設定中更改。）';
 
   @override
   String get startUsingClipious => '開始使用 Videre';
@@ -1416,9 +1307,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get selectBrowsingCountry => '選擇瀏覽國家';
 
   @override
-  String get showOnStart => '選擇應用程式啟動時要顯示的內容';
-
-  @override
   String get settings => '設定';
 
   @override
@@ -1426,9 +1314,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get country => '國家';
-
-  @override
-  String get whenAppStartsShow => '當應用程式啟動時，顯示…';
 
   @override
   String get servers => '伺服器';
@@ -1440,9 +1325,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String currentServer(String current) {
     return '目前正在使用 $current';
   }
-
-  @override
-  String get useSponsorBlock => '使用 SponsorBlock';
 
   @override
   String get sponsorBlockDescription => '跳過由社群提交的贊助商片段';
@@ -1475,9 +1357,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get delete => '刪除';
 
   @override
-  String get invalidInvidiousServer => '無效的 Invidious 伺服器';
-
-  @override
   String get yourServers => '您的伺服器';
 
   @override
@@ -1485,21 +1364,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get notLoggedIn => '未登入';
-
-  @override
-  String get addServerHelpText => '使用 + 按鈕新增您自己的伺服器或點選公開伺服器並新增。';
-
-  @override
-  String get publicServers => '公開伺服器';
-
-  @override
-  String get loadingPublicServer => '正在載入公開伺服器';
-
-  @override
-  String get tapToAddServer => '點選以將伺服器新增到您的清單';
-
-  @override
-  String get publicServersError => '無法取得公開伺服器清單。點選以重試。';
 
   @override
   String get appearance => '外觀';
@@ -1561,13 +1425,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get error => '錯誤';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      '伺服器統計端點未回傳預期的內容，\"software.name\" 鍵應為 \"invidious\"。\n伺服器回應為：';
-
-  @override
-  String get serverIsNotReachable => '無法連結伺服器';
 
   @override
   String get videoQueue => '影片佇列';
@@ -1653,9 +1510,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get useProxyDescription => '透過從伺服器代理影片串流，您可以繞過區域封鎖或 ISP 封鎖 YouTube';
 
   @override
-  String get pressDownToShowSettings => '按下以顯示設定';
-
-  @override
   String get quality => '畫質';
 
   @override
@@ -1700,9 +1554,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get followSystem => '跟隨系統';
-
-  @override
-  String get requiresRestart => '需要重新啟動應用程式';
 
   @override
   String get appLanguage => '應用程式語言';
@@ -1823,9 +1674,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get copyToClipBoard => '複製到剪貼簿';
-
-  @override
-  String get logsCopied => '日誌已複製到剪貼簿';
 
   @override
   String get rememberSubtitleLanguage => '記住字幕語言';
@@ -1995,9 +1843,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get manageSubscriptions => '管理訂閱';
 
   @override
-  String get noSubscriptions => '沒有訂閱，瀏覽影片並訂閱您喜歡的任何頻道。';
-
-  @override
   String get youCanSubscribeAgainLater => '您稍後可以再次訂閱此頻道';
 
   @override
@@ -2025,9 +1870,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get home => '首頁';
-
-  @override
-  String get library => '圖書館';
 
   @override
   String get customizeAppLayout => '自定義應用程式區塊';
@@ -2058,20 +1900,11 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get secondsShortForm => '秒';
 
   @override
-  String get videoFilterApplyDateToFilter => '在指定的時間篩選影片';
-
-  @override
   String get videoFilterDayOfWeek => '選擇套用篩選器的天數';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       '您可以選擇性地選擇篩選器適用的星期幾和時間，來達到例如避免體育賽事劇透的目的。';
-
-  @override
-  String get videoFilterStartTime => '開始時間';
-
-  @override
-  String get videoFilterEndTime => '結束時間';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -2124,13 +1957,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
     );
     return '您的訂閱來源中有 $_temp0';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle => '需要停用電池最佳化';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      '為了傳送通知，Videre 需要執行一個背景服務。為了使其順暢執行，需要給予 Videre 不受限制的電池使用權，點選確定將開啟電池最佳化設定。';
 
   @override
   String get askToEnableBackgroundServiceTitle => '通知已關閉';
@@ -2199,9 +2025,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => '影片監控';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -2213,15 +2036,6 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
     );
     return '將每 $_temp0 檢查一次新影片';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions => '正在檢查訂閱...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => '正在檢查播放清單...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => '正在檢查頻道...';
 
   @override
   String get notificationFrequencySettingsTitle => '新影片檢查頻率';

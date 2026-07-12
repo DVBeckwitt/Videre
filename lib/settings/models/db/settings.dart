@@ -2,8 +2,6 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'settings.g.dart';
 
-const selectedServer = 'selected-server';
-const useSponsorBlock = 'use-sponsor-block';
 const sponsorBlockPrefix = 'sponsor-block-';
 const browsingCountry = 'browsing-country';
 const dynamicTheme = 'dynamic-theme';
@@ -24,7 +22,6 @@ const themeModeSettingName = 'theme-mode';
 const localeSettingName = 'locale';
 const useSearchHistorySettingName = 'use-search-history';
 const searchHistoryLimitSettingName = 'search-history-limit';
-const hideFilteredVideo = 'hide-filtered-videos';
 const remeberPlaybackSpeed = 'remember-playback-speed';
 const lastSpeedSettingName = 'last-speed';
 const lockOrientationFullScreen = 'lock-orientation-fullscreen';

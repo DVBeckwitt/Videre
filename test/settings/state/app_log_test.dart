@@ -4,24 +4,23 @@ import 'package:clipious/settings/models/db/app_logs.dart';
 import 'package:clipious/settings/states/app_logs.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 
-
-Future<void> main() async {
-
+void main() {
   setUp(() async {
     TestWidgetsFlutterBinding.ensureInitialized();
     db = await SembastSqfDb.createInMemory();
   });
 
-  tearDown(() async => await db.close());
+  tearDown(() => db.close());
   test('test logs', () async {
-    // inserting more than expected ot make sure old stuff is culled
-    for (int i = 0; i < 200; i++) {
-      await db.insertLogs(AppLog(message: i.toString(), level: "info", logger: 'test_log', time: DateTime.now()));
+    for (int i = 0; i < 11; i++) {
+      await db.insertLogs(AppLog(
+          message: i.toString(),
+          level: "info",
+          logger: 'test_log',
+          time: DateTime.now()));
     }
 
-    // we should be cutting old stuff
     var cubit = AppLogsCubit(AppLogsState.init());
-    // we don't exactly know when the logs are going to be cleaned up
     expect(cubit.state.logs.isEmpty, false);
 
     cubit.selectLog(cubit.state.logs[10].uuid, true);

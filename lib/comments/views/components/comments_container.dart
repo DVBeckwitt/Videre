@@ -49,28 +49,6 @@ class CommentsContainer extends StatelessWidget {
                       ),
                     ],
                   )
-/*
-                  DropdownButton<String>(
-                    value: source,
-                    onChanged: (String? value) {
-                      if (value != source) {
-                        setState(() {
-                          source = value ?? 'youtube';
-                        });
-                      }
-                    },
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'youtube',
-                        child: Text('Youtube'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'reddit',
-                        child: Text('Reddit'),
-                      ),
-                    ],
-                  )
-*/
                 ],
               ),
               CommentsView(

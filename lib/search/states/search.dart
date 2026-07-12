@@ -39,11 +39,6 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
     emit(state.copyWith(filters: newValue));
   }
 
-  void sortChanged(SearchSortBy? value) {
-    emit(state.copyWith(sortBy: value ?? state.sortBy));
-    search(state.queryController.value.text);
-  }
-
   // returns true search is already cleared
   bool searchCleared() {
     if (state.queryController.value.text.isEmpty) {

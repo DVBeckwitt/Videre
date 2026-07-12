@@ -108,9 +108,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String get noChannels => 'ਕੋਈ ਚੈਨਲ ਨਹੀਂ';
 
   @override
-  String get noPlaylists => 'ਕੋਈ ਪਲੇਅ-ਲਿਸਟ ਨਹੀਂ';
-
-  @override
   String get channels => 'ਚੈਨਲ';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsPa extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'ਵੀਡੀਓ ਪ੍ਰਾਪਤ ਨਹੀਂ ਕੀਤੀਆਂ ਜਾ ਸਕੀਆਂ। ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰਨ ਲਈ ਟੈਪ ਕਰੋ।';
-
-  @override
-  String get wizardIntro =>
-      'ਇੱਕ ਜਨਤਕ ਸਰਵਰ ਚੁਣੋ ਜਾਂ ਆਪਣਾ ਖੁਦ ਦਾ ਸਰਵਰ ਸ਼ਾਮਲ ਕਰੋ। (ਸੈਟਿੰਗਾਂ ਵਿੱਚ ਬਾਅਦ ਵਿੱਚ ਜਾ ਕੇ ਬਦਲਿਆ ਜਾ ਸਕਦਾ ਹੈ)';
 
   @override
   String get startUsingClipious => 'Videre ਵਰਤਣਾ ਸ਼ੁਰੂ ਕਰੋ';
@@ -192,9 +185,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String get selectBrowsingCountry => 'ਦੇਸ਼ ਚੁਣੋ';
 
   @override
-  String get showOnStart => 'ਚੁਣੋ ਕਿ ਜਦੋਂ ਐਪ ਸ਼ੁਰੂ ਹੁੰਦੀ ਹੈ ਤਾਂ ਕੀ ਵਿਖਾਉਣਾ ਹੈ';
-
-  @override
   String get settings => 'ਸੈਟਿੰਗਾਂ';
 
   @override
@@ -202,9 +192,6 @@ class AppLocalizationsPa extends AppLocalizations {
 
   @override
   String get country => 'ਦੇਸ਼';
-
-  @override
-  String get whenAppStartsShow => 'ਜਦੋਂ ਐਪ ਸ਼ੁਰੂ ਹੁੰਦੀ ਹੈ, ਤਾਂ ਵਿਖਾਓ…';
 
   @override
   String get servers => 'ਸਰਵਰ';
@@ -216,9 +203,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String currentServer(String current) {
     return 'ਵਰਤਮਾਨ ਵਿੱਚ $current ਦੀ ਵਰਤੋਂ ਕਰ ਰਿਹਾ ਹੈ';
   }
-
-  @override
-  String get useSponsorBlock => 'ਸਪਾਂਸਰਬਲਾਕ ਦੀ ਵਰਤੋਂ ਕਰੋ';
 
   @override
   String get sponsorBlockDescription =>
@@ -252,9 +236,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String get delete => 'ਮਿਟਾਓ';
 
   @override
-  String get invalidInvidiousServer => 'ਅਵੈਧ Invidious ਸਰਵਰ';
-
-  @override
   String get yourServers => 'ਤੁਹਾਡੇ ਸਰਵਰ';
 
   @override
@@ -262,23 +243,6 @@ class AppLocalizationsPa extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'ਲੌਗ ਇਨ ਨਹੀਂ ਹੈ';
-
-  @override
-  String get addServerHelpText =>
-      'ਆਪਣੇ ਸਰਵਰ ਨੂੰ ਜੋੜਨ ਲਈ + ਬਟਨ ਦੀ ਵਰਤੋਂ ਕਰੋ ਜਾਂ ਕਿਸੇ ਜਨਤਕ ਸਰਵਰ \'ਤੇ ਟੈਪ ਕਰੋ ਅਤੇ ਇਸਨੂੰ ਜੋੜੋ।';
-
-  @override
-  String get publicServers => 'ਪਬਲਿਕ ਸਰਵਰ';
-
-  @override
-  String get loadingPublicServer => 'ਜਨਤਕ ਸਰਵਰਾਂ ਨੂੰ ਲੋਡ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ';
-
-  @override
-  String get tapToAddServer => 'ਆਪਣੀ ਸੂਚੀ ਵਿੱਚ ਸਰਵਰ ਸ਼ਾਮਿਲ ਕਰਨ ਲਈ ਟੈਪ ਕਰੋ';
-
-  @override
-  String get publicServersError =>
-      'ਜਨਤਕ ਸਰਵਰਾਂ ਦੀ ਸੂਚੀ ਪ੍ਰਾਪਤ ਨਹੀਂ ਕੀਤੀ ਜਾ ਸਕੀ। ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰਨ ਲਈ ਟੈਪ ਕਰੋ।';
 
   @override
   String get appearance => 'ਦਿੱਖ';
@@ -342,16 +306,6 @@ class AppLocalizationsPa extends AppLocalizations {
 
   @override
   String get error => 'Error';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats is not as expected';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'The server stats endpoint did not respond an expected payload, the key \"software.name\" should be equal to \"invidious\".\nResponse from the server:';
-
-  @override
-  String get serverIsNotReachable => 'Server is not reachable';
 
   @override
   String get videoQueue => 'Video queue';
@@ -440,9 +394,6 @@ class AppLocalizationsPa extends AppLocalizations {
       'By proxying video streams from the server, you can bypass regional blocks or ISP blocking YouTube';
 
   @override
-  String get pressDownToShowSettings => 'Press down to show settings';
-
-  @override
   String get quality => 'Quality';
 
   @override
@@ -488,9 +439,6 @@ class AppLocalizationsPa extends AppLocalizations {
 
   @override
   String get followSystem => 'Follow system';
-
-  @override
-  String get requiresRestart => 'Requires app restart';
 
   @override
   String get appLanguage => 'App language';
@@ -616,9 +564,6 @@ class AppLocalizationsPa extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Copy to clipboard';
-
-  @override
-  String get logsCopied => 'Logs copied to clipboard';
 
   @override
   String get rememberSubtitleLanguage => 'Remember subtitles language';
@@ -795,10 +740,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String get manageSubscriptions => 'Manage Subscriptions';
 
   @override
-  String get noSubscriptions =>
-      'No subscriptions, browse videos and subscribe to any channel you like.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'You can subscribe to this channel again later';
 
@@ -830,9 +771,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String get home => 'Home';
 
   @override
-  String get library => 'Library';
-
-  @override
   String get customizeAppLayout => 'Customize app sections';
 
   @override
@@ -862,20 +800,11 @@ class AppLocalizationsPa extends AppLocalizations {
   String get secondsShortForm => 'secs';
 
   @override
-  String get videoFilterApplyDateToFilter => 'Filter videos on given times';
-
-  @override
   String get videoFilterDayOfWeek => 'Select days to apply filters';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'You can selectively choose days of the week and time to which the filters apply to, for example, avoid sport events spoilers.';
-
-  @override
-  String get videoFilterStartTime => 'Start time';
-
-  @override
-  String get videoFilterEndTime => 'End time';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -931,14 +860,6 @@ class AppLocalizationsPa extends AppLocalizations {
     );
     return 'There are  $_temp0 in your subscription feed';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Disabling battery optimization required';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications turned off';
@@ -1010,9 +931,6 @@ class AppLocalizationsPa extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Video monitoring';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1024,16 +942,6 @@ class AppLocalizationsPa extends AppLocalizations {
     );
     return 'Will check for new videos once $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Checking subscriptions...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => 'Checking playlists...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Checking channels...';
 
   @override
   String get notificationFrequencySettingsTitle => 'New video check frequency';
@@ -1153,10 +1061,6 @@ class AppLocalizationsPa extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1239,14 +1143,4 @@ class AppLocalizationsPa extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

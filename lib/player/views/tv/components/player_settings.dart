@@ -63,8 +63,6 @@ class TvPlayerSettings extends StatelessWidget {
                   },
                 )
         ];
-      default:
-        return const [SizedBox.shrink()];
     }
   }
 

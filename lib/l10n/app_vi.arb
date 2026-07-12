@@ -75,10 +75,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Chọn nội dung sẽ hiển thị khi ứng dụng khởi động",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "Cài đặt",
   "@settings": {
     "description": "Settings title"
@@ -168,10 +164,6 @@
   "@share": {
     "description": "asking user if to share"
   },
-  "noPlaylists": "Không có danh sách phát",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "recommended": "Đề xuất",
   "@recommended": {
     "description": "Recommended label"
@@ -187,10 +179,6 @@
   "redirectInvidiousLink": "Chia sẻ liên kết chuyển hướng gây khó chịu",
   "@redirectInvidiousLink": {
     "description": "asking user to share redirecting invidious link"
-  },
-  "wizardIntro": "Chọn một máy chủ công cộng hoặc thêm máy chủ của riêng bạn. (Có thể thay đổi sau trong cài đặt)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "itemListErrorInvalidScope": "Bạn không có quyền xem nội dung này, nếu bạn đăng nhập bằng phương thức mã thông báo, hãy thử đăng xuất và đăng nhập lại",
   "@itemListErrorInvalidScope": {
@@ -223,10 +211,6 @@
   "country": "Quốc gia",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "Khi mở ứng dụng, hiển thị…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "Máy chủ",
   "@servers": {
@@ -279,10 +263,6 @@
       }
     }
   },
-  "useSponsorBlock": "Dùng chặn tài trợ",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "sponsorBlockDescription": "Bỏ qua các phân đoạn tài trợ do cộng đồng gửi",
   "@sponsorBlockDescription": {
     "description": "Sponsorblock setting description"
@@ -315,10 +295,6 @@
   "@useThisServer": {
     "description": "Use this server label"
   },
-  "invalidInvidiousServer": "Máy chủ không hợp lệ",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "logIn": "Đăng nhập",
   "@logIn": {
     "description": "CTA to log in to server"
@@ -338,26 +314,6 @@
   "notLoggedIn": "Chưa đăng nhập",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "Sử dụng nút + để thêm máy chủ của riêng bạn hoặc nhấn vào máy chủ công cộng và thêm nó.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Máy chủ công cộng",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Đang tải máy chủ công cộng",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Nhấn để thêm máy chủ vào danh sách của bạn",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Không thể tìm nạp danh sách máy chủ công cộng. Chạm để thử lại.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "Vẻ bề ngoài",
   "@appearance": {
@@ -433,18 +389,6 @@
   },
   "error": "Lỗi",
   "@error": {},
-  "malformedStatsEndpoint": "/api/v1/stats không như mong đợi",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "Điểm cuối thống kê máy chủ không phản hồi tải trọng dự kiến, khóa \"software.name\" phải bằng \"invidious\". \nPhản hồi từ máy chủ:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "serverIsNotReachable": "Máy chủ không thể truy cập được",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "addToQueueList": "Thêm vào hàng",
   "@addToQueueList": {
     "description": "Label on button to add a video to the queue list"
@@ -525,10 +469,6 @@
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"
   },
-  "pressDownToShowSettings": "Nhấn xuống để hiển thị cài đặt",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "quality": "Chất lượng",
   "@quality": {
     "description": "Name of TV ui video settings"
@@ -588,10 +528,6 @@
   "followSystem": "Theo hệ thống",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Yêu cầu khởi động lại ứng dụng",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "Ngôn ngữ ứng dụng",
   "@appLanguage": {
@@ -735,10 +671,6 @@
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
   },
-  "logsCopied": "Nhật ký được sao chép vào bộ nhớ tạm",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
-  },
   "nFilters": "{count, plural, =0{Không có videos} =1{1 video tìm thấy} other{{count} video tìm thấy}}",
   "@nFilters": {
     "description": "One or more video filters",
@@ -851,10 +783,6 @@
   "@videoDownloadStarted": {
     "description": "Message when a video starts being downloaded"
   },
-  "noSubscriptions": "Không đăng ký, duyệt video và đăng ký bất kỳ kênh nào bạn thích.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Bạn có thể đăng ký lại kênh này sau",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -883,10 +811,6 @@
   "@home": {
     "description": "Label for Home browsing tab"
   },
-  "library": "Thư viện",
-  "@library": {
-    "description": "Name for user library"
-  },
   "navigationBarStyle": "Kiểu thanh điều hướng",
   "@navigationBarStyle": {
     "description": "Label for settings on customizing navigation bar style"
@@ -894,10 +818,6 @@
   "navigationBarLabelNeverShow": "Không bao giờ hiển thị nhãn",
   "@navigationBarLabelNeverShow": {
     "description": "Never show label option for navigation bar"
-  },
-  "videoFilterEndTime": "Thời gian kết thúc",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "notificationsDescription": "Kích hoạt và xem lại những gì bạn được thông báo",
   "@notificationsDescription": {
@@ -915,10 +835,6 @@
   "@subscriptionNotificationTitle": {
     "description": "Title for the notification showing that there are new videos from the subscription feed"
   },
-  "askForDisableBatteryOptimizationTitle": "Cần phải tắt tính năng tối ưu hóa pin",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "askToEnableBackgroundServiceContent": "Để nhận thông báo, bạn cần bật thông báo Videre, nhấn OK để bật.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
@@ -926,10 +842,6 @@
   "deletePlaylistNotificationContent": "Bạn sẽ không nhận được thông báo nào nữa từ danh sách phát này.",
   "@deletePlaylistNotificationContent": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
-  },
-  "foregroundServiceUpdatingPlaylist": "Đang kiểm tra danh sách phát...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "history": "Lịch sử",
   "@history": {
@@ -1065,14 +977,6 @@
   "@videoFilterDayOfWeekDescription": {
     "description": ""
   },
-  "videoFilterStartTime": "Thời gian bắt đầu",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterApplyDateToFilter": "Lọc video vào những thời điểm nhất định",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "videoFilterDayOfWeek": "Chọn ngày để áp dụng bộ lọc",
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
@@ -1102,10 +1006,6 @@
   "subscriptionNotificationDescription": "Nhận thông báo về video mới từ nguồn cấp dữ liệu đăng ký của bạn nếu bạn đăng nhập vào phiên bản hiện tại của mình",
   "@subscriptionNotificationDescription": {
     "description": "Description for subscription notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "Để gửi thông báo, Videre cần chạy dịch vụ nền. Để ứng dụng chạy trơn tru, Videre cần được cung cấp mức sử dụng pin không hạn chế, nhấn ok sẽ mở cài đặt tối ưu hóa pin.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "askToEnableBackgroundServiceTitle": "Đã tắt thông báo",
   "@askToEnableBackgroundServiceTitle": {
@@ -1183,21 +1083,9 @@
       "format": "compact"
     }
   },
-  "foregroundServiceUpdatingSubscriptions": "Đang kiểm tra đăng ký...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingChannels": "Đang kiểm tra kênh...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
-  },
   "notificationFrequencySettingsTitle": "Tần suất kiểm tra video mới",
   "@notificationFrequencySettingsTitle": {
     "description": "Title for frequency settings"
-  },
-  "foregroundServiceNotificationTitle": "Video giám sát",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
   },
   "notificationFrequencySettingsDescription": "Tần suất ứng dụng sẽ kiểm tra video mới",
   "@notificationFrequencySettingsDescription": {

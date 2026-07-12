@@ -15,10 +15,6 @@
     "@noChannels": {
         "description": "when there are no channels to display"
     },
-    "noPlaylists": "Brez seznamov predvajanja",
-    "@noPlaylists": {
-        "description": "when there are no playlists to display"
-    },
     "channels": "Kanali",
     "@channels": {
         "description": "Channels label"
@@ -225,17 +221,9 @@
     "@manageServers": {
         "description": "Settings to manage servers"
     },
-    "useSponsorBlock": "Uporabi SponsorBlock",
-    "@useSponsorBlock": {
-        "description": "label for sponsorblock checkbox"
-    },
     "yourServers": "Vaši strežniki",
     "@yourServers": {
         "description": "Your servers label"
-    },
-    "publicServers": "Javni strežniki",
-    "@publicServers": {
-        "description": "Public servers label"
     },
     "loadMore": "Naloži več",
     "@loadMore": {

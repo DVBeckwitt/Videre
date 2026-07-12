@@ -104,10 +104,6 @@
     "@noChannels": {
         "description": "when there are no channels to display"
     },
-    "noPlaylists": "ਕੋਈ ਪਲੇਅ-ਲਿਸਟ ਨਹੀਂ",
-    "@noPlaylists": {
-        "description": "when there are no playlists to display"
-    },
     "channels": "ਚੈਨਲ",
     "@channels": {
         "description": "Channels label"
@@ -123,10 +119,6 @@
     "couldntFetchVideos": "ਵੀਡੀਓ ਪ੍ਰਾਪਤ ਨਹੀਂ ਕੀਤੀਆਂ ਜਾ ਸਕੀਆਂ। ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰਨ ਲਈ ਟੈਪ ਕਰੋ।",
     "@couldntFetchVideos": {
         "description": "Can't load bunch of videos, asking  user to try again"
-    },
-    "wizardIntro": "ਇੱਕ ਜਨਤਕ ਸਰਵਰ ਚੁਣੋ ਜਾਂ ਆਪਣਾ ਖੁਦ ਦਾ ਸਰਵਰ ਸ਼ਾਮਲ ਕਰੋ। (ਸੈਟਿੰਗਾਂ ਵਿੱਚ ਬਾਅਦ ਵਿੱਚ ਜਾ ਕੇ ਬਦਲਿਆ ਜਾ ਸਕਦਾ ਹੈ)",
-    "@wizardIntro": {
-        "description": "Welcome message on frst time use"
     },
     "startUsingClipious": "Videre ਵਰਤਣਾ ਸ਼ੁਰੂ ਕਰੋ",
     "@startUsingClipious": {
@@ -202,25 +194,13 @@
             }
         }
     },
-    "showOnStart": "ਚੁਣੋ ਕਿ ਜਦੋਂ ਐਪ ਸ਼ੁਰੂ ਹੁੰਦੀ ਹੈ ਤਾਂ ਕੀ ਵਿਖਾਉਣਾ ਹੈ",
-    "@showOnStart": {
-        "description": "Title of dialog asking which screen the users prefers to see"
-    },
     "selectBrowsingCountry": "ਦੇਸ਼ ਚੁਣੋ",
     "@selectBrowsingCountry": {
         "description": "Select country for trending content"
     },
-    "whenAppStartsShow": "ਜਦੋਂ ਐਪ ਸ਼ੁਰੂ ਹੁੰਦੀ ਹੈ, ਤਾਂ ਵਿਖਾਓ…",
-    "@whenAppStartsShow": {
-        "description": "Setting title for selecting the screen to show on start"
-    },
     "redirectInvidiousLink": "Invidious ਰੀਡਾਇਰੈਕਟ ਲਿੰਕ ਸਾਂਝਾ ਕਰੋ",
     "@redirectInvidiousLink": {
         "description": "asking user to share redirecting invidious link"
-    },
-    "useSponsorBlock": "ਸਪਾਂਸਰਬਲਾਕ ਦੀ ਵਰਤੋਂ ਕਰੋ",
-    "@useSponsorBlock": {
-        "description": "label for sponsorblock checkbox"
     },
     "authentication": "ਪ੍ਰਮਾਣਿਕਤਾ",
     "@authentication": {
@@ -283,10 +263,6 @@
     "@delete": {
         "description": "Delete label"
     },
-    "invalidInvidiousServer": "ਅਵੈਧ Invidious ਸਰਵਰ",
-    "@invalidInvidiousServer": {
-        "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-    },
     "yourServers": "ਤੁਹਾਡੇ ਸਰਵਰ",
     "@yourServers": {
         "description": "Your servers label"
@@ -303,22 +279,6 @@
     "@logIn": {
         "description": "CTA to log in to server"
     },
-    "publicServers": "ਪਬਲਿਕ ਸਰਵਰ",
-    "@publicServers": {
-        "description": "Public servers label"
-    },
-    "loadingPublicServer": "ਜਨਤਕ ਸਰਵਰਾਂ ਨੂੰ ਲੋਡ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ",
-    "@loadingPublicServer": {
-        "description": "Message telling users the app is loading the list of public servers"
-    },
-    "tapToAddServer": "ਆਪਣੀ ਸੂਚੀ ਵਿੱਚ ਸਰਵਰ ਸ਼ਾਮਿਲ ਕਰਨ ਲਈ ਟੈਪ ਕਰੋ",
-    "@tapToAddServer": {
-        "description": "public server description"
-    },
-    "publicServersError": "ਜਨਤਕ ਸਰਵਰਾਂ ਦੀ ਸੂਚੀ ਪ੍ਰਾਪਤ ਨਹੀਂ ਕੀਤੀ ਜਾ ਸਕੀ। ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਕਰਨ ਲਈ ਟੈਪ ਕਰੋ।",
-    "@publicServersError": {
-        "description": "Error message when trying to get public servers but it failed"
-    },
     "appearance": "ਦਿੱਖ",
     "@appearance": {
         "description": "Settings category title"
@@ -326,10 +286,6 @@
     "notLoggedIn": "ਲੌਗ ਇਨ ਨਹੀਂ ਹੈ",
     "@notLoggedIn": {
         "description": "Label when the user is not logged in to the server"
-    },
-    "addServerHelpText": "ਆਪਣੇ ਸਰਵਰ ਨੂੰ ਜੋੜਨ ਲਈ + ਬਟਨ ਦੀ ਵਰਤੋਂ ਕਰੋ ਜਾਂ ਕਿਸੇ ਜਨਤਕ ਸਰਵਰ ''ਤੇ ਟੈਪ ਕਰੋ ਅਤੇ ਇਸਨੂੰ ਜੋੜੋ।",
-    "@addServerHelpText": {
-        "description": "label for when the user hasn't chosen a server yet"
     },
     "useDashDescription": "DASH ਅਨੁਕੂਲ ਸਟ੍ਰੀਮਿੰਗ ਕਈ ਵਾਰ ਸਮੱਸਿਆ ਪੈਦਾ ਕਰ ਸਕਦੀ ਹੈ, Youtube ਇਸ ਨੂੰ ਥ੍ਰੋਟਲ ਕਰ ਸਕਦਾ ਹੈ।",
     "@useDashDescription": {

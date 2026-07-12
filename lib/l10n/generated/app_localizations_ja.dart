@@ -108,9 +108,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get noChannels => 'チャンネルなし';
 
   @override
-  String get noPlaylists => '再生リストなし';
-
-  @override
   String get channels => 'チャンネル';
 
   @override
@@ -124,9 +121,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get couldntFetchVideos => '動画を取得できません。タップして再試行。';
-
-  @override
-  String get wizardIntro => '公開サーバーから選ぶか、独自のものを追加します。(設定からも変更可能)';
 
   @override
   String get startUsingClipious => 'Videre の使用を開始';
@@ -189,9 +183,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get selectBrowsingCountry => '閲覧したい国を選択';
 
   @override
-  String get showOnStart => 'アプリの起動時に表示する内容を選択';
-
-  @override
   String get settings => '設定';
 
   @override
@@ -199,9 +190,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get country => '国';
-
-  @override
-  String get whenAppStartsShow => 'アプリ起動時の表示…';
 
   @override
   String get servers => 'サーバー';
@@ -213,9 +201,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String currentServer(String current) {
     return '使用中 $current';
   }
-
-  @override
-  String get useSponsorBlock => 'SponsorBlock を使用';
 
   @override
   String get sponsorBlockDescription => 'みんなが登録した広告シーンを飛ばします';
@@ -248,9 +233,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get delete => '削除';
 
   @override
-  String get invalidInvidiousServer => '無効な Invidious サーバー';
-
-  @override
   String get yourServers => '使用するサーバー';
 
   @override
@@ -258,21 +240,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'ログインしていません';
-
-  @override
-  String get addServerHelpText => '公開サーバーから選ぶか、+ ボタンからサーバーを追加します。';
-
-  @override
-  String get publicServers => '公開サーバー';
-
-  @override
-  String get loadingPublicServer => '公開サーバーを読み込み中';
-
-  @override
-  String get tapToAddServer => 'タップでサーバーを一覧に追加';
-
-  @override
-  String get publicServersError => '公開サーバーの一覧を取得できませんでした。タップで再試行。';
 
   @override
   String get appearance => '外観';
@@ -335,16 +302,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get error => 'エラー';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats は予想通りではありません';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'サーバーのデータの終点は期待されたペイロードで応答しませんでした。キー software.name は invidious であるべきです。\nサーバーからの応答:';
-
-  @override
-  String get serverIsNotReachable => 'サーバーに到達できません';
 
   @override
   String get videoQueue => '動画再生待ち';
@@ -431,9 +388,6 @@ class AppLocalizationsJa extends AppLocalizations {
       'プロキシを介してサーバーから動画ストリームを受信。YouTubeによる地域やISPの制限を回避します';
 
   @override
-  String get pressDownToShowSettings => '下を押して、設定を表示';
-
-  @override
   String get quality => '画質';
 
   @override
@@ -478,9 +432,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get followSystem => 'システムの設定に従う';
-
-  @override
-  String get requiresRestart => 'アプリの再起動が必要';
 
   @override
   String get appLanguage => 'アプリの表示言語';
@@ -601,9 +552,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'クリップボードにコピー';
-
-  @override
-  String get logsCopied => 'ログをクリップボードにコピー';
 
   @override
   String get rememberSubtitleLanguage => '字幕の言語を記憶';
@@ -775,9 +723,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get manageSubscriptions => '登録チャンネルの管理';
 
   @override
-  String get noSubscriptions => '登録チャンネルなし。動画を探し、好きなチャンネルを登録できます。';
-
-  @override
   String get youCanSubscribeAgainLater => 'いつでも再びチャンネル登録できます';
 
   @override
@@ -805,9 +750,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get home => 'ホーム';
-
-  @override
-  String get library => 'ライブラリ';
 
   @override
   String get customizeAppLayout => '表示ボタンを変更';
@@ -838,20 +780,11 @@ class AppLocalizationsJa extends AppLocalizations {
   String get secondsShortForm => '秒';
 
   @override
-  String get videoFilterApplyDateToFilter => '指定日時に動画をフィルター';
-
-  @override
   String get videoFilterDayOfWeek => '絞り込む時間帯を選択';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       '絞り込む曜日と時間を選択できます。スポーツの結果のネタバレを避けたりできます。';
-
-  @override
-  String get videoFilterStartTime => '開始時間';
-
-  @override
-  String get videoFilterEndTime => '終了時間';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -903,13 +836,6 @@ class AppLocalizationsJa extends AppLocalizations {
     );
     return '登録チャンネルに$_temp0';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle => '電池の最適化を無効にしてください';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      '通知を送信するには、Videreがバックグラウンドサービスを実行する必要があります。円滑な動作のためには、電池の使用を制限しないでください。OKで電池の最適化の設定を開きます。';
 
   @override
   String get askToEnableBackgroundServiceTitle => '通知は無効になっています';
@@ -976,9 +902,6 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => '動画の監視';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -990,15 +913,6 @@ class AppLocalizationsJa extends AppLocalizations {
     );
     return '新着動画を$_temp0ごとに確認中';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions => '登録チャンネルを確認中...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => '再生リストを確認中...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'チャンネルを確認中...';
 
   @override
   String get notificationFrequencySettingsTitle => '新着動画の確認頻度';
@@ -1110,10 +1024,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get addBasicAuth => 'ベーシック認証を追加';
 
   @override
-  String get addBasicAuthExplanation =>
-      'サーバーにベーシック認証が必要なら、以下に設定を追加します。これらはInvidiousアカウントのものではありません';
-
-  @override
   String get addHeader => 'ヘッダーを追加';
 
   @override
@@ -1192,14 +1102,4 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       '表示を強制的にテレビ用にすることで、リーンバックシステム設定がない一部の端末でも役立ちます。アプリの再起動が必要';
-
-  @override
-  String get noPublicServers => '利用可能な公開サーバーなし';
-
-  @override
-  String get tapToSeeHow => 'タップで、自分でホストする方法を表示';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Invidiousサーバーをホストする方法は、Invidiousのサイトをご覧ください';
 }

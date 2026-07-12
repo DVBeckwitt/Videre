@@ -19,8 +19,7 @@ const taskName = "Clipious background refresh task";
 
 Future<void> configureBackgroundService(SettingsCubit settings) async {
   if (settings.state.backgroundNotifications) {
-    await Workmanager()
-        .initialize(callbackDispatcher, isInDebugMode: kDebugMode);
+    await Workmanager().initialize(callbackDispatcher);
   }
 }
 

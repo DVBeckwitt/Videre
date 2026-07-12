@@ -3,29 +3,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/states/playlist_list.dart';
-import 'package:clipious/playlists/views/components/playlist_list.dart';
-import 'package:clipious/utils/models/paginated_list.dart';
 
 import '../../../utils.dart';
-
-class AddToPlaylistList extends StatelessWidget {
-  final bool canDeleteVideos;
-
-  const AddToPlaylistList({super.key, required this.canDeleteVideos});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Expanded(
-            child: PlaylistList(
-          canDeleteVideos: canDeleteVideos,
-          paginatedList: SingleEndpointList(service.getUserPlaylists),
-        ))
-      ],
-    );
-  }
-}
 
 class AddPlayListButton extends StatelessWidget {
   const AddPlayListButton({super.key});

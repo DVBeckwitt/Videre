@@ -108,9 +108,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get noChannels => 'Ei kanavia';
 
   @override
-  String get noPlaylists => 'Ei soittolistoja';
-
-  @override
   String get channels => 'Kanavat';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsFi extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'Videoita ei voitu hakea. Yritä uudelleen napauttamalla.';
-
-  @override
-  String get wizardIntro =>
-      'Valitse julkinen palvelin tai lisää oma. (Voidaan muuttaa myöhemmin asetuksissa)';
 
   @override
   String get startUsingClipious => 'Aloita Videren käyttö';
@@ -192,9 +185,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get selectBrowsingCountry => 'Valitse selainmaa';
 
   @override
-  String get showOnStart => 'Valitse, mitä näytetään sovelluksen käynnistyessä';
-
-  @override
   String get settings => 'Asetukset';
 
   @override
@@ -202,9 +192,6 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get country => 'Maa';
-
-  @override
-  String get whenAppStartsShow => 'Kun sovellus käynnistyy, näytä…';
 
   @override
   String get servers => 'Palvelimet';
@@ -216,9 +203,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String currentServer(String current) {
     return 'Tällä hetkellä käytössä $current';
   }
-
-  @override
-  String get useSponsorBlock => 'Käytä SponsorBlock';
 
   @override
   String get sponsorBlockDescription =>
@@ -252,9 +236,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get delete => 'Poista';
 
   @override
-  String get invalidInvidiousServer => 'Virheellinen Invidious-palvelin';
-
-  @override
   String get yourServers => 'Omat palvelimet';
 
   @override
@@ -262,23 +243,6 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Ei kirjautuneena sisään';
-
-  @override
-  String get addServerHelpText =>
-      'Lisää omia palvelimia +-painikkeella tai napauta julkista palvelinta ja lisää se.';
-
-  @override
-  String get publicServers => 'Julkiset palvelimet';
-
-  @override
-  String get loadingPublicServer => 'Ladataan julkisia palvelimia';
-
-  @override
-  String get tapToAddServer => 'Lisää palvelin luetteloon napauttamalla';
-
-  @override
-  String get publicServersError =>
-      'Julkisten palvelimien luetteloa ei voitu hakea. Yritä uudelleen napauttamalla.';
 
   @override
   String get appearance => 'Ulkonäkö';
@@ -342,16 +306,6 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get error => 'Vihre';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats is not as expected';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'The server stats endpoint did not respond an expected payload, the key \"software.name\" should be equal to \"invidious\".\nResponse from the server:';
-
-  @override
-  String get serverIsNotReachable => 'Palvelin ei ole tavoitettavissa';
 
   @override
   String get videoQueue => 'Jono';
@@ -441,9 +395,6 @@ class AppLocalizationsFi extends AppLocalizations {
       'Välityspalvelinta käyttämällä voit ohittaa ISP:n asettamat sekä aluekohtaiset YouTube-rajoitukset';
 
   @override
-  String get pressDownToShowSettings => 'Paina alas näyttääksesi asetukset';
-
-  @override
   String get quality => 'Laatu';
 
   @override
@@ -489,9 +440,6 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get followSystem => 'Järjestelmä';
-
-  @override
-  String get requiresRestart => 'Vaatii sovelluksen uudelleen käynnistämisen';
 
   @override
   String get appLanguage => 'Sovelluksen kieli';
@@ -617,9 +565,6 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Kopioi leikepöydälle';
-
-  @override
-  String get logsCopied => 'Lokit kopioitu leikepöydälle';
 
   @override
   String get rememberSubtitleLanguage => 'Muista tekstitysten kieli';
@@ -797,10 +742,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get manageSubscriptions => 'Hallinnoi tilauksia';
 
   @override
-  String get noSubscriptions =>
-      'Ei tilauksia, selaa videoita ja tilaa kanavia, joista pidät.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'Voit tilata kanavan uudelleen myöhemmin';
 
@@ -830,9 +771,6 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get home => 'Koti';
-
-  @override
-  String get library => 'Kirjasto';
 
   @override
   String get customizeAppLayout => 'Mukauta sovelluksen näkymiä';
@@ -865,20 +803,11 @@ class AppLocalizationsFi extends AppLocalizations {
   String get secondsShortForm => 'sek.';
 
   @override
-  String get videoFilterApplyDateToFilter => 'Filter videos on given times';
-
-  @override
   String get videoFilterDayOfWeek => 'Select days to apply filters';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'You can selectively choose days of the week and time to which the filters apply to, for example, avoid sport events spoilers.';
-
-  @override
-  String get videoFilterStartTime => 'Aloitusaika';
-
-  @override
-  String get videoFilterEndTime => 'Päättymisaika';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -932,14 +861,6 @@ class AppLocalizationsFi extends AppLocalizations {
     );
     return 'Uusia videoita $_temp0 tilauksiltasi';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Akun optimoinnin käytöstä poisto';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'Videre pitää taustapalvelua käynnissä, jotta se voi lähettää ilmoituksia. Taustapalvelun käyttö vaatii rajoittamattoman akun käytön. Painamalla OK avataan akun optimointiasetukset.';
 
   @override
   String get askToEnableBackgroundServiceTitle =>
@@ -1013,9 +934,6 @@ class AppLocalizationsFi extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Video monitoring';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1027,17 +945,6 @@ class AppLocalizationsFi extends AppLocalizations {
     );
     return 'Will check for new videos once $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Tarkistetaan tilauksia...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist =>
-      'Tarkistetaan soittolistoja...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Tarkistetaan kanavia...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1158,10 +1065,6 @@ class AppLocalizationsFi extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1244,14 +1147,4 @@ class AppLocalizationsFi extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

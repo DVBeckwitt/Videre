@@ -50,25 +50,6 @@ class ImageObject {
     }
   }
 
-  static ImageObject? getBestThumbnail(List<ImageObject>? images) {
-    final imgs = _getThumbnailsByPreferredORder(images);
-    if (imgs.isNotEmpty) {
-      return imgs.firstOrNull;
-    } else {
-      return null;
-    }
-  }
-
-  static ImageObject? getWorstThumbnail(List<ImageObject>? images) {
-    if (images != null && images.isNotEmpty) {
-      List<ImageObject> imgs = List.from(images);
-      imgs.sort((a, b) {
-        return (a.width * a.height).compareTo(b.width * b.height);
-      });
-
-      return imgs[0];
-    } else {
-      return null;
-    }
-  }
+  static ImageObject? getBestThumbnail(List<ImageObject>? images) =>
+      _getThumbnailsByPreferredORder(images).firstOrNull;
 }

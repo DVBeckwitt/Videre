@@ -68,10 +68,6 @@
   "@ok": {
     "description": "Ok"
   },
-  "noPlaylists": "Nincsenek lejátszási listák",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "noChannels": "Nincsenek csatornák",
   "@noChannels": {
     "description": "when there are no channels to display"
@@ -91,10 +87,6 @@
   "couldntFetchVideos": "A videókat nem sikerült betölteni. Nyomjon ide az újrakezdéshez.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Válasszon ki egy nyilvános szervert vagy adjon hozzá egy sajátot. (Később meg tudja változtatni a beállításoknál.)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "startUsingClipious": "Videre használatának megkezdése",
   "@startUsingClipious": {
@@ -128,10 +120,6 @@
   "@manageServers": {
     "description": "Settings to manage servers"
   },
-  "useSponsorBlock": "SponsorBlock használata",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "name": "Név",
   "@name": {
     "description": "NAme label"
@@ -144,10 +132,6 @@
   "@logIn": {
     "description": "CTA to log in to server"
   },
-  "invalidInvidiousServer": "Hibás Invidious-szerver",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "loggedIn": "Bejelentkezve",
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
@@ -159,14 +143,6 @@
   "yourServers": "Szervereim",
   "@yourServers": {
     "description": "Your servers label"
-  },
-  "loadingPublicServer": "Nyilvános szerverek betöltése",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Nyomjon ide a szerver hozzáadásához",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "appearance": "Megjelenés",
   "@appearance": {
@@ -246,10 +222,6 @@
   "@createNewPlaylist": {
     "description": "Button label to create a new playlist when the user wants to add a video to a playlist"
   },
-  "showOnStart": "Válassza ki, mit muttasson az app induláskor",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "loadMore": "Továbbiak betöltése",
   "@loadMore": {
     "description": "CTA to load more"
@@ -269,10 +241,6 @@
   "settings": "Beállítások",
   "@settings": {
     "description": "Settings title"
-  },
-  "whenAppStartsShow": "Amikor az app elindul, mutassa ezt'':",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "currentServer": "Jelenleg ezt használja'': {current}",
   "@currentServer": {
@@ -295,29 +263,9 @@
   "@delete": {
     "description": "Delete label"
   },
-  "addServerHelpText": "Saját szerver hozzáadásához nyomjon a + gombra, vagy nyomjon egy nyilvános szerverre a hozzáadáshoz.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Nyilvános szerverek",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "publicServersError": "A nyilvános szerverek listáját nem sikerült betölteni. Nyomjon ide az újrakezdéshez.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
-  },
   "tokenLogin": "Belépés tokennel",
   "@tokenLogin": {
     "description": "Textto login to a server using the recommended way"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats nem megfelelő",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "serverIsNotReachable": "A szerver nem elérhető",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "irreversibleAction": "Ez a művelet nem vonható vissza",
   "@irreversibleAction": {

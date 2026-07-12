@@ -56,10 +56,6 @@
   "@ok": {
     "description": "Ok"
   },
-  "noPlaylists": "பிளேலிச்ட்கள் இல்லை",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "சேனல்கள்",
   "@channels": {
     "description": "Channels label"
@@ -95,10 +91,6 @@
   "sponsorBlockCategoryOutro": "எண்ட்கார்டுகள்/வரவு",
   "@sponsorBlockCategoryOutro": {
     "description": "Outro block 'Outro' Category"
-  },
-  "pressDownToShowSettings": "அமைப்புகளைக் காட்ட கீழே அழுத்தவும்",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
   },
   "playbackSpeed": "பிளேபேக் விரைவு",
   "@playbackSpeed": {
@@ -204,10 +196,6 @@
   "@home": {
     "description": "Label for Home browsing tab"
   },
-  "library": "நூலகம்",
-  "@library": {
-    "description": "Name for user library"
-  },
   "customizeAppLayout": "பயன்பாட்டு பிரிவுகளைத் தனிப்பயனாக்குங்கள்",
   "@customizeAppLayout": {
     "description": "Settings label for the settings to allow the user to set up the app sections themselves"
@@ -223,14 +211,6 @@
   "secondsShortForm": "நொடி",
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
-  },
-  "videoFilterApplyDateToFilter": "கொடுக்கப்பட்ட நேரங்களில் வீடியோக்களை வடிகட்டவும்",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
-  "foregroundServiceUpdatingChannels": "சேனல்களைச் சரிபார்க்கிறது ...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "subtitlesBackground": "வசன வரிகள் பின்னணி",
   "@subtitlesBackground": {
@@ -265,10 +245,6 @@
   "manageSubscriptions": "சந்தாக்களை நிர்வகிக்கவும்",
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
-  },
-  "noSubscriptions": "சந்தாக்கள் இல்லை, வீடியோக்களை உலாவவும், நீங்கள் விரும்பும் எந்த சேனலுக்கும் குழுசேரவும்.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
   },
   "youCanSubscribeAgainLater": "இந்த சேனலுக்கு பின்னர் மீண்டும் குழுசேரலாம்",
   "@youCanSubscribeAgainLater": {
@@ -328,14 +304,6 @@
   "@videoFilterDayOfWeekDescription": {
     "description": ""
   },
-  "videoFilterStartTime": "தொடக்க நேரம்",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterEndTime": "இறுதி நேரம்",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "videoFilterAppliedOn": "{selectedDays} இல் பயன்படுத்தப்பட்டது",
   "@videoFilterAppliedOn": {
     "description": "Readable text on when the filter should apply",
@@ -392,10 +360,6 @@
   "@subscriptionNotificationTitle": {
     "description": "Title for the notification showing that there are new videos from the subscription feed"
   },
-  "askForDisableBatteryOptimizationTitle": "பேட்டரி தேர்வுமுறை முடக்குதல் தேவை",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "subscriptionNotificationContent": "There are  {count, plural, =0{no new videos} =1{1 new video} other{{count} new videos}} in your subscription feed",
   "@subscriptionNotificationContent": {
     "description": "Content for subscription notification",
@@ -405,10 +369,6 @@
         "format": "compact"
       }
     }
-  },
-  "askForDisableBatteryOptimizationContent": "அறிவிப்பை அனுப்ப, பின்னணி சேவையை இயக்க Videre தேவைகள். இது சீராக இயங்குவதற்கு, Videreக்கு கட்டுப்பாடற்ற பேட்டரி பயன்பாடு வழங்கப்பட வேண்டும், சரி தட்டுவது பேட்டரி உகப்பாக்கம் அமைப்புகளைத் திறக்கும்.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "askToEnableBackgroundServiceTitle": "அறிவிப்புகள் அணைக்கப்பட்டன",
   "@askToEnableBackgroundServiceTitle": {
@@ -486,10 +446,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "வீடியோ கண்காணிப்பு",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "foregroundServiceNotificationContent": "Will check for new videos once {hours, select, 1{per hour} 24{a day} other{every {hours} hours}}",
   "@foregroundServiceNotificationContent": {
     "description": "Content for the foreground service running notification when the user wants to receive notifications",
@@ -497,14 +453,6 @@
       "type": "num",
       "format": "compact"
     }
-  },
-  "foregroundServiceUpdatingSubscriptions": "சந்தாக்களை சரிபார்க்கிறது ...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingPlaylist": "பிளேலிச்ட்களை சரிபார்க்கிறது ...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "notificationFrequencySettingsTitle": "புதிய வீடியோ சோதனை அதிர்வெண்",
   "@notificationFrequencySettingsTitle": {
@@ -614,8 +562,6 @@
   "@addBasicAuth": {},
   "addHeader": "தலைப்புச் சேர்க்கவும்",
   "@addHeader": {},
-  "addBasicAuthExplanation": "உங்கள் சேவையகத்திற்கு அடிப்படை HTTP ஏற்பு தேவைப்பட்டால், கீழே உள்ள விவரங்களைச் சேர்க்கவும். இவை உங்கள் வன்கவர்வு கணக்கு விவரங்கள் அல்ல",
-  "@addBasicAuthExplanation": {},
   "advancedConfiguration": "மேம்பட்ட உள்ளமைவு",
   "@advancedConfiguration": {},
   "customHeaders": "தனிப்பயன் தலைப்புகள்",
@@ -738,10 +684,6 @@
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
   },
-  "wizardIntro": "பொது சேவையகத்தைத் தேர்ந்தெடுக்கவும் அல்லது உங்கள் சொந்தத்தைச் சேர்க்கவும். (பின்னர் அமைப்புகளில் மாற்றலாம்)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "startUsingClipious": "Videre பயன்படுத்தத் தொடங்குங்கள்",
   "@startUsingClipious": {
     "description": "button label to start using the app"
@@ -788,10 +730,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "பயன்பாடு தொடங்கும் போது என்ன காண்பிக்க வேண்டும் என்பதைத் தேர்ந்தெடுக்கவும்",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "அமைப்புகள்",
   "@settings": {
     "description": "Settings title"
@@ -803,10 +741,6 @@
   "country": "நாடு",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "பயன்பாடு தொடங்கும் போது, காட்டு…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "சேவையகங்கள்",
   "@servers": {
@@ -824,10 +758,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "ஒப்புரவாளர் பிளாக் பயன்படுத்தவும்",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "சமூகத்தால் சமர்ப்பிக்கப்பட்ட ஒப்புரவாளர் பிரிவுகளைத் தவிர்க்கவும்",
   "@sponsorBlockDescription": {
@@ -869,10 +799,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "தவறான அகாத சேவையகம்",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "உங்கள் சேவையகங்கள்",
   "@yourServers": {
     "description": "Your servers label"
@@ -884,26 +810,6 @@
   "notLoggedIn": "உள்நுழையவில்லை",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "உங்கள் சொந்த சேவையகங்களைச் சேர்க்க + பொத்தானைப் பயன்படுத்தவும் அல்லது பொது சேவையகத்தில் தட்டவும், சேர்க்கவும்.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "பொது சேவையகங்கள்",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "பொது சேவையகங்களை ஏற்றுகிறது",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "உங்கள் பட்டியலில் சேவையகத்தைச் சேர்க்க தட்டவும்",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "பொது சேவையகங்களின் பட்டியலைப் பெற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "தோற்றம்",
   "@appearance": {
@@ -979,18 +885,6 @@
   },
   "error": "பிழை",
   "@error": {},
-  "malformedStatsEndpoint": "/API/V1/புள்ளிவிவரங்கள் எதிர்பார்த்தபடி இல்லை",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "சேவையக புள்ளிவிவரங்கள் இறுதிப்புள்ளி எதிர்பார்க்கப்படும் பேலோடிற்கு பதிலளிக்கவில்லை, முக்கிய \"மென்பொருள். பெயர்\" \"வெகுவாக\" சமமாக இருக்க வேண்டும்.\n சேவையகத்திலிருந்து பதில்:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "serverIsNotReachable": "சேவையகம் அடைய முடியாது",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "sponsorBlockCategorySponsor": "ஒப்புரவாளர்",
   "@sponsorBlockCategorySponsor": {
     "description": "Sponsor block 'Sponsor' Category"
@@ -1127,10 +1021,6 @@
   "@followSystem": {
     "description": "Follow system label"
   },
-  "requiresRestart": "பயன்பாட்டு மறுதொடக்கம் தேவை",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "appLanguage": "பயன்பாட்டு மொழி",
   "@appLanguage": {
     "description": "Select app language"
@@ -1242,10 +1132,6 @@
   "copyToClipBoard": "கிளிப்போர்டுக்கு நகலெடுக்கவும்",
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
-  },
-  "logsCopied": "கிளிப்போர்டுக்கு நகலெடுக்கப்பட்ட பதிவுகள்",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "rememberSubtitleLanguage": "வசன வரிகள் மொழியை நினைவில் கொள்ளுங்கள்",
   "@rememberSubtitleLanguage": {

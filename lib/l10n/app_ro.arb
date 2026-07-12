@@ -96,10 +96,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Nu există Playlisturi",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "couldntLoadVideo": "Nu s-a putut încărca videoclipul",
   "@couldntLoadVideo": {
     "description": "Message to display when a video can't be loaded"
@@ -107,10 +103,6 @@
   "couldntFetchVideos": "Nu s-au putut prelua videoclipuri. Atingeți pentru a încerca din nou.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Selectați un server public sau adăugați unul propriu. (Poate fi modificat ulterior în setări)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "videoAddedToPlaylist": "Videoclip adăugat în playlist",
   "@videoAddedToPlaylist": {
@@ -140,10 +132,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Selectați ce să afișați când pornește aplicația",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "Setări",
   "@settings": {
     "description": "Settings title"
@@ -155,10 +143,6 @@
   "country": "Țară",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "Când aplicația pornește, arată…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "Servere",
   "@servers": {
@@ -176,10 +160,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "Utilizați SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "Săriți peste segmentele de sponsori trimise de comunitate",
   "@sponsorBlockDescription": {
@@ -221,10 +201,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "Server Invidious nevalid",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "Serverele tale",
   "@yourServers": {
     "description": "Your servers label"
@@ -236,14 +212,6 @@
   "notLoggedIn": "Nu ești conectat",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "Folosiți butonul + pentru a vă adăuga propriile servere sau apăsați pe un server public și adăugați-l.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "tapToAddServer": "Atinge pentru a adăuga server la lista",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "useDynamicTheme": "Culori dinamice",
   "@useDynamicTheme": {
@@ -326,18 +294,6 @@
   "newSorting": "Nou",
   "@newSorting": {
     "description": "Content sorting: new"
-  },
-  "publicServers": "Servere publice",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Se încarcă servere publice",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "publicServersError": "Nu s-a putut prelua lista de servere publice. Apasă pentru a reîncerca.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "Aspect",
   "@appearance": {
@@ -499,10 +455,6 @@
   "@blackBackground": {
     "description": "Settings name for black background"
   },
-  "pressDownToShowSettings": "Apasă în jos pentru a afișa setările",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "subtitles": "Subtitrări",
   "@subtitles": {
     "description": "Name of TV ui subtitles settings"
@@ -550,10 +502,6 @@
   "followSystem": "Urmărește sistemul",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Necesită repornirea aplicației",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "Limba aplicației",
   "@appLanguage": {
@@ -715,10 +663,6 @@
   "@appLogsDescription": {
     "description": "Description of the app log settings"
   },
-  "logsCopied": "Jurnalele copiate în clipboard",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
-  },
   "copyToClipBoard": "Copiază în clipboard",
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
@@ -857,10 +801,6 @@
   "@home": {
     "description": "Label for Home browsing tab"
   },
-  "library": "Bibliotecă",
-  "@library": {
-    "description": "Name for user library"
-  },
   "notifications": "Notificării",
   "@notifications": {
     "description": "Notification settings title"
@@ -887,14 +827,6 @@
   "@searchDurationMedium": {
     "description": "Search for medium videos only"
   },
-  "videoFilterStartTime": "Începutul timpului",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterEndTime": "Sfârșitul timpului",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "subscriptionNotification": "Notificările prin abonamente",
   "@subscriptionNotification": {
     "description": "Title for subscriptions notifications"
@@ -907,21 +839,9 @@
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
   },
-  "malformedStatsEndpointDescription": "Serverul stats endpoint nu a răspuns un payload așteptat, cheia \"software.name” ar trebui să fie egală cu \"invidious”.\nRăspuns de la server:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
   "itemListErrorInvalidScope": "Nu ai permisiunea de a vedea, dacă te-ai logat folosind metoda token încearcă să te deconectezi și să intri din nou",
   "@itemListErrorInvalidScope": {
     "description": "Error when the user doesn't have the proper scope to its current token"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats nu este așa cum se aștepta",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "serverIsNotReachable": "Serverul nu este accesibil",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "returnYoutubeUrlValidation": "Adresa URL trebuie să înceapă cu http:// sau https://",
   "@returnYoutubeUrlValidation": {
@@ -995,10 +915,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Fără abonamente, caută videoclipuri și abonează-te la orice canal îți place.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Te poți abona la acest canal mai târziu",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -1058,10 +974,6 @@
   "secondsShortForm": "sec",
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
-  },
-  "videoFilterApplyDateToFilter": "Filtrează videoclipurile după anumite intervale de timp",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
   },
   "videoFilterDayOfWeek": "Selectează zilele pentru a aplica filtrele",
   "@videoFilterDayOfWeek": {
@@ -1128,14 +1040,6 @@
         "format": "compact"
       }
     }
-  },
-  "askForDisableBatteryOptimizationTitle": "Dezactivarea optimizării bateriei necesară",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "Pentru a trimite notificări, Videre trebuie să ruleze un serviciu în fundal. Pentru ca acesta să funcționeze fără probleme, este necesar ca Videre să aibă acces nerestricționat la baterie. Apăsând pe OK se vor deschide setările de optimizare a bateriei.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "askToEnableBackgroundServiceTitle": "Notificări dezactivate",
   "@askToEnableBackgroundServiceTitle": {
@@ -1213,10 +1117,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "Monitorizare video",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "foregroundServiceNotificationContent": "Va verifica pentru videoclipuri noi o dată la {hours, select, 1{per hour} 24{a day} other{every {hours} hours}}",
   "@foregroundServiceNotificationContent": {
     "description": "Content for the foreground service running notification when the user wants to receive notifications",
@@ -1224,18 +1124,6 @@
       "type": "num",
       "format": "compact"
     }
-  },
-  "foregroundServiceUpdatingSubscriptions": "Se verifică abonamentele...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingPlaylist": "Se verifică listele de redare...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
-  "foregroundServiceUpdatingChannels": "Se verifică canalele...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsTitle": "Noua frecvență de verificare video",
   "@notificationFrequencySettingsTitle": {

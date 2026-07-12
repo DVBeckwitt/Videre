@@ -167,7 +167,5 @@ sealed class TvPlayerControlsState with _$TvPlayerControlsState {
     @Default(false) bool displayControls,
   }) = _TvPlayerControlsState;
 
-  bool get isShowUi => controlsOpacity == 1;
-
   const TvPlayerControlsState._();
 }

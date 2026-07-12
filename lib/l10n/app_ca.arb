@@ -79,10 +79,6 @@
     "@noChannels": {
         "description": "when there are no channels to display"
     },
-    "noPlaylists": "No hi ha cap llista",
-    "@noPlaylists": {
-        "description": "when there are no playlists to display"
-    },
     "couldntLoadVideo": "No s’ha pogut carregar el vídeo",
     "@couldntLoadVideo": {
         "description": "Message to display when a video can't be loaded"
@@ -139,10 +135,6 @@
     "@streamIsLive": {
         "description": "Label when a video is a live stream"
     },
-    "showOnStart": "Seleccioneu el que es mostrarà quan s’iniciï l’aplicació",
-    "@showOnStart": {
-        "description": "Title of dialog asking which screen the users prefers to see"
-    },
     "settings": "Paràmetres",
     "@settings": {
         "description": "Settings title"
@@ -154,14 +146,6 @@
     "country": "País",
     "@country": {
         "description": "Country label"
-    },
-    "whenAppStartsShow": "Quan s’iniciï l’aplicació, mostra…",
-    "@whenAppStartsShow": {
-        "description": "Setting title for selecting the screen to show on start"
-    },
-    "useSponsorBlock": "Usa l’SponsorBlock",
-    "@useSponsorBlock": {
-        "description": "label for sponsorblock checkbox"
     },
     "about": "Quant a",
     "@about": {
@@ -178,14 +162,6 @@
     "useThisServer": "Usa aquest servidor",
     "@useThisServer": {
         "description": "Use this server label"
-    },
-    "publicServers": "Servidors públics",
-    "@publicServers": {
-        "description": "Public servers label"
-    },
-    "loadingPublicServer": "S’estan carregant els servidors públics",
-    "@loadingPublicServer": {
-        "description": "Message telling users the app is loading the list of public servers"
     },
     "delete": "Suprimeix",
     "@delete": {
@@ -254,10 +230,6 @@
     "themeDark": "Fosc",
     "@themeDark": {
         "description": "Dark theme"
-    },
-    "requiresRestart": "Cal reiniciar l’aplicació",
-    "@requiresRestart": {
-        "description": "Requires app restart label"
     },
     "appLanguage": "Llengua de l’aplicació",
     "@appLanguage": {

@@ -11,10 +11,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "wizardIntro": "Seleziona un server pubblico o aggiungi il proprio. (Può essere modificato in seguito nelle impostazioni)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "nReplies": "{count, plural, =0{Nessuna risposta} =1{1 risposta} other{{count} risposte}}",
   "@nReplies": {
     "description": "number of replies to a comment",
@@ -25,10 +21,6 @@
       }
     }
   },
-  "whenAppStartsShow": "Quando l’applicazione si avvia, mostra…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "servers": "Server",
   "@servers": {
     "description": "Server management settings category"
@@ -36,10 +28,6 @@
   "startUsingClipious": "Inizia a usare Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
-  },
-  "showOnStart": "Seleziona cosa mostrare all’avvio dell’applicazione",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
   },
   "manageServers": "Gestisci i server",
   "@manageServers": {
@@ -62,18 +50,6 @@
   "@useDynamicThemeDescription": {
     "description": ""
   },
-  "addServerHelpText": "Utilizzare il pulsante + per aggiungere i propri server o toccare un server pubblico e aggiungerlo.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "tapToAddServer": "Tocca per aggiungere il server all’elenco",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Impossibile recuperare l’elenco dei server pubblici. Tocca per riprovare.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
-  },
   "appearance": "Aspetto",
   "@appearance": {
     "description": "Settings category title"
@@ -91,10 +67,6 @@
         "format": "compact"
       }
     }
-  },
-  "useSponsorBlock": "Usa SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "about": "Informazioni",
   "@about": {
@@ -249,10 +221,6 @@
   "@subscribe": {
     "description": "Label for user to subscribe to a channel"
   },
-  "noPlaylists": "Nessuna playlist",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "noChannels": "Nessun canale",
   "@noChannels": {
     "description": "when there are no channels to display"
@@ -293,10 +261,6 @@
   "@playlists": {
     "description": "User playlists"
   },
-  "invalidInvidiousServer": "Server Invidious non valido",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "I tuoi server",
   "@yourServers": {
     "description": "Your servers label"
@@ -308,14 +272,6 @@
   "notLoggedIn": "Accesso non effettuato",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "publicServers": "Server pubblici",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Caricamento di server pubblici",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "useDynamicTheme": "Colori dinamici",
   "@useDynamicTheme": {
@@ -434,10 +390,6 @@
   "videoAddedToQueue": "Video aggiunto alla coda",
   "@videoAddedToQueue": {
     "description": "Pop up message when a video was added at the end of the video queue"
-  },
-  "requiresRestart": "Richiede il riavvio dell''applicazione",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "themeLight": "Chiaro",
   "@themeLight": {
@@ -599,10 +551,6 @@
   "@sponsorBlockCategoryFiller": {
     "description": "Sponsorblock 'Filler' Category"
   },
-  "pressDownToShowSettings": "Premi per mostrare le impostazioni",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "useProxy": "Proxy per i video",
   "@useProxy": {
     "description": "label for settings switch to proxy videos from server"
@@ -614,14 +562,6 @@
   "sponsorBlockCategoryPreviewDescription": "Insieme di clip che mostrano anteprime su cosa succederà in questo o altri video della serie. Gli argomenti saranno ripresi durante i video.",
   "@sponsorBlockCategoryPreviewDescription": {
     "description": "Sponsorblock 'Preview' Category description"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats non conforme",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "L''endpoint non ha restituito i dati aspettati, la chiave \"software.name\" dovrebbe essere \"invidious\".\nRisposta dal server:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "sponsorBlockCategoryInteraction": "Promemoria di interazione (Iscriviti)",
   "@sponsorBlockCategoryInteraction": {
@@ -643,10 +583,6 @@
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
   },
-  "serverIsNotReachable": "Il server non é raggiungibile",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "playNextAddedToQueue": "Il video verrà riprodotto successivamente",
   "@playNextAddedToQueue": {
     "description": "Pop up message to confirm that the video has been properly set to play next"
@@ -658,10 +594,6 @@
   "sponsorBlockCategoryFillerDescription": "Scene superflue aggiunte solo per riempire o per fare dell''umorismo che non sono necessarie per capire il contenuto principale del video. Non devono essere inclusi i segmenti che forniscono il contesto o altri dettagli. Questa è una categoria molto precisa pensata per quando non si è in \"vena di divertimento\".",
   "@sponsorBlockCategoryFillerDescription": {
     "description": "Sponsorblock 'Filler' Category description"
-  },
-  "logsCopied": "Log copiati negli appunti",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "videoFilterFilterLabel": "Oscura",
   "@videoFilterFilterLabel": {
@@ -687,10 +619,6 @@
   "@rememberPlaybackSpeedDescription": {
     "description": "Settings description for remembering playback speed"
   },
-  "noSubscriptions": "Nessuna iscrizione, guarda video e iscriviti a qualunque canale ti interessi.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "unSubscribeQuestion": "Disiscrivi ?",
   "@unSubscribeQuestion": {
     "description": "Title for dialog if a user wants to unsubscribe in the subscribtion management screen"
@@ -707,10 +635,6 @@
   "@noHistory": {
     "description": "Message when the user visits the history tab but it's empty"
   },
-  "library": "Raccolta",
-  "@library": {
-    "description": "Name for user library"
-  },
   "from": "Da",
   "@from": {
     "description": "From word (as in 'From xx To xx')"
@@ -722,10 +646,6 @@
   "deletePlaylistNotificationTitle": "Eliminare notifica playlist ?",
   "@deletePlaylistNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
-  },
-  "foregroundServiceUpdatingSubscriptions": "Controllando iscrizioni...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
   },
   "subtitlesBackground": "Sfondo sottotitoli",
   "@subtitlesBackground": {
@@ -949,14 +869,6 @@
   "@distractionFreeModeDescription": {
     "description": "Description for distraction free mode"
   },
-  "videoFilterStartTime": "Tempo inizio",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterEndTime": "Tempo fine",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "subscriptionNotification": "Notifiche iscrizione",
   "@subscriptionNotification": {
     "description": "Title for subscriptions notifications"
@@ -1000,10 +912,6 @@
         "example": "Lo-Fi girl"
       }
     }
-  },
-  "foregroundServiceUpdatingPlaylist": "Controllando playlist...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "notificationFrequencySettingsDescription": "Quanto spesso l''applicazione controllerà per nuovi video",
   "@notificationFrequencySettingsDescription": {
@@ -1130,10 +1038,6 @@
         "example": "MKBHD"
       }
     }
-  },
-  "foregroundServiceUpdatingChannels": "Controllando canali...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "layoutEditorExplanation": "Puoi scegliere cosa mostrare nella schermata Pagina principale, puoi avere fino a 2 viste piccole con scorrimento orizzontale e una fonte principale.",
   "@layoutEditorExplanation": {

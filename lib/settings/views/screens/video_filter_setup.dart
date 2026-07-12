@@ -161,34 +161,7 @@ class VideoFilterSetupScreen extends StatelessWidget {
                                 icon: const Icon(Icons.clear))
                         ],
                       ),
-                    )
-/*
-                    SearchChoices.single(
-                      isExpanded: true,
-                      value: _.channel,
-                      selectedValueWidgetFn: (value) => Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Text(value.author),
-                      ),
-                      hint: '${locals.channel} (${locals.optional})',
-                      dialogBox: true,
-                      onChanged: cubit.selectChannel,
-                      onClear: cubit.channelClear,
-                      futureSearchFn: (keyword, orderBy, orderAsc, filters, pageNb) async {
-                        List<Channel> channels = await cubit.searchChannel(keyword ?? '');
-
-                        return Tuple2(
-                            channels
-                                .map((e) => DropdownMenuItem(
-                                      value: e,
-                                      child: Text(e.author),
-                                    ))
-                                .toList(),
-                            channels.length);
-                      },
                     ),
-*/
-                    ,
                     Visibility(
                         visible: state.filter?.channelId != null,
                         child: SwitchListTile(

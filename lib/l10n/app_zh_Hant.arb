@@ -104,10 +104,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "無播放清單",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "頻道",
   "@channels": {
     "description": "Channels label"
@@ -178,10 +174,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "選擇應用程式啟動時要顯示的內容",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "設定",
   "@settings": {
     "description": "Settings title"
@@ -193,10 +185,6 @@
   "country": "國家",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "當應用程式啟動時，顯示…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "伺服器",
   "@servers": {
@@ -214,10 +202,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "使用 SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "跳過由社群提交的贊助商片段",
   "@sponsorBlockDescription": {
@@ -259,10 +243,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "無效的 Invidious 伺服器",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "您的伺服器",
   "@yourServers": {
     "description": "Your servers label"
@@ -274,26 +254,6 @@
   "notLoggedIn": "未登入",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "使用 + 按鈕新增您自己的伺服器或點選公開伺服器並新增。",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "公開伺服器",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "正在載入公開伺服器",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "點選以將伺服器新增到您的清單",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "無法取得公開伺服器清單。點選以重試。",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "外觀",
   "@appearance": {
@@ -331,10 +291,6 @@
   "@subscribed": {
     "description": "When the user is subscribed to a channel"
   },
-  "wizardIntro": "選擇一個公開伺服器或新增您自己的伺服器。（可以稍後在設定中更改。）",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "useProxyDescription": "透過從伺服器代理影片串流，您可以繞過區域封鎖或 ISP 封鎖 YouTube",
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"
@@ -363,10 +319,6 @@
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
-  "askForDisableBatteryOptimizationTitle": "需要停用電池最佳化",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "videoAddedToQueue": "影片已新增至佇列",
   "@videoAddedToQueue": {
     "description": "Pop up message when a video was added at the end of the video queue"
@@ -374,10 +326,6 @@
   "itemlistErrorGeneric": "無法取得資料",
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
-  },
-  "askForDisableBatteryOptimizationContent": "為了傳送通知，Videre 需要執行一個背景服務。為了使其順暢執行，需要給予 Videre 不受限制的電池使用權，點選確定將開啟電池最佳化設定。",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "save": "儲存",
   "@save": {
@@ -390,10 +338,6 @@
   "homeLayoutEditor": "編輯首頁版面配置",
   "@homeLayoutEditor": {
     "description": "Title of layout editor screen"
-  },
-  "requiresRestart": "需要重新啟動應用程式",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "themeLight": "淺色",
   "@themeLight": {
@@ -462,10 +406,6 @@
   "sponsorBlockCategoryInteraction": "互動提醒（訂閱）",
   "@sponsorBlockCategoryInteraction": {
     "description": "Sponsor block 'Interaction' Category"
-  },
-  "noSubscriptions": "沒有訂閱，瀏覽影片並訂閱您喜歡的任何頻道。",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
   },
   "addToQueueList": "新增至佇列",
   "@addToQueueList": {
@@ -703,10 +643,6 @@
   "@cookieLoginDescription": {
     "description": "Cookie log in description"
   },
-  "videoFilterApplyDateToFilter": "在指定的時間篩選影片",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "videoFiltered": "影片因以下原因被篩選：",
   "@videoFiltered": {
     "description": "Label shown on video list when it is filtered out"
@@ -726,10 +662,6 @@
   "addToPlaylist": "新增至播放清單",
   "@addToPlaylist": {
     "description": "Label to add a video to a playlist"
-  },
-  "logsCopied": "日誌已複製到剪貼簿",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "deleteChannelNotificationContent": "您將不再收到來自此頻道的任何通知。",
   "@deleteChannelNotificationContent": {
@@ -777,10 +709,6 @@
   "@notifications": {
     "description": "Notification settings title"
   },
-  "pressDownToShowSettings": "按下以顯示設定",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "unSubscribeQuestion": "取消訂閱？",
   "@unSubscribeQuestion": {
     "description": "Title for dialog if a user wants to unsubscribe in the subscribtion management screen"
@@ -796,10 +724,6 @@
   "videoFilterHide": "隱藏篩選的影片",
   "@videoFilterHide": {
     "description": "Label for settings to hide filtered videos"
-  },
-  "library": "圖書館",
-  "@library": {
-    "description": "Name for user library"
   },
   "sponsorBlockCategorySponsorDescription": "付費推廣、付費推薦和直接廣告。不包括自我推廣或免費為他們喜歡的事業/創作者/網站/產品喊話。",
   "@sponsorBlockCategorySponsorDescription": {
@@ -820,10 +744,6 @@
   "editVideoFilter": "編輯篩選器",
   "@editVideoFilter": {
     "description": "Title when editting a filter"
-  },
-  "videoFilterStartTime": "開始時間",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "videoPlayer": "影片播放器",
   "@videoPlayer": {
@@ -961,10 +881,6 @@
   "@videoFilters": {
     "description": "Title for video filter settings"
   },
-  "videoFilterEndTime": "結束時間",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "rememberPlaybackSpeed": "記住播放速度",
   "@rememberPlaybackSpeed": {
     "description": "Setting label for remembering playback speed"
@@ -1019,10 +935,6 @@
   "@noDownloadedVideos": {
     "description": "Message showing when the user goes to the download screen but there are no offline videos."
   },
-  "foregroundServiceUpdatingSubscriptions": "正在檢查訂閱...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
   "rememberSubtitleLanguage": "記住字幕語言",
   "@rememberSubtitleLanguage": {
     "description": "Settings label for remembering subtitle language"
@@ -1068,10 +980,6 @@
         "example": "Monday, Wednesday, Friday"
       }
     }
-  },
-  "foregroundServiceNotificationTitle": "影片監控",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
   },
   "otherNotifications": "其他通知來源（鈴鐺圖示）",
   "@otherNotifications": {
@@ -1145,10 +1053,6 @@
   "@videoDownloadStarted": {
     "description": "Message when a video starts being downloaded"
   },
-  "foregroundServiceUpdatingChannels": "正在檢查頻道...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
-  },
   "audio": "音訊",
   "@audio": {
     "description": "Name TV ui audio settings"
@@ -1156,10 +1060,6 @@
   "notificationFrequencySettingsDescription": "應用程式將多久檢查一次新影片",
   "@notificationFrequencySettingsDescription": {
     "description": "Description for frequency settings"
-  },
-  "foregroundServiceUpdatingPlaylist": "正在檢查播放清單...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "videoFilterOperationHigherThan": "高於",
   "@videoFilterOperationHigherThan": {
@@ -1216,10 +1116,6 @@
   "share": "分享",
   "@share": {
     "description": "asking user if to share"
-  },
-  "serverIsNotReachable": "無法連結伺服器",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "searchUploadDateAny": "不限時間",
   "@searchUploadDateAny": {
@@ -1292,10 +1188,6 @@
   "skipStepDescription": "快轉/倒轉操作時要跳過的秒數",
   "@skipStepDescription": {
     "description": "Title for the settings to set the skipping step"
-  },
-  "malformedStatsEndpointDescription": "伺服器統計端點未回傳預期的內容，\"software.name\" 鍵應為 \"invidious\"。\n伺服器回應為：",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "invidiousAccount": "Invidious 帳號",
   "@invidiousAccount": {

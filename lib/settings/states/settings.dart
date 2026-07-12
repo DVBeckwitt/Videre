@@ -50,10 +50,6 @@ class SettingsCubit extends Cubit<SettingsState> {
     await _getSubscriptionNotification();
   }
 
-  toggleSponsorBlock(bool value) async {
-    await setSponsorBlock(value);
-  }
-
   toggleForceLandscapeFullScreen(bool value) async {
     await setForceLandscapeFullScreen(value);
   }
@@ -102,10 +98,6 @@ class SettingsCubit extends Cubit<SettingsState> {
     await setCountry(countryCodes.firstWhere(
         (element) => element.name == selected,
         orElse: () => state.country));
-  }
-
-  serverChanged() {
-    emit(state.copyWith());
   }
 
   toggleSslVerification(bool value) async {
@@ -313,8 +305,6 @@ class SettingsCubit extends Cubit<SettingsState> {
     emit(state.copyWith(settings: newSettings));
   }
 
-  setSponsorBlock(bool b) async => await _set(useSponsorBlock, b);
-
   setOnOpen(int i) async => await _set(onOpenSettingName, i);
 
   setUseProxy(bool b) async => await _set(useProxySettingName, b);
@@ -490,10 +480,6 @@ sealed class SettingsState with _$SettingsState {
 
     return SettingsState(settings: settings, packageInfo: packageInfo);
   }
-
-  //late Map<String, SettingsValue> settings;
-
-  bool get sponsorBlock => _get(useSponsorBlock)?.value == 'true';
 
   int get onOpen => int.parse(_get(onOpenSettingName)?.value ?? '0');
 

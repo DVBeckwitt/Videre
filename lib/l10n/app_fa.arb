@@ -31,10 +31,6 @@
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
   },
-  "askForDisableBatteryOptimizationTitle": "غیرفعال کردن بهینه‌سازی مصرف باتری لازم است",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "videoAddedToQueue": "ویدیو به صف افزوده شد",
   "@videoAddedToQueue": {
     "description": "Pop up message when a video was added at the end of the video queue"
@@ -42,10 +38,6 @@
   "itemlistErrorGeneric": "اطلاعات دریافت نشد",
   "@itemlistErrorGeneric": {
     "description": "Error showing when the data can't be fetch"
-  },
-  "askForDisableBatteryOptimizationContent": "جهت ارسال اطلاعیه، Videre نیاز دارد تا یک سرویس در پس‌زمینه اجرا کند. برای این که این سرویس بدون مشکل اجرا شود، لازم است که Videre دسترسی نامحدود به مصرف باتری داشته باشد. ضربه روی تایید، شما را به تنظیمات بهینه‌سازی منتقل خواهد کرد.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "save": "ذخیره",
   "@save": {
@@ -70,10 +62,6 @@
   "startUsingClipious": "آغاز استفاده از Videre",
   "@startUsingClipious": {
     "description": "button label to start using the app"
-  },
-  "requiresRestart": "نیازمند بازکردن دوبارهٔ اپ",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "themeLight": "روشن",
   "@themeLight": {
@@ -163,10 +151,6 @@
   "@sponsorBlockCategoryInteraction": {
     "description": "Sponsor block 'Interaction' Category"
   },
-  "noSubscriptions": "اشتراکی ندارید، هنگام مشاهدهٔ ویدیوها مشترک کانال‌هایی که می‌پسندید شوید.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "addToQueueList": "افزودن به صف",
   "@addToQueueList": {
     "description": "Label on button to add a video to the queue list"
@@ -225,10 +209,6 @@
   "@videoQueue": {
     "description": "Label for button to display the video queue"
   },
-  "showOnStart": "انتخاب کنید که پس از باز شدن اپ چه چیزی نمایش داده شود",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "videoFilterHideLabel": "مخفی کن",
   "@videoFilterHideLabel": {
     "description": "Label to hide videos"
@@ -252,10 +232,6 @@
   "playlists": "فهرست‌های پخش",
   "@playlists": {
     "description": "User playlists"
-  },
-  "invalidInvidiousServer": "سرویس دهندهٔ نامعتبر Invidious",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
   },
   "videos": "ویدیوها",
   "@videos": {
@@ -302,10 +278,6 @@
   "navigationBarLabelAlwaysShowing": "برچسب همیشه نمایش داده شود",
   "@navigationBarLabelAlwaysShowing": {
     "description": "Label always showing option for navigation bar"
-  },
-  "tapToAddServer": "برای افزودن سرویس دهنده به فهرست، ضربه بزنید",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "videoFilterType": "نوع",
   "@videoFilterType": {
@@ -457,10 +429,6 @@
   "@sponsorBlockCategorySponsor": {
     "description": "Sponsor block 'Sponsor' Category"
   },
-  "wizardIntro": "یک سرویس دهندهٔ عمومی انتخاب کنید یا سرویس دهندهٔ خودتان را وارد کنید. (می‌توانید بعدا در تنظیمات تغییر دهید)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "channels": "کانال‌ها",
   "@channels": {
     "description": "Channels label"
@@ -505,10 +473,6 @@
   "@cookieLoginDescription": {
     "description": "Cookie log in description"
   },
-  "videoFilterApplyDateToFilter": "پالایش ویدیوها در زمان مشخص شده",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "videoFiltered": "ویدیو به دلایل زیر پالایش شده است:",
   "@videoFiltered": {
     "description": "Label shown on video list when it is filtered out"
@@ -524,10 +488,6 @@
   "to": "تا",
   "@to": {
     "description": "To word as in 'From xx To xx')"
-  },
-  "addServerHelpText": "از دکمهٔ + برای افزودن سرویس دهندگان خود استفاده کنید یا روی یکی از سرویس دهندگان عمومی ضربه بزنید تا افزوده شود.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
   },
   "subscriptionNotificationTitle": "ویدیوهای تازه از اشتراک‌های شما",
   "@subscriptionNotificationTitle": {
@@ -548,14 +508,6 @@
   "version": "نسخه",
   "@version": {
     "description": "version label"
-  },
-  "publicServersError": "فهرست سرویس دهندگان عمومی دریافت نشد. برای تلاش مجدد ضربه بزنید.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
-  },
-  "logsCopied": "نسخه‌بردای از Logها به کلیپ‌بورد انجام شد",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "notLoggedIn": "وارد نشده",
   "@notLoggedIn": {
@@ -611,10 +563,6 @@
   "@sponsorBlockCategoryOutro": {
     "description": "Outro block 'Outro' Category"
   },
-  "noPlaylists": "بدون فهرست پخش",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "copySettingsAsJsonDescription": "چنانچه به مشکلی در اپ برخوردید و تصمیم داشتید پیگیری کنید، از تنظیمات برای استفاده در عیب‌یابی به صورت JSON نسخه‌برداری شود",
   "@copySettingsAsJsonDescription": {
     "description": ""
@@ -639,10 +587,6 @@
   "@useThisServer": {
     "description": "Use this server label"
   },
-  "pressDownToShowSettings": "برای نمایش گزینه‌های بیشتر پایین را فشار دهید",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "unSubscribeQuestion": "لغو اشتراک؟",
   "@unSubscribeQuestion": {
     "description": "Title for dialog if a user wants to unsubscribe in the subscribtion management screen"
@@ -658,10 +602,6 @@
   "videoFilterHide": "ویدیوهای پالایش شده را مخفی کن",
   "@videoFilterHide": {
     "description": "Label for settings to hide filtered videos"
-  },
-  "library": "کتابخانه",
-  "@library": {
-    "description": "Name for user library"
   },
   "sponsorBlockCategorySponsorDescription": "تبلیغات و ارجاعاتی که پولی به ازایشان دریافت شده و تبلیغات مستفیم. شامل تبلیغ-خود یا اشاره‌های رایگان به اهداف/سازندگان/وب‌سایت‌ها و محصولاتی که دوست دارند نمی‌شود.",
   "@sponsorBlockCategorySponsorDescription": {
@@ -682,10 +622,6 @@
   "editVideoFilter": "ویرایش قاعده",
   "@editVideoFilter": {
     "description": "Title when editting a filter"
-  },
-  "videoFilterStartTime": "زمان آغاز",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "about": "درباره",
   "@about": {
@@ -789,10 +725,6 @@
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
   },
-  "whenAppStartsShow": "هنگامی که اپ باز شد، نمایش بده…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "sponsorBlockCategoryPreviewDescription": "مجموعه‌ای از کلیپ‌ها که خلاصه‌ای از آن‌چه در ویدیو خواهد بود یا دیگرهای ویدیوهای یک مجموعه را نمایش می‌دهند که همهٔ اطلاعات در ویدیوی پیش‌رو خواهد بود.",
   "@sponsorBlockCategoryPreviewDescription": {
     "description": "Sponsorblock 'Preview' Category description"
@@ -885,10 +817,6 @@
   "@videoFilters": {
     "description": "Title for video filter settings"
   },
-  "videoFilterEndTime": "زمان پایان",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "rememberPlaybackSpeed": "سرعت پخش ویدیو را به خاطر بسپار",
   "@rememberPlaybackSpeed": {
     "description": "Setting label for remembering playback speed"
@@ -908,10 +836,6 @@
   "selectPlaylist": "انتخاب فهرست پخش",
   "@selectPlaylist": {
     "description": "Title when users wants to add a video to a playlist"
-  },
-  "useSponsorBlock": "استفاده از SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "search": "جست و جو",
   "@search": {
@@ -962,10 +886,6 @@
   "noDownloadedVideos": "ویدیویی دریافت نشده است. ویدیوها را ببینید، انگشت را روی یک ویدیو در فهرست نگه داشته یا روی دکمهٔ دریافت ضربه بزنید",
   "@noDownloadedVideos": {
     "description": "Message showing when the user goes to the download screen but there are no offline videos."
-  },
-  "foregroundServiceUpdatingSubscriptions": "بررسی اشتراک‌ها…",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
   },
   "rememberSubtitleLanguage": "زبان زیرنویس را به خاطر بسپار",
   "@rememberSubtitleLanguage": {
@@ -1025,10 +945,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "پایش ویدیوها",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "otherNotifications": "منابع دیگر اطلاع‌رسانی (bell icons)",
   "@otherNotifications": {
     "description": "Title for settings section in the notification settings"
@@ -1052,10 +968,6 @@
   "unlistedPlaylist": "فهرست نشده",
   "@unlistedPlaylist": {
     "description": "Unlisted playlist"
-  },
-  "loadingPublicServer": "در حال بارگزاری سرویس دهندگان عمومی",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "manageSubscriptions": "مدیریت اشتراک‌ها",
   "@manageSubscriptions": {
@@ -1088,10 +1000,6 @@
       "type": "num",
       "format": "compact"
     }
-  },
-  "publicServers": "سرویس دهندگان عمومی",
-  "@publicServers": {
-    "description": "Public servers label"
   },
   "searchHistoryDescription": "تنظیمات سابقهٔ جست و جو",
   "@searchHistoryDescription": {
@@ -1137,10 +1045,6 @@
   "@servers": {
     "description": "Server management settings category"
   },
-  "foregroundServiceUpdatingChannels": "بررسی کانال‌ها…",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
-  },
   "audio": "صدا",
   "@audio": {
     "description": "Name TV ui audio settings"
@@ -1164,10 +1068,6 @@
   "couldntFetchVideos": "ویدیو دریافت نشد. برای تلاش مجدد کلیک کنید.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "foregroundServiceUpdatingPlaylist": "بررسی فهرست‌های پخش…",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "videoFilterOperationHigherThan": "بالاتر از",
   "@videoFilterOperationHigherThan": {
@@ -1207,14 +1107,6 @@
   "@searchSortBy": {
     "description": "Search sorting option"
   },
-  "serverIsNotReachable": "سرویس دهنده در دسترس نیست",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats آن گونه که انتظار می‌رود نیست",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
   "seeking": "مرور ویدیو",
   "@seeking": {
     "description": "category for settings related to seeking in a video"
@@ -1244,10 +1136,6 @@
   "exponentialSkip": "عقب/جلو کردن به صورت تصاعدی",
   "@exponentialSkip": {
     "description": "Title for the setting to enable the exponential skipping"
-  },
-  "malformedStatsEndpointDescription": "نقطهٔ پایانی آمار سرویس دهنده پاسخ درستی نداد. کلید «software.name» باید برابر با «invidious» باشد.\nپاسخ دریافتی از سرویس دهنده:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "fullscreenOnLandscape": "تمام صفحه در حالت افقی",
   "@fullscreenOnLandscape": {

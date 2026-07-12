@@ -21,14 +21,6 @@ class ChannelCubit extends Cubit<ChannelController> {
         channel: channel, loading: false, isSubscribed: isSubscribed));
   }
 
-/*
-  @override
-  close() async {
-    state.controller?.dispose();
-    super.close();
-  }
-*/
-
   toggleSubscription() async {
     var state = this.state.copyWith();
     if (state.channel != null) {

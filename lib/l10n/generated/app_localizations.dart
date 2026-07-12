@@ -341,12 +341,6 @@ abstract class AppLocalizations {
   /// **'No channels'**
   String get noChannels;
 
-  /// when there are no playlists to display
-  ///
-  /// In en, this message translates to:
-  /// **'No playlists'**
-  String get noPlaylists;
-
   /// Channels label
   ///
   /// In en, this message translates to:
@@ -376,12 +370,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Could not fetch videos. Tap to try again.'**
   String get couldntFetchVideos;
-
-  /// Welcome message on frst time use
-  ///
-  /// In en, this message translates to:
-  /// **'Select a public server or add your own. (Can be changed later in the settings)'**
-  String get wizardIntro;
 
   /// button label to start using the app
   ///
@@ -473,12 +461,6 @@ abstract class AppLocalizations {
   /// **'Select browsing country'**
   String get selectBrowsingCountry;
 
-  /// Title of dialog asking which screen the users prefers to see
-  ///
-  /// In en, this message translates to:
-  /// **'Select what to show when the app starts'**
-  String get showOnStart;
-
   /// Settings title
   ///
   /// In en, this message translates to:
@@ -497,12 +479,6 @@ abstract class AppLocalizations {
   /// **'Country'**
   String get country;
 
-  /// Setting title for selecting the screen to show on start
-  ///
-  /// In en, this message translates to:
-  /// **'When the app starts, show…'**
-  String get whenAppStartsShow;
-
   /// Server management settings category
   ///
   /// In en, this message translates to:
@@ -520,12 +496,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Currently using {current}'**
   String currentServer(String current);
-
-  /// label for sponsorblock checkbox
-  ///
-  /// In en, this message translates to:
-  /// **'Use SponsorBlock'**
-  String get useSponsorBlock;
 
   /// Sponsorblock setting description
   ///
@@ -587,12 +557,6 @@ abstract class AppLocalizations {
   /// **'Delete'**
   String get delete;
 
-  /// Error when the user tries to add a server that is not a proper or reachable invidious server
-  ///
-  /// In en, this message translates to:
-  /// **'Invalid Invidious server'**
-  String get invalidInvidiousServer;
-
   /// Your servers label
   ///
   /// In en, this message translates to:
@@ -610,36 +574,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Not logged in'**
   String get notLoggedIn;
-
-  /// label for when the user hasn't chosen a server yet
-  ///
-  /// In en, this message translates to:
-  /// **'Use the + button to add your own servers or tap on a public server and add it.'**
-  String get addServerHelpText;
-
-  /// Public servers label
-  ///
-  /// In en, this message translates to:
-  /// **'Public servers'**
-  String get publicServers;
-
-  /// Message telling users the app is loading the list of public servers
-  ///
-  /// In en, this message translates to:
-  /// **'Loading public servers'**
-  String get loadingPublicServer;
-
-  /// public server description
-  ///
-  /// In en, this message translates to:
-  /// **'Tap to add server to your list'**
-  String get tapToAddServer;
-
-  /// Error message when trying to get public servers but it failed
-  ///
-  /// In en, this message translates to:
-  /// **'Could not fetch list of public servers. Tap to retry.'**
-  String get publicServersError;
 
   /// Settings category title
   ///
@@ -760,24 +694,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Error'**
   String get error;
-
-  /// Title for dialog when adding a server that isn't validated as it should
-  ///
-  /// In en, this message translates to:
-  /// **'/api/v1/stats is not as expected'**
-  String get malformedStatsEndpoint;
-
-  /// Description of the possible issue for an invalid stats endpoints
-  ///
-  /// In en, this message translates to:
-  /// **'The server stats endpoint did not respond an expected payload, the key \"software.name\" should be equal to \"invidious\".\nResponse from the server:'**
-  String get malformedStatsEndpointDescription;
-
-  /// Title for dialog when adding a server that is not reachable
-  ///
-  /// In en, this message translates to:
-  /// **'Server is not reachable'**
-  String get serverIsNotReachable;
 
   /// Label for button to display the video queue
   ///
@@ -929,12 +845,6 @@ abstract class AppLocalizations {
   /// **'By proxying video streams from the server, you can bypass regional blocks or ISP blocking YouTube'**
   String get useProxyDescription;
 
-  /// Instruction on how to show video settings when playing a video on TV
-  ///
-  /// In en, this message translates to:
-  /// **'Press down to show settings'**
-  String get pressDownToShowSettings;
-
   /// Name of TV ui video settings
   ///
   /// In en, this message translates to:
@@ -1024,12 +934,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Follow system'**
   String get followSystem;
-
-  /// Requires app restart label
-  ///
-  /// In en, this message translates to:
-  /// **'Requires app restart'**
-  String get requiresRestart;
 
   /// Select app language
   ///
@@ -1240,12 +1144,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Copy to clipboard'**
   String get copyToClipBoard;
-
-  /// Message to tell user that logs have been copied to the clipboard
-  ///
-  /// In en, this message translates to:
-  /// **'Logs copied to clipboard'**
-  String get logsCopied;
 
   /// Settings label for remembering subtitle language
   ///
@@ -1536,12 +1434,6 @@ abstract class AppLocalizations {
   /// **'Manage Subscriptions'**
   String get manageSubscriptions;
 
-  /// Message when the user has no subs
-  ///
-  /// In en, this message translates to:
-  /// **'No subscriptions, browse videos and subscribe to any channel you like.'**
-  String get noSubscriptions;
-
   /// Text for the unscubscribe confirmation dialog
   ///
   /// In en, this message translates to:
@@ -1595,12 +1487,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Home'**
   String get home;
-
-  /// Name for user library
-  ///
-  /// In en, this message translates to:
-  /// **'Library'**
-  String get library;
 
   /// Settings label for the settings to allow the user to set up the app sections themselves
   ///
@@ -1656,12 +1542,6 @@ abstract class AppLocalizations {
   /// **'secs'**
   String get secondsShortForm;
 
-  /// Label for switch to allow user to customize video filter and set days of week and time to them
-  ///
-  /// In en, this message translates to:
-  /// **'Filter videos on given times'**
-  String get videoFilterApplyDateToFilter;
-
   /// Title for day selection for the filter
   ///
   /// In en, this message translates to:
@@ -1673,18 +1553,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'You can selectively choose days of the week and time to which the filters apply to, for example, avoid sport events spoilers.'**
   String get videoFilterDayOfWeekDescription;
-
-  /// Title for filter start time
-  ///
-  /// In en, this message translates to:
-  /// **'Start time'**
-  String get videoFilterStartTime;
-
-  /// Title for filter end time
-  ///
-  /// In en, this message translates to:
-  /// **'End time'**
-  String get videoFilterEndTime;
 
   /// Readable text on when the filter should apply
   ///
@@ -1752,18 +1620,6 @@ abstract class AppLocalizations {
   /// **'There are  {count, plural, =0{no new videos} =1{1 new video} other{{count} new videos}} in your subscription feed'**
   String subscriptionNotificationContent(num count);
 
-  /// Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications
-  ///
-  /// In en, this message translates to:
-  /// **'Disabling battery optimization required'**
-  String get askForDisableBatteryOptimizationTitle;
-
-  /// Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications
-  ///
-  /// In en, this message translates to:
-  /// **'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.'**
-  String get askForDisableBatteryOptimizationContent;
-
   /// If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them
   ///
   /// In en, this message translates to:
@@ -1830,35 +1686,11 @@ abstract class AppLocalizations {
   /// **'There are {count, plural, =0{no new videos} =1{1 new video} other{{count} new videos}} in the {playlist} playlist'**
   String playlistNotificationContent(String playlist, num count);
 
-  /// Title for the foreground service running notification when the user wants to receive notifications
-  ///
-  /// In en, this message translates to:
-  /// **'Video monitoring'**
-  String get foregroundServiceNotificationTitle;
-
   /// Content for the foreground service running notification when the user wants to receive notifications
   ///
   /// In en, this message translates to:
   /// **'Will check for new videos once {hours, select, 1{per hour} 24{a day} other{every {hours} hours}}'**
   String foregroundServiceNotificationContent(String hours);
-
-  /// Foreground service notification text when checking for new subscription videos
-  ///
-  /// In en, this message translates to:
-  /// **'Checking subscriptions...'**
-  String get foregroundServiceUpdatingSubscriptions;
-
-  /// Foreground service notification text when checking for new playlist videos
-  ///
-  /// In en, this message translates to:
-  /// **'Checking playlists...'**
-  String get foregroundServiceUpdatingPlaylist;
-
-  /// Foreground service notification text when checking for new channel videos
-  ///
-  /// In en, this message translates to:
-  /// **'Checking channels...'**
-  String get foregroundServiceUpdatingChannels;
 
   /// Title for frequency settings
   ///
@@ -2052,12 +1884,6 @@ abstract class AppLocalizations {
   /// **'Add Basic Authentication'**
   String get addBasicAuth;
 
-  /// No description provided for @addBasicAuthExplanation.
-  ///
-  /// In en, this message translates to:
-  /// **'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details'**
-  String get addBasicAuthExplanation;
-
   /// No description provided for @addHeader.
   ///
   /// In en, this message translates to:
@@ -2207,24 +2033,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required'**
   String get forceTvUiExplanation;
-
-  /// No description provided for @noPublicServers.
-  ///
-  /// In en, this message translates to:
-  /// **'No public servers are available'**
-  String get noPublicServers;
-
-  /// No description provided for @tapToSeeHow.
-  ///
-  /// In en, this message translates to:
-  /// **'Tap to see how to host your own'**
-  String get tapToSeeHow;
-
-  /// No description provided for @referToInvidiousWebsiteForHostingInstructions.
-  ///
-  /// In en, this message translates to:
-  /// **'Refer to Invidious website for instructions on how to host invidious'**
-  String get referToInvidiousWebsiteForHostingInstructions;
 }
 
 class _AppLocalizationsDelegate

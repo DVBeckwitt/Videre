@@ -23,8 +23,6 @@ abstract class PaginatedList<T> {
   bool getHasMore();
 }
 
-abstract class PaginatedVideoList extends PaginatedList<Video> {}
-
 /// Paginated video list that uses the continuation concept
 class ContinuationList<T> extends PaginatedList<T> {
   String? continuation;
@@ -128,7 +126,7 @@ class FixedItemList<T> extends PaginatedList<T> {
 }
 
 /// User subscription_management
-class SubscriptionVideoList extends PaginatedVideoList {
+class SubscriptionVideoList extends PaginatedList<Video> {
   final maxResults = 50;
   int page = 1;
   bool hasMoreOnline = true;
@@ -251,31 +249,6 @@ class SearchPaginatedList<T> extends PaginatedList<T> {
   @override
   Future<List<T>> refresh() async {
     return [];
-  }
-}
-
-// Force refresh to fetch all videos as search endpoint only returns 2 videos for each playlist
-class PlaylistSearchPaginatedList<T> extends SearchPaginatedList<T> {
-  PlaylistSearchPaginatedList(
-      {required super.query,
-      required super.items,
-      required super.type,
-      required super.getFromResults,
-      required super.sortBy});
-
-  @override
-  bool getHasMore() {
-    return false;
-  }
-
-  @override
-  bool hasRefresh() {
-    return true;
-  }
-
-  @override
-  Future<List<T>> refresh() async {
-    return (await service.getPublicPlaylists(super.query)).videos as List<T>;
   }
 }
 

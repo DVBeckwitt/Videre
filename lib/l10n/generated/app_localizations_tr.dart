@@ -109,9 +109,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get noChannels => 'Kanal yok';
 
   @override
-  String get noPlaylists => 'Çalma listesi yok';
-
-  @override
   String get channels => 'Kanallar';
 
   @override
@@ -126,10 +123,6 @@ class AppLocalizationsTr extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'Video alınamadı. Tekrar denemek için dokunun.';
-
-  @override
-  String get wizardIntro =>
-      'Ortak bir sunucu seçin veya kendinizinkini ekleyin. (Daha sonra ayarlarda değiştirilebilir)';
 
   @override
   String get startUsingClipious => 'Videre\'yi kullanmaya başlayın';
@@ -193,9 +186,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get selectBrowsingCountry => 'Gözatma ülkesini seçin';
 
   @override
-  String get showOnStart => 'Uygulama başladığında ne gösterileceğini seçin';
-
-  @override
   String get settings => 'Ayarlar';
 
   @override
@@ -203,9 +193,6 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get country => 'Ülke';
-
-  @override
-  String get whenAppStartsShow => 'Uygulama başladığında, göster…';
 
   @override
   String get servers => 'Sunucular';
@@ -217,9 +204,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String currentServer(String current) {
     return 'Şu anda $current kullanıyor';
   }
-
-  @override
-  String get useSponsorBlock => 'Sponsor Engelini Kullan';
 
   @override
   String get sponsorBlockDescription =>
@@ -253,9 +237,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get delete => 'Silmek';
 
   @override
-  String get invalidInvidiousServer => 'Geçersiz Davetsiz sunucu';
-
-  @override
   String get yourServers => 'Sunucularınız';
 
   @override
@@ -263,23 +244,6 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Giriş yapılmadı';
-
-  @override
-  String get addServerHelpText =>
-      'Kendi sunucularınızı eklemek için + düğmesini kullanın veya genel bir sunucuya dokunup ekleyin.';
-
-  @override
-  String get publicServers => 'Genel sunucular';
-
-  @override
-  String get loadingPublicServer => 'Genel sunucular yükleniyor';
-
-  @override
-  String get tapToAddServer => 'Listenize sunucu eklemek için dokunun';
-
-  @override
-  String get publicServersError =>
-      'Genel sunucuların listesi alınamadı. Yeniden denemek için dokunun.';
 
   @override
   String get appearance => 'Görünüm';
@@ -343,16 +307,6 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get error => 'Hata';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats beklenildiği gibi değil';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'Sunucu istatistikleri bitiş noktası beklenen bir yüke yanıt vermedi, anahtar \"software.name \" \"davetsiz\" ile eşit olmalıdır.\nSunucudan yanıt:';
-
-  @override
-  String get serverIsNotReachable => 'Sunucuya erişilemiyor';
 
   @override
   String get videoQueue => 'Video kuyruğu';
@@ -442,10 +396,6 @@ class AppLocalizationsTr extends AppLocalizations {
       'Sunucudan video akışlarını proxyleyerek, bölgesel blokları atlayabilir veya YouTubeu engelleyen ISSYİ atlayabilirsiniz';
 
   @override
-  String get pressDownToShowSettings =>
-      'Ayarları göstermek için aşağı tuşuna basın';
-
-  @override
   String get quality => 'Kalite';
 
   @override
@@ -491,9 +441,6 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get followSystem => 'Takip sistemi';
-
-  @override
-  String get requiresRestart => 'Uygulamanın yeniden başlatılmasını gerektirir';
 
   @override
   String get appLanguage => 'Uygulama dili';
@@ -619,9 +566,6 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Panoya kopyala';
-
-  @override
-  String get logsCopied => 'Panoya kopyalanan günlükler';
 
   @override
   String get rememberSubtitleLanguage => 'Altyazı dilini hatırla';
@@ -802,10 +746,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get manageSubscriptions => 'Abonelikleri Yönet';
 
   @override
-  String get noSubscriptions =>
-      'Abonelik yok, videolara göz atın ve istediğiniz herhangi bir kanala abone olun.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'Bu kanala daha sonra tekrar abone olabilirsiniz';
 
@@ -837,9 +777,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get home => 'Ev';
 
   @override
-  String get library => 'Kütüphane';
-
-  @override
   String get customizeAppLayout => 'Uygulama bölümlerini özelleştirme';
 
   @override
@@ -869,21 +806,11 @@ class AppLocalizationsTr extends AppLocalizations {
   String get secondsShortForm => 'saniye';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'Videoları belirli zamanlara göre filtreleyin';
-
-  @override
   String get videoFilterDayOfWeek => 'Filtre uygulamak için günleri seçin';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'Haftanın günlerini ve filtrelerin uygulandığı zamanı seçerek seçebilirsiniz, örneğin spor etkinlikleri spoylerinden kaçının.';
-
-  @override
-  String get videoFilterStartTime => 'Başlama zamanı';
-
-  @override
-  String get videoFilterEndTime => 'Bitiş zamanı';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -939,14 +866,6 @@ class AppLocalizationsTr extends AppLocalizations {
     );
     return 'Abonelik akışınızda  $_temp0 var';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Pil optimizasyonunu devre dışı bırakmak gerekir';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'Videre bildirimi göndermek için bir arka plan hizmeti çalıştırmanız gerekir. Sorunsuz çalışması için Videreye sınırsız pil kullanımı verilmesi gerekir, tamama dokunmak pil optimizasyon ayarlarını açacaktır.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Bildirimler kapalı';
@@ -1018,9 +937,6 @@ class AppLocalizationsTr extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Video izleme';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1032,18 +948,6 @@ class AppLocalizationsTr extends AppLocalizations {
     );
     return 'Yeni videolar için her $_temp0 kontrol edecektir.';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Abonelikleri kontrol etme...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist =>
-      'Çalma listelerini kontrol etme...';
-
-  @override
-  String get foregroundServiceUpdatingChannels =>
-      'Kanalları kontrol ediyorum...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1164,10 +1068,6 @@ class AppLocalizationsTr extends AppLocalizations {
   String get addBasicAuth => 'Basit Kimlik Doğrulaması Ekle';
 
   @override
-  String get addBasicAuthExplanation =>
-      'Eğer sunucunuz basit HTTP kimlik doğrulaması gerektiriyorsa, detayları aşağıya ekleyiniz. Bunlar Invidious hesap detaylarınız değildir';
-
-  @override
   String get addHeader => 'Üstbilgi ekle';
 
   @override
@@ -1250,15 +1150,4 @@ class AppLocalizationsTr extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Arayüzün TV deneyimi olmasını zorla, leanback sistem yapılandırmasına sahip olmayan bazı cihazlar için kullanışlı olabilir. Uygulamayı yeniden başlatmak gereklidir';
-
-  @override
-  String get noPublicServers => 'Hiçbir herkese açık sunucu mevcut değil';
-
-  @override
-  String get tapToSeeHow =>
-      'Kendi ev sahipliğinizi nasıl yapacağınızı görmek için dokunun';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Invidious\'u nasıl barındıracağınıza dair talimatlar için Invidious web sitesine bakın';
 }

@@ -141,10 +141,6 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
     emit(state.copyWith(position: seekTo, draggingPositionSlider: true));
   }
 
-  void setPlaybackSpeed(double d) {
-    player.setSpeed(d);
-  }
-
   void removeError() {
     emit(state.copyWith(errored: false));
   }

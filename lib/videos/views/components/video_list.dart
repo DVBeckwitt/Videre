@@ -9,8 +9,6 @@ import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/utils/views/components/top_loading.dart';
 import 'package:clipious/videos/views/components/video_in_list.dart';
 
-// import 'package:pull_to_refresh/pull_to_refresh.dart';
-
 import '../../../downloads/models/downloaded_video.dart';
 import '../../../utils/models/paginated_list.dart';
 
@@ -38,17 +36,6 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
       this.showVideoModalSheet,
       this.openVideoOverride,
       this.small = false});
-
-/*
-  @override
-  void initState() {
-    super.initState();
-
-    FBroadcast.instance().register(BROADCAST_SERVER_CHANGED, (value, callback) {
-      // getVideos();
-    });
-  }
-*/
 
   @override
   Widget build(BuildContext context) {

@@ -1,4 +1,3 @@
-// import 'package:video_player/video_player.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -19,13 +18,6 @@ import 'package:clipious/videos/views/components/video_share_button.dart';
 
 import '../../../player/states/player.dart';
 import '../../../utils.dart';
-
-class VideoRouteArguments {
-  final String videoId;
-  bool? playNow;
-
-  VideoRouteArguments({@pathParam required this.videoId, this.playNow});
-}
 
 @RoutePage()
 class VideoScreen extends StatelessWidget {
@@ -55,16 +47,6 @@ class VideoScreen extends StatelessWidget {
     AutoRouter.of(context)
         .push(const DownloadManagerRoute())
         .then((value) => cubit.getDownloadStatus());
-  }
-
-  Object getNavigationItem(
-      {required DeviceType device, required Icon icon, required String label}) {
-    return switch (device) {
-      DeviceType.phone => NavigationDestination(icon: icon, label: label),
-      DeviceType.tablet =>
-        NavigationRailDestination(icon: icon, label: Text(label)),
-      (_) => throw UnsupportedError("Should not reach here")
-    };
   }
 
   @override
@@ -216,10 +198,6 @@ class VideoScreen extends StatelessWidget {
                                   child: VideoShareButton(
                                       video: videoState.video!),
                                 ),
-                                /*
-                                VideoLikeButton(videoId: _.video?.videoId),
-                                VideoAddToPlaylistButton(videoId: _.video?.videoId),
-                  */
                                 AddToPlayListButton(videoId: videoState.videoId)
                               ],
                       ),

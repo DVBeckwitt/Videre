@@ -24,36 +24,35 @@ class FakeService extends Service {
 }
 
 void main() {
-  setUp(() async {
-    await setUpTestsForTestServer();
-  });
+  setUp(setUpTestsForTestServer);
+  tearDown(cleanUpTestServer);
 
-  tearDown(() async {
-    await cleanUpTestServer();
-    // nock.cleanAll();
-  });
+  test('If youtube dislike is down, it should not break the video loading',
+      () async {
+    try {
+      // using service that will fail on dislikes
+      service = FakeService();
 
-  group('Youtube dislike', () {
-    test('If youtube dislike is down, it should not break the video loading', () async {
-      try {
-        // using service that will fail on dislikes
-        service = FakeService();
+      final loggedIn = await service.isLoggedIn();
+      final settingsCubit = TestSettingsCubit(
+          SettingsState.init(), TestAppCubit(AppState(0, null, HomeLayout())));
 
-        bool loggedIn = await service.isLoggedIn();
-        var settingsCubit = TestSettingsCubit(SettingsState.init(), TestAppCubit(AppState(0, null, HomeLayout())));
+      // using youtube dislikes
+      await settingsCubit.setUseReturnYoutubeDislike(true);
 
-        // using youtube dislikes
-        await settingsCubit.setUseReturnYoutubeDislike(true);
+      final player =
+          TestPlayerCubit(PlayerState(playQueue: ListQueue()), settingsCubit);
+      final video = VideoCubit(
+          VideoState(videoId: 'dQw4w9WgXcQ', isLoggedIn: loggedIn),
+          DownloadManagerCubit(const DownloadManagerState(), player),
+          player,
+          settingsCubit);
+      await video.onReady();
 
-        PlayerCubit player = TestPlayerCubit(PlayerState(playQueue: ListQueue()), settingsCubit);
-        var video = VideoCubit(VideoState(videoId: 'dQw4w9WgXcQ', isLoggedIn: loggedIn), DownloadManagerCubit(const DownloadManagerState(), player), player, settingsCubit);
-        await video.onReady();
-
-        // we shouldn't have any errors that would override displaying video info properly
-        expect(video.state.error, '');
-      } finally {
-        service = Service();
-      }
-    });
+      // we shouldn't have any errors that would override displaying video info properly
+      expect(video.state.error, '');
+    } finally {
+      service = Service();
+    }
   });
 }

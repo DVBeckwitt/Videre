@@ -18,15 +18,6 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
     onReady();
   }
 
-  bool videoInPlaylist(String playlistId) {
-    Playlist? pl =
-        state.playlists.firstWhere((pl) => pl.playlistId == playlistId);
-
-    return pl.videos
-            .indexWhere((element) => element.videoId == state.videoId) >=
-        0;
-  }
-
   addToPlaylist(String playlistId) async {
     await service.addVideoToPlaylist(playlistId, state.videoId);
     onReady();

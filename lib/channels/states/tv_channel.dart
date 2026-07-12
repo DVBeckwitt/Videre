@@ -11,8 +11,6 @@ class TvChannelCubit extends Cubit<TvChannelController> {
   final GlobalKey shortTitle = GlobalKey();
   final GlobalKey streamTitle = GlobalKey();
 
-  GlobalKey playlistsTitle = GlobalKey();
-
   TvChannelCubit(super.initialState) {
     onReady();
   }

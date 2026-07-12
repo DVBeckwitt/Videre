@@ -96,10 +96,6 @@
     "@recommended": {
         "description": "Recommended label"
     },
-    "wizardIntro": "পাবলিক সার্ভার সিলেক্ট করুন অথবা নিজের সার্ভার অ্যাড করুন।(পরবর্তিতে সেটিং থেকে পরিবর্তন করা যাবে)",
-    "@wizardIntro": {
-        "description": "Welcome message on frst time use"
-    },
     "startUsingClipious": "Videre ব্যাবহার শুরু করুন",
     "@startUsingClipious": {
         "description": "button label to start using the app"
@@ -135,10 +131,6 @@
     "comments": "মন্তব্য",
     "@comments": {
         "description": "Comments label"
-    },
-    "noPlaylists": "কোনো প্লেলিস্ট নেই",
-    "@noPlaylists": {
-        "description": "when there are no playlists to display"
     },
     "sponsorSkipped": "স্পনসর এড়িয়ে যাওয়া হয়েছে",
     "@sponsorSkipped": {

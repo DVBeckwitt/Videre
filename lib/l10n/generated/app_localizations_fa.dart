@@ -108,9 +108,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String get noChannels => 'بدون کانال';
 
   @override
-  String get noPlaylists => 'بدون فهرست پخش';
-
-  @override
   String get channels => 'کانال‌ها';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'ویدیو دریافت نشد. برای تلاش مجدد کلیک کنید.';
-
-  @override
-  String get wizardIntro =>
-      'یک سرویس دهندهٔ عمومی انتخاب کنید یا سرویس دهندهٔ خودتان را وارد کنید. (می‌توانید بعدا در تنظیمات تغییر دهید)';
 
   @override
   String get startUsingClipious => 'آغاز استفاده از Videre';
@@ -192,10 +185,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String get selectBrowsingCountry => 'کشور را انتخاب کنید';
 
   @override
-  String get showOnStart =>
-      'انتخاب کنید که پس از باز شدن اپ چه چیزی نمایش داده شود';
-
-  @override
   String get settings => 'تنظیمات';
 
   @override
@@ -203,9 +192,6 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get country => 'کشور';
-
-  @override
-  String get whenAppStartsShow => 'هنگامی که اپ باز شد، نمایش بده…';
 
   @override
   String get servers => 'سرویس دهندگان';
@@ -217,9 +203,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String currentServer(String current) {
     return 'همینک در حال استفاده از $current';
   }
-
-  @override
-  String get useSponsorBlock => 'استفاده از SponsorBlock';
 
   @override
   String get sponsorBlockDescription =>
@@ -253,9 +236,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String get delete => 'حذف';
 
   @override
-  String get invalidInvidiousServer => 'سرویس دهندهٔ نامعتبر Invidious';
-
-  @override
   String get yourServers => 'سرویس دهنده‌های شما';
 
   @override
@@ -263,23 +243,6 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'وارد نشده';
-
-  @override
-  String get addServerHelpText =>
-      'از دکمهٔ + برای افزودن سرویس دهندگان خود استفاده کنید یا روی یکی از سرویس دهندگان عمومی ضربه بزنید تا افزوده شود.';
-
-  @override
-  String get publicServers => 'سرویس دهندگان عمومی';
-
-  @override
-  String get loadingPublicServer => 'در حال بارگزاری سرویس دهندگان عمومی';
-
-  @override
-  String get tapToAddServer => 'برای افزودن سرویس دهنده به فهرست، ضربه بزنید';
-
-  @override
-  String get publicServersError =>
-      'فهرست سرویس دهندگان عمومی دریافت نشد. برای تلاش مجدد ضربه بزنید.';
 
   @override
   String get appearance => 'ظاهر';
@@ -343,17 +306,6 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get error => 'خطا';
-
-  @override
-  String get malformedStatsEndpoint =>
-      '/api/v1/stats آن گونه که انتظار می‌رود نیست';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'نقطهٔ پایانی آمار سرویس دهنده پاسخ درستی نداد. کلید «software.name» باید برابر با «invidious» باشد.\nپاسخ دریافتی از سرویس دهنده:';
-
-  @override
-  String get serverIsNotReachable => 'سرویس دهنده در دسترس نیست';
 
   @override
   String get videoQueue => 'صف ویدیو';
@@ -441,10 +393,6 @@ class AppLocalizationsFa extends AppLocalizations {
       'با استفاده از پروکسی برای پخش ویدیوها از سرویس دهنده، می‌توانید محدودیت‌های منطقه‌ای یا اعمال شده توسط ISP را رد کنید';
 
   @override
-  String get pressDownToShowSettings =>
-      'برای نمایش گزینه‌های بیشتر پایین را فشار دهید';
-
-  @override
   String get quality => 'کیفیت';
 
   @override
@@ -491,9 +439,6 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get followSystem => 'پیروی از دستگاه شما';
-
-  @override
-  String get requiresRestart => 'نیازمند بازکردن دوبارهٔ اپ';
 
   @override
   String get appLanguage => 'زبان اپ';
@@ -619,9 +564,6 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'نسخه‌برداری به کلیپ‌بورد';
-
-  @override
-  String get logsCopied => 'نسخه‌بردای از Logها به کلیپ‌بورد انجام شد';
 
   @override
   String get rememberSubtitleLanguage => 'زبان زیرنویس را به خاطر بسپار';
@@ -800,10 +742,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String get manageSubscriptions => 'مدیریت اشتراک‌ها';
 
   @override
-  String get noSubscriptions =>
-      'اشتراکی ندارید، هنگام مشاهدهٔ ویدیوها مشترک کانال‌هایی که می‌پسندید شوید.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'می‌توانید بعدا دوباره مشترک این کانال شوید';
 
@@ -833,9 +771,6 @@ class AppLocalizationsFa extends AppLocalizations {
 
   @override
   String get home => 'صفحهٔ اصلی';
-
-  @override
-  String get library => 'کتابخانه';
 
   @override
   String get customizeAppLayout => 'شخصی‌سازی بخش‌های اپ';
@@ -868,20 +803,11 @@ class AppLocalizationsFa extends AppLocalizations {
   String get secondsShortForm => 'ثانیه';
 
   @override
-  String get videoFilterApplyDateToFilter => 'پالایش ویدیوها در زمان مشخص شده';
-
-  @override
   String get videoFilterDayOfWeek => 'برای تایید پالایش، روزها را انتخاب کنید';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'می‌توانید روزها و زمان‌های دلخواه خود را مشخص کنید تا قواعد پالایشی فعال شوند. به عنوان مثال اگر نمی‌خواهید نتیجهٔ مسابقات ورزشی لو برود.';
-
-  @override
-  String get videoFilterStartTime => 'زمان آغاز';
-
-  @override
-  String get videoFilterEndTime => 'زمان پایان';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -936,14 +862,6 @@ class AppLocalizationsFa extends AppLocalizations {
     );
     return '$_temp0 در اشتراک‌های شما';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'غیرفعال کردن بهینه‌سازی مصرف باتری لازم است';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'جهت ارسال اطلاعیه، Videre نیاز دارد تا یک سرویس در پس‌زمینه اجرا کند. برای این که این سرویس بدون مشکل اجرا شود، لازم است که Videre دسترسی نامحدود به مصرف باتری داشته باشد. ضربه روی تایید، شما را به تنظیمات بهینه‌سازی منتقل خواهد کرد.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'اطلاع‌رسانی‌ها خاموش است';
@@ -1014,9 +932,6 @@ class AppLocalizationsFa extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'پایش ویدیوها';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1028,15 +943,6 @@ class AppLocalizationsFa extends AppLocalizations {
     );
     return 'بررسی جهت ویدیوهای تازه هر$_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions => 'بررسی اشتراک‌ها…';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => 'بررسی فهرست‌های پخش…';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'بررسی کانال‌ها…';
 
   @override
   String get notificationFrequencySettingsTitle => 'تناوب بررسی ویدیوهای تازه';
@@ -1156,10 +1062,6 @@ class AppLocalizationsFa extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1242,14 +1144,4 @@ class AppLocalizationsFa extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

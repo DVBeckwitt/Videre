@@ -51,10 +51,6 @@
   "@loadMore": {
     "description": "CTA to load more"
   },
-  "showOnStart": "Selecione o que mostrar quando a aplicação começar",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "Definições",
   "@settings": {
     "description": "Settings title"
@@ -67,10 +63,6 @@
   "@country": {
     "description": "Country label"
   },
-  "whenAppStartsShow": "Quando a aplicação começar, mostrar…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "package": "Pacote",
   "@package": {
     "description": "package label"
@@ -78,10 +70,6 @@
   "delete": "Eliminar",
   "@delete": {
     "description": "Delete label"
-  },
-  "invalidInvidiousServer": "Servidor Invidious inválido",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
   },
   "yourServers": "Os seus servidores",
   "@yourServers": {
@@ -121,25 +109,9 @@
   "@useThisServer": {
     "description": "Use this server label"
   },
-  "publicServersError": "Não foi possível obter uma lista de Servidores Públicos. Toque em para tentar novamente.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
-  },
   "loggedIn": "Não ligado",
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
-  },
-  "addServerHelpText": "Use o botão + para adicionar os seus próprios servidores ou toque num servidor público e adicione-o.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Servidores públicos",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Carregando servidores públicos",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "appearance": "Aparência",
   "@appearance": {
@@ -274,10 +246,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Sem listas de reprodução",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "couldntLoadVideo": "Não foi possível carregar o vídeo",
   "@couldntLoadVideo": {
     "description": "Message to display when a video can't be loaded"
@@ -293,10 +261,6 @@
   "couldntFetchVideos": "Não foi possível ir buscar vídeos. Toque para tentar novamente.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Selecione um servidor público ou adicione o seu próprio. (Pode ser alterado mais tarde nas definições)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "newSorting": "Novo",
   "@newSorting": {
@@ -334,14 +298,6 @@
         "type": "String"
       }
     }
-  },
-  "tapToAddServer": "Toque para adicionar servidor à sua lista",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "useSponsorBlock": "Usar SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "version": "Versão",
   "@version": {
@@ -495,10 +451,6 @@
   "@blackBackgroundDescription": {
     "description": ""
   },
-  "pressDownToShowSettings": "Pressione para baixo para mostrar as definições",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "quality": "Qualidade",
   "@quality": {
     "description": "Name of TV ui video settings"
@@ -554,10 +506,6 @@
   "followSystem": "Seguir sistema",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Requer reinício da aplicação",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "Idioma da aplicação",
   "@appLanguage": {
@@ -622,10 +570,6 @@
   "enableSearchHistory": "Ativar o histórico de pesquisa",
   "@enableSearchHistory": {
     "description": "Settings label for enabling search history"
-  },
-  "logsCopied": "Registos copiados para a área de transferência",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "copyToClipBoard": "Copiar para a área de transferência",
   "@copyToClipBoard": {
@@ -887,10 +831,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Sem subscrições, navegue pelos vídeos e subscreva qualquer canal de que goste.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Pode voltar a subscrever este canal mais tarde",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -925,10 +865,6 @@
   "@customizeAppLayoutExplanation": {
     "description": ""
   },
-  "library": "Biblioteca",
-  "@library": {
-    "description": "Name for user library"
-  },
   "navigationBarLabelAlwaysShowing": "Etiqueta sempre visível",
   "@navigationBarLabelAlwaysShowing": {
     "description": "Label always showing option for navigation bar"
@@ -957,10 +893,6 @@
   "@from": {
     "description": "From word (as in 'From xx To xx')"
   },
-  "videoFilterApplyDateToFilter": "Filtrar vídeos para datas fornecidas",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "to": "até",
   "@to": {
     "description": "To word as in 'From xx To xx')"
@@ -968,10 +900,6 @@
   "videoFilterDayOfWeekDescription": "Você pode escolher, via seleção, dias da semana e horários para aplicar os filtros e, por exemplo, evitar spoilers de eventos esportivos.",
   "@videoFilterDayOfWeekDescription": {
     "description": ""
-  },
-  "videoFilterStartTime": "Horário inicial",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "videoFilterTimeOfDayFromTo": "De {from} até {to}",
   "@videoFilterTimeOfDayFromTo": {
@@ -990,10 +918,6 @@
   "videoFilterDayOfWeek": "Selecionar dias para aplicar filtros",
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
-  },
-  "videoFilterEndTime": "Horário final",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "secondsShortForm": "segs",
   "@secondsShortForm": {
@@ -1028,14 +952,6 @@
   "askToEnableBackgroundServiceContent": "Para receber notificações, as notificações Videre têm de estar ativadas, prima OK para as ativar.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
-  },
-  "askForDisableBatteryOptimizationTitle": "Desativar a otimização da bateria necessária",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "Para enviar notificações, o Videre precisa de executar um serviço em segundo plano. Para que este funcione sem problemas, é necessário que o Videre tenha uma utilização de bateria sem restrições. Ao tocar em ok, serão abertas as definições de otimização da bateria.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "playlistNotificationTitle": "Novos vídeos na lista de reprodução {playlist}",
   "@playlistNotificationTitle": {
@@ -1077,17 +993,9 @@
   "@deletePlaylistNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
   },
-  "foregroundServiceUpdatingSubscriptions": "Verificar as subscrições...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
   "deleteChannelNotificationTitle": "Eliminar a notificação de canal?",
   "@deleteChannelNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete channel notifications"
-  },
-  "foregroundServiceNotificationTitle": "Monitorização por vídeo",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
   },
   "otherNotifications": "Outras fontes de notificações (ícones de sino)",
   "@otherNotifications": {
@@ -1100,10 +1008,6 @@
       "type": "num",
       "format": "compact"
     }
-  },
-  "foregroundServiceUpdatingPlaylist": "Verificando as novas listas de reprodução...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "subscriptionNotificationContent": "Existem {count, plural, =0{nenhum vídeo novo} =1{1 vídeo novo} other{{count} vídeos novos}} no seu feed de subscrição",
   "@subscriptionNotificationContent": {
@@ -1130,10 +1034,6 @@
   "subtitlesBackground": "Fundo das legendas",
   "@subtitlesBackground": {
     "description": "Title for settings to set black background  for subtitles"
-  },
-  "foregroundServiceUpdatingChannels": "Verificar os canais...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsDescription": "Com que frequência a aplicação irá procurar novos vídeos",
   "@notificationFrequencySettingsDescription": {
@@ -1194,14 +1094,6 @@
         "format": "compact"
       }
     }
-  },
-  "serverIsNotReachable": "O servidor não está acessível",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
-  "malformedStatsEndpointDescription": "O endpoint de estatísticas do servidor não respondeu com o payload esperado, a chave \"software.name\" deveria ser igual a \"invidious\".\nResposta do servidor:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "channelSortByPopular": "Popular",
   "@channelSortByPopular": {
@@ -1310,10 +1202,6 @@
   "channelSortByOldest": "Mais velho",
   "@channelSortByOldest": {
     "description": "Sort channel videos from oldest to newest"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats não é o esperado",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
   },
   "rydCustomInstance": "endereço de instância RYD personalizado",
   "@rydCustomInstance": {

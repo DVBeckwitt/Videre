@@ -16,7 +16,6 @@ import 'package:clipious/videos/models/db/progress.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sembast/sembast.dart';
 import 'package:sembast/sembast_memory.dart';
 import 'package:sembast_sqflite/sembast_sqflite.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;

@@ -12,18 +12,17 @@ import '../screens/settings.dart';
 class TvManageServersInner extends StatelessWidget {
   const TvManageServersInner({super.key});
 
-  openServer(BuildContext context, Server s) {
+  Future<void> openServer(BuildContext context, Server s) async {
     var cubit = context.read<ServerListSettingsCubit>();
-    AutoRouter.of(context)
-        .push(TvManageSingleServerRoute(server: s))
-        .then((value) => cubit.refreshServers());
+    await AutoRouter.of(context).push(TvManageSingleServerRoute(server: s));
+    await cubit.refreshServers();
   }
 
-  addServer(BuildContext context) async {
+  Future<void> addServer(BuildContext context) async {
     var cubit = context.read<ServerListSettingsCubit>();
     final server = await AutoRouter.of(context).push(const TvAddServerRoute());
     if (server != null && server is Server && context.mounted) {
-      cubit.saveServer(server);
+      await cubit.saveServer(server);
     }
   }
 
@@ -35,13 +34,6 @@ class TvManageServersInner extends StatelessWidget {
         builder: (context, state) {
       var cubit = context.read<ServerListSettingsCubit>();
       var settings = context.watch<SettingsCubit>();
-/*
-      var filteredPublicServers = state.publicServers
-          .where((s) =>
-              state.dbServers.indexWhere((element) => element.url == s.url) ==
-              -1)
-          .toList();
-*/
       return ListView(children: [
         SettingsTile(
           title: locals.skipSslVerification,
@@ -81,49 +73,6 @@ class TvManageServersInner extends StatelessWidget {
           ),
           onSelected: (context) => addServer(context),
         ),
-/*
-        SettingsTitle(title: locals.publicServers),
-        ...state.publicServersError != PublicServerErrors.none
-            ? [
-                SettingsTile(
-                  onSelected: (context) => cubit.getPublicServers(),
-                  title: locals.publicServersError,
-                )
-              ]
-            : state.pinging
-                ? [
-                    SettingsTile(
-                      title: locals.loadingPublicServer,
-                      leading: SizedBox(
-                          height: 15,
-                          width: 15,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            value: state.publicServerProgress > 0
-                                ? state.publicServerProgress
-                                : null,
-                          )),
-                    )
-                  ]
-                : filteredPublicServers.isEmpty
-                    ? [
-                        SettingsTile(
-                          title: locals.noPublicServers,
-                          description: locals
-                              .referToInvidiousWebsiteForHostingInstructions,
-                        )
-                      ]
-                    : filteredPublicServers
-                        .map((s) => SettingsTile(
-                              key: Key(s.url),
-                              title:
-                                  '${s.url} - ${(s.ping != null && s.ping!.compareTo(const Duration(seconds: pingTimeout)) == -1) ? '${s.ping?.inMilliseconds}ms' : '>${pingTimeout}s'}',
-                              description:
-                                  '${(s.flag != null && s.region != null) ? '${s.flag} - ${s.region} - ' : ''} ${locals.tapToAddServer}',
-                              onSelected: (context) => cubit.upsertServer(s),
-                            ))
-                        .toList()
-*/
       ]);
     });
   }

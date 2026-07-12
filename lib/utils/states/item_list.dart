@@ -79,9 +79,6 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
       rethrow;
     }
   }
-
-  // similar
-  focusChanged(bool value, int index) {}
 }
 
 @freezed

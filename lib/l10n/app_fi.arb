@@ -3,17 +3,9 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Ei soittolistoja",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "addServer": "Lisää palvelin",
   "@addServer": {
     "description": "Add server label"
-  },
-  "invalidInvidiousServer": "Virheellinen Invidious-palvelin",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
   },
   "yourServers": "Omat palvelimet",
   "@yourServers": {
@@ -89,10 +81,6 @@
   "@ok": {
     "description": "Ok"
   },
-  "wizardIntro": "Valitse julkinen palvelin tai lisää oma. (Voidaan muuttaa myöhemmin asetuksissa)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "videoAddedToPlaylist": "Video lisätty soittolistaan",
   "@videoAddedToPlaylist": {
     "description": "Pop up message when a video was added to a playlist"
@@ -161,17 +149,9 @@
   "@country": {
     "description": "Country label"
   },
-  "whenAppStartsShow": "Kun sovellus käynnistyy, näytä…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "servers": "Palvelimet",
   "@servers": {
     "description": "Server management settings category"
-  },
-  "loadingPublicServer": "Ladataan julkisia palvelimia",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
   },
   "currentServer": "Tällä hetkellä käytössä {current}",
   "@currentServer": {
@@ -181,10 +161,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "Käytä SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "Ohita yhteisön lähettämät sponsoripätkät",
   "@sponsorBlockDescription": {
@@ -238,22 +214,6 @@
   "notLoggedIn": "Ei kirjautuneena sisään",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "Lisää omia palvelimia +-painikkeella tai napauta julkista palvelinta ja lisää se.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Julkiset palvelimet",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "tapToAddServer": "Lisää palvelin luetteloon napauttamalla",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Julkisten palvelimien luetteloa ei voitu hakea. Yritä uudelleen napauttamalla.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "Ulkonäkö",
   "@appearance": {
@@ -318,10 +278,6 @@
   "sponsorSkipped": "Sponsori jätti väliin",
   "@sponsorSkipped": {
     "description": "When a sponsor segment is skipped thanks to sponsor block"
-  },
-  "showOnStart": "Valitse, mitä näytetään sovelluksen käynnistyessä",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
   },
   "manageServers": "Hallitse palvelimia",
   "@manageServers": {
@@ -491,10 +447,6 @@
   "@followSystem": {
     "description": "Follow system label"
   },
-  "requiresRestart": "Vaatii sovelluksen uudelleen käynnistämisen",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "appLanguage": "Sovelluksen kieli",
   "@appLanguage": {
     "description": "Select app language"
@@ -502,10 +454,6 @@
   "appLogs": "Sovelluksen lokit",
   "@appLogs": {
     "description": "Title for settings that leads to application logs"
-  },
-  "logsCopied": "Lokit kopioitu leikepöydälle",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "searchSortRating": "Arviointi",
   "@searchSortRating": {
@@ -695,10 +643,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Ei tilauksia, selaa videoita ja tilaa kanavia, joista pidät.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "history": "Historia",
   "@history": {
     "description": "User view history label"
@@ -753,10 +697,6 @@
   "@autoplayVideoOnLoadDescription": {
     "description": "Description for the autoplay video on load setting"
   },
-  "pressDownToShowSettings": "Paina alas näyttääksesi asetukset",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "videoFiltersSettingTileDescriptions": "Määrittele suodatusasetukset",
   "@videoFiltersSettingTileDescriptions": {
     "description": "Description for the main settings page"
@@ -772,14 +712,6 @@
   "askToEnableBackgroundServiceContent": "Saadaksesi ilmoituksia, Videren ilmoitukset tulee olla käytössä. Paina OK ottaaksesi ne käyttöön.",
   "@askToEnableBackgroundServiceContent": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
-  },
-  "askForDisableBatteryOptimizationTitle": "Akun optimoinnin käytöstä poisto",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "Videre pitää taustapalvelua käynnissä, jotta se voi lähettää ilmoituksia. Taustapalvelun käyttö vaatii rajoittamattoman akun käytön. Painamalla OK avataan akun optimointiasetukset.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "homeLayoutEditor": "Muokkaa kotinäkymän asettelua",
   "@homeLayoutEditor": {
@@ -901,17 +833,9 @@
   "@notifications": {
     "description": "Notification settings title"
   },
-  "library": "Kirjasto",
-  "@library": {
-    "description": "Name for user library"
-  },
   "subscriptionNotification": "Tilausten ilmoitukset",
   "@subscriptionNotification": {
     "description": "Title for subscriptions notifications"
-  },
-  "videoFilterStartTime": "Aloitusaika",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "distractionFreeModeDescription": "Poistaa käytöstä videoiden kommentit ja suositukset",
   "@distractionFreeModeDescription": {
@@ -955,17 +879,9 @@
   "@lockFullScreenToLandscapeDescription": {
     "description": "Setting description for forcing video to landscape when in full screen"
   },
-  "videoFilterEndTime": "Päättymisaika",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "enableNotificationDescriptions": "Palvelu joka tarkistaa ja ilmoittaa valitsemistasi kohteista, pidetään käynnissä.",
   "@enableNotificationDescriptions": {
     "description": ""
-  },
-  "foregroundServiceUpdatingSubscriptions": "Tarkistetaan tilauksia...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
   },
   "secondsShortForm": "sek.",
   "@secondsShortForm": {
@@ -991,17 +907,9 @@
   "@navigationBarStyle": {
     "description": "Label for settings on customizing navigation bar style"
   },
-  "foregroundServiceUpdatingChannels": "Tarkistetaan kanavia...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
-  },
   "notificationFrequencySettingsDescription": "Kuinka usein sovellus tarkistaa uusien videoiden saatavuuden",
   "@notificationFrequencySettingsDescription": {
     "description": "Description for frequency settings"
-  },
-  "foregroundServiceUpdatingPlaylist": "Tarkistetaan soittolistoja...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
   },
   "videoFilterOperationHigherThan": "Korkeampi kuin",
   "@videoFilterOperationHigherThan": {
@@ -1024,9 +932,5 @@
   "share": "Jaa",
   "@share": {
     "description": "asking user if to share"
-  },
-  "serverIsNotReachable": "Palvelin ei ole tavoitettavissa",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   }
 }

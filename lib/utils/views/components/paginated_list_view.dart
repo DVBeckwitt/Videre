@@ -21,7 +21,7 @@ class PaginatedListView<T> extends StatelessWidget {
     return BlocProvider(
       create: (context) => PaginatedListCubit<T>(
           PaginatedListViewController.init<T>(
-              paginatedList: this.paginatedList, startItems: this.startItems)),
+              paginatedList: paginatedList, startItems: startItems)),
       child: BlocBuilder<PaginatedListCubit<T>, PaginatedListViewController<T>>(
           builder: (context, state) {
         var cubit = context.read<PaginatedListCubit<T>>();

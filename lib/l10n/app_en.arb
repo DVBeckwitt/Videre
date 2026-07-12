@@ -124,10 +124,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "No playlists",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "Channels",
   "@channels": {
     "description": "Channels label"
@@ -147,10 +143,6 @@
   "couldntFetchVideos": "Could not fetch videos. Tap to try again.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Select a public server or add your own. (Can be changed later in the settings)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "startUsingClipious": "Start using Videre",
   "@startUsingClipious": {
@@ -218,10 +210,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Select what to show when the app starts",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "Settings",
   "@settings": {
     "description": "Settings title"
@@ -233,10 +221,6 @@
   "country": "Country",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "When the app starts, show…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "Servers",
   "@servers": {
@@ -254,10 +238,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "Use SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "sponsorBlockDescription": "Skip sponsor segments submitted by the community",
   "@sponsorBlockDescription": {
@@ -299,10 +279,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "Invalid Invidious server",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "Your servers",
   "@yourServers": {
     "description": "Your servers label"
@@ -314,26 +290,6 @@
   "notLoggedIn": "Not logged in",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "addServerHelpText": "Use the + button to add your own servers or tap on a public server and add it.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Public servers",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Loading public servers",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Tap to add server to your list",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Could not fetch list of public servers. Tap to retry.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "Appearance",
   "@appearance": {
@@ -413,18 +369,6 @@
   },
   "error": "Error",
   "@error": {},
-  "malformedStatsEndpoint": "/api/v1/stats is not as expected",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "The server stats endpoint did not respond an expected payload, the key \"software.name\" should be equal to \"invidious\".\nResponse from the server:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "serverIsNotReachable": "Server is not reachable",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "videoQueue": "Video queue",
   "@videoQueue": {
     "description": "Label for button to display the video queue"
@@ -525,10 +469,6 @@
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"
   },
-  "pressDownToShowSettings": "Press down to show settings",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "quality": "Quality",
   "@quality": {
     "description": "Name of TV ui video settings"
@@ -588,10 +528,6 @@
   "followSystem": "Follow system",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Requires app restart",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "App language",
   "@appLanguage": {
@@ -738,10 +674,6 @@
   "copyToClipBoard": "Copy to clipboard",
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
-  },
-  "logsCopied": "Logs copied to clipboard",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "rememberSubtitleLanguage": "Remember subtitles language",
   "@rememberSubtitleLanguage": {
@@ -965,10 +897,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "No subscriptions, browse videos and subscribe to any channel you like.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "You can subscribe to this channel again later",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -1002,10 +930,6 @@
   "home": "Home",
   "@home": {
     "description": "Label for Home browsing tab"
-  },
-  "library": "Library",
-  "@library": {
-    "description": "Name for user library"
   },
   "customizeAppLayout": "Customize app sections",
   "@customizeAppLayout": {
@@ -1043,10 +967,6 @@
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
   },
-  "videoFilterApplyDateToFilter": "Filter videos on given times",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "videoFilterDayOfWeek": "Select days to apply filters",
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
@@ -1054,14 +974,6 @@
   "videoFilterDayOfWeekDescription": "You can selectively choose days of the week and time to which the filters apply to, for example, avoid sport events spoilers.",
   "@videoFilterDayOfWeekDescription": {
     "description": ""
-  },
-  "videoFilterStartTime": "Start time",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterEndTime": "End time",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "videoFilterAppliedOn": "Applied on {selectedDays}",
   "@videoFilterAppliedOn": {
@@ -1128,14 +1040,6 @@
         "format": "compact"
       }
     }
-  },
-  "askForDisableBatteryOptimizationTitle": "Disabling battery optimization required",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "askToEnableBackgroundServiceTitle": "Notifications turned off",
   "@askToEnableBackgroundServiceTitle": {
@@ -1213,10 +1117,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "Video monitoring",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "foregroundServiceNotificationContent": "Will check for new videos once {hours, select, 1{per hour} 24{a day} other{every {hours} hours}}",
   "@foregroundServiceNotificationContent": {
     "description": "Content for the foreground service running notification when the user wants to receive notifications",
@@ -1224,18 +1124,6 @@
       "type": "num",
       "format": "compact"
     }
-  },
-  "foregroundServiceUpdatingSubscriptions": "Checking subscriptions...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingPlaylist": "Checking playlists...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
-  "foregroundServiceUpdatingChannels": "Checking channels...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsTitle": "New video check frequency",
   "@notificationFrequencySettingsTitle": {
@@ -1360,7 +1248,6 @@
   "both": "Both",
   "refresh": "Refresh",
   "addBasicAuth": "Add Basic Authentication",
-  "addBasicAuthExplanation": "If your server requires basic HTTP authentication, add the details below. These are not your invidious account details",
   "addHeader": "Add header",
   "advancedConfiguration": "Advanced Configuration",
   "customHeaders": "Custom headers",
@@ -1385,8 +1272,5 @@
   "screenControlsExplanation": "When watching a video in full screen, Vertically dragging from the left or the right will adjust the brightness or volume respectively",
   "retry": "Retry",
   "forceTvUi": "Force TV interface",
-  "forceTvUiExplanation": "Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required",
-  "noPublicServers": "No public servers are available",
-  "tapToSeeHow": "Tap to see how to host your own",
-  "referToInvidiousWebsiteForHostingInstructions": "Refer to Invidious website for instructions on how to host invidious"
+  "forceTvUiExplanation": "Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required"
 }

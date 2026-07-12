@@ -20,7 +20,6 @@ import 'utils/models/country.dart';
 import 'videos/models/video.dart';
 
 const phoneMax = 600;
-const tabletPortraitMax = 900;
 
 var log = Logger('Utils');
 
@@ -192,12 +191,6 @@ void showSharingSheet(BuildContext context, ShareLinks links,
       );
     },
   );
-}
-
-double getScreenWidth() {
-  final data = MediaQueryData.fromView(
-      WidgetsBinding.instance.platformDispatcher.implicitView!);
-  return data.size.width;
 }
 
 DeviceType getDeviceType() {

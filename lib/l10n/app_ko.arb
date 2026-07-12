@@ -84,10 +84,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "재생목록 없음",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "채널",
   "@channels": {
     "description": "Channels label"
@@ -184,10 +180,6 @@
   "@info": {
     "description": "Info label"
   },
-  "wizardIntro": "공개 서버를 선택하거나 직접 추가하세요. (나중에 설정에서 변경 가능)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "nReplies": "{count, plural, =0{답글 없음} =1{답글 1 개} other{답글 {count} 개}}",
   "@nReplies": {
     "description": "number of replies to a comment",
@@ -222,10 +214,6 @@
   "@country": {
     "description": "Country label"
   },
-  "whenAppStartsShow": "앱이 시작하면…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "servers": "서버",
   "@servers": {
     "description": "Server management settings category"
@@ -242,10 +230,6 @@
         "type": "String"
       }
     }
-  },
-  "useSponsorBlock": "SponsorBlock 사용하기",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "name": "이름",
   "@name": {
@@ -267,10 +251,6 @@
   "@browsing": {
     "description": "video browsing preferences"
   },
-  "showOnStart": "앱 시작 화면 선택",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "about": "정보",
   "@about": {
     "description": "About"
@@ -282,14 +262,6 @@
   "logIn": "로그인",
   "@logIn": {
     "description": "CTA to log in to server"
-  },
-  "invalidInvidiousServer": "유효하지 않은 Invidious 서버",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
-  "tapToAddServer": "탭하여 서버를 목록에 추가",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "addToPlaylist": "재생 목록에 추가",
   "@addToPlaylist": {

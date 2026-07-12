@@ -108,9 +108,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get noChannels => 'Nincsenek csatornák';
 
   @override
-  String get noPlaylists => 'Nincsenek lejátszási listák';
-
-  @override
   String get channels => 'Csatornák';
 
   @override
@@ -125,10 +122,6 @@ class AppLocalizationsHu extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'A videókat nem sikerült betölteni. Nyomjon ide az újrakezdéshez.';
-
-  @override
-  String get wizardIntro =>
-      'Válasszon ki egy nyilvános szervert vagy adjon hozzá egy sajátot. (Később meg tudja változtatni a beállításoknál.)';
 
   @override
   String get startUsingClipious => 'Videre használatának megkezdése';
@@ -192,9 +185,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get selectBrowsingCountry => 'Ország kiválasztása';
 
   @override
-  String get showOnStart => 'Válassza ki, mit muttasson az app induláskor';
-
-  @override
   String get settings => 'Beállítások';
 
   @override
@@ -202,9 +192,6 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get country => 'Ország';
-
-  @override
-  String get whenAppStartsShow => 'Amikor az app elindul, mutassa ezt\':';
 
   @override
   String get servers => 'Szerverek';
@@ -216,9 +203,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String currentServer(String current) {
     return 'Jelenleg ezt használja\': $current';
   }
-
-  @override
-  String get useSponsorBlock => 'SponsorBlock használata';
 
   @override
   String get sponsorBlockDescription =>
@@ -252,9 +236,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get delete => 'Törlés';
 
   @override
-  String get invalidInvidiousServer => 'Hibás Invidious-szerver';
-
-  @override
   String get yourServers => 'Szervereim';
 
   @override
@@ -262,23 +243,6 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Kijelentkezve';
-
-  @override
-  String get addServerHelpText =>
-      'Saját szerver hozzáadásához nyomjon a + gombra, vagy nyomjon egy nyilvános szerverre a hozzáadáshoz.';
-
-  @override
-  String get publicServers => 'Nyilvános szerverek';
-
-  @override
-  String get loadingPublicServer => 'Nyilvános szerverek betöltése';
-
-  @override
-  String get tapToAddServer => 'Nyomjon ide a szerver hozzáadásához';
-
-  @override
-  String get publicServersError =>
-      'A nyilvános szerverek listáját nem sikerült betölteni. Nyomjon ide az újrakezdéshez.';
 
   @override
   String get appearance => 'Megjelenés';
@@ -342,16 +306,6 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get error => 'Hiba';
-
-  @override
-  String get malformedStatsEndpoint => '/api/v1/stats nem megfelelő';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'The server stats endpoint did not respond an expected payload, the key \"software.name\" should be equal to \"invidious\".\nResponse from the server:';
-
-  @override
-  String get serverIsNotReachable => 'A szerver nem elérhető';
 
   @override
   String get videoQueue => 'Műsorlista';
@@ -441,9 +395,6 @@ class AppLocalizationsHu extends AppLocalizations {
       'By proxying video streams from the server, you can bypass regional blocks or ISP blocking YouTube';
 
   @override
-  String get pressDownToShowSettings => 'Press down to show settings';
-
-  @override
   String get quality => 'Quality';
 
   @override
@@ -489,9 +440,6 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get followSystem => 'Follow system';
-
-  @override
-  String get requiresRestart => 'Requires app restart';
 
   @override
   String get appLanguage => 'App language';
@@ -617,9 +565,6 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Copy to clipboard';
-
-  @override
-  String get logsCopied => 'Logs copied to clipboard';
 
   @override
   String get rememberSubtitleLanguage => 'Remember subtitles language';
@@ -796,10 +741,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get manageSubscriptions => 'Manage Subscriptions';
 
   @override
-  String get noSubscriptions =>
-      'No subscriptions, browse videos and subscribe to any channel you like.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'You can subscribe to this channel again later';
 
@@ -831,9 +772,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get home => 'Home';
 
   @override
-  String get library => 'Library';
-
-  @override
   String get customizeAppLayout => 'Customize app sections';
 
   @override
@@ -863,20 +801,11 @@ class AppLocalizationsHu extends AppLocalizations {
   String get secondsShortForm => 'secs';
 
   @override
-  String get videoFilterApplyDateToFilter => 'Filter videos on given times';
-
-  @override
   String get videoFilterDayOfWeek => 'Select days to apply filters';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'You can selectively choose days of the week and time to which the filters apply to, for example, avoid sport events spoilers.';
-
-  @override
-  String get videoFilterStartTime => 'Start time';
-
-  @override
-  String get videoFilterEndTime => 'End time';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -932,14 +861,6 @@ class AppLocalizationsHu extends AppLocalizations {
     );
     return 'There are  $_temp0 in your subscription feed';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Disabling battery optimization required';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'In order to send notification Videre needs to run a background service. For it to run smoothly it is required that Videre is given unrestricted battery usage, tapping ok will open the battery optimization settings.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Notifications turned off';
@@ -1011,9 +932,6 @@ class AppLocalizationsHu extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Video monitoring';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1025,16 +943,6 @@ class AppLocalizationsHu extends AppLocalizations {
     );
     return 'Will check for new videos once $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions =>
-      'Checking subscriptions...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist => 'Checking playlists...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Checking channels...';
 
   @override
   String get notificationFrequencySettingsTitle => 'New video check frequency';
@@ -1154,10 +1062,6 @@ class AppLocalizationsHu extends AppLocalizations {
   String get addBasicAuth => 'Add Basic Authentication';
 
   @override
-  String get addBasicAuthExplanation =>
-      'If your server requires basic HTTP authentication, add the details below. These are not your invidious account details';
-
-  @override
   String get addHeader => 'Add header';
 
   @override
@@ -1240,14 +1144,4 @@ class AppLocalizationsHu extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required';
-
-  @override
-  String get noPublicServers => 'No public servers are available';
-
-  @override
-  String get tapToSeeHow => 'Tap to see how to host your own';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Refer to Invidious website for instructions on how to host invidious';
 }

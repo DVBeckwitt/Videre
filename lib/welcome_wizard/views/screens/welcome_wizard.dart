@@ -26,8 +26,7 @@ class WelcomeWizardScreen extends StatelessWidget {
         BlocProvider(create: (context) => WelcomeWizardCubit(null)),
         BlocProvider(
           create: (context) => ServerListSettingsCubit(
-              const ServerListSettingsState(publicServers: [], dbServers: []),
-              context.read<AppCubit>()),
+              ServerListSettingsState(dbServers: []), context.read<AppCubit>()),
         )
       ],
       child: BlocListener<ServerListSettingsCubit, ServerListSettingsState>(
@@ -54,10 +53,9 @@ class WelcomeWizardScreen extends StatelessWidget {
                         ),
                         Padding(
                           padding: const EdgeInsets.all(8.0),
-                          child: Text(locals.wizardIntro),
+                          child: Text(locals.addServer),
                         ),
-                        const Expanded(
-                            child: ManagerServersView(fromWizard: true)),
+                        const Expanded(child: ManagerServersView()),
                         Padding(
                           padding: const EdgeInsets.all(8.0),
                           child: FilledButton.tonal(

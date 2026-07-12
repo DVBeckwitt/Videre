@@ -111,10 +111,6 @@ class AppCubit extends Cubit<AppState> {
     }
   }
 
-  selectIndex(int index) {
-    emit(state.copyWith(firstIndex: index));
-  }
-
   rebuildApp() {
     emit(state.copyWith());
   }

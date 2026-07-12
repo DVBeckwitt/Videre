@@ -19,10 +19,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Vyberte co bude ukázáno při zapnutí aplikace",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "about": "O",
   "@about": {
     "description": "About"
@@ -34,10 +30,6 @@
   "useDash": "Použít DASH",
   "@useDash": {
     "description": "Label on video options if a user wants to switch to dash urls instead of the regular quality selection"
-  },
-  "whenAppStartsShow": "Když se aplikace zapne, ukaž…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "sponsorBlockDescription": "Přeskočit sponzorské segmenty vybrané komunitou",
   "@sponsorBlockDescription": {
@@ -78,14 +70,6 @@
   "addRecommendedToQueue": "Jako další automaticky přehrát doporučené",
   "@addRecommendedToQueue": {
     "description": "Switch when playing a video to automatically add the recommended videos to the video queue"
-  },
-  "addServerHelpText": "Použijte tlačítko + pro přidání serveru nebo klikněte na veřejný server pro přidání.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServersError": "Nepodařilo se načíst seznam veřejných servrů. Klikněte pro zopakování.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "password": "Heslo",
   "@password": {
@@ -176,10 +160,6 @@
       }
     }
   },
-  "noPlaylists": "Žádné seznamy videí",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "Kanály",
   "@channels": {
     "description": "Channels label"
@@ -207,10 +187,6 @@
   "videoAddedToPlaylist": "Video bylo přidáno do seznamu videí",
   "@videoAddedToPlaylist": {
     "description": "Pop up message when a video was added to a playlist"
-  },
-  "wizardIntro": "Vyberte veřejný server nebo přidejte svůj vlastní.(Může být změněno později v nastavení)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "createNewPlaylist": "Vytvořit nový seznam skladeb",
   "@createNewPlaylist": {
@@ -254,10 +230,6 @@
   "@manageServers": {
     "description": "Settings to manage servers"
   },
-  "useSponsorBlock": "Použít SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "currentServer": "Momentálně využívan {current}",
   "@currentServer": {
     "description": "Which server the user is currently using",
@@ -295,10 +267,6 @@
   "@delete": {
     "description": "Delete label"
   },
-  "invalidInvidiousServer": "Neplatný Invidious server",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "Vaše servery",
   "@yourServers": {
     "description": "Your servers label"
@@ -306,18 +274,6 @@
   "loggedIn": "Přihlášen",
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
-  },
-  "publicServers": "Veřejné Servery",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Načítám veřejné servery",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Klikněte pro přidání serveru do vašeho seznamu",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "useDynamicTheme": "Dynamické barvy",
   "@useDynamicTheme": {
@@ -453,10 +409,6 @@
   "@themeDark": {
     "description": "Dark theme"
   },
-  "requiresRestart": "Vyžaduje restartování aplikace",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
-  },
   "autoplayVideoOnLoad": "Automaticky přehrát video při načtení",
   "@autoplayVideoOnLoad": {
     "description": "Label for settings to enable autoplay when a video loads"
@@ -559,10 +511,6 @@
   "@subtitleFontSize": {
     "description": "Settings label for the size of the subtitles"
   },
-  "pressDownToShowSettings": "Stiskněte dolu pro zobrazení nastavení",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "themeBrightness": "Téma",
   "@themeBrightness": {
     "description": "Ask the user to user dark / light / system theme"
@@ -611,10 +559,6 @@
   "@appLogsDescription": {
     "description": "Description of the app log settings"
   },
-  "malformedStatsEndpointDescription": "Koncový bod statistik serveru neodpověděl s očekávanou odpovědí, klíč serveru \"software.name\" by měl být stejny s \"invidious\".\nOdpověď serveru:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
   "searchDurationLong": "Dlouhé (>20 minut)",
   "@searchDurationLong": {
     "description": "Search for long videos only"
@@ -634,14 +578,6 @@
   "searchSortViewCount": "Počet shlédnutí",
   "@searchSortViewCount": {
     "description": "Sort search by view count"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats není podle očekávání",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "serverIsNotReachable": "Server dočasně neni dostupný",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "searchUploadDate": "Datum zveřejnění",
   "@searchUploadDate": {

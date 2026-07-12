@@ -35,11 +35,9 @@ import 'comments/models/video_comments.dart';
 import 'notifications/models/db/subscription_notifications.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
-import 'settings/models/invidious_public_server.dart';
 import 'subscription_management/models/subscription.dart';
 import 'videos/models/sponsor_segment_types.dart';
 
-const urlGetInvidiousPublicServers = 'https://api.invidious.io/instances.json';
 const urlGetVideo = '/api/v1/videos/:id';
 const urlGetTrending = '/api/v1/trending';
 const urlGetPopular = '/api/v1/popular';
@@ -72,8 +70,6 @@ const urlImgurScreenshotUpload = 'https://api.imgur.com/3/image';
 
 const imgurClientId = 'Client-ID 2cfbc27ce77879d';
 
-const maxPing = 9007199254740991;
-
 class Service {
   final log = Logger('Service');
   final Client httpClient;
@@ -84,7 +80,7 @@ class Service {
     return kDebugMode ? uri.toString() : '${uri?.replace(host: 'xxxxxxxxxx')}';
   }
 
-  handleResponse(Response response) {
+  dynamic handleResponse(Response response) {
     var body = utf8.decode(response.bodyBytes);
     log.info(
         "Response from ${response.request?.method} ${urlFormatForLog(response.request?.url)}, status: ${response.statusCode}");
@@ -171,8 +167,6 @@ class Service {
       rethrow;
     }
   }
-
-  handleErrors(Response response) {}
 
   Future<Video> getVideo(String videoId, {Server? serverOverride}) async {
     var req = await buildRequest(urlGetVideo,
@@ -719,42 +713,6 @@ class Service {
 
     final response = await httpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
-  }
-
-  Future<Duration?> pingServer(String url) async {
-    int start = DateTime.now().millisecondsSinceEpoch;
-    String fullUri = '$url$urlStats';
-    log.fine('ping $fullUri');
-    final response = await httpClient.get(Uri.parse(fullUri),
-        headers: {'Content-Type': 'application/json; charset=utf-16'});
-
-    try {
-      handleResponse(response);
-      var diff = DateTime.now().millisecondsSinceEpoch - start;
-      return Duration(milliseconds: diff);
-    } catch (err, stacktrace) {
-      log.severe('couldn;t ping $url', err, stacktrace);
-      return null;
-    }
-  }
-
-  Future<List<InvidiousPublicServer>> getPublicServers() async {
-    final response =
-        await httpClient.get(Uri.parse(urlGetInvidiousPublicServers));
-    List<InvidiousPublicServer> servers = [];
-    Iterable i = handleResponse(response);
-
-    for (var element in i) {
-      Iterable s = element as Iterable;
-      if (s.length == 2) {
-        servers.add(InvidiousPublicServer.fromJson(
-            s.toList()[1] as Map<String, dynamic>));
-      }
-    }
-
-    return servers
-        .where((s) => (s.api ?? false) && (s.stats?.openRegistrations ?? false))
-        .toList();
   }
 
   Future<Playlist> getPublicPlaylists(String playlistId,

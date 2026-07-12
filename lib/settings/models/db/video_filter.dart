@@ -134,13 +134,6 @@ class VideoFilter {
 
     log.fine('filtering videos, we have ${filters.length} filters');
 
-/*
-    videos = await Future.wait(videos?.map((v) {
-          return compute((message) => _innerFilterVideo(message.first, message.last), Couple(v, filters));
-        }).toList() ??
-        []);
-*/
-
     videos = videos?.map((v) => _innerFilterVideo(v, filters)).toList() ?? [];
 
     // leaving this for future self. CANNOT remove videos from list, otherwise it will break pagination

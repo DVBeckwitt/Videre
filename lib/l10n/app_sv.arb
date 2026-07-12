@@ -108,10 +108,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Välj vad som skall visas när applikationen startas",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "browsing": "Utforskning",
   "@browsing": {
     "description": "video browsing preferences"
@@ -123,10 +119,6 @@
   "manageServers": "Hantera servrar",
   "@manageServers": {
     "description": "Settings to manage servers"
-  },
-  "useSponsorBlock": "Använd AnnonseringsBlockerare",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
   },
   "name": "Namn",
   "@name": {
@@ -236,10 +228,6 @@
   "@shareInvidiousLink": {
     "description": "asking user to share invidious link"
   },
-  "noPlaylists": "Inga spellistor",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "comments": "Kommentarer",
   "@comments": {
     "description": "Comments label"
@@ -255,10 +243,6 @@
   "couldntFetchVideos": "Kunde inte få tag på filmen. Tryck för att försöka igen.",
   "@couldntFetchVideos": {
     "description": "Can't load bunch of videos, asking  user to try again"
-  },
-  "wizardIntro": "Välj en publik eller lägg till din egen. (Kan ändras senare i inställningar)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "videoAddedToPlaylist": "Filmen har lagts till i din spellista",
   "@videoAddedToPlaylist": {
@@ -290,10 +274,6 @@
   "@country": {
     "description": "Country label"
   },
-  "whenAppStartsShow": "När applikationen startar, visa…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "currentServer": "För stunden används {current}",
   "@currentServer": {
     "description": "Which server the user is currently using",
@@ -322,30 +302,6 @@
   "useThisServer": "Använd denna server",
   "@useThisServer": {
     "description": "Use this server label"
-  },
-  "invalidInvidiousServer": "Ogiltig Invidious-server",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
-  "addServerHelpText": "Tryck på \"+\" för att lägga till din egen server, eller tryck på en publik server för att använda den.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "publicServers": "Publika servrar",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Laddar listan med publika servrar",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Tryck för att lägga till servern till din lista",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServersError": "Misslyckades med att hämta listan över publika servrar. Tryck för att försöka igen.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "Utseende",
   "@appearance": {
@@ -413,14 +369,6 @@
   },
   "error": "Fel",
   "@error": {},
-  "malformedStatsEndpoint": "/api/v1/stats är inte som förväntat",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "serverIsNotReachable": "Servern går ej att nå",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
-  },
   "videoQueue": "Videokö",
   "@videoQueue": {
     "description": "Label for button to display the video queue"
@@ -448,10 +396,6 @@
   "sponsorBlockSettingsQuickDescription": "Välj vilka typer av sektioner som skall hoppas över",
   "@sponsorBlockSettingsQuickDescription": {
     "description": "Small description of what the sponsor block settings do"
-  },
-  "malformedStatsEndpointDescription": "Serverstatistikens slutpunkt motsvarade inte det förväntade avslutet, nyckeln \"software.name\" borde motsvara \"invidious\".\nSvaret från servern var:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "sponsorBlockCategorySponsor": "Annonseringar",
   "@sponsorBlockCategorySponsor": {
@@ -505,10 +449,6 @@
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"
   },
-  "pressDownToShowSettings": "Visa inställningar genom att trycka neråt",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "quality": "Kvalitet",
   "@quality": {
     "description": "Name of TV ui video settings"
@@ -540,10 +480,6 @@
   "themeDark": "Mörk",
   "@themeDark": {
     "description": "Dark theme"
-  },
-  "requiresRestart": "Kräver omstart av app",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "Språk",
   "@appLanguage": {
@@ -670,10 +606,6 @@
   "appLogsDescription": "Erhåll journal över vad som händer i applikationen, kan vara användbart när problem skall rapporteras",
   "@appLogsDescription": {
     "description": "Description of the app log settings"
-  },
-  "logsCopied": "Journal kopierad till urklippshanteraren",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "rememberSubtitleLanguage": "Kom ihåg språk för undertexter",
   "@rememberSubtitleLanguage": {
@@ -857,10 +789,6 @@
   "@videoFailedDownloadRetry": {
     "description": "Shown on download manager when a download fails and prompt the user to retry"
   },
-  "noSubscriptions": "Inga prenumerationer, sök upp filmer och prenumerera på valfri kanal som faller dig i smaken.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Du kan åter välja att prenumerera på denna kanal igen vid ett senare tillfälle",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -886,10 +814,6 @@
   "layoutEditorExplanation": "Du kan välja vad som skall visas på din hemskärm, du kan ha upp till 2 små visare med horisontell bläddring och en stor källa.",
   "@layoutEditorExplanation": {
     "description": "text to explain the home layout editor"
-  },
-  "library": "Bibliotek",
-  "@library": {
-    "description": "Name for user library"
   },
   "customizeAppLayout": "Anpassa appsektioner",
   "@customizeAppLayout": {
@@ -923,10 +847,6 @@
   "@secondsShortForm": {
     "description": "Short form for the word seconds"
   },
-  "videoFilterApplyDateToFilter": "Filtrera filmer under specifika tider",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "videoFilterDayOfWeek": "Ange dagar som filtren skall appliceras på",
   "@videoFilterDayOfWeek": {
     "description": "Title for day selection for the filter"
@@ -934,14 +854,6 @@
   "videoFilterDayOfWeekDescription": "Du kan selektivt välja vilka dagar och tider på veckan som du vill att filtren skall gälla för, för att som exempel motverka att avslöja resultat av sportevent i förtid.",
   "@videoFilterDayOfWeekDescription": {
     "description": ""
-  },
-  "videoFilterStartTime": "Starttid",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterEndTime": "Sluttid",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "videoFilterAppliedOn": "Appliceras på {selectedDays}",
   "@videoFilterAppliedOn": {
@@ -1067,10 +979,6 @@
       }
     }
   },
-  "foregroundServiceNotificationTitle": "Övervakning av filmer",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
   "foregroundServiceNotificationContent": "Leta efter nya filmer {hours, select, 1{varje timme} 24{varje dag} 2{varannan timme} other{var {hours}:e timme}}",
   "@foregroundServiceNotificationContent": {
     "description": "Content for the foreground service running notification when the user wants to receive notifications",
@@ -1078,18 +986,6 @@
       "type": "num",
       "format": "compact"
     }
-  },
-  "foregroundServiceUpdatingSubscriptions": "Kontrollerar prenumerationer...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingPlaylist": "Kontrollerar spellistor...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
-  "foregroundServiceUpdatingChannels": "Kontrollerar kanaler...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsTitle": "Kontrollfrekvens för nya filmer",
   "@notificationFrequencySettingsTitle": {
@@ -1291,14 +1187,6 @@
   "@subscriptionNotificationTitle": {
     "description": "Title for the notification showing that there are new videos from the subscription feed"
   },
-  "askForDisableBatteryOptimizationTitle": "Inaktivering av batterioptimering krävs",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "För att kunna skicka meddelande så behöver Videre kunna köra tjänster i bakgrunden. För att dessa skall kunna köras smidigt så krävs det att Videre ges obegränsad batterianvändning, klicka på ok för att öppna upp inställningar för batterioptimering.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "channelNotificationContent": "Det finns {count, plural, =0{inga nya filmer} =1{1 ny film} other{{count} nya filmer}} från {channel}",
   "@channelNotificationContent": {
     "description": "Content for channel notification when there are new videos",
@@ -1363,8 +1251,6 @@
   },
   "addBasicAuth": "Lägg till Grundläggande Autentisering",
   "@addBasicAuth": {},
-  "addBasicAuthExplanation": "Om din server kräver grundläggande HTTP autentisering så lägger du till detaljerna nedan. Dessa är inte detaljerna för ditt incidious-konto",
-  "@addBasicAuthExplanation": {},
   "addHeader": "Lägg till rubrik",
   "@addHeader": {},
   "value": "Värde",
@@ -1414,11 +1300,5 @@
   "forceTvUi": "Tvinga TV-gränssnitt",
   "@forceTvUi": {},
   "forceTvUiExplanation": "Tvinga gränssnittet att vara TV-upplevelsen, kan vara användbart för vissa enheter som inte har leanback-systemkonfiguration. Omstart av appen krävs",
-  "@forceTvUiExplanation": {},
-  "tapToSeeHow": "Tryck för att se hur du kan vara värd för din egen",
-  "@tapToSeeHow": {},
-  "referToInvidiousWebsiteForHostingInstructions": "Se Invidious webbsida för instruktioner om hur man är värd för invidious",
-  "@referToInvidiousWebsiteForHostingInstructions": {},
-  "noPublicServers": "Inga publika servrar är tillgängliga",
-  "@noPublicServers": {}
+  "@forceTvUiExplanation": {}
 }

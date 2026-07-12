@@ -124,10 +124,6 @@
       }
     }
   },
-  "useSponsorBlock": "Sponsor Engelini Kullan",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "sponsorBlockDescription": "Topluluk tarafından gönderilen sponsor segmentlerini atla",
   "@sponsorBlockDescription": {
     "description": "Sponsorblock setting description"
@@ -159,22 +155,6 @@
   "notLoggedIn": "Giriş yapılmadı",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "tapToAddServer": "Listenize sunucu eklemek için dokunun",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
-  "publicServers": "Genel sunucular",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Genel sunucular yükleniyor",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "publicServersError": "Genel sunucuların listesi alınamadı. Yeniden denemek için dokunun.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "appearance": "Görünüm",
   "@appearance": {
@@ -241,10 +221,6 @@
   "addToPlaylist": "Çalma listesine ekle",
   "@addToPlaylist": {
     "description": "Label to add a video to a playlist"
-  },
-  "serverIsNotReachable": "Sunucuya erişilemiyor",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "addRecommendedToQueue": "Sonraki otomatik oynatma önerilir",
   "@addRecommendedToQueue": {
@@ -474,14 +450,6 @@
   "@deleteChannelNotificationContent": {
     "description": "Title for dialog to confirm whether to delete channel notifications"
   },
-  "foregroundServiceNotificationTitle": "Video izleme",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
-  "foregroundServiceUpdatingPlaylist": "Çalma listelerini kontrol etme...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
   "notificationFrequencySettingsDescription": "Uygulamanın yeni videoları ne sıklıkla kontrol edeceği",
   "@notificationFrequencySettingsDescription": {
     "description": "Description for frequency settings"
@@ -521,10 +489,6 @@
   "noChannels": "Kanal yok",
   "@noChannels": {
     "description": "when there are no channels to display"
-  },
-  "noPlaylists": "Çalma listesi yok",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
   },
   "channels": "Kanallar",
   "@channels": {
@@ -570,10 +534,6 @@
   "@selectBrowsingCountry": {
     "description": "Select country for trending content"
   },
-  "showOnStart": "Uygulama başladığında ne gösterileceğini seçin",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "settings": "Ayarlar",
   "@settings": {
     "description": "Settings title"
@@ -585,10 +545,6 @@
   "country": "Ülke",
   "@country": {
     "description": "Country label"
-  },
-  "whenAppStartsShow": "Uygulama başladığında, göster…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "servers": "Sunucular",
   "@servers": {
@@ -742,10 +698,6 @@
   "@home": {
     "description": "Label for Home browsing tab"
   },
-  "videoFilterStartTime": "Başlama zamanı",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
   "deArrowSettingDescription": "Tıklama yemi başlıklarını ve küçük resimlerini değiştirin",
   "@deArrowSettingDescription": {
     "description": "Description for dearrow"
@@ -805,10 +757,6 @@
   "appLogsDescription": "Uygulamada neler olup bittiğinin günlüklerini alın, sorunları bildirmek için yararlı olabilir",
   "@appLogsDescription": {
     "description": "Description of the app log settings"
-  },
-  "logsCopied": "Panoya kopyalanan günlükler",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "save": "Kaydetmek",
   "@save": {
@@ -870,10 +818,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Abonelik yok, videolara göz atın ve istediğiniz herhangi bir kanala abone olun.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Bu kanala daha sonra tekrar abone olabilirsiniz",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -889,10 +833,6 @@
   "layoutEditorAddVideoSource": "Video kaynağı ekle",
   "@layoutEditorAddVideoSource": {
     "description": "Label for button to allow user to add more video sources to the home screen"
-  },
-  "library": "Kütüphane",
-  "@library": {
-    "description": "Name for user library"
   },
   "customizeAppLayout": "Uygulama bölümlerini özelleştirme",
   "@customizeAppLayout": {
@@ -930,10 +870,6 @@
   "@videoFilterDayOfWeekDescription": {
     "description": ""
   },
-  "videoFilterEndTime": "Bitiş zamanı",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "notifications": "Bildirimler",
   "@notifications": {
     "description": "Notification settings title"
@@ -953,14 +889,6 @@
   "deletePlaylistNotificationContent": "Bu çalma listesinden artık bildirim almayacaksınız.",
   "@deletePlaylistNotificationContent": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
-  },
-  "foregroundServiceUpdatingSubscriptions": "Abonelikleri kontrol etme...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
-  "foregroundServiceUpdatingChannels": "Kanalları kontrol ediyorum...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsTitle": "Yeni video kontrol frekansı",
   "@notificationFrequencySettingsTitle": {
@@ -1035,21 +963,9 @@
   "@redirectInvidiousLink": {
     "description": "asking user to share redirecting invidious link"
   },
-  "wizardIntro": "Ortak bir sunucu seçin veya kendinizinkini ekleyin. (Daha sonra ayarlarda değiştirilebilir)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "selectPlaylist": "Çalma listesi seç",
   "@selectPlaylist": {
     "description": "Title when users wants to add a video to a playlist"
-  },
-  "invalidInvidiousServer": "Geçersiz Davetsiz sunucu",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
-  "addServerHelpText": "Kendi sunucularınızı eklemek için + düğmesini kullanın veya genel bir sunucuya dokunup ekleyin.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
   },
   "useDynamicThemeDescription": "Kullandığınız Malzeme renklerini kullanın (yalnızca Android 12+ ''da mevcuttur)",
   "@useDynamicThemeDescription": {
@@ -1095,17 +1011,9 @@
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"
   },
-  "pressDownToShowSettings": "Ayarları göstermek için aşağı tuşuna basın",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "blackBackgroundDescription": "OLED ekranda karanlık tema için",
   "@blackBackgroundDescription": {
     "description": "Description for dark background setting"
-  },
-  "requiresRestart": "Uygulamanın yeniden başlatılmasını gerektirir",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "returnYoutubeDislikeDescription": "Tarafından sağlanan API''yi kullanarak tahmini video beğenmediklerini göster returnyoutubedislike.com",
   "@returnYoutubeDislikeDescription": {
@@ -1155,10 +1063,6 @@
   "@layoutEditorExplanation": {
     "description": "text to explain the home layout editor"
   },
-  "videoFilterApplyDateToFilter": "Videoları belirli zamanlara göre filtreleyin",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "notificationsDescription": "Bildirdiklerinizi etkinleştirin ve gözden geçirin",
   "@notificationsDescription": {
     "description": "Setting description for notifications"
@@ -1167,21 +1071,9 @@
   "@subscriptionNotificationTitle": {
     "description": "Title for the notification showing that there are new videos from the subscription feed"
   },
-  "askForDisableBatteryOptimizationTitle": "Pil optimizasyonunu devre dışı bırakmak gerekir",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
-  "askForDisableBatteryOptimizationContent": "Videre bildirimi göndermek için bir arka plan hizmeti çalıştırmanız gerekir. Sorunsuz çalışması için Videre'ye sınırsız pil kullanımı verilmesi gerekir, tamam'a dokunmak pil optimizasyon ayarlarını açacaktır.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "copySettingsAsJsonDescription": "Uygulama ile ilgili bir sorunla karşılaşırsanız ve bir sorunu gündeme getirmeye karar verirseniz hata ayıklamaya yardımcı olması için ayarları JSON olarak kopyalayın",
   "@copySettingsAsJsonDescription": {
     "description": ""
-  },
-  "malformedStatsEndpointDescription": "Sunucu istatistikleri bitiş noktası beklenen bir yüke yanıt vermedi, anahtar \"software.name \" \"davetsiz\" ile eşit olmalıdır.\nSunucudan yanıt:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "feedbackDisclaimer": "Geri bildirim göndermek için bir GitHub hesabına ihtiyacınız olacak ve ekran görüntünüz anonim olarak Imgur''a gönderilecektir.",
   "@feedbackDisclaimer": {
@@ -1222,10 +1114,6 @@
   "channelSortByPopular": "Popüler",
   "@channelSortByPopular": {
     "description": "Sort channel videos by popularity"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats beklenildiği gibi değil",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
   },
   "nFilters": "{count, plural, =0{Video yok} =1{1 filter} other{{count} filtre}}",
   "@nFilters": {
@@ -1309,8 +1197,6 @@
   "@retry": {},
   "addBasicAuth": "Basit Kimlik Doğrulaması Ekle",
   "@addBasicAuth": {},
-  "addBasicAuthExplanation": "Eğer sunucunuz basit HTTP kimlik doğrulaması gerektiriyorsa, detayları aşağıya ekleyiniz. Bunlar Invidious hesap detaylarınız değildir",
-  "@addBasicAuthExplanation": {},
   "addHeader": "Üstbilgi ekle",
   "@addHeader": {},
   "advancedConfiguration": "Gelişmiş Yapılandırma",
@@ -1379,12 +1265,6 @@
   "@forceTvUiExplanation": {},
   "stopTheVideoExplanation": "Eğer etkinleştirilmişse, video kapatılacaktır, eğer devre dışı bırakılmışsa, video sadece durdurulacaktır",
   "@stopTheVideoExplanation": {},
-  "tapToSeeHow": "Kendi ev sahipliğinizi nasıl yapacağınızı görmek için dokunun",
-  "@tapToSeeHow": {},
-  "noPublicServers": "Hiçbir herkese açık sunucu mevcut değil",
-  "@noPublicServers": {},
-  "referToInvidiousWebsiteForHostingInstructions": "Invidious''u nasıl barındıracağınıza dair talimatlar için Invidious web sitesine bakın",
-  "@referToInvidiousWebsiteForHostingInstructions": {},
   "videoFilterDescriptionString": "{hideOrFilter} {type} {operation} ''{value}'' olan videolar.",
   "@videoFilterDescriptionString": {
     "description": "Human readable description of a video filter, in this case is it for string comparison, example: Hide videos where the name of the video does not contain the following string 'test' (Do not translate text between { })",

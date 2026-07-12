@@ -109,9 +109,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get noChannels => 'Немає каналів';
 
   @override
-  String get noPlaylists => 'Немає добірок';
-
-  @override
   String get channels => 'Канали';
 
   @override
@@ -126,10 +123,6 @@ class AppLocalizationsUk extends AppLocalizations {
   @override
   String get couldntFetchVideos =>
       'Не вдалося завантажити відео. Натисніть, щоб спробувати ще раз.';
-
-  @override
-  String get wizardIntro =>
-      'Виберіть публічний сервер або додайте власний. (Можна змінити пізніше в налаштуваннях)';
 
   @override
   String get startUsingClipious => 'Почати користуватися Videre';
@@ -193,9 +186,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get selectBrowsingCountry => 'Оберіть країну перегляду';
 
   @override
-  String get showOnStart => 'Оберіть, що показувати під час запуску застосунку';
-
-  @override
   String get settings => 'Налаштування';
 
   @override
@@ -203,9 +193,6 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get country => 'Країна';
-
-  @override
-  String get whenAppStartsShow => 'Коли застосунок запуститься, показати…';
 
   @override
   String get servers => 'Сервери';
@@ -217,9 +204,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String currentServer(String current) {
     return 'Наразі використовується $current';
   }
-
-  @override
-  String get useSponsorBlock => 'Використовувати SponsorBlock';
 
   @override
   String get sponsorBlockDescription =>
@@ -253,9 +237,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get delete => 'Видалити';
 
   @override
-  String get invalidInvidiousServer => 'Недійсний сервер Invidious';
-
-  @override
   String get yourServers => 'Ваші сервери';
 
   @override
@@ -263,23 +244,6 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get notLoggedIn => 'Ви не увійшли';
-
-  @override
-  String get addServerHelpText =>
-      'Використовуйте кнопку +, щоб додати власні сервери або натисніть на публічний сервер та додайте його.';
-
-  @override
-  String get publicServers => 'Публічні сервери';
-
-  @override
-  String get loadingPublicServer => 'Завантаження публічних серверів';
-
-  @override
-  String get tapToAddServer => 'Натисніть, щоб додати сервер до вашого списку';
-
-  @override
-  String get publicServersError =>
-      'Не вдалося отримати список публічних серверів. Натисніть, щоб повторити спробу.';
 
   @override
   String get appearance => 'Зовнішній вигляд';
@@ -343,17 +307,6 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get error => 'Помилка';
-
-  @override
-  String get malformedStatsEndpoint =>
-      '/api/v1/stats не відповідає очікуванням';
-
-  @override
-  String get malformedStatsEndpointDescription =>
-      'Кінцева точка статистики сервера не відповіла очікуваним корисним навантаженням, ключ «software.name» має дорівнювати «invidious».\nВідповідь від сервера:';
-
-  @override
-  String get serverIsNotReachable => 'Сервер недоступний';
 
   @override
   String get videoQueue => 'Черга відео';
@@ -442,10 +395,6 @@ class AppLocalizationsUk extends AppLocalizations {
       'Проксі дозволяє обходити регіональні обмеження або блокування YouTube провайдером';
 
   @override
-  String get pressDownToShowSettings =>
-      'Натисніть вниз, щоб показати налаштування';
-
-  @override
   String get quality => 'Якість';
 
   @override
@@ -491,9 +440,6 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get followSystem => 'Як у системі';
-
-  @override
-  String get requiresRestart => 'Потребує перезапуску застосунку';
 
   @override
   String get appLanguage => 'Мова застосунку';
@@ -620,9 +566,6 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get copyToClipBoard => 'Копіювати в буфер обміну';
-
-  @override
-  String get logsCopied => 'Журнали скопійовано до буфера обміну';
 
   @override
   String get rememberSubtitleLanguage => 'Запам’ятати мову субтитрів';
@@ -801,10 +744,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get manageSubscriptions => 'Керувати підписками';
 
   @override
-  String get noSubscriptions =>
-      'Немає підписок, переглядайте відео та підписуйтеся на будь-який канал, який вам подобається.';
-
-  @override
   String get youCanSubscribeAgainLater =>
       'Ви можете підписатися на цей канал пізніше';
 
@@ -836,9 +775,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get home => 'Головний екран';
 
   @override
-  String get library => 'Бібліотека';
-
-  @override
   String get customizeAppLayout => 'Налаштувати розділи застосунку';
 
   @override
@@ -868,21 +804,11 @@ class AppLocalizationsUk extends AppLocalizations {
   String get secondsShortForm => 'сек.';
 
   @override
-  String get videoFilterApplyDateToFilter =>
-      'Фільтрувати відео за вказаний час';
-
-  @override
   String get videoFilterDayOfWeek => 'Виберіть дні для застосування фільтрів';
 
   @override
   String get videoFilterDayOfWeekDescription =>
       'Ви можете вибрати дні тижня і час, до яких застосовуються фільтри, наприклад, щоб уникнути спойлерів спортивних подій.';
-
-  @override
-  String get videoFilterStartTime => 'Час початку';
-
-  @override
-  String get videoFilterEndTime => 'Час кінця';
 
   @override
   String videoFilterAppliedOn(String selectedDays) {
@@ -937,14 +863,6 @@ class AppLocalizationsUk extends AppLocalizations {
     );
     return 'У вашій стрічці підписок –  $_temp0';
   }
-
-  @override
-  String get askForDisableBatteryOptimizationTitle =>
-      'Потрібно вимкнути оптимізацію акумулятора';
-
-  @override
-  String get askForDisableBatteryOptimizationContent =>
-      'Для того, щоб надсилати вам повідомлення, Videre має запустити фонову службу. Для безперебійної роботи, необхідно, щоб Videre мав необмежене використання акумулятора, натиснувши кнопку «Добре», ви відкриєте налаштування оптимізації роботи акумулятора.';
 
   @override
   String get askToEnableBackgroundServiceTitle => 'Повідомлення вимкнені';
@@ -1018,9 +936,6 @@ class AppLocalizationsUk extends AppLocalizations {
   }
 
   @override
-  String get foregroundServiceNotificationTitle => 'Відео моніторинг';
-
-  @override
   String foregroundServiceNotificationContent(String hours) {
     String _temp0 = intl.Intl.selectLogic(
       hours,
@@ -1032,16 +947,6 @@ class AppLocalizationsUk extends AppLocalizations {
     );
     return 'Буде перевіряти наявність нових відео раз $_temp0';
   }
-
-  @override
-  String get foregroundServiceUpdatingSubscriptions => 'Перевірка підписок...';
-
-  @override
-  String get foregroundServiceUpdatingPlaylist =>
-      'Перевірка списків відтворення...';
-
-  @override
-  String get foregroundServiceUpdatingChannels => 'Перевірка каналів...';
 
   @override
   String get notificationFrequencySettingsTitle =>
@@ -1161,10 +1066,6 @@ class AppLocalizationsUk extends AppLocalizations {
   String get addBasicAuth => 'Додайте базову автентифікацію';
 
   @override
-  String get addBasicAuthExplanation =>
-      'Якщо ваш сервер вимагає базової автентифікації HTTP, додайте деталі нижче. Це не ваші образливі дані облікового запису';
-
-  @override
   String get addHeader => 'Додайте заголовок';
 
   @override
@@ -1248,14 +1149,4 @@ class AppLocalizationsUk extends AppLocalizations {
   @override
   String get forceTvUiExplanation =>
       'Змусити інтерфейс бути телевізійним, може бути корисним для деяких пристроїв, які не мають конфігурації системи Leanback. Потрібен перезапуск програми';
-
-  @override
-  String get noPublicServers => 'Загальнодоступні сервери недоступні';
-
-  @override
-  String get tapToSeeHow => 'Торкніться, щоб побачити, як розмістити власний';
-
-  @override
-  String get referToInvidiousWebsiteForHostingInstructions =>
-      'Зверніться до веб-сайту Invidious, щоб отримати інструкції щодо розміщення invidious';
 }

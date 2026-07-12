@@ -28,8 +28,7 @@ class TvWelcomeWizardScreen extends StatelessWidget {
             BlocProvider(create: (context) => WelcomeWizardCubit(null)),
             BlocProvider(
               create: (context) => ServerListSettingsCubit(
-                  const ServerListSettingsState(
-                      publicServers: [], dbServers: []),
+                  ServerListSettingsState(dbServers: []),
                   context.read<AppCubit>()),
             )
           ],
@@ -44,7 +43,7 @@ class TvWelcomeWizardScreen extends StatelessWidget {
                 child: Column(
                   children: [
                     Text(
-                      locals.wizardIntro,
+                      locals.addServer,
                       style: textTheme.titleLarge,
                     ),
                     const Expanded(child: TvManageServersInner()),

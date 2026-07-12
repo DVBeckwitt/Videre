@@ -89,7 +89,6 @@ late AppRouter appRouter;
 final log = Logger('Router');
 
 const mainPath = '/';
-const contentPath = 'content';
 const homePath = 'home';
 const subscriptionPath = 'subscriptions';
 const playlistsPath = 'playlists';
@@ -101,7 +100,6 @@ const searchHistoryPath = 'searchHistory';
 const searchPath = 'search';
 const videoPath = 'video/:videoId';
 const infoPath = 'info';
-const channelsPath = 'channels';
 const recommendedVideoPath = 'recommended';
 const commentsPath = 'comments';
 const channelPath = 'channel/:channelId';
@@ -280,17 +278,4 @@ class MyRouteObserver extends AutoRouterObserver {
     log.fine('current route: ${appRouter.current.name}');
     super.didPop(route, previousRoute);
   }
-
-/*
-  // only override to observer tab routes
-  @override
-  void didInitTabRoute(TabPageRoute route, TabPageRoute? previousRoute) {
-    print('Tab route visited: ${route.name}');
-  }
-
-  @override
-  void didChangeTabRoute(TabPageRoute route, TabPageRoute previousRoute) {
-    print('Tab route re-visited: ${route.name}');
-  }
-*/
 }

@@ -1,6 +1,7 @@
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,7 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import '../../test_app_cubit.dart';
 
 void main() {
-  // Setting a customer override that'll use an unmocked HTTP client
   late AppCubit app;
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
@@ -16,55 +16,26 @@ void main() {
     await app.initState();
   });
 
-  tearDown(() async => await db.close());
-
-  test('save public servers', () async {
-    final servers = ServerListSettingsCubit(const ServerListSettingsState(dbServers: [], publicServers: []), app);
-    // await servers.getPublicServers();
-    await servers.refreshServers();
-    expect(servers.state.publicServers.isEmpty, false);
-    var publicServerCount = servers.state.publicServers.length;
-
-    // adding server to selected servers
-    await servers.upsertServer(servers.state.publicServers.first);
-    expect(servers.state.publicServers.length, publicServerCount - 1);
-  });
-
-  test('adding own server', () async {
-    // final servers = ServerListSettingsCubit(const ServerListSettingsState(dbServers: [], publicServers: []), app);
-    // await servers.refreshServers();
-    // servers.addServerController.text = localInvidiousServer;
-    // await servers.saveServer();
-    // expect(servers.state.dbServers.length, 1);
-    // expect(servers.isLoggedInToServer(localInvidiousServer), false);
-  });
+  tearDown(() => db.close());
 
   test('switching server', () async {
-    final servers = ServerListSettingsCubit(const ServerListSettingsState(dbServers: [], publicServers: []), app);
-    // await servers.getPublicServers();
-    await servers.refreshServers();
-    expect(servers.state.publicServers.isEmpty, false);
-    var publicServerCount = servers.state.publicServers.length;
+    const first = Server(url: 'https://first.example');
+    const second = Server(url: 'https://second.example');
+    final state = ServerListSettingsState(dbServers: [first, second]);
+    expect(state, ServerListSettingsState(dbServers: [first, second]));
+    expect(() => state.dbServers.clear(), throwsUnsupportedError);
 
-    var s1 = servers.state.publicServers[0];
-    var s2 = servers.state.publicServers[1];
-    await servers.upsertServer(s1);
-    await servers.upsertServer(s2);
+    final servers =
+        ServerListSettingsCubit(ServerListSettingsState(dbServers: []), app);
+    await servers.saveServer(first);
+    await db.upsertServer(second);
 
-    expect(servers.state.publicServers.length, publicServerCount - 2);
+    for (final server in [first, second]) {
+      await servers.switchServer(server);
 
-    await servers.switchServer(s1);
-    var inUse = await db.getCurrentlySelectedServer();
-    expect(inUse.url, s1.url);
-    var inUseCount = servers.state.dbServers.where((element) => element.inUse == true).length;
-    expect(inUseCount, 1);
-    expect(app.state.server?.url, s1.url);
-
-    await servers.switchServer(s2);
-    inUse = await db.getCurrentlySelectedServer();
-    expect(inUse.url, s2.url);
-    inUseCount = servers.state.dbServers.where((element) => element.inUse == true).length;
-    expect(inUseCount, 1);
-    expect(app.state.server?.url, s2.url);
+      expect((await db.getCurrentlySelectedServer()).url, server.url);
+      expect(servers.state.dbServers.where((s) => s.inUse).length, 1);
+      expect(app.state.server?.url, server.url);
+    }
   });
 }

@@ -67,10 +67,6 @@
   "@browsing": {
     "description": "video browsing preferences"
   },
-  "whenAppStartsShow": "Når programmer starter, vis …",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "addServer": "Legg til tjener",
   "@addServer": {
     "description": "Add server label"
@@ -139,10 +135,6 @@
   "@latestVideos": {
     "description": "Latest channel videos"
   },
-  "noPlaylists": "Ingen spillelister",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "channels": "Kanaler",
   "@channels": {
     "description": "Channels label"
@@ -183,10 +175,6 @@
   "@servers": {
     "description": "Server management settings category"
   },
-  "useSponsorBlock": "Bruk SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "logIn": "Logg inn",
   "@logIn": {
     "description": "CTA to log in to server"
@@ -219,10 +207,6 @@
   "@useThisServer": {
     "description": "Use this server label"
   },
-  "invalidInvidiousServer": "Ugyldig Invidious-tjener",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "yourServers": "Dine tjenere",
   "@yourServers": {
     "description": "Your servers label"
@@ -234,10 +218,6 @@
   "sponsorSkipped": "Segment skippet",
   "@sponsorSkipped": {
     "description": "When a sponsor segment is skipped thanks to sponsor block"
-  },
-  "publicServers": "Offentlige tjenere",
-  "@publicServers": {
-    "description": "Public servers label"
   },
   "appearance": "Utseende",
   "@appearance": {
@@ -264,10 +244,6 @@
   "@sponsorBlockDescription": {
     "description": "Sponsorblock setting description"
   },
-  "tapToAddServer": "Trykk for å legge til en tjener på listen din",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
   "nReplies": "{count, plural, =0{Ingen svar} =1{1 svar} other{{count} svar}}",
   "@nReplies": {
     "description": "number of replies to a comment",
@@ -278,14 +254,6 @@
       }
     }
   },
-  "addServerHelpText": "Bruk «+»-knappen for å legge til egne tjenere, eller trykk på en offentlig tjener for å legge den til.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
-  "showOnStart": "Velg hva som skal vises når programmet starter",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "useDynamicThemeDescription": "Bruker Material You-farger (kun tilgjengelig på Android 12+)",
   "@useDynamicThemeDescription": {
     "description": ""
@@ -293,14 +261,6 @@
   "notLoggedIn": "Ikke innlogget. Trykk for å logge inn.",
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
-  },
-  "loadingPublicServer": "Laster inn offentlige tjenere",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "publicServersError": "Kunne ikke hente liste over offentlige tjenere. Trykk for å prøve igjen.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "shareYoutubeLink": "Del YouTube-lenke",
   "@shareYoutubeLink": {
@@ -315,10 +275,6 @@
         "format": "compact"
       }
     }
-  },
-  "wizardIntro": "Velg en offentlig tjener, eller legg til din egen. Du kan endre dette senere i innstillingene.",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "package": "Pakke",
   "@package": {
@@ -511,10 +467,6 @@
   "@quality": {
     "description": "Name of TV ui video settings"
   },
-  "pressDownToShowSettings": "Trykk ↓ for å vise innstillinger",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "audio": "Lyd",
   "@audio": {
     "description": "Name TV ui audio settings"
@@ -547,21 +499,9 @@
   "@itemListErrorInvalidScope": {
     "description": "Error when the user doesn't have the proper scope to its current token"
   },
-  "malformedStatsEndpoint": "/api/v1/stats er ikke som forventet",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "Serverstatistikk endepunktet svarte ikke med et forventet svar, nøkkelen \"software.name\" skal være lik \"invidious\".\nSvar fra serveren:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
   "appLogsDescription": "Få logger over hva som skjer i applikasjonen, kan være nyttig for å rapportere problemer",
   "@appLogsDescription": {
     "description": "Description of the app log settings"
-  },
-  "logsCopied": "Logger kopiert til utklippstavlen",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "rememberSubtitleLanguage": "Husk undertekstspråk",
   "@rememberSubtitleLanguage": {
@@ -598,10 +538,6 @@
   "followSystem": "Følg system",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Krever omstart av appen",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "autoplayVideoOnLoad": "Spill av video automatisk ved innlasting",
   "@autoplayVideoOnLoad": {
@@ -690,10 +626,6 @@
   "save": "Lagre",
   "@save": {
     "description": "Text for save action"
-  },
-  "serverIsNotReachable": "Tjeneren er ikke tilgjengelig",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "enableSearchHistory": "Aktiver søkehistorikk",
   "@enableSearchHistory": {

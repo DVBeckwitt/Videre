@@ -80,10 +80,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "noPlaylists": "Немає добірок",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "couldntLoadVideo": "Не вдалося завантажити відео",
   "@couldntLoadVideo": {
     "description": "Message to display when a video can't be loaded"
@@ -157,10 +153,6 @@
       }
     }
   },
-  "useSponsorBlock": "Використовувати SponsorBlock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "about": "Про застосунок",
   "@about": {
     "description": "About"
@@ -196,18 +188,6 @@
   "loggedIn": "Ви увійшли",
   "@loggedIn": {
     "description": "Label to tell the user that he is logged in to the server"
-  },
-  "publicServers": "Публічні сервери",
-  "@publicServers": {
-    "description": "Public servers label"
-  },
-  "loadingPublicServer": "Завантаження публічних серверів",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
-  "tapToAddServer": "Натисніть, щоб додати сервер до вашого списку",
-  "@tapToAddServer": {
-    "description": "public server description"
   },
   "appearance": "Зовнішній вигляд",
   "@appearance": {
@@ -355,10 +335,6 @@
       }
     }
   },
-  "wizardIntro": "Виберіть публічний сервер або додайте власний. (Можна змінити пізніше в налаштуваннях)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
-  },
   "channels": "Канали",
   "@channels": {
     "description": "Channels label"
@@ -383,14 +359,6 @@
   "@sponsorBlockDescription": {
     "description": "Sponsorblock setting description"
   },
-  "showOnStart": "Оберіть, що показувати під час запуску застосунку",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
-  "whenAppStartsShow": "Коли застосунок запуститься, показати…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
-  },
   "package": "Пакунок",
   "@package": {
     "description": "package label"
@@ -398,10 +366,6 @@
   "version": "Версія",
   "@version": {
     "description": "version label"
-  },
-  "invalidInvidiousServer": "Недійсний сервер Invidious",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
   },
   "useDash": "Використовувати DASH",
   "@useDash": {
@@ -411,17 +375,9 @@
   "@notLoggedIn": {
     "description": "Label when the user is not logged in to the server"
   },
-  "addServerHelpText": "Використовуйте кнопку +, щоб додати власні сервери або натисніть на публічний сервер та додайте його.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
   "useDynamicThemeDescription": "Використовувати кольори Material You (доступно лише на Android 12+)",
   "@useDynamicThemeDescription": {
     "description": ""
-  },
-  "publicServersError": "Не вдалося отримати список публічних серверів. Натисніть, щоб повторити спробу.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "useDashDescription": "Адаптивний стримінг DASH, іноді може бути проблематичним, YouTube може обмежувати його швидкість.",
   "@useDashDescription": {
@@ -507,10 +463,6 @@
   "@search": {
     "description": "search title"
   },
-  "pressDownToShowSettings": "Натисніть вниз, щоб показати налаштування",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "audio": "Аудіо",
   "@audio": {
     "description": "Name TV ui audio settings"
@@ -546,10 +498,6 @@
   "followSystem": "Як у системі",
   "@followSystem": {
     "description": "Follow system label"
-  },
-  "requiresRestart": "Потребує перезапуску застосунку",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "appLanguage": "Мова застосунку",
   "@appLanguage": {
@@ -626,10 +574,6 @@
   "copyToClipBoard": "Копіювати в буфер обміну",
   "@copyToClipBoard": {
     "description": "Text to copy something to clipboard"
-  },
-  "logsCopied": "Журнали скопійовано до буфера обміну",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
   },
   "appLogs": "Журнали застосунку",
   "@appLogs": {
@@ -879,10 +823,6 @@
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
   },
-  "noSubscriptions": "Немає підписок, переглядайте відео та підписуйтеся на будь-який канал, який вам подобається.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Ви можете підписатися на цей канал пізніше",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -925,17 +865,9 @@
   "@navigationBarLabelAlwaysShowing": {
     "description": "Label always showing option for navigation bar"
   },
-  "videoFilterApplyDateToFilter": "Фільтрувати відео за вказаний час",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
-  },
   "layoutEditorExplanation": "Ви можете налаштувати, що відображати на головному екрані: у вас може бути до двох невеликих уявлень з горизонтальним прокручуванням і одне велике джерело.",
   "@layoutEditorExplanation": {
     "description": "text to explain the home layout editor"
-  },
-  "library": "Бібліотека",
-  "@library": {
-    "description": "Name for user library"
   },
   "distractionFreeModeDescription": "Вимкнути коментарі та рекомендації до відео",
   "@distractionFreeModeDescription": {
@@ -986,18 +918,6 @@
   "share": "Поділитися",
   "@share": {
     "description": "asking user if to share"
-  },
-  "malformedStatsEndpoint": "/api/v1/stats не відповідає очікуванням",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "Кінцева точка статистики сервера не відповіла очікуваним корисним навантаженням, ключ «software.name» має дорівнювати «invidious».\nВідповідь від сервера:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
-  },
-  "serverIsNotReachable": "Сервер недоступний",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "searchUploadDateYear": "Цього року",
   "@searchUploadDateYear": {
@@ -1081,10 +1001,6 @@
   "@subscriptionNotificationDescription": {
     "description": "Description for subscription notifications"
   },
-  "askForDisableBatteryOptimizationContent": "Для того, щоб надсилати вам повідомлення, Videre має запустити фонову службу. Для безперебійної роботи, необхідно, щоб Videre мав необмежене використання акумулятора, натиснувши кнопку «Добре», ви відкриєте налаштування оптимізації роботи акумулятора.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "otherNotifications": "Інші джерела повідомлень (значки дзвіночків)",
   "@otherNotifications": {
     "description": "Title for settings section in the notification settings"
@@ -1104,14 +1020,6 @@
   "deletePlaylistNotificationContent": "Ви більше не будете отримувати повідомлення від цієї добірки.",
   "@deletePlaylistNotificationContent": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
-  },
-  "videoFilterStartTime": "Час початку",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
-  },
-  "videoFilterEndTime": "Час кінця",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
   },
   "from": "З",
   "@from": {
@@ -1161,10 +1069,6 @@
       }
     }
   },
-  "askForDisableBatteryOptimizationTitle": "Потрібно вимкнути оптимізацію акумулятора",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "askToEnableBackgroundServiceTitle": "Повідомлення вимкнені",
   "@askToEnableBackgroundServiceTitle": {
     "description": "If the users tries to turn on notifications for a channel but hasn't enable notifications in the app we need to turn it on for them"
@@ -1196,14 +1100,6 @@
         "format": "compact"
       }
     }
-  },
-  "foregroundServiceUpdatingPlaylist": "Перевірка списків відтворення...",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
-  "foregroundServiceUpdatingChannels": "Перевірка каналів...",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "notificationFrequencySettingsDescription": "Як часто програма перевірятиме наявність нових відео",
   "@notificationFrequencySettingsDescription": {
@@ -1303,8 +1199,6 @@
   },
   "addBasicAuth": "Додайте базову автентифікацію",
   "@addBasicAuth": {},
-  "addBasicAuthExplanation": "Якщо ваш сервер вимагає базової автентифікації HTTP, додайте деталі нижче. Це не ваші образливі дані облікового запису",
-  "@addBasicAuthExplanation": {},
   "addHeader": "Додайте заголовок",
   "@addHeader": {},
   "advancedConfiguration": "Розширена конфігурація",
@@ -1350,14 +1244,6 @@
         "example": "Lo-Fi girl"
       }
     }
-  },
-  "foregroundServiceNotificationTitle": "Відео моніторинг",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
-  "foregroundServiceUpdatingSubscriptions": "Перевірка підписок...",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
   },
   "notificationFrequencySettingsTitle": "Нова частота перевірки відео",
   "@notificationFrequencySettingsTitle": {
@@ -1414,11 +1300,5 @@
   "forceTvUiExplanation": "Змусити інтерфейс бути телевізійним, може бути корисним для деяких пристроїв, які не мають конфігурації системи Leanback. Потрібен перезапуск програми",
   "@forceTvUiExplanation": {},
   "forceTvUi": "Force TV інтерфейс",
-  "@forceTvUi": {},
-  "noPublicServers": "Загальнодоступні сервери недоступні",
-  "@noPublicServers": {},
-  "tapToSeeHow": "Торкніться, щоб побачити, як розмістити власний",
-  "@tapToSeeHow": {},
-  "referToInvidiousWebsiteForHostingInstructions": "Зверніться до веб-сайту Invidious, щоб отримати інструкції щодо розміщення invidious",
-  "@referToInvidiousWebsiteForHostingInstructions": {}
+  "@forceTvUi": {}
 }

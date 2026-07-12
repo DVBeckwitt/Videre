@@ -12,8 +12,6 @@ import '../../../utils/models/paginated_list.dart';
 import '../../../utils/views/components/placeholders.dart';
 import '../../states/history.dart';
 
-const smallHistoryAspectRatio = 1.15;
-
 class HistoryView extends StatelessWidget {
   const HistoryView({super.key});
 

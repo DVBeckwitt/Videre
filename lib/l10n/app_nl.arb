@@ -108,10 +108,6 @@
   "@settings": {
     "description": "Settings title"
   },
-  "useSponsorBlock": "Gebruik Sponsorblock",
-  "@useSponsorBlock": {
-    "description": "label for sponsorblock checkbox"
-  },
   "useThisServer": "Gebruik deze server",
   "@useThisServer": {
     "description": "Use this server label"
@@ -404,10 +400,6 @@
   "@noChannels": {
     "description": "when there are no channels to display"
   },
-  "invalidInvidiousServer": "Ongeldige Invidious-server",
-  "@invalidInvidiousServer": {
-    "description": "Error when the user tries to add a server that is not a proper or reachable invidious server"
-  },
   "searchHistory": "Zoek­geschiedenis",
   "@searchHistory": {
     "description": "Settings label for search history"
@@ -452,10 +444,6 @@
   "@sponsorBlockCategoryFiller": {
     "description": "Sponsorblock 'Filler' Category"
   },
-  "noPlaylists": "Geen afspeellijsten",
-  "@noPlaylists": {
-    "description": "when there are no playlists to display"
-  },
   "useDynamicTheme": "Dynamische kleuren",
   "@useDynamicTheme": {
     "description": ""
@@ -468,17 +456,9 @@
   "@download": {
     "description": "A single download or CTA for downloading a video"
   },
-  "library": "Bibliotheek",
-  "@library": {
-    "description": "Name for user library"
-  },
   "editVideoFilter": "Filter bewerken",
   "@editVideoFilter": {
     "description": "Title when editting a filter"
-  },
-  "videoFilterStartTime": "Starttijd",
-  "@videoFilterStartTime": {
-    "description": "Title for filter start time"
   },
   "yourServers": "Uw servers",
   "@yourServers": {
@@ -525,10 +505,6 @@
   "@videoFilters": {
     "description": "Title for video filter settings"
   },
-  "videoFilterEndTime": "Eindtijd",
-  "@videoFilterEndTime": {
-    "description": "Title for filter end time"
-  },
   "searchSortViewCount": "Weergaven",
   "@searchSortViewCount": {
     "description": "Sort search by view count"
@@ -549,17 +525,9 @@
   "@playbackSpeed": {
     "description": "Name of TV ui Playback speed"
   },
-  "loadingPublicServer": "Publieke servers laden",
-  "@loadingPublicServer": {
-    "description": "Message telling users the app is loading the list of public servers"
-  },
   "manageSubscriptions": "Abonnementen beheren",
   "@manageSubscriptions": {
     "description": "Title of manage subscriptions page"
-  },
-  "publicServers": "Publieke servers",
-  "@publicServers": {
-    "description": "Public servers label"
   },
   "blackBackground": "Zwarte achtergrond",
   "@blackBackground": {
@@ -761,10 +729,6 @@
   "@searchDurationMedium": {
     "description": "Search for medium videos only"
   },
-  "logsCopied": "Log­boeken gekopieerd naar klem­bord",
-  "@logsCopied": {
-    "description": "Message to tell user that logs have been copied to the clipboard"
-  },
   "deArrowReplaceThumbnails": "Miniaturen vervangen",
   "@deArrowReplaceThumbnails": {
     "description": "Settings title for checkbox on whether the thumbnail should be replaced as well"
@@ -780,14 +744,6 @@
   "skipStep": "Stap­grootte van voor-/achter­uit spoelen",
   "@skipStep": {
     "description": "Title for the settings to set the skipping step"
-  },
-  "foregroundServiceUpdatingPlaylist": "Afspeel­lijsten controleren…",
-  "@foregroundServiceUpdatingPlaylist": {
-    "description": "Foreground service notification text when checking for new playlist videos"
-  },
-  "foregroundServiceUpdatingChannels": "Kanalen controleren…",
-  "@foregroundServiceUpdatingChannels": {
-    "description": "Foreground service notification text when checking for new channel videos"
   },
   "channelSortByPopular": "Populair",
   "@channelSortByPopular": {
@@ -817,17 +773,9 @@
   "@subscriptionNotification": {
     "description": "Title for subscriptions notifications"
   },
-  "foregroundServiceUpdatingSubscriptions": "Abonnementen controleren…",
-  "@foregroundServiceUpdatingSubscriptions": {
-    "description": "Foreground service notification text when checking for new subscription videos"
-  },
   "addRecommendedToQueue": "Aanbevolen video''s automatisch afspelen",
   "@addRecommendedToQueue": {
     "description": "Switch when playing a video to automatically add the recommended videos to the video queue"
-  },
-  "requiresRestart": "Vereist herstart van app",
-  "@requiresRestart": {
-    "description": "Requires app restart label"
   },
   "searchHistoryDescription": "Instellingen voor zoek­geschiedenis",
   "@searchHistoryDescription": {
@@ -855,21 +803,9 @@
   "@tokenLoginDescription": {
     "description": "Recommended way to log in"
   },
-  "pressDownToShowSettings": "Druk op ⬇️ om instellingen te tonen",
-  "@pressDownToShowSettings": {
-    "description": "Instruction on how to show video settings when playing a video on TV"
-  },
   "videoFilterHideAllFromChannel": "Alle video''s van kanaal verbergen",
   "@videoFilterHideAllFromChannel": {
     "description": "Label for video filter switch to allow to hide all videos from a channel"
-  },
-  "foregroundServiceNotificationTitle": "Video­monitoring",
-  "@foregroundServiceNotificationTitle": {
-    "description": "Title for the foreground service running notification when the user wants to receive notifications"
-  },
-  "whenAppStartsShow": "Als de app start, toon…",
-  "@whenAppStartsShow": {
-    "description": "Setting title for selecting the screen to show on start"
   },
   "deletePlaylistNotificationTitle": "Afspeellijst­melding verwijderen?",
   "@deletePlaylistNotificationTitle": {
@@ -889,10 +825,6 @@
       }
     }
   },
-  "askForDisableBatteryOptimizationTitle": "Batterij­optimalisatie uitschakelen vereist",
-  "@askForDisableBatteryOptimizationTitle": {
-    "description": "Title for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
-  },
   "deleteChannelNotificationTitle": "Kanaal­melding verwijderen?",
   "@deleteChannelNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete channel notifications"
@@ -908,10 +840,6 @@
   "notificationFrequencySettingsTitle": "Controle­frequentie voor nieuwe video''s",
   "@notificationFrequencySettingsTitle": {
     "description": "Title for frequency settings"
-  },
-  "serverIsNotReachable": "Server is onbereikbaar",
-  "@serverIsNotReachable": {
-    "description": "Title for dialog when adding a server that is not reachable"
   },
   "autoplayVideoOnLoad": "Video automatisch afspelen bij laden",
   "@autoplayVideoOnLoad": {
@@ -946,10 +874,6 @@
   "navigationBarLabelShowOnSelect": "Label tonen op geselecteerd item",
   "@navigationBarLabelShowOnSelect": {
     "description": "Label only showing when selected option for navigation bar"
-  },
-  "wizardIntro": "Selecteer een openbare server of voeg uw eigen server toe. (Kan later worden gewijzigd in de instellingen)",
-  "@wizardIntro": {
-    "description": "Welcome message on frst time use"
   },
   "errorAddingVideoToPlaylist": "Fout bij toevoegen van video aan afspeellijst",
   "@errorAddingVideoToPlaylist": {
@@ -991,10 +915,6 @@
   "@sponsorBlockDescription": {
     "description": "Sponsorblock setting description"
   },
-  "tapToAddServer": "Klik om de server aan je lijst toe te voegen",
-  "@tapToAddServer": {
-    "description": "public server description"
-  },
   "cookieLoginDescription": "Gebruik deze manier als je problemen ervaart met token authenticatie",
   "@cookieLoginDescription": {
     "description": "Cookie log in description"
@@ -1010,10 +930,6 @@
   "skipStepDescription": "Aantal seconden om over te slaan bij doorspoel/terugspoel acties",
   "@skipStepDescription": {
     "description": "Title for the settings to set the skipping step"
-  },
-  "publicServersError": "Kon de lijst van publieke servers niet laden. Klik om opnieuw te proberen.",
-  "@publicServersError": {
-    "description": "Error message when trying to get public servers but it failed"
   },
   "useDashDescription": "DASH adaptieve streaming kan soms problematisch zijn; YouTube kan het vertragen.",
   "@useDashDescription": {
@@ -1055,10 +971,6 @@
   "@copySettingsAsJsonDescription": {
     "description": ""
   },
-  "showOnStart": "Selecteer wat je wilt zien als je de app opent",
-  "@showOnStart": {
-    "description": "Title of dialog asking which screen the users prefers to see"
-  },
   "blackBackgroundDescription": "Voor donker thema op een OLED scherm",
   "@blackBackgroundDescription": {
     "description": "Description for dark background setting"
@@ -1085,21 +997,9 @@
       }
     }
   },
-  "addServerHelpText": "Klik op de + om je eigen servers toe te voegen of klik op een publieke server en voeg die toe.",
-  "@addServerHelpText": {
-    "description": "label for when the user hasn't chosen a server yet"
-  },
   "useDynamicThemeDescription": "Gebruik Material You kleuren (alleen beschikbaar op Android 12+)",
   "@useDynamicThemeDescription": {
     "description": ""
-  },
-  "malformedStatsEndpoint": "/api/v1/stats is anders dan verwacht",
-  "@malformedStatsEndpoint": {
-    "description": "Title for dialog when adding a server that isn't validated as it should"
-  },
-  "malformedStatsEndpointDescription": "Het server stats eindpunt gaf geen verwachte payload, de sleutel \"software.name\" moet \"invidious\" zijn.\nReactie van de server:",
-  "@malformedStatsEndpointDescription": {
-    "description": "Description of the possible issue for an invalid stats endpoints"
   },
   "sponsorBlockCategoryOutroDescription": "Credits of als het Youtube eindscherm wordt getoond. Niet voor conclusies met informatie.",
   "@sponsorBlockCategoryOutroDescription": {
@@ -1136,10 +1036,6 @@
   "subscriptionNotificationTitle": "Nieuwe video''s van je geabonneerde kanalen",
   "@subscriptionNotificationTitle": {
     "description": "Title for the notification showing that there are new videos from the subscription feed"
-  },
-  "askForDisableBatteryOptimizationContent": "Om meldingen te kunnen sturen moet Videre een achtergrondservice uitvoeren. Voor een betrouwbare werking moet Videre onbeperkt batterijgebruik krijgen. Door op ok te tikken, worden de instellingen voor batterijoptimalisatie geopend.",
-  "@askForDisableBatteryOptimizationContent": {
-    "description": "Content for the dialog asking the user to turn off disabling battery optimization when turning on notifications"
   },
   "notificationFrequencySettingsDescription": "Hoe vaak de applicatie controleert voor nieuwe video''s",
   "@notificationFrequencySettingsDescription": {
@@ -1213,10 +1109,6 @@
   "@rememberPlaybackSpeedDescription": {
     "description": "Settings description for remembering playback speed"
   },
-  "noSubscriptions": "Geen abonnementen. Blader door video''s en abonneer je op de kanalen die je leuk vindt.",
-  "@noSubscriptions": {
-    "description": "Message when the user has no subs"
-  },
   "youCanSubscribeAgainLater": "Je kan je later opnieuw op dit kanaal abonneren",
   "@youCanSubscribeAgainLater": {
     "description": "Text for the unscubscribe confirmation dialog"
@@ -1232,10 +1124,6 @@
   "customizeAppLayoutExplanation": "Selecteer welke items je wilt tonen in de hoofdnavigatiebalk van de app. Klik op het huisje om te kiezen welk scherm wordt weergegeven wanneer de applicatie start. Je kunt de volgorde aanpassen door de secties te slepen.",
   "@customizeAppLayoutExplanation": {
     "description": ""
-  },
-  "videoFilterApplyDateToFilter": "Filter video''s op gegeven tijd",
-  "@videoFilterApplyDateToFilter": {
-    "description": "Label for switch to allow user to customize video filter and set days of week and time to them"
   },
   "videoFilterDayOfWeek": "Selecteer dagen om de filters toe te passen",
   "@videoFilterDayOfWeek": {

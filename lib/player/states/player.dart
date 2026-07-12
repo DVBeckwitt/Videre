@@ -34,9 +34,7 @@ import '../../videos/models/video.dart';
 part 'player.freezed.dart';
 
 const double targetHeight = 66;
-const double miniPlayerThreshold = 300;
 const skipToVideoThrottleName = 'skip-to-video';
-const double bigPlayerThreshold = 700;
 const stepMultiplier = 1.15;
 
 const maxInt = -1 >>> 1;
@@ -266,14 +264,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   double get getBottom => state.isHidden ? -targetHeight : 0;
 
-/*
-  BaseVideo showVideo() {
-    var video = state.videos[state.currentIndex];
-    hide();
-    return video;
-  }
-*/
-
   Future<void> saveProgress(int timeInSeconds) async {
     if (state.currentlyPlaying != null) {
       int currentPosition = timeInSeconds;
@@ -372,20 +362,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 type: MediaEventType.sponsorSkipped)));
         //for some reasons this needs to be last
         seek(Duration(milliseconds: skipTo + 1000));
-/*
-        final ScaffoldMessengerState? scaffold = scaffoldKey.currentState;
-
-
-        if (scaffold != null) {
-          var locals = AppLocalizations.of(scaffold.context)!;
-          scaffold.showSnackBar(SnackBar(
-            content: Text(locals.sponsorSkipped),
-            duration: const Duration(seconds: 1),
-          ));
-        }
-*/
-
-        // log.info('SPONSOR SKIPPED');
       }
     }
   }
@@ -716,12 +692,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     emit(state.copyWith(dragDistance: 0, dragStartMini: state.isMini));
   }
 
-  bool isVideoInQueue(Video video) {
-    return state.videos
-            .indexWhere((element) => element.videoId == video.videoId) >=
-        0;
-  }
-
   void onQueueReorder(int oldItemIndex, int newItemIndex) {
     log.fine('Dragged video');
     var videos = List<Video>.from(state.videos);
@@ -736,16 +706,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (newItemIndex <= currentIndex) {
       playedVideos.add(listToUpdate[newItemIndex].videoId);
     }
-/*
-    if (oldItemIndex == state.currentIndex) {
-      state.currentIndex = newItemIndex;
-    } else if (oldItemIndex > state.currentIndex && newItemIndex <= state.currentIndex) {
-      state.currentIndex++;
-    } else if (oldItemIndex < state.currentIndex && newItemIndex >= state.currentIndex) {
-      state.currentIndex--;
-    }
-*/
-
     emit(state.copyWith(
         playedVideos: playedVideos,
         videos: videos,

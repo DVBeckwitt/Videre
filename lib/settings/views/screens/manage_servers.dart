@@ -29,8 +29,7 @@ class ManageServerState extends State<ManageServersScreen> {
             bottom: false,
             child: BlocProvider(
                 create: (BuildContext context) => ServerListSettingsCubit(
-                    const ServerListSettingsState(
-                        dbServers: [], publicServers: []),
+                    ServerListSettingsState(dbServers: []),
                     context.read<AppCubit>()),
                 child: const ManagerServersView())));
   }
