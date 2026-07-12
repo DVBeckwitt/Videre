@@ -16,6 +16,10 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
+### Current release: 1.22.17
+
+This release prevents instance credentials from reaching external thumbnail origins, improves thumbnail fallback and controls, restores the dark Android splash artwork, refreshes generated platform files, and removes obsolete or duplicated code and assets. No settings or data migration are required.
+
 ### Homepage tab navigation
 
 Status: available in the current source and covered by an automated widget test.
