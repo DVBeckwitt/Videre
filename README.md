@@ -169,6 +169,8 @@ git submodule update
 ./submodules/flutter/bin/dart run tools/setup_git_hooks.dart
 ```
 
+Keep source and project configuration lean: remove unused files and obsolete commented-out alternatives rather than preserving them in-tree; Git history remains the archive.
+
 Or use Nix, which handles the setup above and starts a working local Invidious instance with user `test` and password `test`:
 
 ```bash
