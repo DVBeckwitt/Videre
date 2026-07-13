@@ -175,13 +175,22 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     }
   }
 
-  final resolutions = {
-    for (final stream in streams) stream.resolution: stream.url,
-  };
-
   void addProgressive() {
-    for (final stream in streams) {
-      add(stream.url, BetterPlayerVideoFormat.other, resolutions: resolutions);
+    final remaining = _maxPlaybackSources - sources.length;
+    final accepted = streams
+        .where((stream) => !seen.contains(_sourceKey(stream.url)))
+        .take(remaining)
+        .toList();
+    final resolutions = <String, String>{};
+    for (final stream in accepted) {
+      resolutions.putIfAbsent(stream.resolution, () => stream.url);
+    }
+    for (final stream in accepted) {
+      final sourceResolutions = resolutions[stream.resolution] == stream.url
+          ? resolutions
+          : {...resolutions, stream.resolution: stream.url};
+      add(stream.url, BetterPlayerVideoFormat.other,
+          resolutions: sourceResolutions);
     }
   }
 
@@ -716,10 +725,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
                 .map(_videoTrackToString)
                 .toList() ??
             [];
-      } else {
-        return (state.video?.formatStreams ?? [])
-            .map((e) => e.resolution)
-            .toList();
+      }
+      for (final source in _playbackSources) {
+        if (source.resolutions != null) {
+          return source.resolutions!.keys.toList().reversed.toList();
+        }
       }
     }
     // for offline video we don't offer video track selection
@@ -729,7 +739,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   @override
   int selectedVideoTrack() {
     if (state.video != null) {
-      if (isUsingDash()) {
+      if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
         var tracks = getVideoTracks();
         var track = _videoTrackToString(videoController?.betterPlayerAsmsTrack);
         log.fine("Current track: $track");
@@ -811,14 +821,16 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   selectVideoTrack(int index) {
-    if (isUsingDash()) {
+    final tracks = getVideoTracks();
+    if (index < 0 || index >= tracks.length) return;
+    if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
       var betterPlayerAsmsTrack =
           videoController?.betterPlayerAsmsTracks[index];
       if (betterPlayerAsmsTrack != null) {
         videoController?.setTrack(betterPlayerAsmsTrack);
       }
     } else {
-      var track = getVideoTracks()[index];
+      var track = tracks[index];
       var url = videoController?.betterPlayerDataSource?.resolutions?[track];
       if (url != null) {
         videoController?.setResolution(url);

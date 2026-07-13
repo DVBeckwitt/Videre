@@ -40,6 +40,7 @@ jobs:
       - run: ./submodules/flutter/bin/flutter pub get
       - run: ./submodules/flutter/bin/dart format --output=none --set-exit-if-changed ./lib ./test/videos/state/video_test.dart
       - run: ./submodules/flutter/bin/dart analyze --no-fatal-warnings ./lib
+      - run: ./submodules/flutter/bin/dart analyze --fatal-infos ./test/videos/state/video_test.dart
       - name: Test offline regressions
         run: |
           ./submodules/flutter/bin/flutter test test/widget_test.dart

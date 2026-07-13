@@ -109,7 +109,6 @@ class RecordingPlayerController extends BetterPlayerController {
   final heldUrls = <String, Completer<void>>{};
   final resolutionUrls = <String>[];
   final sourceWaiters = <String, List<Completer<void>>>{};
-  final sourceCountWaiters = <({int count, Completer<void> completer})>[];
   final idleWaiters = <Completer<void>>[];
   var activeSetups = 0;
   var maxActiveSetups = 0;
@@ -124,13 +123,6 @@ class RecordingPlayerController extends BetterPlayerController {
     if (sources.any((source) => source.url == url)) return Future<void>.value();
     final waiter = Completer<void>();
     sourceWaiters.putIfAbsent(url, () => []).add(waiter);
-    return waiter.future;
-  }
-
-  Future<void> waitForSourceCount(int count) {
-    if (sources.length >= count) return Future<void>.value();
-    final waiter = Completer<void>();
-    sourceCountWaiters.add((count: count, completer: waiter));
     return waiter.future;
   }
 
@@ -159,15 +151,10 @@ class RecordingPlayerController extends BetterPlayerController {
 
   @override
   Future<void> setupDataSource(BetterPlayerDataSource source) async {
+    if (disposed) throw StateError('Cannot set up a disposed controller');
     sources.add(source);
     for (final waiter in sourceWaiters.remove(source.url) ?? const []) {
       waiter.complete();
-    }
-    for (final waiter in List.of(sourceCountWaiters)) {
-      if (sources.length >= waiter.count) {
-        waiter.completer.complete();
-        sourceCountWaiters.remove(waiter);
-      }
     }
     activeSetups++;
     if (activeSetups > maxActiveSetups) maxActiveSetups = activeSetups;
@@ -416,6 +403,60 @@ void main() {
       await failed;
 
       expect(controller.sourceUrls.skip(1), urls.reversed.take(10));
+    });
+
+    test('keeps duplicate resolution fallbacks selectable', () async {
+      await settings.toggleDash(false);
+      const preferred = 'https://r1.googlevideo.com/preferred.mp4';
+      const fallback = 'https://r1.googlevideo.com/fallback.mp4';
+      controller.failingUrls.add(preferred);
+      final started = controller.waitForSource(fallback);
+
+      cubit.switchVideo(Video(
+        videoId: 'duplicate-resolution-video',
+        formatStreams: [
+          _stream(fallback, '360p'),
+          _stream(preferred, '360p'),
+        ],
+      ));
+      await started;
+      await controller.waitForIdle();
+
+      expect(controller.sources[controller.sources.length - 2].resolutions,
+          {'360p': preferred});
+      expect(controller.sources.last.resolutions, {'360p': fallback});
+      cubit.selectVideoTrack(0);
+      expect(controller.resolutionUrls, [fallback]);
+    });
+
+    test('exposes only retained progressive quality tracks', () async {
+      const hls = 'https://r1.googlevideo.com/live.m3u8';
+      const dash = 'https://r1.googlevideo.com/manifest-2.mpd';
+      final urls = [
+        for (var index = 0; index < 20; index++)
+          'https://r$index.googlevideo.com/video.mp4',
+      ];
+      final started = controller.waitForSource(hls);
+
+      cubit.switchVideo(Video(
+        videoId: 'bounded-quality-video',
+        hlsUrl: hls,
+        dashUrl: dash,
+        formatStreams: [
+          for (var index = 0; index < urls.length; index++)
+            _stream(urls[index], '${index}p'),
+        ],
+      ));
+      await started;
+
+      expect(cubit.getVideoTracks(), [
+        for (var index = 12; index < 20; index++) '${index}p',
+      ]);
+      final selected = controller.waitForSource(urls[12]);
+      cubit.selectVideoTrack(0);
+      await selected;
+      expect(controller.sources.last.url, urls[12]);
+      expect(cubit.selectedVideoTrack(), 0);
     });
 
     test('deduplicates fragment variants before falling back', () async {
@@ -721,7 +762,8 @@ void main() {
     });
 
     test('rebuilds source order after toggling DASH preference', () async {
-      final rebuilt = controller.waitForSourceCount(2);
+      final rebuilt =
+          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
       cubit.toggleDash();
       await rebuilt;
 
