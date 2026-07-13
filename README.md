@@ -117,6 +117,8 @@ Then install dependencies and build with the pinned Flutter version:
 ./submodules/flutter/bin/flutter build apk
 ```
 
+Localization Dart files in `lib/l10n/generated/` are intentionally untracked; `flutter pub get` regenerates them from `lib/l10n/*.arb` using `l10n.yaml`.
+
 The APK should be created under:
 
 ```text
