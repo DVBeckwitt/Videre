@@ -16,9 +16,9 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
-### Current release: 1.22.18
+### Current release: 1.22.19
 
-This release hardens video startup and source fallback, prevents stalled setup from blocking a newly selected video, bounds progressive quality choices, and removes instance credentials from native media requests. It also prunes obsolete CI/build files and regenerable localization output. Authenticated media proxies must expose media URLs that work without custom headers; no settings or stored-data migration is required.
+This release ships a build-verified candidate mitigation for Android TV black video (#672) by disabling Impeller application-wide; Nvidia Shield and control-phone playback verification remain pending. It also prevents file-backed worker settings from exposing credentials in fine-level logs, reports non-missing storage failures instead of hiding them, adds focused storage regressions to CI, and removes redundant Android build configuration. No settings, stored-data, schema, or public-interface migration is required.
 
 See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Videre verification status.
 
