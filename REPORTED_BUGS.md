@@ -14,14 +14,13 @@ independent confirmation that every report still reproduces in Videre.
   build evidence.
 - **Open upstream; Videre unverified**: the upstream issue remains open and was
   not reproduced against Videre during this work.
-- **Client failure mode covered in current source; reporter environment
+- **Client failure mode covered in Videre 1.22.18; reporter environment
   unverified**: deterministic offline tests cover the client behavior, but the
-  reported device and instance path has not been reproduced and no release
-  contains the change yet.
-- **Fixed in current source; unreleased**: source and regression evidence cover
-  the defect, but release 1.22.17 does not contain the fix.
-- **Partially mitigated in current source; unreleased**: the documented attack
-  path is reduced, but a stated residual risk remains open.
+  reported device and instance path has not been reproduced.
+- **Fixed in Videre 1.22.18**: source and regression evidence cover the shipped
+  defect.
+- **Partially mitigated in Videre 1.22.18**: the documented attack path is
+  reduced in the release, but a stated residual risk remains open.
 - **Audit finding fixed in Videre 1.22.17**: found during source review rather
   than filed as an upstream issue.
 
@@ -32,8 +31,8 @@ independent confirmation that every report still reproduces in Videre.
 | [#708: Thumbnail 404 prevents playback](https://github.com/lamarios/clipious/issues/708) | A request for `maxresdefault.jpg` can return 404. The failed thumbnail then blocks the usable video-card interaction instead of falling back cleanly. | **Fixed in Videre 1.22.17.** Cards prefer an exact max-resolution candidate, continue through fallback candidates, and keep foreground controls usable during loading and failure. Covered by offline widget tests. |
 | Instance credentials sent to unrelated thumbnail origins | Source review found that authentication headers intended for the selected Invidious instance could be reused for external, lookalike-host, scheme-mismatched, or port-mismatched thumbnail URLs. This was a privacy and credential-boundary defect without an upstream issue number. | **Audit finding fixed in Videre 1.22.17.** Headers are now limited to the selected instance's exact normalized HTTP(S) origin, including effective port. Covered by origin-matching and off-origin request tests. |
 | Android 7–11 dark splash omitted its artwork | The night launch theme pointed directly to a solid launcher color, bypassing the generated splash drawable and logo. | **Audit finding fixed in Videre 1.22.17.** The night theme now resolves through `launch_background`; Android release resources compile successfully. |
-| A stalled playback setup blocks the next video | Source review found that switching videos waited forever when the prior native data-source setup never completed. | **Fixed in current source; unreleased.** A switch now cancels the Dart-side wait, detaches and disposes the obsolete controller, and ignores late completion. A regression proves the replacement starts while the old future remains unresolved. |
-| Media credentials and unbounded destinations reached the native player | Source review found custom instance headers could follow redirects or adaptive child requests, while untrusted metadata could supply unlimited arbitrary HTTP(S) candidates. | **Partially mitigated in current source; unreleased.** Credential propagation is fixed: native media sources receive no instance custom headers. Starting URLs are limited to the selected exact origin or default-port HTTPS YouTube media hosts, fragments deduplicate, and progressive candidates and their displayed quality choices are capped at ten. The pinned native player can still follow unchecked redirects and adaptive child URLs; per-request destination enforcement remains open. |
+| A stalled playback setup blocks the next video | Source review found that switching videos waited forever when the prior native data-source setup never completed. | **Fixed in Videre 1.22.18.** A switch now cancels the Dart-side wait, detaches and disposes the obsolete controller, and ignores late completion. A regression proves the replacement starts while the old future remains unresolved. |
+| Media credentials and unbounded destinations reached the native player | Source review found custom instance headers could follow redirects or adaptive child requests, while untrusted metadata could supply unlimited arbitrary HTTP(S) candidates. | **Partially mitigated in Videre 1.22.18.** Credential propagation is fixed: native media sources receive no instance custom headers. Starting URLs are limited to the selected exact origin or default-port HTTPS YouTube media hosts, fragments deduplicate, and progressive candidates and their displayed quality choices are capped at ten. The pinned native player can still follow unchecked redirects and adaptive child URLs; per-request destination enforcement remains open. |
 
 ## Playback and video loading
 
@@ -41,8 +40,8 @@ Unless noted above, these reports are **open upstream; Videre unverified**.
 
 | Issue | Reported behavior and context |
 | --- | --- |
-| [#705](https://github.com/lamarios/clipious/issues/705) | No videos play on a Pixel 9 running Android 16/GrapheneOS with Clipious 1.22.15 and a private Invidious instance. **Client failure mode covered in current source; reporter environment unverified.** Videre now validates and orders media candidates, retries pre-initialization failures once per source, isolates stale loads, and emits one terminal error after exhaustion. Covered by the offline video regression suite; the reporter's Pixel, GrapheneOS, and private-instance path was not runtime-verified. |
-| [#680](https://github.com/lamarios/clipious/issues/680) | Opening a video shows “Could not load the video”; changing the selected server and toggling DASH did not resolve it. **Client failure mode covered in current source; reporter environment unverified.** Videre now falls back across valid HLS, DASH, and progressive candidates without carrying retries across video changes. Covered by the offline video regression suite; the reporter's server-switch path was not runtime-verified. |
+| [#705](https://github.com/lamarios/clipious/issues/705) | No videos play on a Pixel 9 running Android 16/GrapheneOS with Clipious 1.22.15 and a private Invidious instance. **Client failure mode covered in Videre 1.22.18; reporter environment unverified.** Videre now validates and orders media candidates, retries pre-initialization failures once per source, isolates stale loads, and emits one terminal error after exhaustion. Covered by the offline video regression suite; the reporter's Pixel, GrapheneOS, and private-instance path was not runtime-verified. |
+| [#680](https://github.com/lamarios/clipious/issues/680) | Opening a video shows “Could not load the video”; changing the selected server and toggling DASH did not resolve it. **Client failure mode covered in Videre 1.22.18; reporter environment unverified.** Videre now falls back across valid HLS, DASH, and progressive candidates without carrying retries across video changes. Covered by the offline video regression suite; the reporter's server-switch path was not runtime-verified. |
 | [#672](https://github.com/lamarios/clipious/issues/672) | On Android TV, audio plays over a black video surface. The same app version works on a phone; the report dates the regression to 1.22.7 and says proxy/DASH changes did not help. |
 | [#656](https://github.com/lamarios/clipious/issues/656) | The player opens but some homepage videos never load across the reporter's available servers. |
 | [#649](https://github.com/lamarios/clipious/issues/649) | Subscription channel pages and videos remain loading instead of opening; the reporter noted the selected server might be involved. |
@@ -111,8 +110,8 @@ Unless noted above, these reports are **open upstream; Videre unverified**.
   exact media URL when safe, and relevant logs.
 - When a report is fixed, retain the row and replace its status with the release,
   commit, and test or runtime evidence.
-- The current playback change covers only the client fallback failure mode; it
-  still awaits reporter/device verification and inclusion in a future release.
+- The playback change is included in Videre 1.22.18 but still awaits
+  reporter/device verification.
 - Playback no longer supplies custom instance headers to native media requests.
   This is a security migration with no stored-data change. An authenticated
   reverse proxy that requires those headers for media must expose unauthenticated

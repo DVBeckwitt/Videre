@@ -16,9 +16,9 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
-### Current release: 1.22.17
+### Current release: 1.22.18
 
-This release prevents instance credentials from reaching external thumbnail origins, improves thumbnail fallback and controls, restores the dark Android splash artwork, refreshes generated platform files, and removes obsolete or duplicated code and assets. No settings or data migration are required.
+This release hardens video startup and source fallback, prevents stalled setup from blocking a newly selected video, bounds progressive quality choices, and removes instance credentials from native media requests. It also prunes obsolete CI/build files and regenerable localization output. Authenticated media proxies must expose media URLs that work without custom headers; no settings or stored-data migration is required.
 
 See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Videre verification status.
 
@@ -36,7 +36,7 @@ Videre sends instance authentication headers only to the selected instance's exa
 
 ### Playback source fallback
 
-Status: implemented in commits `87d988fa` and `51368a4e` and covered by offline regression tests; it is not part of release 1.22.17, and the upstream reporters' device and instance paths have not been reproduced.
+Status: released in Videre 1.22.18 from commits `87d988fa` and `51368a4e` and covered by offline regression tests; the upstream reporters' device and instance paths have not been reproduced.
 
 Videre validates and deduplicates HLS, DASH, and progressive sources, retains at most ten ordered candidates, and tries each alternative once when setup fails before initialization. A video switch cancels its Dart-side wait, disposes the obsolete controller, and ignores late completion instead of waiting indefinitely. Progressive quality choices come from the same bounded, validated candidates; duplicate labels prefer the first accepted URL while keeping same-label fallbacks selectable. Retries preserve subtitles, progress, and quality selection; errors after initialization remain terminal.
 
