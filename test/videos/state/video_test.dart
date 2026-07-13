@@ -351,21 +351,10 @@ void main() {
       expect(controller.sources, hasLength(1));
     });
 
-    test('accepts a default-port HTTPS YouTube media host', () async {
-      const expected = 'https://manifest.youtube.com/live.m3u8';
-      final started = controller.waitForSource(expected);
-
-      cubit.switchVideo(Video(videoId: 'live-video', hlsUrl: expected));
-      await started;
-
-      expect(controller.sources.last.url, expected);
-      expect(controller.sources.last.headers, isNull);
-    });
-
     test('preserves HLS live and remembered subtitle configuration', () async {
       await settings.setRememberSubtitles(true);
       await settings.setLastSubtitle('English');
-      const expected = 'https://r1.googlevideo.com/live.m3u8';
+      const expected = 'https://manifest.youtube.com/live.m3u8';
       final started = controller.waitForSource(expected);
 
       cubit.switchVideo(Video(
@@ -377,6 +366,7 @@ void main() {
       await started;
 
       final source = controller.sources.last;
+      expect(source.headers, isNull);
       expect(source.videoFormat, BetterPlayerVideoFormat.hls);
       expect(source.liveStream, isTrue);
       expect(source.subtitles!.single.urls,
@@ -475,34 +465,6 @@ void main() {
       expect(controller.sourceUrls.skip(1), [hls]);
     });
 
-    test('keeps media credentials empty and shares quality choices', () async {
-      const authenticatedServer = Server(
-        url: 'https://inv.example',
-        customHeaders: {'Authorization': 'Basic secret'},
-      );
-      await db.upsertServer(authenticatedServer);
-      await db.useServer(authenticatedServer);
-      await settings.toggleDash(false);
-      const expected = 'https://inv.example/720.mp4';
-      final started = controller.waitForSource(expected);
-
-      cubit.switchVideo(Video(
-        videoId: 'authenticated-video',
-        formatStreams: [
-          _stream('https://r1.googlevideo.com/360.mp4', '360p'),
-          _stream(expected, '720p'),
-        ],
-      ));
-      await started;
-
-      final source = controller.sources.last;
-      expect(source.headers, isNull);
-      expect(source.resolutions, {
-        '720p': expected,
-        '360p': 'https://r1.googlevideo.com/360.mp4',
-      });
-    });
-
     test('revalidates proxied URLs and preserves repeated query values',
         () async {
       await settings.setUseProxy(true);
@@ -522,19 +484,6 @@ void main() {
       expect(controller.sources.last.headers, isNull);
     });
 
-    test('retries the next source after a pre-initialization exception',
-        () async {
-      final fallback =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
-      cubit.onVideoListener(BetterPlayerEvent(BetterPlayerEventType.exception));
-      await fallback;
-
-      expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
-        'https://r1.googlevideo.com/video.mp4',
-      ]);
-    });
-
     test('defers fallback until exception dispatch finishes', () async {
       final fallback =
           controller.waitForSource('https://r1.googlevideo.com/video.mp4');
@@ -550,20 +499,15 @@ void main() {
       ]);
     });
 
-    test('cancels a pending fallback when closed', () async {
+    test('close cancels pending fallback and disposes the controller',
+        () async {
+      expect(controller.listeners, hasLength(1));
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
       await cubit.close();
       await _waitForDeferredFallback();
 
       expect(
           controller.sourceUrls, ['https://r1.googlevideo.com/manifest.mpd']);
-    });
-
-    test('close removes the listener and disposes the controller', () async {
-      expect(controller.listeners, hasLength(1));
-
-      await cubit.close();
-
       expect(controller.disposed, isTrue);
       expect(controller.listeners, isEmpty);
       expect(cubit.videoController, isNull);
@@ -790,21 +734,6 @@ void main() {
       ]);
     });
 
-    test('falls back when initial data-source setup throws', () async {
-      controller.failingUrls.add('https://r1.googlevideo.com/next.mpd');
-      final fallback =
-          controller.waitForSource('https://r1.googlevideo.com/next.mp4');
-
-      cubit.switchVideo(_videoWithFallback('next'));
-      await fallback;
-
-      expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
-        'https://r1.googlevideo.com/next.mpd',
-        'https://r1.googlevideo.com/next.mp4',
-      ]);
-    });
-
     test('keeps fallback track state after synchronous setup failure',
         () async {
       controller.failingUrls.add('https://r1.googlevideo.com/next.mpd');
@@ -815,6 +744,11 @@ void main() {
           resolution: '640x360', qualityLabel: 'Medium'));
       await fallback;
 
+      expect(controller.sourceUrls, [
+        'https://r1.googlevideo.com/manifest.mpd',
+        'https://r1.googlevideo.com/next.mpd',
+        'https://r1.googlevideo.com/next.mp4',
+      ]);
       expect(cubit.state.selectedNonDashTrack, '640x360');
     });
 

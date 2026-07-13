@@ -31,6 +31,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+/lib/l10n/generated/
 
 # Symbolication related
 app.*.symbols
@@ -42,7 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-/docker/result
 /.nix-shell/
 /nix/result/
 /android/app/local.properties

@@ -118,7 +118,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
 }) {
   final sources = <BetterPlayerDataSource>[];
   final seen = <String>{};
-  final subtitles = video.captions
+  late final subtitles = video.captions
       .map((caption) => BetterPlayerSubtitlesSource(
             type: BetterPlayerSubtitlesSourceType.network,
             urls: ['${server.url}${caption.url}'],
@@ -143,7 +143,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   }
 
   String? adaptiveUrl(String? value) {
-    final url = _validMediaUrl(value, server);
+    final url = _mediaUrl(value);
     return url == null
         ? null
         : _validMediaUrl(
@@ -176,10 +176,9 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   }
 
   void addProgressive() {
-    final remaining = _maxPlaybackSources - sources.length;
     final accepted = streams
         .where((stream) => !seen.contains(_sourceKey(stream.url)))
-        .take(remaining)
+        .take(_maxPlaybackSources - sources.length)
         .toList();
     final resolutions = <String, String>{};
     for (final stream in accepted) {
@@ -348,8 +347,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         _requestSourceFailure();
       }
       return;
-    } else if (event.betterPlayerEventType ==
-        BetterPlayerEventType.initialized) {
+    }
+    if (event.betterPlayerEventType == BetterPlayerEventType.initialized) {
       _playbackInitialized = true;
       _sourceFailurePending = false;
     }
@@ -489,7 +488,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
     log.info(
         'Playing ${source.videoFormat} source from ${Uri.parse(source.url).host}');
-    Object? setupError;
+    var setupFailed = false;
     var setup = Future<void>.value();
     try {
       setup = videoController?.setupDataSource(source) ?? Future<void>.value();
@@ -497,8 +496,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _controllerSetupAttempt =
           (generation: generation, sourceIndex: sourceIndex);
       await Future.any([setup, cancelled]);
-    } catch (error) {
-      setupError = error;
+    } catch (_) {
+      setupFailed = true;
     } finally {
       if (identical(_controllerSetup, setup)) {
         _controllerSetup = null;
@@ -507,7 +506,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
 
     if (!_isCurrentAttempt(generation, sourceIndex)) return;
-    if (setupError != null || _sourceFailurePending) {
+    if (setupFailed || _sourceFailurePending) {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else if (seekAfterSetup) {
@@ -719,39 +718,31 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   List<String> getVideoTracks() {
-    if (state.video != null) {
-      if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
-        return videoController?.betterPlayerAsmsTracks
-                .map(_videoTrackToString)
-                .toList() ??
-            [];
-      }
-      for (final source in _playbackSources) {
-        if (source.resolutions != null) {
-          return source.resolutions!.keys.toList().reversed.toList();
-        }
+    if (state.video == null) return [];
+    if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
+      return videoController?.betterPlayerAsmsTracks
+              .map(_videoTrackToString)
+              .toList() ??
+          [];
+    }
+    for (final source in _playbackSources) {
+      if (source.resolutions != null) {
+        return source.resolutions!.keys.toList().reversed.toList();
       }
     }
-    // for offline video we don't offer video track selection
     return [];
   }
 
   @override
   int selectedVideoTrack() {
-    if (state.video != null) {
-      if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
-        var tracks = getVideoTracks();
-        var track = _videoTrackToString(videoController?.betterPlayerAsmsTrack);
-        log.fine("Current track: $track");
-        return tracks.indexOf(track);
-      } else {
-        var tracks = getVideoTracks();
-
-        return tracks.indexOf(state.selectedNonDashTrack);
-      }
+    if (state.video == null) return -1;
+    final tracks = getVideoTracks();
+    if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
+      final track = _videoTrackToString(videoController?.betterPlayerAsmsTrack);
+      log.fine("Current track: $track");
+      return tracks.indexOf(track);
     }
-    // for offline video we don't offer video track selection
-    return -1;
+    return tracks.indexOf(state.selectedNonDashTrack);
   }
 
   @override
@@ -824,37 +815,36 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final tracks = getVideoTracks();
     if (index < 0 || index >= tracks.length) return;
     if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
-      var betterPlayerAsmsTrack =
+      final betterPlayerAsmsTrack =
           videoController?.betterPlayerAsmsTracks[index];
       if (betterPlayerAsmsTrack != null) {
         videoController?.setTrack(betterPlayerAsmsTrack);
       }
-    } else {
-      var track = tracks[index];
-      var url = videoController?.betterPlayerDataSource?.resolutions?[track];
-      if (url != null) {
-        videoController?.setResolution(url);
-        emit(state.copyWith(selectedNonDashTrack: track));
-      } else {
-        final sourceIndex = _playbackSources
-            .indexWhere((source) => _selectedResolution(source) == track);
-        if (sourceIndex >= 0) {
-          final wasPlaying = isPlaying();
-          final generation = _playbackGeneration;
-          _playbackStartAt = position();
-          _playbackSourceIndex = sourceIndex;
-          _playbackInitialized = false;
-          _terminalErrorSent = false;
-          _sourceFailurePending = false;
-          WakelockPlus.enable();
-          _setupPlaybackSource().then((_) {
-            if (!wasPlaying && !isClosed && generation == _playbackGeneration) {
-              videoController?.pause();
-            }
-          });
-        }
-      }
+      return;
     }
+    final track = tracks[index];
+    final url = videoController?.betterPlayerDataSource?.resolutions?[track];
+    if (url != null) {
+      videoController?.setResolution(url);
+      emit(state.copyWith(selectedNonDashTrack: track));
+      return;
+    }
+    final sourceIndex = _playbackSources
+        .indexWhere((source) => _selectedResolution(source) == track);
+    if (sourceIndex < 0) return;
+    final wasPlaying = isPlaying();
+    final generation = _playbackGeneration;
+    _playbackStartAt = position();
+    _playbackSourceIndex = sourceIndex;
+    _playbackInitialized = false;
+    _terminalErrorSent = false;
+    _sourceFailurePending = false;
+    WakelockPlus.enable();
+    _setupPlaybackSource().then((_) {
+      if (!wasPlaying && !isClosed && generation == _playbackGeneration) {
+        videoController?.pause();
+      }
+    });
   }
 
   @override
