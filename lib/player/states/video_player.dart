@@ -193,13 +193,9 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     }
   }
 
-  if (preferDash) {
-    addDash();
-    addProgressive();
-  } else {
-    addProgressive();
-    addDash();
-  }
+  if (preferDash) addDash();
+  addProgressive();
+  if (!preferDash) addDash();
   return sources;
 }
 

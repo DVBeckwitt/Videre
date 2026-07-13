@@ -1,10 +1,10 @@
 # Reported bugs
 
-Last reviewed: 2026-07-12
+Last reviewed: 2026-07-13
 
 This document records the open reports labeled `bug` in the upstream
 [Clipious issue tracker](https://github.com/lamarios/clipious/issues), together
-with the security and splash defects found during the initial Videre audit.
+with defects found during Videre source audits.
 Issue descriptions below summarize reporter-provided information; they are not
 independent confirmation that every report still reproduces in Videre.
 
@@ -23,6 +23,8 @@ independent confirmation that every report still reproduces in Videre.
   reduced in the release, but a stated residual risk remains open.
 - **Audit finding fixed in Videre 1.22.17**: found during source review rather
   than filed as an upstream issue.
+- **Audit finding fixed in current source; release pending**: fixed and covered
+  locally but not included in the current release.
 
 ## Fixed or directly addressed in Videre
 
@@ -33,6 +35,7 @@ independent confirmation that every report still reproduces in Videre.
 | Android 7–11 dark splash omitted its artwork | The night launch theme pointed directly to a solid launcher color, bypassing the generated splash drawable and logo. | **Audit finding fixed in Videre 1.22.17.** The night theme now resolves through `launch_background`; Android release resources compile successfully. |
 | A stalled playback setup blocks the next video | Source review found that switching videos waited forever when the prior native data-source setup never completed. | **Fixed in Videre 1.22.18.** A switch now cancels the Dart-side wait, detaches and disposes the obsolete controller, and ignores late completion. A regression proves the replacement starts while the old future remains unresolved. |
 | Media credentials and unbounded destinations reached the native player | Source review found custom instance headers could follow redirects or adaptive child requests, while untrusted metadata could supply unlimited arbitrary HTTP(S) candidates. | **Partially mitigated in Videre 1.22.18.** Credential propagation is fixed: native media sources receive no instance custom headers. Starting URLs are limited to the selected exact origin or default-port HTTPS YouTube media hosts, fragments deduplicate, and progressive candidates and their displayed quality choices are capped at ten. The pinned native player can still follow unchecked redirects and adaptive child URLs; per-request destination enforcement remains open. |
+| File-backed worker settings exposed credentials in debug logs and hid storage failures | Source review found serialized settings, including server credentials and custom headers, in fine-level logs. Cleanup treated every deletion error as a missing file, and storage could fall back to a process-dependent working directory when the app documents directory was unavailable. | **Audit finding fixed in current source; release pending.** File writes log only their destination, cleanup ignores only absent files while propagating other filesystem failures, and both storage implementations now report app-directory lookup failures. Successful storage paths, the data format, and public interfaces are unchanged, so no migration is required. Existing regressions cover the FileDB boundaries. |
 
 ## Playback and video loading
 
@@ -42,7 +45,7 @@ Unless noted above, these reports are **open upstream; Videre unverified**.
 | --- | --- |
 | [#705](https://github.com/lamarios/clipious/issues/705) | No videos play on a Pixel 9 running Android 16/GrapheneOS with Clipious 1.22.15 and a private Invidious instance. **Client failure mode covered in Videre 1.22.18; reporter environment unverified.** Videre now validates and orders media candidates, retries pre-initialization failures once per source, isolates stale loads, and emits one terminal error after exhaustion. Covered by the offline video regression suite; the reporter's Pixel, GrapheneOS, and private-instance path was not runtime-verified. |
 | [#680](https://github.com/lamarios/clipious/issues/680) | Opening a video shows “Could not load the video”; changing the selected server and toggling DASH did not resolve it. **Client failure mode covered in Videre 1.22.18; reporter environment unverified.** Videre now falls back across valid HLS, DASH, and progressive candidates without carrying retries across video changes. Covered by the offline video regression suite; the reporter's server-switch path was not runtime-verified. |
-| [#672](https://github.com/lamarios/clipious/issues/672) | Android TV audio plays over a black video surface; the reporter dates the regression to 1.22.7 while the same version works on a phone. **Build-verified candidate mitigation; runtime verification pending.** Videre sets `io.flutter.embedding.android.EnableImpeller=false` at application scope, and the merged APK manifest contains the opt-out. Playback still requires confirmation on an affected Nvidia Shield and the previously working phone before this can be marked fixed. |
+| [#672](https://github.com/lamarios/clipious/issues/672) | Android TV audio plays over a black video surface; the reporter dates the regression to 1.22.7 while the same version works on a phone. **Build-verified candidate mitigation in current source; release and runtime verification pending.** Videre sets `io.flutter.embedding.android.EnableImpeller=false` at application scope. Clean debug and profile APKs each retain one application-scoped opt-out after redundant source-set manifests were removed. Playback still requires confirmation on an affected Nvidia Shield and the previously working phone before this can be marked fixed. |
 | [#656](https://github.com/lamarios/clipious/issues/656) | The player opens but some homepage videos never load across the reporter's available servers. |
 | [#649](https://github.com/lamarios/clipious/issues/649) | Subscription channel pages and videos remain loading instead of opening; the reporter noted the selected server might be involved. |
 | [#646](https://github.com/lamarios/clipious/issues/646) | Shorts are listed but tapping them neither plays nor downloads them; already-published shorts also display nonsensical negative premiere times. |

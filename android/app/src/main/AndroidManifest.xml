@@ -23,7 +23,6 @@
         android:banner="@drawable/banner"
         android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
-
         android:label="Videre"
         android:networkSecurityConfig="@xml/network_security_config">
         <meta-data
@@ -44,7 +43,6 @@
                 <data android:scheme="clipious-auth" />
             </intent-filter>
         </activity>
-        <!--                android:name="com.ryanheise.audioservice.AudioServiceActivity"-->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
@@ -63,7 +61,6 @@
                     android:required="false" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- App Link sample -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
 
@@ -87,7 +84,6 @@
                     android:pathPrefix="/watch"
                     android:scheme="https" />
             </intent-filter>
-            <!--TODO: Add this filter, if you want to support sharing text into your app-->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -111,8 +107,6 @@
             android:name=".BetterPlayerService"
             android:stopWithTask="false" />
 
-
-        <!-- ADD THIS "SERVICE" element -->
         <service
             android:name="com.ryanheise.audioservice.AudioService"
             android:exported="true"
@@ -121,8 +115,6 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
-
-        <!-- ADD THIS "RECEIVER" element -->
         <receiver
             android:name="com.ryanheise.audioservice.MediaButtonReceiver"
             android:exported="true">

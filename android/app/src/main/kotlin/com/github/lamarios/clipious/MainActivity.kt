@@ -1,6 +1,5 @@
 package com.github.lamarios.clipious
 
-import io.flutter.embedding.android.FlutterActivity
 import cl.puntito.simple_pip_mode.PipCallbackHelper
 import com.ryanheise.audioservice.AudioServiceActivity;
 import androidx.annotation.NonNull;

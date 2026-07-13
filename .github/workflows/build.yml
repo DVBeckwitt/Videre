@@ -38,14 +38,10 @@ jobs:
       - run: ./submodules/flutter/bin/flutter doctor
       - run: ./submodules/flutter/bin/flutter config --no-analytics
       - run: ./submodules/flutter/bin/flutter pub get
-      - run: ./submodules/flutter/bin/dart format --output=none --set-exit-if-changed ./lib ./test/videos/state/video_test.dart
+      - run: ./submodules/flutter/bin/dart format --output=none --set-exit-if-changed ./lib ./test/videos/state/video_test.dart ./test/utils/file_db_test.dart
       - run: ./submodules/flutter/bin/dart analyze --no-fatal-warnings ./lib
-      - run: ./submodules/flutter/bin/dart analyze --fatal-infos ./test/videos/state/video_test.dart
-      - name: Test offline regressions
-        run: |
-          ./submodules/flutter/bin/flutter test test/widget_test.dart
-          ./submodules/flutter/bin/flutter test test/utils/image_object_test.dart
-          ./submodules/flutter/bin/flutter test test/videos/state/video_test.dart
+      - run: ./submodules/flutter/bin/dart analyze --fatal-infos ./test/videos/state/video_test.dart ./test/utils/file_db_test.dart
+      - run: ./submodules/flutter/bin/flutter test test/widget_test.dart test/utils/image_object_test.dart test/utils/file_db_test.dart test/videos/state/video_test.dart
       - run: ./submodules/flutter/bin/flutter pub run flutter_native_splash:create
       - run: ./submodules/flutter/bin/flutter build apk --profile --split-per-abi
       - name: Archive build artifacts

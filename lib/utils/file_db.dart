@@ -36,6 +36,7 @@ const _subNotifsFile = 'subscription_notifications.json',
     _playlistNotifsFile = "playlist_notifications.json",
     _genericSettings = "generic_settings.json",
     _fileDbFolder = 'fileDb';
+const _fileNotFoundErrorCode = 2;
 
 final _log = Logger('FileDb');
 
@@ -187,13 +188,7 @@ class FileDB extends IDbClient {
   }
 
   Future<File> _openAppFile(String path) async {
-    late Directory docsDir;
-    try {
-      docsDir = await getApplicationDocumentsDirectory();
-    } catch (e) {
-      docsDir = Directory.current;
-    }
-
+    var docsDir = await getApplicationDocumentsDirectory();
     docsDir = Directory(p.join(docsDir.path, _fileDbFolder));
 
     if (!(await docsDir.exists())) {
@@ -207,7 +202,7 @@ class FileDB extends IDbClient {
 
   Future<void> _writeMapToFile(File f, Map<String, dynamic> map) async {
     var string = jsonEncode(map);
-    _log.fine("Writing json to ${f.path}: $string");
+    _log.fine("Writing json to ${f.path}");
     await f.writeAsString(string, mode: FileMode.write);
   }
 
@@ -222,32 +217,19 @@ class FileDB extends IDbClient {
   }
 
   Future<void> clearDb() async {
-    var f = await _openAppFile(_channelNotifFile);
-    try {
-      await f.delete();
-    } catch (e) {
-      log.fine('file doesn\'t exist');
-    }
-
-    f = await _openAppFile(_playlistNotifsFile);
-    try {
-      await f.delete();
-    } catch (e) {
-      log.fine('file doesn\'t exist');
-    }
-
-    f = await _openAppFile(_subNotifsFile);
-    try {
-      await f.delete();
-    } catch (e) {
-      log.fine('file doesn\'t exist');
-    }
-
-    f = await _openAppFile(_genericSettings);
-    try {
-      await f.delete();
-    } catch (e) {
-      log.fine('file doesn\'t exist');
+    for (final path in const [
+      _channelNotifFile,
+      _playlistNotifsFile,
+      _subNotifsFile,
+      _genericSettings,
+    ]) {
+      final file = await _openAppFile(path);
+      try {
+        await file.delete();
+      } on FileSystemException catch (error) {
+        if (error.osError?.errorCode != _fileNotFoundErrorCode) rethrow;
+        log.fine('file doesn\'t exist');
+      }
     }
   }
 

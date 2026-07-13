@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -51,13 +50,7 @@ class SembastSqfDb extends IDbClient {
   SembastSqfDb(this.db);
 
   static Future<SembastSqfDb> create() async {
-    late final Directory docsDir;
-    try {
-      docsDir = await getApplicationDocumentsDirectory();
-    } catch (e) {
-      docsDir = Directory.current;
-    }
-
+    final docsDir = await getApplicationDocumentsDirectory();
     var dbPath = p.join(docsDir.path, "clipious.db");
 
     final databaseFactorySqflite =

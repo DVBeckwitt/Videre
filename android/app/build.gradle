@@ -6,7 +6,6 @@ plugins {
 
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
-def ENV = System.getenv()
 
 if (localPropertiesFile.exists()) {
     localPropertiesFile.withReader('UTF-8') { reader ->
@@ -14,38 +13,11 @@ if (localPropertiesFile.exists()) {
     }
 }
 
-def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-if (flutterVersionCode == null) {
-    flutterVersionCode = '1'
-}
+def flutterVersionName = localProperties.getProperty('flutter.versionName', '1.0')
+def keyFile = System.getenv().getOrDefault('ANDROID_KEY_FILE', '/home/gz/dev/android/keys/key.properties')
 
-def flutterVersionName = localProperties.getProperty('flutter.versionName')
-if (flutterVersionName == null) {
-    flutterVersionName = '1.0'
-}
-
-def keyFile = ENV['ANDROID_KEY_FILE']
-if (keyFile == null) {
-    keyFile = '/home/gz/dev/android/keys/key.properties'
-}
-
-def buildNumber = flutterVersionCode.toInteger()
-/*
-if (ENV['DRONE_BUILD_NUMBER'] != null) {
-    buildNumber = ENV['DRONE_BUILD_NUMBER'].toInteger()
-}
-
-def tag = ENV['DRONE_TAG']
-if(tag != null) {
-    flutterVersionName = tag
-}
-*/
-
-
-
-print flutterVersionName
-print ":"
-println buildNumber
+def buildNumber = localProperties.getProperty('flutter.versionCode', '1').toInteger()
+println "${flutterVersionName}:${buildNumber}"
 
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = file(keyFile)
@@ -110,12 +82,6 @@ android {
 flutter {
     source '../..'
 }
-
-/*
-dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-}
-*/
 
 ext.abiCodes = ["x86_64": 1, "armeabi-v7a": 2, "arm64-v8a": 3]
 import com.android.build.OutputFile

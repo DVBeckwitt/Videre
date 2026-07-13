@@ -255,11 +255,12 @@ Alternatively, run the tests directly inside the Nix environment:
 nix-shell --run './submodules/flutter/bin/flutter test'
 ```
 
-The homepage, thumbnail, and playback-source regression tests are self-contained and do not require the local Invidious test server:
+The homepage, thumbnail, playback-source, and file-backed storage regression tests are self-contained and do not require the local Invidious test server:
 
 ```bash
 ./submodules/flutter/bin/flutter test test/widget_test.dart
 ./submodules/flutter/bin/flutter test test/utils/image_object_test.dart
+./submodules/flutter/bin/flutter test test/utils/file_db_test.dart
 ./submodules/flutter/bin/flutter test test/videos/state/video_test.dart
 ```
 
