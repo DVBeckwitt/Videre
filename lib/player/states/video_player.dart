@@ -1,4 +1,5 @@
-import 'package:clipious/videos/models/ided_video.dart';
+import 'dart:async';
+
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../globals.dart';
 import '../../main.dart';
+import '../../settings/models/db/server.dart';
 import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
 import '../views/components/player_controls.dart';
@@ -22,12 +24,191 @@ import 'interfaces/media_player.dart';
 part 'video_player.freezed.dart';
 
 final log = Logger('VideoPlayer');
+const _maxPlaybackSources = 10;
 
-final _googleCdnRegex = RegExp(r'https://(.+)googlevideo.com/');
+bool _sameOrigin(Uri left, Uri right) =>
+    left.scheme.toLowerCase() == right.scheme.toLowerCase() &&
+    left.host.toLowerCase() == right.host.toLowerCase() &&
+    left.port == right.port;
+
+String? _mediaUrl(String? value) {
+  final url = value?.trim();
+  final uri = url == null ? null : Uri.tryParse(url);
+  if (uri == null ||
+      uri.userInfo.isNotEmpty ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    return null;
+  }
+  return uri.toString();
+}
+
+String? _validMediaUrl(String? value, Server server) {
+  final url = _mediaUrl(value);
+  final uri = url == null ? null : Uri.parse(url);
+  final serverUri = Uri.tryParse(server.url);
+  if (uri == null || serverUri == null) return null;
+  if (_sameOrigin(uri, serverUri)) return uri.toString();
+
+  final host = uri.host.toLowerCase();
+  final trustedVideoHost = host == 'googlevideo.com' ||
+      host.endsWith('.googlevideo.com') ||
+      host == 'youtube.com' ||
+      host.endsWith('.youtube.com');
+  return uri.scheme == 'https' && uri.port == 443 && trustedVideoHost
+      ? uri.toString()
+      : null;
+}
+
+String _sourceKey(String url) {
+  final uri = Uri.parse(url).normalizePath();
+  final defaultPort = (uri.scheme == 'http' && uri.port == 80) ||
+      (uri.scheme == 'https' && uri.port == 443);
+  return uri
+      .replace(
+        scheme: uri.scheme.toLowerCase(),
+        host: uri.host.toLowerCase(),
+        port: defaultPort ? 0 : uri.port,
+        fragment: '',
+      )
+      .toString();
+}
+
+String _proxyUrl(String url, Server server, bool useProxy,
+    {bool adaptive = false}) {
+  if (!useProxy) return url;
+  if (adaptive) {
+    final uri = Uri.parse(url);
+    return uri.replace(queryParameters: {
+      ...uri.queryParametersAll,
+      'local': ['true']
+    }).toString();
+  }
+  final source = Uri.parse(url);
+  final host = source.host.toLowerCase();
+  if (host != 'googlevideo.com' && !host.endsWith('.googlevideo.com')) {
+    return url;
+  }
+  final target = Uri.tryParse(server.url);
+  if (target == null ||
+      (target.scheme != 'http' && target.scheme != 'https') ||
+      target.host.isEmpty) {
+    return url;
+  }
+  final prefix = target.path.endsWith('/')
+      ? target.path.substring(0, target.path.length - 1)
+      : target.path;
+  return Uri(
+    scheme: target.scheme,
+    userInfo: target.userInfo,
+    host: target.host,
+    port: target.hasPort ? target.port : null,
+    path: '$prefix${source.path}',
+    query: source.hasQuery ? source.query : null,
+    fragment: source.hasFragment ? source.fragment : null,
+  ).toString();
+}
+
+List<BetterPlayerDataSource> _buildPlaybackDataSources(
+  Video video,
+  Server server, {
+  required bool preferDash,
+  required bool useProxy,
+  String? lastSubtitle,
+}) {
+  final sources = <BetterPlayerDataSource>[];
+  final seen = <String>{};
+  final subtitles = video.captions
+      .map((caption) => BetterPlayerSubtitlesSource(
+            type: BetterPlayerSubtitlesSourceType.network,
+            urls: ['${server.url}${caption.url}'],
+            name: caption.label,
+            selectedByDefault: caption.label == lastSubtitle,
+          ))
+      .toList();
+
+  void add(String url, BetterPlayerVideoFormat format,
+      {Map<String, String>? resolutions}) {
+    if (sources.length >= _maxPlaybackSources || !seen.add(_sourceKey(url))) {
+      return;
+    }
+    sources.add(BetterPlayerDataSource(
+      BetterPlayerDataSourceType.network,
+      url,
+      videoFormat: format,
+      liveStream: video.liveNow,
+      subtitles: subtitles,
+      resolutions: resolutions,
+    ));
+  }
+
+  String? adaptiveUrl(String? value) {
+    final url = _validMediaUrl(value, server);
+    return url == null
+        ? null
+        : _validMediaUrl(
+            _proxyUrl(url, server, useProxy, adaptive: true), server);
+  }
+
+  final hls = adaptiveUrl(video.hlsUrl);
+  if (hls != null) {
+    add(hls, BetterPlayerVideoFormat.hls);
+  }
+
+  final dash = adaptiveUrl(video.dashUrl);
+  void addDash() {
+    if (dash != null) {
+      add(dash, BetterPlayerVideoFormat.dash);
+    }
+  }
+
+  final streams = <({String resolution, String url})>[];
+  final streamUrls = <String>{};
+  for (final stream in (video.formatStreams ?? []).reversed) {
+    final url = _mediaUrl(stream.url);
+    if (url == null) continue;
+    final safeUrl = _validMediaUrl(_proxyUrl(url, server, useProxy), server);
+    if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
+    streams.add((resolution: stream.resolution, url: safeUrl));
+    if (streams.length >= _maxPlaybackSources) {
+      break;
+    }
+  }
+
+  final resolutions = {
+    for (final stream in streams) stream.resolution: stream.url,
+  };
+
+  void addProgressive() {
+    for (final stream in streams) {
+      add(stream.url, BetterPlayerVideoFormat.other, resolutions: resolutions);
+    }
+  }
+
+  if (preferDash) {
+    addDash();
+    addProgressive();
+  } else {
+    addProgressive();
+    addDash();
+  }
+  return sources;
+}
 
 class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   BetterPlayerController? videoController;
   final SettingsCubit settings;
+  List<BetterPlayerDataSource> _playbackSources = const [];
+  int _playbackSourceIndex = 0;
+  bool _playbackInitialized = false;
+  bool _terminalErrorSent = false;
+  bool _sourceFailurePending = false;
+  int _playbackGeneration = 0;
+  Future<void>? _controllerSetup;
+  ({int generation, int sourceIndex})? _controllerSetupAttempt;
+  Completer<void> _setupCancellation = Completer<void>();
+  Function(BetterPlayerEvent)? _videoListener;
+  Duration _playbackStartAt = Duration.zero;
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
@@ -39,26 +220,34 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   @override
-  close() async {
+  Future<void> close() async {
+    _playbackGeneration++;
+    _playbackSources = const [];
+    _cancelSetup();
+    _controllerSetup = null;
+    _controllerSetupAttempt = null;
     disposeControllers();
-    super.close();
+    await super.close();
   }
 
   @override
-  disposeControllers() {
+  void disposeControllers() {
     WakelockPlus.disable();
     log.fine("Disposing video controller");
-    var state = this.state.copyWith();
+    final newState = state.copyWith();
     videoController?.exitFullScreen();
-    videoController?.removeEventsListener(onVideoListener);
+    if (_videoListener != null) {
+      videoController?.removeEventsListener(_videoListener!);
+      _videoListener = null;
+    }
     videoController?.dispose();
     videoController = null;
     if (!isClosed) {
-      emit(state);
+      emit(newState);
     }
   }
 
-  forwardEvent(BetterPlayerEvent event) {
+  void forwardEvent(BetterPlayerEvent event) {
     MediaEventType? type;
     MediaState mediaState = MediaState.playing;
 
@@ -141,7 +330,21 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     player.setEvent(MediaEvent(state: mediaState, type: type));
   }
 
-  onVideoListener(BetterPlayerEvent event) {
+  void onVideoListener(BetterPlayerEvent event) {
+    if (isClosed) return;
+    if (event.betterPlayerEventType == BetterPlayerEventType.exception) {
+      if (_playbackInitialized) {
+        _emitTerminalPlaybackError();
+      } else {
+        _requestSourceFailure();
+      }
+      return;
+    } else if (event.betterPlayerEventType ==
+        BetterPlayerEventType.initialized) {
+      _playbackInitialized = true;
+      _sourceFailurePending = false;
+    }
+
     forwardEvent(event);
 
     switch (event.betterPlayerEventType) {
@@ -179,19 +382,137 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
   }
 
+  void _listenForPlaybackEvents(int generation) {
+    if (_videoListener != null) {
+      videoController?.removeEventsListener(_videoListener!);
+    }
+    _videoListener = (event) {
+      if (!isClosed && generation == _playbackGeneration) {
+        onVideoListener(event);
+      }
+    };
+    videoController?.addEventsListener(_videoListener!);
+  }
+
+  String? _selectedResolution(BetterPlayerDataSource source) =>
+      source.resolutions?.entries
+          .where((entry) => entry.value == source.url)
+          .firstOrNull
+          ?.key;
+
+  void _emitTerminalPlaybackError() {
+    if (isClosed || _terminalErrorSent) return;
+    _terminalErrorSent = true;
+    videoController?.pause();
+    WakelockPlus.disable();
+    player.setEvent(const MediaEvent(state: MediaState.error));
+    final generation = _playbackGeneration;
+    void pauseAfterSetup() {
+      if (!isClosed &&
+          generation == _playbackGeneration &&
+          _terminalErrorSent) {
+        videoController?.pause();
+      }
+    }
+
+    _controllerSetup?.then<void>(
+      (_) => pauseAfterSetup(),
+      onError: (_) => pauseAfterSetup(),
+    );
+  }
+
+  void _requestSourceFailure() {
+    if (_sourceFailurePending) return;
+    _sourceFailurePending = true;
+    final generation = _playbackGeneration;
+    final sourceIndex = _playbackSourceIndex;
+    if (_controllerSetupAttempt ==
+        (generation: generation, sourceIndex: sourceIndex)) {
+      return;
+    }
+    Future<void>(() => _handleSourceFailure(generation, sourceIndex));
+  }
+
+  bool _isCurrentAttempt(int generation, int sourceIndex) =>
+      !isClosed &&
+      generation == _playbackGeneration &&
+      sourceIndex == _playbackSourceIndex;
+
+  void _cancelSetup() {
+    if (!_setupCancellation.isCompleted) {
+      _setupCancellation.complete();
+    }
+  }
+
+  Future<void> _handleSourceFailure(int generation, int sourceIndex) async {
+    if (!_isCurrentAttempt(generation, sourceIndex) ||
+        _playbackInitialized ||
+        !_sourceFailurePending) {
+      return;
+    }
+    _sourceFailurePending = false;
+    if (_playbackSourceIndex + 1 >= _playbackSources.length) {
+      _emitTerminalPlaybackError();
+      return;
+    }
+    _playbackSourceIndex++;
+    await _setupPlaybackSource();
+  }
+
+  Future<void> _setupPlaybackSource({bool seekAfterSetup = true}) async {
+    if (isClosed) return;
+    final generation = _playbackGeneration;
+    final sourceIndex = _playbackSourceIndex;
+    final source = _playbackSources[sourceIndex];
+    final cancelled = _setupCancellation.future;
+    final previousSetup = _controllerSetup;
+    if (previousSetup != null) {
+      try {
+        await Future.any([previousSetup, cancelled]);
+      } catch (_) {}
+      if (!_isCurrentAttempt(generation, sourceIndex)) return;
+    }
+
+    _listenForPlaybackEvents(generation);
+    final selectedTrack = _selectedResolution(source);
+    if (selectedTrack != null) {
+      emit(state.copyWith(selectedNonDashTrack: selectedTrack));
+    }
+    log.info(
+        'Playing ${source.videoFormat} source from ${Uri.parse(source.url).host}');
+    Object? setupError;
+    var setup = Future<void>.value();
+    try {
+      setup = videoController?.setupDataSource(source) ?? Future<void>.value();
+      _controllerSetup = setup;
+      _controllerSetupAttempt =
+          (generation: generation, sourceIndex: sourceIndex);
+      await Future.any([setup, cancelled]);
+    } catch (error) {
+      setupError = error;
+    } finally {
+      if (identical(_controllerSetup, setup)) {
+        _controllerSetup = null;
+        _controllerSetupAttempt = null;
+      }
+    }
+
+    if (!_isCurrentAttempt(generation, sourceIndex)) return;
+    if (setupError != null || _sourceFailurePending) {
+      _sourceFailurePending = true;
+      await _handleSourceFailure(generation, sourceIndex);
+    } else if (seekAfterSetup) {
+      seek(_playbackStartAt);
+    }
+  }
+
   @override
   toggleDash() async {
     log.fine('toggle dash');
-    var state = this.state.copyWith();
-    // saving progress before we reload new video format
-    // saveProgress(videoController?.videoPlayerController?.value.position.inSeconds ?? 0);
+    final newState = state.copyWith();
     await player.saveProgress(position().inSeconds);
-
-    // disposeControllers();
-
     await settings.toggleDash(!isUsingDash());
-
-    emit(state);
+    emit(newState);
     playVideo(false);
   }
 
@@ -221,175 +542,120 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (player.state.isAudio) {
       return;
     }
-    var newState = state.copyWith();
-
-    // only used if the player is currently close because it is onReady that will actually play the video
-    // need better way of handling this
-    newState = newState.copyWith(startAt: startAt);
+    _cancelSetup();
+    _setupCancellation = Completer<void>();
+    final generation = ++_playbackGeneration;
+    if (_controllerSetup != null) {
+      _controllerSetup = null;
+      _controllerSetupAttempt = null;
+      disposeControllers();
+    }
+    _playbackSourceIndex = 0;
+    _playbackInitialized = false;
+    _terminalErrorSent = false;
+    _sourceFailurePending = false;
+    var newState = state.copyWith(startAt: startAt);
     if (newState.video != null || newState.offlineVideo != null) {
-      IdedVideo idedVideo = offline ? newState.offlineVideo! : newState.video!;
-      // videoController?.dispose();
-      // videoController = null;
+      final idedVideo = offline ? newState.offlineVideo! : newState.video!;
       newState = newState.copyWith(bufferPosition: Duration.zero);
 
       if (startAt == null && !offline) {
-        double progress = db.getVideoProgress(idedVideo.videoId);
+        final progress = db.getVideoProgress(idedVideo.videoId);
         if (progress > 0 && progress < 0.90) {
           startAt = Duration(
-              seconds: (offline
-                      ? newState.offlineVideo!.lengthSeconds
-                      : (newState.video!.lengthSeconds ?? 0) * progress)
-                  .floor());
+              seconds:
+                  ((newState.video!.lengthSeconds ?? 0) * progress).floor());
         }
       }
 
-      late BetterPlayerDataSource betterPlayerDataSource;
-
-      // getting data sources
       if (offline) {
-        String videoPath = await newState.offlineVideo!.effectivePath;
+        final videoPath = await newState.offlineVideo!.effectivePath;
+        if (isClosed || generation != _playbackGeneration) return;
 
-        betterPlayerDataSource = BetterPlayerDataSource(
-          BetterPlayerDataSourceType.file,
-          videoPath,
-          videoFormat: BetterPlayerVideoFormat.other,
-          liveStream: false,
-        );
+        _playbackSources = [
+          BetterPlayerDataSource(
+            BetterPlayerDataSourceType.file,
+            videoPath,
+            videoFormat: BetterPlayerVideoFormat.other,
+            liveStream: false,
+          )
+        ];
       } else {
-        assert(newState.video!.formatStreams != null);
-        assert(newState.video!.adaptiveFormats != null);
-
-        var server = await db.getCurrentlySelectedServer();
-        String baseUrl = (server).url;
-
-        Map<String, String> resolutions = {};
-
-        bool isHls = newState.video!.hlsUrl != null;
-
-        var formatStream = isHls
-            ? null
-            : newState.video!
-                .formatStreams![newState.video!.formatStreams!.length - 1];
-
-        var useProxy = service.useProxy();
-
-        String videoUrl = isHls
-            ? '${newState.video!.hlsUrl!}${useProxy ? '?local=true' : ''}'
-            : isUsingDash()
-                ? '${newState.video!.dashUrl}${useProxy ? '?local=true' : ''}'
-                : formatStream?.url ?? '';
-        if (!isUsingDash() && formatStream != null) {
-          newState =
-              newState.copyWith(selectedNonDashTrack: formatStream.resolution);
-        }
-
-        // somehow invidious is sending google url even when using local proxy when not using dash
-        if (!isUsingDash() && useProxy) {
-          // we replace google's cdn by invidious server url.
-          videoUrl = videoUrl.replaceFirst(_googleCdnRegex, '${(server).url}/');
-        }
-
-        log.info(
-            'Playing url (dash ${isUsingDash()},  hasHls ? ${newState.video!.hlsUrl != null})  $videoUrl');
-
-        BetterPlayerVideoFormat format = isHls
-            ? BetterPlayerVideoFormat.hls
-            : isUsingDash()
-                ? BetterPlayerVideoFormat.dash
-                : BetterPlayerVideoFormat.other;
-
-        if (format == BetterPlayerVideoFormat.other) {
-          for (var value in (newState.video!.formatStreams ?? [])) {
-            resolutions[value.qualityLabel] = value.url;
-          }
-        }
-
-        String lastSubtitle = '';
-        if (settings.state.rememberSubtitles) {
-          lastSubtitle = settings.state.lastSubtitles;
-        }
-
-        betterPlayerDataSource = BetterPlayerDataSource(
-          BetterPlayerDataSourceType.network,
-          videoUrl,
-          headers: !offline ? server.headersForUrl(videoUrl) : {},
-          videoFormat: format,
-          liveStream: newState.video!.liveNow,
-          subtitles: newState.video!.captions
-              .map((s) => BetterPlayerSubtitlesSource(
-                  type: BetterPlayerSubtitlesSourceType.network,
-                  urls: ['$baseUrl${s.url}'],
-                  name: s.label,
-                  selectedByDefault: s.label == lastSubtitle))
-              .toList(),
-          resolutions: resolutions.isNotEmpty ? resolutions : null,
+        final server = await db.getCurrentlySelectedServer();
+        if (isClosed || generation != _playbackGeneration) return;
+        final sources = _buildPlaybackDataSources(
+          newState.video!,
+          server,
+          preferDash: isUsingDash(),
+          useProxy: service.useProxy(),
+          lastSubtitle: settings.state.rememberSubtitles
+              ? settings.state.lastSubtitles
+              : null,
         );
+        if (sources.isEmpty) {
+          _playbackSources = const [];
+          _emitTerminalPlaybackError();
+          return;
+        }
+        _playbackSources = sources;
+        final selectedTrack = _selectedResolution(sources.first);
+        if (selectedTrack != null) {
+          newState = newState.copyWith(selectedNonDashTrack: selectedTrack);
+        }
       }
+      _playbackStartAt = startAt ?? Duration.zero;
 
       WakelockPlus.enable();
 
-      bool fillVideo = settings.state.fillFullscreen;
+      final fillVideo = settings.state.fillFullscreen;
 
-      if (videoController == null) {
-        videoController = BetterPlayerController(
-            BetterPlayerConfiguration(
-                overlay: isTv
-                    ? const TvPlayerControls()
-                    : PlayerControls(mediaPlayerCubit: this),
-                deviceOrientationsOnFullScreen: [
-                  DeviceOrientation.landscapeLeft,
-                  DeviceOrientation.landscapeRight,
-                  DeviceOrientation.portraitDown,
-                  DeviceOrientation.portraitUp
-                ],
-                deviceOrientationsAfterFullScreen: [
-                  DeviceOrientation.landscapeLeft,
-                  DeviceOrientation.landscapeRight,
-                  DeviceOrientation.portraitDown,
-                  DeviceOrientation.portraitUp
-                ],
-                handleLifecycle: false,
-                startAt: startAt,
-                autoPlay: true,
-                allowedScreenSleep: false,
-                fit: fillVideo ? BoxFit.cover : BoxFit.contain,
-                subtitlesConfiguration: BetterPlayerSubtitlesConfiguration(
-                    backgroundColor: settings.state.subtitlesBackground
-                        ? Colors.black.withValues(alpha: 0.8)
-                        : Colors.transparent,
-                    fontSize: settings.state.subtitleSize,
-                    outlineEnabled: true,
-                    outlineColor: Colors.black,
-                    outlineSize: 1),
-                controlsConfiguration: const BetterPlayerControlsConfiguration(
-                    showControls: false
-                    // customControlsBuilder: (controller, onPlayerVisibilityChanged) => PlayerControls(mediaPlayerCubit: this),
-                    // customControlsBuilder: (controller, onPlayerVisibilityChanged) => const PlayerControls(),
-                    // enablePlayPause: false,
-                    // overflowModalColor: colors.surface,
-                    // overflowModalTextColor: overFlowTextColor,
-                    // overflowMenuIconsColor: overFlowTextColor,
-                    // overflowMenuCustomItems: [BetterPlayerOverflowMenuItem(useDash ? Icons.check_box_outlined : Icons.check_box_outline_blank, locals.useDash, toggleDash)])
-                    )),
-            betterPlayerDataSource: betterPlayerDataSource);
-        videoController!.addEventsListener(onVideoListener);
+      final reusedController = videoController != null;
+      if (!reusedController) {
+        videoController = BetterPlayerController(BetterPlayerConfiguration(
+            overlay: isTv
+                ? const TvPlayerControls()
+                : PlayerControls(mediaPlayerCubit: this),
+            deviceOrientationsOnFullScreen: [
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+              DeviceOrientation.portraitDown,
+              DeviceOrientation.portraitUp
+            ],
+            deviceOrientationsAfterFullScreen: [
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+              DeviceOrientation.portraitDown,
+              DeviceOrientation.portraitUp
+            ],
+            handleLifecycle: false,
+            startAt: startAt,
+            autoPlay: true,
+            allowedScreenSleep: false,
+            fit: fillVideo ? BoxFit.cover : BoxFit.contain,
+            subtitlesConfiguration: BetterPlayerSubtitlesConfiguration(
+                backgroundColor: settings.state.subtitlesBackground
+                    ? Colors.black.withValues(alpha: 0.8)
+                    : Colors.transparent,
+                fontSize: settings.state.subtitleSize,
+                outlineEnabled: true,
+                outlineColor: Colors.black,
+                outlineSize: 1),
+            controlsConfiguration:
+                const BetterPlayerControlsConfiguration(showControls: false)));
         videoController!.setBetterPlayerGlobalKey(newState.key);
-        // isPipSupported = await videoController?.isPictureInPictureSupported() ?? false;
-      } else {
-        await videoController?.setupDataSource(betterPlayerDataSource);
-        seek(startAt ?? Duration.zero);
       }
-
+      if (isClosed || generation != _playbackGeneration) return;
       emit(newState);
+      await _setupPlaybackSource(seekAfterSetup: reusedController);
     }
 
-    super.playVideo(offline);
+    if (!isClosed && generation == _playbackGeneration && !_terminalErrorSent) {
+      super.playVideo(offline);
+    }
   }
 
   @override
   void switchToOfflineVideo(DownloadedVideo v) {
-    // videoController?.exitFullScreen();
-    // disposeControllers();
     emit(state.copyWith(offlineVideo: v));
     playVideo(true);
   }
@@ -557,6 +823,24 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       if (url != null) {
         videoController?.setResolution(url);
         emit(state.copyWith(selectedNonDashTrack: track));
+      } else {
+        final sourceIndex = _playbackSources
+            .indexWhere((source) => _selectedResolution(source) == track);
+        if (sourceIndex >= 0) {
+          final wasPlaying = isPlaying();
+          final generation = _playbackGeneration;
+          _playbackStartAt = position();
+          _playbackSourceIndex = sourceIndex;
+          _playbackInitialized = false;
+          _terminalErrorSent = false;
+          _sourceFailurePending = false;
+          WakelockPlus.enable();
+          _setupPlaybackSource().then((_) {
+            if (!wasPlaying && !isClosed && generation == _playbackGeneration) {
+              videoController?.pause();
+            }
+          });
+        }
       }
     }
   }

@@ -20,6 +20,8 @@ Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google
 
 This release prevents instance credentials from reaching external thumbnail origins, improves thumbnail fallback and controls, restores the dark Android splash artwork, refreshes generated platform files, and removes obsolete or duplicated code and assets. No settings or data migration are required.
 
+See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Videre verification status.
+
 ### Homepage tab navigation
 
 Status: available in the current source and covered by an automated widget test.
@@ -31,6 +33,16 @@ On phones, the Home, Subscriptions, Playlists, and History pages can be changed 
 Status: fixed in the current source and covered by offline regression tests.
 
 Videre sends instance authentication headers only to the selected instance's exact HTTP(S) origin, including its effective port. External, lookalike-host, scheme-mismatched, and port-mismatched thumbnail URLs still load, but without instance credentials. Video cards prefer an exact `maxres` thumbnail before the existing fallback order, and their foreground controls remain usable while thumbnails load or fail. The fix requires no setting, data migration, or user action.
+
+### Playback source fallback
+
+Status: implemented in the current source and covered by offline regression tests; it is not part of release 1.22.17, and the upstream reporters' device and instance paths have not been reproduced.
+
+Videre validates and deduplicates HLS, DASH, and progressive sources, retains at most ten ordered candidates, and tries each alternative once when setup fails before initialization. A video switch disposes an obsolete controller instead of waiting indefinitely for setup to finish. Retries preserve subtitles, progress, and quality selection; errors after initialization remain terminal.
+
+Playback starts only from the selected instance's exact origin or a default-port HTTPS `googlevideo.com`/`youtube.com` origin. Instance custom headers are not passed to the native media player, preventing them from following redirects or adaptive child requests to another origin. API and thumbnail authentication are unchanged. This is a deliberate security migration: an authenticated reverse proxy that requires custom headers for media must expose unauthenticated media URLs or playback will fail. There is no stored-data migration.
+
+The starting-URL and candidate-count hardening is partial destination containment, not a native network sandbox. The pinned player can still follow redirects and adaptive child URLs beyond the Dart check, including destinations that the starting-URL policy would reject; it receives no instance credentials when doing so. Closing that residual request-forgery risk requires a native player data-source policy.
 
 ## How it works
 
@@ -241,10 +253,12 @@ Alternatively, run the tests directly inside the Nix environment:
 nix-shell --run './submodules/flutter/bin/flutter test'
 ```
 
-The homepage and thumbnail regression tests are self-contained and do not require the local Invidious test server:
+The homepage, thumbnail, and playback-source regression tests are self-contained and do not require the local Invidious test server:
 
 ```bash
-./submodules/flutter/bin/flutter test test/widget_test.dart test/utils/image_object_test.dart
+./submodules/flutter/bin/flutter test test/widget_test.dart
+./submodules/flutter/bin/flutter test test/utils/image_object_test.dart
+./submodules/flutter/bin/flutter test test/videos/state/video_test.dart
 ```
 
 ### Translations
