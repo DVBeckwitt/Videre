@@ -36,7 +36,7 @@ Videre sends instance authentication headers only to the selected instance's exa
 
 ### Playback source fallback
 
-Status: implemented in the current source and covered by offline regression tests; it is not part of release 1.22.17, and the upstream reporters' device and instance paths have not been reproduced.
+Status: implemented in commits `87d988fa` and `51368a4e` and covered by offline regression tests; it is not part of release 1.22.17, and the upstream reporters' device and instance paths have not been reproduced.
 
 Videre validates and deduplicates HLS, DASH, and progressive sources, retains at most ten ordered candidates, and tries each alternative once when setup fails before initialization. A video switch cancels its Dart-side wait, disposes the obsolete controller, and ignores late completion instead of waiting indefinitely. Progressive quality choices come from the same bounded, validated candidates; duplicate labels prefer the first accepted URL while keeping same-label fallbacks selectable. Retries preserve subtitles, progress, and quality selection; errors after initialization remain terminal.
 
