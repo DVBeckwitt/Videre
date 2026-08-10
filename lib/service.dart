@@ -80,54 +80,73 @@ class Service {
     return kDebugMode ? uri.toString() : '${uri?.replace(host: 'xxxxxxxxxx')}';
   }
 
+  bool _looksLikeJson(String body, String contentType) {
+    return contentType.contains('json') ||
+        body.startsWith('{') ||
+        body.startsWith('[');
+  }
+
+  dynamic _decodeJsonResponse(
+    String body,
+    String contentType,
+    int statusCode,
+  ) {
+    if (body.isEmpty || !_looksLikeJson(body, contentType)) return null;
+
+    try {
+      return jsonDecode(body);
+    } on FormatException {
+      if (statusCode >= 200 && statusCode < 300) {
+        throw InvidiousServiceError(
+          'The server returned malformed JSON',
+          statusCode: statusCode,
+        );
+      }
+      return null;
+    }
+  }
+
+  String _errorMessage(dynamic json, bool isHtml, int statusCode) {
+    if (json is Map && json['error'] != null) {
+      return json['error'].toString();
+    }
+    if (isHtml) {
+      return 'The reverse proxy returned HTML instead of Invidious JSON';
+    }
+    return 'Request failed with HTTP $statusCode';
+  }
+
   dynamic handleResponse(Response response) {
-    final body = utf8.decode(response.bodyBytes);
-    final text = body.trim();
+    final body = utf8.decode(response.bodyBytes).trim();
     final contentType = response.headers['content-type']?.toLowerCase() ?? '';
+    final isSuccessful =
+        response.statusCode >= 200 && response.statusCode < 300;
+    final isHtml = contentType.contains('html') || body.startsWith('<');
+
     log.info(
         "Response from ${response.request?.method} ${urlFormatForLog(response.request?.url)}, status: ${response.statusCode}");
 
-    final statusOk = response.statusCode >= 200 && response.statusCode < 300;
-    final responseWasHtml =
-        contentType.contains('html') || text.startsWith('<');
+    final json = _decodeJsonResponse(
+      body,
+      contentType,
+      response.statusCode,
+    );
 
-    dynamic decoded;
-    final looksLikeJson = contentType.contains('json') ||
-        text.startsWith('{') ||
-        text.startsWith('[');
-
-    if (text.isNotEmpty && looksLikeJson) {
-      try {
-        decoded = jsonDecode(body);
-      } on FormatException {
-        if (statusOk) {
-          throw InvidiousServiceError(
-            'The server returned malformed JSON',
-            statusCode: response.statusCode,
-          );
-        }
-      }
-    }
-
-    if (!statusOk) {
-      final apiError = decoded is Map ? decoded['error']?.toString() : null;
-      final message = apiError ??
-          (responseWasHtml
-              ? 'The reverse proxy returned HTML instead of Invidious JSON'
-              : 'Request failed with HTTP ${response.statusCode}');
+    if (!isSuccessful) {
+      final message = _errorMessage(json, isHtml, response.statusCode);
 
       log.severe(message);
       throw InvidiousServiceError(
         message,
         statusCode: response.statusCode,
-        responseWasHtml: responseWasHtml,
+        responseWasHtml: isHtml,
       );
     }
 
-    if (text.isEmpty) return null;
-    if (decoded != null) return decoded;
+    if (body.isEmpty) return null;
+    if (json != null) return json;
 
-    if (responseWasHtml) {
+    if (isHtml) {
       throw InvidiousServiceError(
         'The reverse proxy returned HTML instead of Invidious JSON',
         statusCode: response.statusCode,
@@ -139,7 +158,6 @@ class Service {
       'Expected JSON but received '
       '${contentType.isEmpty ? 'an unknown content type' : contentType}',
       statusCode: response.statusCode,
-      responseWasHtml: responseWasHtml,
     );
   }
 
@@ -492,29 +510,43 @@ class Service {
       }
       return true;
     } on InvidiousServiceError catch (error, stackTrace) {
-      final invalidCredentials = !error.responseWasHtml &&
-          (error.statusCode == 401 || error.statusCode == 403);
-      if (!invalidCredentials) rethrow;
+      if (!error.isAuthenticationFailure) rethrow;
 
-      final loggedOutServer = server.copyWith(authToken: null, sidCookie: null);
-      await db.upsertServer(loggedOutServer);
-      if (loggedOutServer.inUse) {
-        try {
-          await fileDb.useServer(loggedOutServer);
-        } catch (fileDbError, fileDbStackTrace) {
-          log.warning(
-            'Failed to mirror invalidated credentials to the file database',
-            fileDbError,
-            fileDbStackTrace,
-          );
-        }
-      }
+      await _clearAuthentication(server);
       log.warning(
         'Cleared credentials rejected by the Invidious subscriptions endpoint',
         error,
         stackTrace,
       );
       return false;
+    }
+  }
+
+  Future<void> validateCurrentSessionSafely() async {
+    try {
+      await validateCurrentSession();
+    } catch (error, stackTrace) {
+      log.warning(
+        'Unable to validate the stored Invidious session',
+        error,
+        stackTrace,
+      );
+    }
+  }
+
+  Future<void> _clearAuthentication(Server server) async {
+    final loggedOutServer = server.copyWith(authToken: null, sidCookie: null);
+    await db.upsertServer(loggedOutServer);
+    if (!loggedOutServer.inUse) return;
+
+    try {
+      await fileDb.useServer(loggedOutServer);
+    } catch (error, stackTrace) {
+      log.warning(
+        'Failed to mirror invalidated credentials to the file database',
+        error,
+        stackTrace,
+      );
     }
   }
 

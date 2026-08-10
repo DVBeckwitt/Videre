@@ -1,14 +1,11 @@
 import 'package:bloc/bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:logging/logging.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
 import '../models/db/server.dart';
 
 part 'server_settings.freezed.dart';
-
-final _log = Logger('ServerSettingsCubit');
 
 class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   final AppCubit app;
@@ -19,15 +16,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
 
   Future<void> useServer(bool value) async {
     await db.useServer(state.server);
-    try {
-      await service.validateCurrentSession();
-    } catch (error, stackTrace) {
-      _log.warning(
-        'Unable to validate the stored Invidious session',
-        error,
-        stackTrace,
-      );
-    }
+    await service.validateCurrentSessionSafely();
     final Server s = await db.getCurrentlySelectedServer();
     await fileDb.useServer(s);
     emit(state.copyWith(server: s));

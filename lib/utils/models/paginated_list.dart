@@ -151,21 +151,19 @@ class SubscriptionVideoList extends PaginatedList<Video> {
         <Future<({String channelId, VideosWithContinuation response})>>[];
 
     for (final offlineSub in offlineSubs) {
-      var hasContinuation = continuations.containsKey(offlineSub.channelId);
-      // if we don't have continuation, we've never seen the channel so we retrive videos
-      // if there is a continuation but it's null, then there's no more videos to fetch
-      if (!hasContinuation ||
-          (hasContinuation && continuations[offlineSub.channelId] != _done)) {
-        futures.add(service
-            .getChannelVideos(
-              offlineSub.channelId,
-              hasContinuation ? continuations[offlineSub.channelId] : null,
-            )
-            .then((response) => (
-                  channelId: offlineSub.channelId,
-                  response: response,
-                )));
+      final continuation = continuations[offlineSub.channelId];
+      if (continuation == _done) continue;
+
+      Future<({String channelId, VideosWithContinuation response})>
+          loadVideos() async {
+        final response = await service.getChannelVideos(
+          offlineSub.channelId,
+          continuation,
+        );
+        return (channelId: offlineSub.channelId, response: response);
       }
+
+      futures.add(loadVideos());
     }
 
     if (futures.isNotEmpty) {

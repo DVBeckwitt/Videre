@@ -66,6 +66,30 @@ Map<String, String>? _mediaHeaders(Server server, String url) {
   return headers == null || headers.isEmpty ? null : headers;
 }
 
+Map<String, String>? _compatibleResolutions(
+  Server server,
+  Map<String, String>? resolutions,
+  Map<String, String>? sourceHeaders,
+) {
+  if (resolutions == null) return null;
+
+  final compatible = Map.fromEntries(
+    resolutions.entries.where((entry) {
+      final resolutionHeaders = _mediaHeaders(server, entry.value);
+      return mapEquals(resolutionHeaders, sourceHeaders);
+    }),
+  );
+  return compatible.isEmpty ? null : compatible;
+}
+
+String _streamLabel(Iterable<String?> candidates) {
+  for (final candidate in candidates) {
+    final label = candidate?.trim();
+    if (label != null && label.isNotEmpty) return label;
+  }
+  return 'unknown';
+}
+
 String _sourceKey(String url) {
   final uri = Uri.parse(url).normalizePath();
   final defaultPort = (uri.scheme == 'http' && uri.port == 80) ||
@@ -139,20 +163,13 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
       return;
     }
     final headers = _mediaHeaders(server, url);
-    final matchingResolutions = resolutions == null
-        ? null
-        : Map.fromEntries(resolutions.entries.where(
-            (entry) => mapEquals(_mediaHeaders(server, entry.value), headers),
-          ));
-    final compatibleResolutions =
-        matchingResolutions?.isEmpty ?? true ? null : matchingResolutions;
     sources.add(BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
       url,
       videoFormat: format,
       liveStream: video.liveNow,
       subtitles: subtitles,
-      resolutions: compatibleResolutions,
+      resolutions: _compatibleResolutions(server, resolutions, headers),
       headers: headers,
       useAsmsSubtitles: false,
     ));
@@ -185,15 +202,12 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     if (url == null) continue;
     final safeUrl = _validMediaUrl(_proxyUrl(url, server, useProxy), server);
     if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
-    final resolution = [
+    final resolution = _streamLabel([
       stream.resolution,
       stream.qualityLabel,
       stream.quality,
       stream.itag,
-    ].whereType<String>().map((value) => value.trim()).firstWhere(
-          (value) => value.isNotEmpty,
-          orElse: () => 'unknown',
-        );
+    ]);
     streams.add((resolution: resolution, url: safeUrl));
     if (streams.length >= _maxPlaybackSources) {
       break;

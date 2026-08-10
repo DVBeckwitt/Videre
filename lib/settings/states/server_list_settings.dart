@@ -1,12 +1,9 @@
 import 'package:bloc/bloc.dart';
 import 'package:flutter/foundation.dart';
-import 'package:logging/logging.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
 import '../models/db/server.dart';
-
-final _log = Logger('ServerListSettingsCubit');
 
 class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
   final AppCubit appCubit;
@@ -38,15 +35,7 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
 
   Future<void> switchServer(Server s) async {
     await db.useServer(s);
-    try {
-      await service.validateCurrentSession();
-    } catch (error, stackTrace) {
-      _log.warning(
-        'Unable to validate the stored Invidious session',
-        error,
-        stackTrace,
-      );
-    }
+    await service.validateCurrentSessionSafely();
     final selectedServer = await db.getCurrentlySelectedServer();
     await fileDb.useServer(selectedServer);
     await refreshServers();
