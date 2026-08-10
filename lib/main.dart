@@ -70,6 +70,17 @@ Future<void> main() async {
   } catch (err) {
     hasServer = false;
   }
+  if (hasServer) {
+    try {
+      await service.validateCurrentSession();
+    } catch (error, stackTrace) {
+      log.warning(
+        'Unable to validate the stored Invidious session',
+        error,
+        stackTrace,
+      );
+    }
+  }
   appRouter = AppRouter(hasServer: hasServer);
 
   initializeNotifications();

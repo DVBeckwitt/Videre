@@ -74,39 +74,73 @@ class Service {
   final log = Logger('Service');
   final Client httpClient;
 
-  Service() : httpClient = http.Client();
+  Service({Client? httpClient}) : httpClient = httpClient ?? http.Client();
 
   String urlFormatForLog(Uri? uri) {
     return kDebugMode ? uri.toString() : '${uri?.replace(host: 'xxxxxxxxxx')}';
   }
 
   dynamic handleResponse(Response response) {
-    var body = utf8.decode(response.bodyBytes);
+    final body = utf8.decode(response.bodyBytes);
+    final text = body.trim();
+    final contentType = response.headers['content-type']?.toLowerCase() ?? '';
     log.info(
         "Response from ${response.request?.method} ${urlFormatForLog(response.request?.url)}, status: ${response.statusCode}");
 
-    if (body.isNotEmpty) {
-      var decoded = jsonDecode(body);
-      String? error;
+    final statusOk = response.statusCode >= 200 && response.statusCode < 300;
+    final responseWasHtml =
+        contentType.contains('html') || text.startsWith('<');
+
+    dynamic decoded;
+    final looksLikeJson = contentType.contains('json') ||
+        text.startsWith('{') ||
+        text.startsWith('[');
+
+    if (text.isNotEmpty && looksLikeJson) {
       try {
-        Map<String, dynamic> errorFinder = decoded as Map<String, dynamic>;
-        error = errorFinder.containsKey('error') ? decoded['error'] : null;
-      } catch (err) {
-        // no error we keep going
+        decoded = jsonDecode(body);
+      } on FormatException {
+        if (statusOk) {
+          throw InvidiousServiceError(
+            'The server returned malformed JSON',
+            statusCode: response.statusCode,
+          );
+        }
       }
-
-      if (error != null) {
-        log.severe('Error while calling service: $error');
-        throw InvidiousServiceError(error);
-      }
-
-      return decoded;
-    } else if (response.statusCode < 200 || response.statusCode >= 400) {
-      log.severe(
-          'Error making request to ${response.request?.url}, \n status: ${response.statusCode}, \n Body: ${response.body}');
-      throw InvidiousServiceError(
-          'Couldn\'t make request, response code: ${response.statusCode}');
     }
+
+    if (!statusOk) {
+      final apiError = decoded is Map ? decoded['error']?.toString() : null;
+      final message = apiError ??
+          (responseWasHtml
+              ? 'The reverse proxy returned HTML instead of Invidious JSON'
+              : 'Request failed with HTTP ${response.statusCode}');
+
+      log.severe(message);
+      throw InvidiousServiceError(
+        message,
+        statusCode: response.statusCode,
+        responseWasHtml: responseWasHtml,
+      );
+    }
+
+    if (text.isEmpty) return null;
+    if (decoded != null) return decoded;
+
+    if (responseWasHtml) {
+      throw InvidiousServiceError(
+        'The reverse proxy returned HTML instead of Invidious JSON',
+        statusCode: response.statusCode,
+        responseWasHtml: true,
+      );
+    }
+
+    throw InvidiousServiceError(
+      'Expected JSON but received '
+      '${contentType.isEmpty ? 'an unknown content type' : contentType}',
+      statusCode: response.statusCode,
+      responseWasHtml: responseWasHtml,
+    );
   }
 
   bool useProxy() {
@@ -442,19 +476,56 @@ class Service {
     return await db.isLoggedInToCurrentServer();
   }
 
+  Future<bool> validateCurrentSession() async {
+    if (!await isLoggedIn()) return false;
+
+    final server = await db.getCurrentlySelectedServer();
+    try {
+      final req = await buildRequest(urlGetSubscriptions, authenticated: true);
+      final response = await httpClient.get(req.uri, headers: req.headers);
+      final subscriptions = handleResponse(response);
+      if (subscriptions is! Iterable) {
+        throw InvidiousServiceError(
+          'The subscriptions endpoint returned an unexpected response',
+          statusCode: response.statusCode,
+        );
+      }
+      return true;
+    } on InvidiousServiceError catch (error, stackTrace) {
+      final invalidCredentials = !error.responseWasHtml &&
+          (error.statusCode == 401 || error.statusCode == 403);
+      if (!invalidCredentials) rethrow;
+
+      final loggedOutServer = server.copyWith(authToken: null, sidCookie: null);
+      await db.upsertServer(loggedOutServer);
+      if (loggedOutServer.inUse) {
+        try {
+          await fileDb.useServer(loggedOutServer);
+        } catch (fileDbError, fileDbStackTrace) {
+          log.warning(
+            'Failed to mirror invalidated credentials to the file database',
+            fileDbError,
+            fileDbStackTrace,
+          );
+        }
+      }
+      log.warning(
+        'Cleared credentials rejected by the Invidious subscriptions endpoint',
+        error,
+        stackTrace,
+      );
+      return false;
+    }
+  }
+
   Future<bool> subscribe(String channelId) async {
     if (!await isLoggedIn()) return false;
     final req = await buildRequest(urlAddDeleteSubscriptions,
         pathParams: {":ucid": channelId}, authenticated: true);
 
     final response = await httpClient.post(req.uri, headers: req.headers);
-    log.info('${response.statusCode} - ${response.body}');
-
-    if (response.statusCode == 204 || response.statusCode == 403) {
-      return response.statusCode == 204;
-    } else {
-      throw InvidiousServiceError("Couldn't subscribe to channel");
-    }
+    handleResponse(response);
+    return true;
   }
 
   Future<bool> unSubscribe(String channelId) async {
@@ -464,13 +535,8 @@ class Service {
         pathParams: {":ucid": channelId}, authenticated: true);
 
     final response = await httpClient.delete(req.uri, headers: req.headers);
-    log.info('${response.statusCode} - ${response.body}');
-
-    if (response.statusCode == 204 || response.statusCode == 403) {
-      return response.statusCode == 204;
-    } else {
-      throw InvidiousServiceError("Couldn't subscribe to channel");
-    }
+    handleResponse(response);
+    return true;
   }
 
   Future<bool> isSubscribedToChannel(String channelId) async {

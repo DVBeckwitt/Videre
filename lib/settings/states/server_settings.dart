@@ -1,11 +1,14 @@
 import 'package:bloc/bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:logging/logging.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
 import '../models/db/server.dart';
 
 part 'server_settings.freezed.dart';
+
+final _log = Logger('ServerSettingsCubit');
 
 class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   final AppCubit app;
@@ -14,28 +17,37 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     canDelete();
   }
 
-  useServer(bool value) async {
+  Future<void> useServer(bool value) async {
     await db.useServer(state.server);
-    await fileDb.useServer(state.server);
-    Server s = state.server.copyWith(inUse: true);
+    try {
+      await service.validateCurrentSession();
+    } catch (error, stackTrace) {
+      _log.warning(
+        'Unable to validate the stored Invidious session',
+        error,
+        stackTrace,
+      );
+    }
+    final Server s = await db.getCurrentlySelectedServer();
+    await fileDb.useServer(s);
     emit(state.copyWith(server: s));
-    app.setServer(state.server);
+    app.setServer(s);
   }
 
-  addHeader(String key, String value) {
+  Future<void> addHeader(String key, String value) async {
     final Map<String, String> headers = Map.from(state.server.customHeaders);
     headers[key] = value;
     emit(state.copyWith.server(customHeaders: headers));
-    db.upsertServer(state.server);
-    fileDb.upsertServer(state.server);
+    await db.upsertServer(state.server);
+    await fileDb.upsertServer(state.server);
   }
 
-  removeHeader(String key) {
+  Future<void> removeHeader(String key) async {
     final Map<String, String> headers = Map.from(state.server.customHeaders);
     headers.remove(key);
     emit(state.copyWith.server(customHeaders: headers));
-    db.upsertServer(state.server);
-    fileDb.upsertServer(state.server);
+    await db.upsertServer(state.server);
+    await fileDb.upsertServer(state.server);
   }
 
   Future<void> logOut() async {
@@ -78,7 +90,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     }
   }
 
-  deleteServer() async {
+  Future<void> deleteServer() async {
     await db.deleteServer(state.server);
 
     Server currentServer = await db.getCurrentlySelectedServer();
