@@ -42,7 +42,9 @@ mixin _$Video {
   bool? get isListed;
   bool? get liveNow;
   String? get hlsUrl;
+  @JsonKey(fromJson: _parseAdaptiveFormats)
   List<AdaptiveFormat>? get adaptiveFormats;
+  @JsonKey(fromJson: _parseFormatStreams)
   List<FormatStream>? get formatStreams;
   List<Caption> get captions;
   List<Video> get recommendedVideos;
@@ -241,8 +243,9 @@ abstract mixin class $VideoCopyWith<$Res> {
       bool? isListed,
       bool? liveNow,
       String? hlsUrl,
+      @JsonKey(fromJson: _parseAdaptiveFormats)
       List<AdaptiveFormat>? adaptiveFormats,
-      List<FormatStream>? formatStreams,
+      @JsonKey(fromJson: _parseFormatStreams) List<FormatStream>? formatStreams,
       List<Caption> captions,
       List<Video> recommendedVideos,
       String? title,
@@ -613,7 +616,9 @@ extension VideoPatterns on Video {
             bool? isListed,
             bool? liveNow,
             String? hlsUrl,
+            @JsonKey(fromJson: _parseAdaptiveFormats)
             List<AdaptiveFormat>? adaptiveFormats,
+            @JsonKey(fromJson: _parseFormatStreams)
             List<FormatStream>? formatStreams,
             List<Caption> captions,
             List<Video> recommendedVideos,
@@ -732,7 +737,9 @@ extension VideoPatterns on Video {
             bool? isListed,
             bool? liveNow,
             String? hlsUrl,
+            @JsonKey(fromJson: _parseAdaptiveFormats)
             List<AdaptiveFormat>? adaptiveFormats,
+            @JsonKey(fromJson: _parseFormatStreams)
             List<FormatStream>? formatStreams,
             List<Caption> captions,
             List<Video> recommendedVideos,
@@ -847,7 +854,9 @@ extension VideoPatterns on Video {
             bool? isListed,
             bool? liveNow,
             String? hlsUrl,
+            @JsonKey(fromJson: _parseAdaptiveFormats)
             List<AdaptiveFormat>? adaptiveFormats,
+            @JsonKey(fromJson: _parseFormatStreams)
             List<FormatStream>? formatStreams,
             List<Caption> captions,
             List<Video> recommendedVideos,
@@ -954,7 +963,9 @@ class _Video extends Video implements ShareLinks, IdedVideo {
       this.isListed,
       this.liveNow,
       this.hlsUrl,
+      @JsonKey(fromJson: _parseAdaptiveFormats)
       final List<AdaptiveFormat>? adaptiveFormats,
+      @JsonKey(fromJson: _parseFormatStreams)
       final List<FormatStream>? formatStreams,
       final List<Caption> captions = const [],
       final List<Video> recommendedVideos = const [],
@@ -1067,6 +1078,7 @@ class _Video extends Video implements ShareLinks, IdedVideo {
   final String? hlsUrl;
   final List<AdaptiveFormat>? _adaptiveFormats;
   @override
+  @JsonKey(fromJson: _parseAdaptiveFormats)
   List<AdaptiveFormat>? get adaptiveFormats {
     final value = _adaptiveFormats;
     if (value == null) return null;
@@ -1077,6 +1089,7 @@ class _Video extends Video implements ShareLinks, IdedVideo {
 
   final List<FormatStream>? _formatStreams;
   @override
+  @JsonKey(fromJson: _parseFormatStreams)
   List<FormatStream>? get formatStreams {
     final value = _formatStreams;
     if (value == null) return null;
@@ -1330,8 +1343,9 @@ abstract mixin class _$VideoCopyWith<$Res> implements $VideoCopyWith<$Res> {
       bool? isListed,
       bool? liveNow,
       String? hlsUrl,
+      @JsonKey(fromJson: _parseAdaptiveFormats)
       List<AdaptiveFormat>? adaptiveFormats,
-      List<FormatStream>? formatStreams,
+      @JsonKey(fromJson: _parseFormatStreams) List<FormatStream>? formatStreams,
       List<Caption> captions,
       List<Video> recommendedVideos,
       String? title,

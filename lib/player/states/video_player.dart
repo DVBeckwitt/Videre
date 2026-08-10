@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:easy_debounce/easy_throttle.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
@@ -58,6 +59,11 @@ String? _validMediaUrl(String? value, Server server) {
   return uri.scheme == 'https' && uri.port == 443 && trustedVideoHost
       ? uri.toString()
       : null;
+}
+
+Map<String, String>? _mediaHeaders(Server server, String url) {
+  final headers = server.headersForUrl(url);
+  return headers == null || headers.isEmpty ? null : headers;
 }
 
 String _sourceKey(String url) {
@@ -132,13 +138,23 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     if (sources.length >= _maxPlaybackSources || !seen.add(_sourceKey(url))) {
       return;
     }
+    final headers = _mediaHeaders(server, url);
+    final matchingResolutions = resolutions == null
+        ? null
+        : Map.fromEntries(resolutions.entries.where(
+            (entry) => mapEquals(_mediaHeaders(server, entry.value), headers),
+          ));
+    final compatibleResolutions =
+        matchingResolutions?.isEmpty ?? true ? null : matchingResolutions;
     sources.add(BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
       url,
       videoFormat: format,
       liveStream: video.liveNow,
       subtitles: subtitles,
-      resolutions: resolutions,
+      resolutions: compatibleResolutions,
+      headers: headers,
+      useAsmsSubtitles: false,
     ));
   }
 
@@ -169,7 +185,16 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     if (url == null) continue;
     final safeUrl = _validMediaUrl(_proxyUrl(url, server, useProxy), server);
     if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
-    streams.add((resolution: stream.resolution, url: safeUrl));
+    final resolution = [
+      stream.resolution,
+      stream.qualityLabel,
+      stream.quality,
+      stream.itag,
+    ].whereType<String>().map((value) => value.trim()).firstWhere(
+          (value) => value.isNotEmpty,
+          orElse: () => 'unknown',
+        );
+    streams.add((resolution: resolution, url: safeUrl));
     if (streams.length >= _maxPlaybackSources) {
       break;
     }

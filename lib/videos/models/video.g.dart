@@ -43,12 +43,8 @@ _Video _$VideoFromJson(Map<String, dynamic> json) => _Video(
       isListed: json['isListed'] as bool?,
       liveNow: json['liveNow'] as bool?,
       hlsUrl: json['hlsUrl'] as String?,
-      adaptiveFormats: (json['adaptiveFormats'] as List<dynamic>?)
-          ?.map((e) => AdaptiveFormat.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      formatStreams: (json['formatStreams'] as List<dynamic>?)
-          ?.map((e) => FormatStream.fromJson(e as Map<String, dynamic>))
-          .toList(),
+      adaptiveFormats: _parseAdaptiveFormats(json['adaptiveFormats']),
+      formatStreams: _parseFormatStreams(json['formatStreams']),
       captions: (json['captions'] as List<dynamic>?)
               ?.map((e) => Caption.fromJson(e as Map<String, dynamic>))
               .toList() ??

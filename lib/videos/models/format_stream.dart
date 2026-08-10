@@ -8,11 +8,11 @@ class FormatStream {
   String itag;
   String type;
   String quality;
-  String container;
-  String encoding;
-  String qualityLabel;
-  String resolution;
-  String size;
+  String? container;
+  String? encoding;
+  String? qualityLabel;
+  String? resolution;
+  String? size;
 
   FormatStream(this.url, this.itag, this.type, this.quality, this.container,
       this.encoding, this.qualityLabel, this.resolution, this.size);

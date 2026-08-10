@@ -147,7 +147,8 @@ class SubscriptionVideoList extends PaginatedList<Video> {
     }
 
     final offlineSubs = await db.getOfflineSubscriptions();
-    List<Future<VideosWithContinuation>> futures = [];
+    final futures =
+        <Future<({String channelId, VideosWithContinuation response})>>[];
 
     for (final offlineSub in offlineSubs) {
       var hasContinuation = continuations.containsKey(offlineSub.channelId);
@@ -155,21 +156,23 @@ class SubscriptionVideoList extends PaginatedList<Video> {
       // if there is a continuation but it's null, then there's no more videos to fetch
       if (!hasContinuation ||
           (hasContinuation && continuations[offlineSub.channelId] != _done)) {
-        futures.add(service.getChannelVideos(offlineSub.channelId,
-            hasContinuation ? continuations[offlineSub.channelId] : null));
+        futures.add(service
+            .getChannelVideos(
+              offlineSub.channelId,
+              hasContinuation ? continuations[offlineSub.channelId] : null,
+            )
+            .then((response) => (
+                  channelId: offlineSub.channelId,
+                  response: response,
+                )));
       }
     }
 
     if (futures.isNotEmpty) {
-      List<VideosWithContinuation> offlineSubVideos =
-          await Future.wait(futures);
-      for (final v in offlineSubVideos) {
-        if (v.videos.isNotEmpty) {
-          videos.addAll(v.videos);
-          if (v.videos[0].authorUrl != null) {
-            continuations[v.videos[0].authorUrl!] = v.continuation ?? _done;
-          }
-        }
+      final offlineSubVideos = await Future.wait(futures);
+      for (final result in offlineSubVideos) {
+        videos.addAll(result.response.videos);
+        continuations[result.channelId] = result.response.continuation ?? _done;
       }
     }
 

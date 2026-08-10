@@ -1,3 +1,5 @@
+// ignore_for_file: invalid_annotation_target
+
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/models/sharelink.dart';
@@ -36,6 +38,30 @@ int? _parsePublished(dynamic published) {
   return null;
 }
 
+List<T>? _parseStreams<T>(
+  Object? value,
+  T Function(Map<String, dynamic>) parse,
+) {
+  if (value is! List) return null;
+
+  final streams = <T>[];
+  for (final item in value) {
+    if (item is! Map) continue;
+    try {
+      streams.add(parse(Map<String, dynamic>.from(item)));
+    } catch (_) {
+      // One incomplete format must not make the whole video unplayable.
+    }
+  }
+  return streams;
+}
+
+List<AdaptiveFormat>? _parseAdaptiveFormats(Object? value) =>
+    _parseStreams(value, AdaptiveFormat.fromJson);
+
+List<FormatStream>? _parseFormatStreams(Object? value) =>
+    _parseStreams(value, FormatStream.fromJson);
+
 @freezed
 sealed class Video with _$Video implements ShareLinks, IdedVideo {
   @Implements<ShareLinks>()
@@ -68,8 +94,9 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       bool? isListed,
       bool? liveNow,
       String? hlsUrl,
+      @JsonKey(fromJson: _parseAdaptiveFormats)
       List<AdaptiveFormat>? adaptiveFormats,
-      List<FormatStream>? formatStreams,
+      @JsonKey(fromJson: _parseFormatStreams) List<FormatStream>? formatStreams,
       @Default([]) List<Caption> captions,
       @Default([]) List<Video> recommendedVideos,
       String? title,

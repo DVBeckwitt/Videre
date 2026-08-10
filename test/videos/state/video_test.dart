@@ -372,6 +372,58 @@ void main() {
       expect(source.subtitles!.single.urls,
           ['https://inv.example/captions/en.vtt']);
       expect(source.subtitles!.single.selectedByDefault, isTrue);
+      expect(source.useAsmsSubtitles, isFalse);
+    });
+
+    test('forwards custom headers only to same-origin media', () async {
+      const server = Server(
+        url: 'https://inv.example',
+        customHeaders: {'X-Proxy-Token': 'service-token'},
+      );
+      await db.upsertServer(server);
+      await db.useServer(server);
+      await settings.setUseProxy(true);
+      const expected = 'https://inv.example/video.mp4';
+      final started = controller.waitForSource(expected);
+
+      cubit.switchVideo(Video(
+        videoId: 'header-video',
+        formatStreams: [
+          _stream('https://r1.googlevideo.com/video.mp4', '360p'),
+        ],
+      ));
+      await started;
+
+      expect(
+        controller.sources.last.headers,
+        {'X-Proxy-Token': 'service-token'},
+      );
+    });
+
+    test('uses quality when optional progressive labels are absent', () async {
+      await settings.toggleDash(false);
+      const expected = 'https://r1.googlevideo.com/optional.mp4';
+      final started = controller.waitForSource(expected);
+
+      cubit.switchVideo(Video(
+        videoId: 'optional-label-video',
+        formatStreams: [
+          FormatStream(
+            expected,
+            '18',
+            'video/mp4',
+            'medium',
+            null,
+            null,
+            null,
+            null,
+            null,
+          ),
+        ],
+      ));
+      await started;
+
+      expect(controller.sources.last.resolutions, {'medium': expected});
     });
 
     test('bounds fallback attempts from oversized metadata', () async {
@@ -809,7 +861,7 @@ void main() {
       expect(player.events.last.state, MediaState.error);
     });
 
-    test('switches cross-origin quality without rebuilding the source',
+    test('does not mix authenticated and cross-origin quality tracks',
         () async {
       const authenticatedServer = Server(
         url: 'https://inv.example',
@@ -829,19 +881,13 @@ void main() {
         ],
       ));
       await started;
-      expect(controller.sources.last.headers, isNull);
+      expect(
+        controller.sources.last.headers,
+        {'Authorization': 'Basic secret'},
+      );
       expect(controller.sources.last.resolutions, {
         '720p': 'https://inv.example/720.mp4',
-        '360p': 'https://r1.googlevideo.com/360.mp4',
       });
-
-      controller.playing = false;
-      final sourceCount = controller.sources.length;
-      cubit.selectVideoTrack(0);
-
-      expect(controller.sources, hasLength(sourceCount));
-      expect(controller.resolutionUrls, ['https://r1.googlevideo.com/360.mp4']);
-      expect(controller.playing, isFalse);
     });
   });
 }
