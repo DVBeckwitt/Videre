@@ -16,9 +16,9 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
-### Current release: 1.22.19
+### Current release: 1.22.20
 
-This release ships a build-verified candidate mitigation for Android TV black video (#672) by disabling Impeller application-wide; Nvidia Shield and control-phone playback verification remain pending. It also prevents file-backed worker settings from exposing credentials in fine-level logs, reports non-missing storage failures instead of hiding them, adds focused storage regressions to CI, and removes redundant Android build configuration. No settings, stored-data, schema, or public-interface migration is required.
+This release improves compatibility with current Invidious responses and makes account failures easier to recover from. Videre now distinguishes API errors from reverse-proxy login pages, clears credentials rejected by Invidious, stops retrying subscription changes indefinitely, tolerates incomplete stream metadata, and keeps playback headers scoped to compatible media sources. If an instance operator resets the Invidious signing key, existing app tokens must still be authorized again; no client can recover a token signed with the old key.
 
 See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Videre verification status.
 

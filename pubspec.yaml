@@ -1,5 +1,5 @@
 name: clipious
-version: 1.22.19+6081
+version: 1.22.20+6082
 publish_to: none
 description: Client for invidious.
 environment: 

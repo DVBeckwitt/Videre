@@ -50,7 +50,7 @@ Unless noted above, these reports are **open upstream; Videre unverified**.
 | [#680](https://github.com/lamarios/clipious/issues/680) | Opening a video shows “Could not load the video”; changing the selected server and toggling DASH did not resolve it. **Client failure mode covered in Videre 1.22.18; reporter environment unverified.** Videre now falls back across valid HLS, DASH, and progressive candidates without carrying retries across video changes. Covered by the offline video regression suite; the reporter's server-switch path was not runtime-verified. |
 | [#672](https://github.com/lamarios/clipious/issues/672) | Android TV audio plays over a black video surface; the reporter dates the regression to 1.22.7 while the same version works on a phone. **Build-verified candidate mitigation in Videre 1.22.19 (`06ae9d08`, retained through `0dc4bd67`); runtime verification pending.** Videre sets `io.flutter.embedding.android.EnableImpeller=false` at application scope. Clean debug and profile APKs each retain one application-scoped opt-out after redundant source-set manifests were removed. Playback still requires confirmation on an affected Nvidia Shield and the previously working phone before this can be marked fixed. |
 | [#656](https://github.com/lamarios/clipious/issues/656) | The player opens but some homepage videos never load across the reporter's available servers. |
-| [#649](https://github.com/lamarios/clipious/issues/649) | Subscription channel pages and videos remain loading instead of opening; the reporter noted the selected server might be involved. |
+| [#649](https://github.com/lamarios/clipious/issues/649) | Subscription channel pages and videos remain loading instead of opening; the reporter noted the selected server might be involved. **Client failure mode covered in Videre 1.22.20; reporter environment unverified.** Subscription writes now fail once instead of retrying forever, current-session checks clear credentials rejected directly by Invidious, and reverse-proxy HTML is reported separately from an Invidious API response. Tokens invalidated by an instance signing-key reset still require fresh authorization. |
 | [#646](https://github.com/lamarios/clipious/issues/646) | Shorts are listed but tapping them neither plays nor downloads them; already-published shorts also display nonsensical negative premiere times. |
 | [#580](https://github.com/lamarios/clipious/issues/580) | With DASH enabled, selecting a resolution above 480p has no effect. Reported on Android 12 with Clipious 1.19.12. |
 | [#555](https://github.com/lamarios/clipious/issues/555) | Some specific videos fail across multiple instances and phones while other videos play, with no clear content pattern identified. |
@@ -116,8 +116,9 @@ Unless noted above, these reports are **open upstream; Videre unverified**.
   exact media URL when safe, and relevant logs.
 - When a report is fixed, retain the row and replace its status with the release,
   commit, and test or runtime evidence.
-- The playback change is included in Videre 1.22.18 but still awaits
-  reporter/device verification.
+- The original playback fallback is included in Videre 1.22.18. Videre 1.22.20
+  also accepts incomplete progressive stream metadata returned by current
+  Invidious versions. Reporter and device verification are still pending.
 - Playback no longer supplies custom instance headers to native media requests.
   This is a security migration with no stored-data change. An authenticated
   reverse proxy that requires those headers for media must expose unauthenticated
