@@ -65,7 +65,7 @@ dependencies:
   river_player:
     git: 
       url: https://github.com/lamarios/river_player.git
-      ref: master
+      ref: 55f1f374adbeeab7aefba5684dc2b014cbc87a63
   simple_pip_mode: 1.1.0
 dev_dependencies: 
   auto_route_generator: any

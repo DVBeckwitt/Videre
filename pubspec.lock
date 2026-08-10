@@ -1106,7 +1106,7 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: master
+      ref: "55f1f374adbeeab7aefba5684dc2b014cbc87a63"
       resolved-ref: "55f1f374adbeeab7aefba5684dc2b014cbc87a63"
       url: "https://github.com/lamarios/river_player.git"
     source: git
