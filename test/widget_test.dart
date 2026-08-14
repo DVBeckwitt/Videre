@@ -4,6 +4,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/channels/models/channel_videos.dart';
+import 'package:clipious/comments/models/video_comments.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -56,6 +57,18 @@ class _TestService extends Service {
   Future<List<Video>> getPopular() async => videos;
 
   @override
+  Future<Video> getVideo(String videoId, {Server? serverOverride}) async =>
+      videos.singleWhere((video) => video.videoId == videoId);
+
+  @override
+  Future<VideoComments> getComments(String videoId,
+          {String? continuation, String? sortBy, String? source}) async =>
+      VideoComments(0, videoId, null, []);
+
+  @override
+  Future<bool> isSubscribedToChannel(String channelId) async => false;
+
+  @override
   Future<UserFeed> getUserFeed(
           {int? maxResults, int? page, bool saveLastSeen = true}) async =>
       UserFeed([], []);
@@ -105,6 +118,14 @@ Future<void> _pumpHomepage(WidgetTester tester, Size size) async {
     ),
   ));
 
+  await tester.pumpAndSettle();
+}
+
+Future<void> _pumpVideo(WidgetTester tester, Size size) async {
+  tester.platformDispatcher.textScaleFactorTestValue = 0.9;
+  addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+  await _pumpHomepage(tester, size);
+  unawaited(appRouter.push(VideoRoute(videoId: 'video-0')));
   await tester.pumpAndSettle();
 }
 
@@ -468,6 +489,67 @@ void main() {
             .widget<NavigationRail>(find.byType(NavigationRail))
             .selectedIndex,
         0);
+  });
+
+  testWidgets('phone video tabs swipe and stay synchronized with navigation',
+      (tester) async {
+    await _pumpVideo(tester, const Size(390, 844));
+
+    void expectSelectedTab(int index) {
+      expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        index,
+      );
+    }
+
+    Future<void> swipeLeft() async {
+      await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> swipeRight() async {
+      await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
+      await tester.pumpAndSettle();
+    }
+
+    Finder destination(String label) => find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text(label),
+        );
+
+    expectSelectedTab(0);
+
+    await swipeLeft();
+    expectSelectedTab(1);
+    await swipeLeft();
+    expectSelectedTab(2);
+    await swipeRight();
+    expectSelectedTab(1);
+    await swipeRight();
+    expectSelectedTab(0);
+
+    await tester.tap(destination('Recommended'));
+    await tester.pumpAndSettle();
+    expectSelectedTab(2);
+    await tester.tap(destination('Info'));
+    await tester.pumpAndSettle();
+    expectSelectedTab(0);
+
+    await tester.drag(find.byType(VideoThumbnailView), const Offset(-320, 0));
+    await tester.pumpAndSettle();
+    expectSelectedTab(0);
+  });
+
+  testWidgets('tablet video tabs ignore horizontal swipes', (tester) async {
+    await _pumpVideo(tester, const Size(1024, 768));
+
+    final tabBar = tester.widget<TabBar>(find.byType(TabBar));
+    expect(tabBar.controller!.index, 0);
+
+    await tester.dragFrom(const Offset(900, 400), const Offset(-800, 0));
+    await tester.pumpAndSettle();
+
+    expect(tabBar.controller!.index, 0);
   });
 
   group('VideoThumbnailView controls', () {

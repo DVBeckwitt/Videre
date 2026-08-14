@@ -99,7 +99,11 @@ class VideoScreen extends StatelessWidget {
               opacity: videoState.opacity,
               child: AutoTabsRouter.tabBar(
                   key: ValueKey(videoState.video),
-                  physics: const NeverScrollableScrollPhysics(),
+                  physics: deviceType == DeviceType.phone
+                      ? const BouncingScrollPhysics(
+                          parent: AlwaysScrollableScrollPhysics(),
+                        )
+                      : const NeverScrollableScrollPhysics(),
                   routes: [
                     VideoInfoRoute(
                         video: videoState.video,
