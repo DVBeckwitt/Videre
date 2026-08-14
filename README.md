@@ -2,6 +2,9 @@
 
 [![License: AGPL v3](https://shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
 
+
+I forked from Clipious so that I can have it working on my device. 
+
 Videre is an Android client for [Invidious](https://invidious.io), the privacy-focused YouTube frontend.
 
 Videre is a fork of [Clipious](https://github.com/lamarios/clipious) by Paul Fauchon and contributors. This fork is maintained independently by DVBeckwitt and contributors.
