@@ -1,6 +1,6 @@
 # Reported bugs
 
-Last reviewed: 2026-07-13
+Last reviewed: 2026-08-14
 
 This document records the open reports labeled `bug` in the upstream
 [Clipious issue tracker](https://github.com/lamarios/clipious/issues), together
@@ -18,6 +18,8 @@ independent confirmation that every report still reproduces in Videre.
   unverified**: deterministic offline tests cover the client behavior, but the
   reported device and instance path has not been reproduced.
 - **Fixed in Videre 1.22.18**: source and regression evidence cover the shipped
+  defect.
+- **Fixed in Videre 1.22.21**: source and regression evidence cover the shipped
   defect.
 - **Partially mitigated in Videre 1.22.18**: the documented attack path is
   reduced in the release, but a stated residual risk remains open.
@@ -39,6 +41,8 @@ independent confirmation that every report still reproduces in Videre.
 | A stalled playback setup blocks the next video | Source review found that switching videos waited forever when the prior native data-source setup never completed. | **Fixed in Videre 1.22.18.** A switch now cancels the Dart-side wait, detaches and disposes the obsolete controller, and ignores late completion. A regression proves the replacement starts while the old future remains unresolved. |
 | Media credentials and unbounded destinations reached the native player | Source review found custom instance headers could follow redirects or adaptive child requests, while untrusted metadata could supply unlimited arbitrary HTTP(S) candidates. | **Partially mitigated in Videre 1.22.18.** Credential propagation is fixed: native media sources receive no instance custom headers. Starting URLs are limited to the selected exact origin or default-port HTTPS YouTube media hosts, fragments deduplicate, and progressive candidates and their displayed quality choices are capped at ten. The pinned native player can still follow unchecked redirects and adaptive child URLs; per-request destination enforcement remains open. |
 | File-backed worker settings exposed credentials in fine-level logs and hid storage failures | Source review found serialized settings, including server credentials and custom headers, in fine-level logs. Cleanup treated every deletion error as a missing file, and storage could fall back to a process-dependent working directory when the app documents directory was unavailable. | **Audit finding fixed in Videre 1.22.19 (`0dc4bd67`).** File writes log only their destination, cleanup ignores only absent files while propagating other filesystem failures, and both storage implementations now report app-directory lookup failures. Successful storage paths, the data format, and public interfaces are unchanged, so no migration is required. Existing regressions cover the FileDB boundaries. |
+| Comments tab crashes on newer Invidious responses | Current Invidious comment responses can provide one `authorThumbnail` URL instead of the older `authorThumbnails` list, causing the generated list parser to reject a valid response. | **Fixed in Videre 1.22.21.** Comment parsing now normalizes either response shape without changing the caller's map, retains compatibility with older instances, and safely handles missing comment lists. Covered by focused model tests. |
+| Phone video tabs cannot be changed with a swipe | The Info, Comments, and Recommended routes were connected to the bottom navigation bar, but horizontal paging was disabled on every device. | **Fixed in Videre 1.22.21.** Phones now use the same router-owned swipe physics as the homepage. Navigation selection follows the swipe, media-area drags do not change tabs, and tablets retain their existing behavior. Covered by phone and tablet widget tests. |
 
 ## Playback and video loading
 

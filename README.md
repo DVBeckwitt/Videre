@@ -16,9 +16,9 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
-### Current release: 1.22.20
+### Current release: 1.22.21
 
-This release improves compatibility with current Invidious responses and makes account failures easier to recover from. Videre now distinguishes API errors from reverse-proxy login pages, clears credentials rejected by Invidious, stops retrying subscription changes indefinitely, tolerates incomplete stream metadata, and keeps playback headers scoped to compatible media sources. If an instance operator resets the Invidious signing key, existing app tokens must still be authorized again; no client can recover a token signed with the old key.
+This release keeps the comments tab working with current Invidious responses that provide a single author thumbnail URL while remaining compatible with older response formats. On phones, the Info, Comments, and Recommended sections of a video can now be changed with a horizontal swipe, and the bottom navigation stays in sync. Swipes that begin over the video thumbnail or player do not change tabs. Tablet and distraction-free behavior are unchanged, and no settings or stored-data migration is required.
 
 See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Videre verification status.
 
@@ -27,6 +27,12 @@ See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Vid
 Status: available in the current source and covered by an automated widget test.
 
 On phones, the Home, Subscriptions, Playlists, and History pages can be changed with the bottom navigation bar or a horizontal swipe. Swipes track the finger, snap to one page at a time, and bounce only at the first and last pages. Horizontal drags that start on a Home carousel scroll that carousel; start the gesture elsewhere in the page to change tabs. Tablet and TV navigation behavior is unchanged. The feature uses the existing tab routes and requires no setting, data migration, or user action.
+
+### Video tab navigation
+
+Status: available in Videre 1.22.21 and covered by automated phone and tablet widget tests.
+
+On phones, the Info, Comments, and Recommended sections below a video can be changed with the bottom navigation bar or a horizontal swipe. The same tab route controls both interactions, so the selected destination follows the swipe. Horizontal drags over the video thumbnail or player remain reserved for the media area. Tablets keep their existing tab behavior, and distraction-free mode remains unchanged.
 
 ### Thumbnail privacy and fallback
 
@@ -67,6 +73,7 @@ Videre does not require a YouTube account. If you use an Invidious account for s
 - Video filtering
 - Return YouTube Dislikes support
 - Swipe navigation between phone homepage tabs
+- Swipe navigation between phone video tabs
 
 ## Installation
 
