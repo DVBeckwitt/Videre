@@ -13,6 +13,7 @@ import 'package:clipious/player/views/tablet/expanded_side_bar.dart';
 import 'package:clipious/utils/views/components/conditional_wrap.dart';
 import 'package:clipious/utils/views/components/device_widget.dart';
 import 'package:clipious/videos/views/components/add_to_playlist_button.dart';
+import 'package:clipious/videos/views/components/video_transcript_button.dart';
 
 import '../../../utils.dart';
 import '../../../videos/models/video.dart';
@@ -175,6 +176,11 @@ class Player extends StatelessWidget {
                                                       video: currentlyPlaying,
                                                       showTimestampOption: true,
                                                     ),
+                                                    if (currentlyPlaying
+                                                        .captions.isNotEmpty)
+                                                      VideoTranscriptButton(
+                                                        video: currentlyPlaying,
+                                                      ),
                                                     AddToPlayListButton(
                                                         key: ValueKey(
                                                             currentlyPlaying),

@@ -1270,7 +1270,34 @@
   "premieresIn": "Premieres in {formattedDuration}",
   "screenControls": "Screen controls",
   "screenControlsExplanation": "When watching a video in full screen, Vertically dragging from the left or the right will adjust the brightness or volume respectively",
+  "transcript": "Transcript",
+  "@transcript": {
+    "description": "Title and tooltip for the video transcript"
+  },
+  "copyTranscript": "Copy transcript",
+  "@copyTranscript": {
+    "description": "Button label for copying the complete video transcript"
+  },
+  "transcriptCopied": "Transcript copied",
+  "@transcriptCopied": {
+    "description": "Confirmation shown after copying a video transcript"
+  },
+  "searchTranscript": "Search transcript",
+  "@searchTranscript": {
+    "description": "Hint text for filtering video transcript lines"
+  },
+  "noTranscriptTextAvailable": "No transcript text available",
+  "@noTranscriptTextAvailable": {
+    "description": "Message shown when a transcript has no usable text"
+  },
+  "couldntLoadTranscript": "Could not load transcript",
+  "@couldntLoadTranscript": {
+    "description": "Message shown when transcript retrieval fails"
+  },
   "retry": "Retry",
+  "@retry": {
+    "description": "Button label for retrying a failed operation"
+  },
   "forceTvUi": "Force TV interface",
   "forceTvUiExplanation": "Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required"
 }

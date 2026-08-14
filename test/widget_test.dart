@@ -19,10 +19,13 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:file/local.dart';
 import 'package:file/memory.dart';
@@ -45,6 +48,53 @@ class _TestService extends Service {
   _TestService({required this.videos});
 
   final List<Video> videos;
+  final List<String> transcriptRequests = [];
+
+  @override
+  Future<VideoTranscript> getTranscript(
+    String videoId,
+    Caption caption,
+  ) async {
+    transcriptRequests.add(caption.label);
+    if (caption.label == 'Spanish') {
+      return const VideoTranscript(
+        label: 'Spanish',
+        languageCode: 'es',
+        lines: [
+          VideoTranscriptLine(
+            type: VideoTranscriptLineType.regular,
+            startMs: 2000,
+            endMs: 4000,
+            text: 'Hola mundo',
+          ),
+        ],
+      );
+    }
+    return const VideoTranscript(
+      label: 'English',
+      languageCode: 'en',
+      lines: [
+        VideoTranscriptLine(
+          type: VideoTranscriptLineType.heading,
+          startMs: 0,
+          endMs: 1000,
+          text: 'Intro',
+        ),
+        VideoTranscriptLine(
+          type: VideoTranscriptLineType.regular,
+          startMs: 1000,
+          endMs: 5000,
+          text: 'Hello world',
+        ),
+        VideoTranscriptLine(
+          type: VideoTranscriptLineType.regular,
+          startMs: 5000,
+          endMs: 8000,
+          text: 'Second line',
+        ),
+      ],
+    );
+  }
 
   @override
   void syncHistory() {}
@@ -134,8 +184,9 @@ Future<void> _pumpExpandedPlayer(
   Size size, {
   bool distractionFree = false,
   int selectedIndex = 3,
+  int videoIndex = 0,
 }) async {
-  final video = (globals.service as _TestService).videos.first;
+  final video = (globals.service as _TestService).videos[videoIndex];
   final settingsState = SettingsState.init();
   await _pumpHomepage(
     tester,
@@ -325,6 +376,12 @@ void main() {
           author: 'Channel $index',
           authorId: 'channel-$index',
           lengthSeconds: 60,
+          captions: index == 0
+              ? [
+                  Caption('Spanish', 'es', '/captions/spanish'),
+                  Caption('English', 'en', '/captions/english'),
+                ]
+              : const [],
         ),
       ),
     );
@@ -346,6 +403,8 @@ void main() {
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, null);
     await globals.db.close();
   });
 
@@ -403,6 +462,92 @@ void main() {
         );
       }
     });
+  });
+
+  testWidgets('expanded player transcript supports select, search, copy, seek',
+      (tester) async {
+    String? copiedText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copiedText =
+            (call.arguments as Map<Object?, Object?>)['text'] as String?;
+      }
+      return null;
+    });
+
+    await _pumpExpandedPlayer(tester, const Size(390, 844));
+    final testService = globals.service as _TestService;
+    final openButton = find.byKey(const ValueKey('video-transcript-open'));
+
+    expect(openButton, findsOneWidget);
+    expect(testService.transcriptRequests, isEmpty);
+
+    await tester.tap(openButton);
+    await tester.pumpAndSettle();
+
+    expect(testService.transcriptRequests, ['English']);
+    final language = find.byKey(
+      const ValueKey('video-transcript-language'),
+    );
+    expect(
+      tester.widget<DropdownButtonFormField<int>>(language).initialValue,
+      1,
+    );
+    expect(find.text('Hello world'), findsOneWidget);
+    expect(find.text('Second line'), findsOneWidget);
+
+    final search = find.byKey(const ValueKey('video-transcript-search'));
+    await tester.enterText(search, 'hello');
+    await tester.pump();
+    expect(find.text('Hello world'), findsOneWidget);
+    expect(find.text('Second line'), findsNothing);
+
+    await tester.enterText(search, '');
+    await tester.pump();
+    expect(find.text('Second line'), findsOneWidget);
+
+    await tester.tap(language);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Spanish').last);
+    await tester.pumpAndSettle();
+    expect(testService.transcriptRequests, ['English', 'Spanish']);
+    expect(find.text('Hola mundo'), findsOneWidget);
+
+    await tester.tap(language);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('English').last);
+    await tester.pumpAndSettle();
+    expect(testService.transcriptRequests, ['English', 'Spanish']);
+
+    await tester.enterText(search, 'second');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('video-transcript-copy')));
+    await tester.pumpAndSettle();
+    expect(copiedText, 'Intro\n\nHello world\nSecond line');
+    expect(find.text('Transcript copied'), findsOneWidget);
+
+    final player = tester.element(language).read<PlayerCubit>();
+    await tester.tap(
+      find.byKey(const ValueKey('video-transcript-seek-5000')),
+    );
+    await tester.pump();
+    expect(player.state.position, const Duration(seconds: 5));
+    expect(language, findsOneWidget);
+  });
+
+  testWidgets('expanded player hides transcript when captions are unavailable',
+      (tester) async {
+    await _pumpExpandedPlayer(
+      tester,
+      const Size(390, 844),
+      videoIndex: 1,
+    );
+
+    expect(
+      find.byKey(const ValueKey('video-transcript-open')),
+      findsNothing,
+    );
   });
 
   testWidgets('phone homepage tabs swipe fluidly and bounce at both edges',

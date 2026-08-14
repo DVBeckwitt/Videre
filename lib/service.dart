@@ -21,11 +21,13 @@ import 'package:clipious/settings/models/errors/unreacheable_server.dart';
 import 'package:clipious/utils/models/imgur_error.dart';
 import 'package:clipious/utils/video_post_processing.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/dearrow.dart';
 import 'package:clipious/videos/models/dislike.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:logging/logging.dart';
 
 import 'channels/models/channel.dart';
@@ -39,6 +41,8 @@ import 'subscription_management/models/subscription.dart';
 import 'videos/models/sponsor_segment_types.dart';
 
 const urlGetVideo = '/api/v1/videos/:id';
+const urlGetTranscript = '/api/v1/transcripts/:id';
+const urlGetCaptions = '/api/v1/captions/:id';
 const urlGetTrending = '/api/v1/trending';
 const urlGetPopular = '/api/v1/popular';
 const urlGetUserFeed = '/api/v1/auth/feed';
@@ -233,6 +237,75 @@ class Service {
         recommendedVideos:
             (await postProcessVideos(video.recommendedVideos)).cast());
     return video;
+  }
+
+  Future<VideoTranscript> getTranscript(
+    String videoId,
+    Caption caption,
+  ) async {
+    final query = {'label': Uri.encodeQueryComponent(caption.label)};
+
+    try {
+      final request = await buildRequest(
+        urlGetTranscript,
+        pathParams: {':id': videoId},
+        query: query,
+      );
+      final response =
+          await httpClient.get(request.uri, headers: request.headers);
+      final transcript = VideoTranscript.fromJson(handleResponse(response));
+      if (transcript.lines.isNotEmpty) return transcript;
+      throw const FormatException('Structured transcript has no usable lines');
+    } catch (error) {
+      log.warning(
+        'Structured transcript unavailable; trying caption fallback '
+        '(${error.runtimeType})',
+      );
+    }
+
+    try {
+      final request = await buildRequest(
+        urlGetCaptions,
+        pathParams: {':id': videoId},
+        query: query,
+      );
+      final response =
+          await httpClient.get(request.uri, headers: request.headers);
+      final body = utf8.decode(response.bodyBytes);
+      final trimmedBody = body.trimLeft();
+      final contentType = response.headers['content-type']?.toLowerCase() ?? '';
+      final isHtml =
+          contentType.contains('html') || trimmedBody.startsWith('<');
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw InvidiousServiceError(
+          isHtml
+              ? 'The reverse proxy returned HTML instead of WebVTT'
+              : 'Request failed with HTTP ${response.statusCode}',
+          statusCode: response.statusCode,
+          responseWasHtml: isHtml,
+        );
+      }
+      if (isHtml) {
+        throw InvidiousServiceError(
+          'The reverse proxy returned HTML instead of WebVTT',
+          statusCode: response.statusCode,
+          responseWasHtml: true,
+        );
+      }
+
+      return VideoTranscript.fromWebVtt(
+        body,
+        label: caption.label,
+        languageCode: caption.languageCode,
+      );
+    } on InvidiousServiceError {
+      rethrow;
+    } catch (error) {
+      throw InvidiousServiceError(
+        'Could not load transcript (${error.runtimeType})',
+      );
+    }
   }
 
   Future<String> loginWithCookies(

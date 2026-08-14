@@ -44,6 +44,7 @@ Videre does not require a YouTube account. If you use an Invidious account for s
 - Swipe navigation between phone homepage tabs
 - Swipe navigation between phone video tabs, including after autoplay
 - Swipe down on an expanded phone video to minimize playback
+- View, search, seek through, and copy video transcripts when captions are available
 
 ## Installation
 
