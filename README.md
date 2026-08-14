@@ -19,40 +19,6 @@ Official Videre APKs are published from this repository under [GitHub Releases](
 
 Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Store listings for Clipious are upstream Clipious listings, not Videre listings.
 
-### Current release: 1.22.21
-
-This release keeps the comments tab working with current Invidious responses that provide a single author thumbnail URL while remaining compatible with older response formats. On phones, the Info, Comments, and Recommended sections of a video can now be changed with a horizontal swipe, and the bottom navigation stays in sync. Swipes that begin over the video thumbnail or player do not change tabs. Tablet and distraction-free behavior are unchanged, and no settings or stored-data migration is required.
-
-See [Reported bugs](./REPORTED_BUGS.md) for the upstream issue inventory and Videre verification status.
-
-### Homepage tab navigation
-
-Status: available in the current source and covered by an automated widget test.
-
-On phones, the Home, Subscriptions, Playlists, and History pages can be changed with the bottom navigation bar or a horizontal swipe. Swipes track the finger, snap to one page at a time, and bounce only at the first and last pages. Horizontal drags that start on a Home carousel scroll that carousel; start the gesture elsewhere in the page to change tabs. Tablet and TV navigation behavior is unchanged. The feature uses the existing tab routes and requires no setting, data migration, or user action.
-
-### Video tab navigation
-
-Status: available in Videre 1.22.21 and covered by automated phone and tablet widget tests.
-
-On phones, the Info, Comments, and Recommended sections below a video can be changed with the bottom navigation bar or a horizontal swipe. The same tab route controls both interactions, so the selected destination follows the swipe. Horizontal drags over the video thumbnail or player remain reserved for the media area. Tablets keep their existing tab behavior, and distraction-free mode remains unchanged.
-
-### Thumbnail privacy and fallback
-
-Status: fixed in the current source and covered by offline regression tests.
-
-Videre sends instance authentication headers only to the selected instance's exact HTTP(S) origin, including its effective port. External, lookalike-host, scheme-mismatched, and port-mismatched thumbnail URLs still load, but without instance credentials. Video cards prefer an exact `maxres` thumbnail before the existing fallback order, and their foreground controls remain usable while thumbnails load or fail. The fix requires no setting, data migration, or user action.
-
-### Playback source fallback
-
-Status: released in Videre 1.22.18 from commits `87d988fa` and `51368a4e` and covered by offline regression tests; the upstream reporters' device and instance paths have not been reproduced.
-
-Videre validates and deduplicates HLS, DASH, and progressive sources, retains at most ten ordered candidates, and tries each alternative once when setup fails before initialization. A video switch cancels its Dart-side wait, disposes the obsolete controller, and ignores late completion instead of waiting indefinitely. Progressive quality choices come from the same bounded, validated candidates; duplicate labels prefer the first accepted URL while keeping same-label fallbacks selectable. Retries preserve subtitles, progress, and quality selection; errors after initialization remain terminal.
-
-Playback starts only from the selected instance's exact origin or a default-port HTTPS `googlevideo.com`/`youtube.com` origin. Instance custom headers are not passed to the native media player, preventing them from following redirects or adaptive child requests to another origin. API and thumbnail authentication are unchanged. This is a deliberate security migration: an authenticated reverse proxy that requires custom headers for media must expose unauthenticated media URLs or playback will fail. There is no stored-data migration.
-
-The starting-URL and candidate-count hardening is partial destination containment, not a native network sandbox. The pinned player can still follow redirects and adaptive child URLs beyond the Dart check, including destinations that the starting-URL policy would reject; it receives no instance credentials when doing so. Closing that residual request-forgery risk requires a native player data-source policy.
-
 ## How it works
 
 Videre does not talk to YouTube directly as a normal YouTube app. Instead, it connects to an Invidious instance selected by the user. That instance retrieves and exposes YouTube content through the Invidious API, and Videre provides the Android, tablet, and TV interface on top of it.
