@@ -21,6 +21,8 @@ independent confirmation that every report still reproduces in Videre.
   defect.
 - **Fixed in Videre 1.22.21**: source and regression evidence cover the shipped
   defect.
+- **Fixed in Videre 1.22.22**: source and regression evidence cover the shipped
+  defect.
 - **Partially mitigated in Videre 1.22.18**: the documented attack path is
   reduced in the release, but a stated residual risk remains open.
 - **Audit finding fixed in Videre 1.22.17**: found during source review rather
@@ -43,6 +45,7 @@ independent confirmation that every report still reproduces in Videre.
 | File-backed worker settings exposed credentials in fine-level logs and hid storage failures | Source review found serialized settings, including server credentials and custom headers, in fine-level logs. Cleanup treated every deletion error as a missing file, and storage could fall back to a process-dependent working directory when the app documents directory was unavailable. | **Audit finding fixed in Videre 1.22.19 (`0dc4bd67`).** File writes log only their destination, cleanup ignores only absent files while propagating other filesystem failures, and both storage implementations now report app-directory lookup failures. Successful storage paths, the data format, and public interfaces are unchanged, so no migration is required. Existing regressions cover the FileDB boundaries. |
 | Comments tab crashes on newer Invidious responses | Current Invidious comment responses can provide one `authorThumbnail` URL instead of the older `authorThumbnails` list, causing the generated list parser to reject a valid response. | **Fixed in Videre 1.22.21.** Comment parsing now normalizes either response shape without changing the caller's map, retains compatibility with older instances, and safely handles missing comment lists. Covered by focused model tests. |
 | Phone video tabs cannot be changed with a swipe | The Info, Comments, and Recommended routes were connected to the bottom navigation bar, but horizontal paging was disabled on every device. | **Fixed in Videre 1.22.21.** Phones now use the same router-owned swipe physics as the homepage. Navigation selection follows the swipe, media-area drags do not change tabs, and tablets retain their existing behavior. Covered by phone and tablet widget tests. |
+| Video tab swiping stops after autoplay starts | Version 1.22.21 covered the video details screen, but autoplay opens a separate expanded-player layout that did not support the same gesture. | **Fixed in Videre 1.22.22.** Phone swipes now continue across Info, Comments, Recommended, and Video Queue after autoplay, with the bottom navigation kept in sync. A downward swipe on the video also minimizes the player. Tablets remain non-swipeable, and distraction-free mode keeps its two intended destinations. Covered by expanded-player widget tests. |
 
 ## Playback and video loading
 

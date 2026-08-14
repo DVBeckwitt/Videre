@@ -42,7 +42,8 @@ Videre does not require a YouTube account. If you use an Invidious account for s
 - Video filtering
 - Return YouTube Dislikes support
 - Swipe navigation between phone homepage tabs
-- Swipe navigation between phone video tabs
+- Swipe navigation between phone video tabs, including after autoplay
+- Swipe down on an expanded phone video to minimize playback
 
 ## Installation
 
