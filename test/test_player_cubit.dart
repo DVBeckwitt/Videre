@@ -1,3 +1,4 @@
+import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 
 class TestPlayerCubit extends PlayerCubit {
@@ -5,4 +6,7 @@ class TestPlayerCubit extends PlayerCubit {
 
   @override
   Future<void> onReady() async {}
+
+  @override
+  void mapMediaEventToMediaHandler(MediaEvent event) {}
 }

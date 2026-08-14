@@ -44,6 +44,8 @@ class Player extends StatelessWidget {
             context.select((PlayerCubit value) => value.state.isPip);
         final bool isHidden =
             context.select((PlayerCubit value) => value.state.isHidden);
+        final bool isAudio =
+            context.select((PlayerCubit value) => value.state.isAudio);
         final bool isDragging =
             context.select((PlayerCubit value) => value.state.isDragging);
         final bool isClosing =
@@ -58,6 +60,11 @@ class Player extends StatelessWidget {
         final deviceType = getDeviceType();
         final orientation =
             context.select((PlayerCubit value) => value.state.orientation);
+        final canSwipeDownToMinimize = deviceType == DeviceType.phone &&
+            !isAudio &&
+            !isMini &&
+            !isPip &&
+            !isFullScreen;
 
         final playerHorizontalPosition = orientation == Orientation.landscape &&
                 isMini &&
@@ -227,7 +234,14 @@ class Player extends StatelessWidget {
                                                                 : MediaQuery.sizeOf(
                                                                         context)
                                                                     .height),
-                                                        child: videoPlayer),
+                                                        child:
+                                                            _MinimizeOnSwipeDown(
+                                                          enabled:
+                                                              canSwipeDownToMinimize,
+                                                          onSwipeDown: cubit
+                                                              .showMiniPlayer,
+                                                          child: videoPlayer,
+                                                        )),
                                                     if (!isFullScreen)
                                                       ConditionalWrap(
                                                           wrapIf: !isMini,
@@ -287,6 +301,69 @@ class Player extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _MinimizeOnSwipeDown extends StatefulWidget {
+  final bool enabled;
+  final VoidCallback onSwipeDown;
+  final Widget child;
+
+  const _MinimizeOnSwipeDown({
+    required this.enabled,
+    required this.onSwipeDown,
+    required this.child,
+  });
+
+  @override
+  State<_MinimizeOnSwipeDown> createState() => _MinimizeOnSwipeDownState();
+}
+
+class _MinimizeOnSwipeDownState extends State<_MinimizeOnSwipeDown> {
+  static const _swipeDistance = 200.0;
+
+  int? _pointer;
+  Offset? _startPosition;
+
+  void _pointerDown(PointerDownEvent event) {
+    if (widget.enabled && _pointer == null) {
+      _pointer = event.pointer;
+      _startPosition = event.position;
+    }
+  }
+
+  void _pointerUp(PointerUpEvent event) {
+    if (event.pointer != _pointer || _startPosition == null) {
+      return;
+    }
+
+    final distance = event.position - _startPosition!;
+    _pointer = null;
+    _startPosition = null;
+
+    if (widget.enabled &&
+        distance.dy > _swipeDistance &&
+        distance.dy > distance.dx.abs()) {
+      widget.onSwipeDown();
+    }
+  }
+
+  void _pointerCancel(PointerCancelEvent event) {
+    if (event.pointer == _pointer) {
+      _pointer = null;
+      _startPosition = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _pointerDown,
+      onPointerUp: _pointerUp,
+      onPointerCancel: _pointerCancel,
+      child: widget.child,
     );
   }
 }

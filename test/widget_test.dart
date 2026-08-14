@@ -11,10 +11,12 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/expanded_player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/user_feed.dart';
@@ -88,22 +90,28 @@ class _TestService extends Service {
       VideosWithContinuation([], null);
 }
 
-Future<void> _pumpHomepage(WidgetTester tester, Size size) async {
+Future<void> _pumpHomepage(
+  WidgetTester tester,
+  Size size, {
+  PlayerState? playerState,
+  SettingsState? settingsState,
+}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
 
   final appCubit = TestAppCubit(AppState(0, null, HomeLayout()));
-  final settingsCubit = TestSettingsCubit(SettingsState.init(), appCubit);
+  final settingsCubit =
+      TestSettingsCubit(settingsState ?? SettingsState.init(), appCubit);
 
   await tester.pumpWidget(MultiBlocProvider(
     providers: [
       BlocProvider<AppCubit>.value(value: appCubit),
       BlocProvider<SettingsCubit>.value(value: settingsCubit),
       BlocProvider<PlayerCubit>(
-        create: (context) =>
-            TestPlayerCubit(PlayerState.init(null), settingsCubit),
+        create: (context) => TestPlayerCubit(
+            playerState ?? PlayerState.init(null), settingsCubit),
       ),
       BlocProvider<DownloadManagerCubit>(
         create: (context) => DownloadManagerCubit(
@@ -119,6 +127,34 @@ Future<void> _pumpHomepage(WidgetTester tester, Size size) async {
   ));
 
   await tester.pumpAndSettle();
+}
+
+Future<void> _pumpExpandedPlayer(
+  WidgetTester tester,
+  Size size, {
+  bool distractionFree = false,
+  int selectedIndex = 3,
+}) async {
+  final video = (globals.service as _TestService).videos.first;
+  final settingsState = SettingsState.init();
+  await _pumpHomepage(
+    tester,
+    size,
+    settingsState: distractionFree
+        ? settingsState.copyWith(settings: {
+            ...settingsState.settings,
+            distractionFreeModeSettingName:
+                SettingsValue(distractionFreeModeSettingName, 'true'),
+          })
+        : settingsState,
+    playerState: PlayerState.init([video]).copyWith(
+      currentlyPlaying: video,
+      isMini: false,
+      isHidden: false,
+      selectedFullScreenIndex: selectedIndex,
+      top: 0,
+    ),
+  );
 }
 
 Future<void> _pumpVideo(WidgetTester tester, Size size) async {
@@ -550,6 +586,182 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tabBar.controller!.index, 0);
+  });
+
+  testWidgets(
+      'phone expanded player tabs swipe and stay synchronized with navigation',
+      (tester) async {
+    await _pumpExpandedPlayer(tester, const Size(390, 844));
+
+    final expandedPlayer = find.byType(ExpandedPlayer);
+    final navigationBar = find.descendant(
+      of: expandedPlayer,
+      matching: find.byType(NavigationBar),
+    );
+
+    void expectSelectedTab(int index) {
+      expect(
+        tester.widget<NavigationBar>(navigationBar).selectedIndex,
+        index,
+      );
+    }
+
+    Future<void> swipeLeft() async {
+      await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> swipeRight() async {
+      await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
+      await tester.pumpAndSettle();
+    }
+
+    Finder destination(String label) => find.descendant(
+          of: navigationBar,
+          matching: find.text(label),
+        );
+
+    expectSelectedTab(3);
+
+    await swipeRight();
+    expectSelectedTab(2);
+    await swipeRight();
+    expectSelectedTab(1);
+    await swipeRight();
+    expectSelectedTab(0);
+    await swipeLeft();
+    expectSelectedTab(1);
+    await swipeLeft();
+    expectSelectedTab(2);
+    await swipeLeft();
+    expectSelectedTab(3);
+
+    await tester.tap(destination('Info'));
+    await tester.pumpAndSettle();
+    expectSelectedTab(0);
+    await tester.tap(destination('Video queue'));
+    await tester.pumpAndSettle();
+    expectSelectedTab(3);
+    await tester.tap(destination('Info'));
+    await tester.pumpAndSettle();
+    expectSelectedTab(0);
+  });
+
+  testWidgets('portrait tablet expanded player tabs ignore horizontal swipes',
+      (tester) async {
+    await _pumpExpandedPlayer(
+      tester,
+      const Size(768, 1024),
+      selectedIndex: 0,
+    );
+
+    final navigationBar = find.descendant(
+      of: find.byType(ExpandedPlayer),
+      matching: find.byType(NavigationBar),
+    );
+
+    expect(tester.widget<NavigationBar>(navigationBar).selectedIndex, 0);
+
+    await tester.dragFrom(const Offset(700, 600), const Offset(-600, 0));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<NavigationBar>(navigationBar).selectedIndex, 0);
+  });
+
+  testWidgets(
+      'distraction-free expanded player maps swipes to its two visible tabs',
+      (tester) async {
+    await _pumpExpandedPlayer(
+      tester,
+      const Size(390, 844),
+      distractionFree: true,
+      selectedIndex: 0,
+    );
+
+    final expandedPlayer = find.byType(ExpandedPlayer);
+    final player = tester.element(expandedPlayer).read<PlayerCubit>();
+    final navigationBar = find.descendant(
+      of: expandedPlayer,
+      matching: find.byType(NavigationBar),
+    );
+
+    void expectSelection({required int tab, required int destination}) {
+      expect(player.state.selectedFullScreenIndex, tab);
+      expect(
+        tester.widget<NavigationBar>(navigationBar).selectedIndex,
+        destination,
+      );
+    }
+
+    Finder destination(String label) => find.descendant(
+          of: navigationBar,
+          matching: find.text(label),
+        );
+
+    expect(destination('Info'), findsOneWidget);
+    expect(destination('Comments'), findsNothing);
+    expect(destination('Recommended'), findsNothing);
+    expect(destination('Video queue'), findsOneWidget);
+    expectSelection(tab: 0, destination: 0);
+
+    await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
+    await tester.pumpAndSettle();
+    expectSelection(tab: 3, destination: 1);
+
+    await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
+    await tester.pumpAndSettle();
+    expectSelection(tab: 0, destination: 0);
+
+    await tester.tap(destination('Video queue'));
+    await tester.pumpAndSettle();
+    expectSelection(tab: 3, destination: 1);
+
+    await tester.tap(destination('Info'));
+    await tester.pumpAndSettle();
+    expectSelection(tab: 0, destination: 0);
+  });
+
+  testWidgets(
+      'expanded player minimizes only for a downward swipe on the video',
+      (tester) async {
+    await _pumpExpandedPlayer(
+      tester,
+      const Size(390, 844),
+      selectedIndex: 0,
+    );
+
+    final expandedPlayer = find.byType(ExpandedPlayer);
+    final player = tester.element(expandedPlayer).read<PlayerCubit>();
+    final videoSurface = find.ancestor(
+      of: find.byKey(const ValueKey('player')),
+      matching: find.byType(AspectRatio),
+    );
+
+    expect(player.state.isMini, isFalse);
+
+    final videoCenter = tester.getCenter(videoSurface);
+
+    await tester.dragFrom(videoCenter, const Offset(-260, 0));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    expect(player.state.selectedFullScreenIndex, 0);
+
+    await tester.dragFrom(videoCenter, const Offset(0, -260));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+
+    await tester.dragFrom(videoCenter, const Offset(0, 260));
+    await tester.pumpAndSettle();
+
+    expect(player.state.isMini, isTrue);
+    expect(player.state.top, isNull);
+    expect(
+      find.descendant(
+        of: expandedPlayer,
+        matching: find.byType(NavigationBar),
+      ),
+      findsNothing,
+    );
   });
 
   group('VideoThumbnailView controls', () {
