@@ -387,7 +387,7 @@ void main() {
     );
     globals.packageInfo = PackageInfo(
         appName: 'Videre',
-        packageName: 'com.github.lamarios.clipious',
+        packageName: 'com.github.dvbeckwitt.videre',
         version: '1.0.0',
         buildNumber: '1');
     globals.db = await SembastSqfDb.createInMemory();

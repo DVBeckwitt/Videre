@@ -8,7 +8,7 @@
 PRODUCT_NAME = Videre
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.github.lamarios.clipious
+PRODUCT_BUNDLE_IDENTIFIER = com.github.dvbeckwitt.videre
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 DVBeckwitt and Videre contributors. All rights reserved.

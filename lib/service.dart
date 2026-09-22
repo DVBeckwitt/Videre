@@ -338,9 +338,9 @@ class Service {
 
   Future<String?> logIn(String serverUrl) async {
     String url =
-        '$serverUrl/authorize_token?scopes=:feed,:subscriptions*,:playlists*,:history*&callback_url=clipious-auth://';
+        '$serverUrl/authorize_token?scopes=:feed,:subscriptions*,:playlists*,:history*&callback_url=videre-auth://';
     final result = await FlutterWebAuth2.authenticate(
-        url: url, callbackUrlScheme: 'clipious-auth');
+        url: url, callbackUrlScheme: 'videre-auth');
 
     final token = Uri.parse(result).queryParameters['token'];
 

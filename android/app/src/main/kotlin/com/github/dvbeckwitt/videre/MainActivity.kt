@@ -1,4 +1,4 @@
-package com.github.lamarios.clipious
+package com.github.dvbeckwitt.videre
 
 import cl.puntito.simple_pip_mode.PipCallbackHelper
 import com.ryanheise.audioservice.AudioServiceActivity;

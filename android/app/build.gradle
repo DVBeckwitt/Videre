@@ -53,7 +53,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.github.lamarios.clipious"
+        applicationId "com.github.dvbeckwitt.videre"
         minSdkVersion 24
         targetSdkVersion 36
         versionCode buildNumber
@@ -76,7 +76,7 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
-    namespace 'com.github.lamarios.clipious'
+    namespace 'com.github.dvbeckwitt.videre'
 }
 
 flutter {

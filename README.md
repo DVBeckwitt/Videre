@@ -43,6 +43,8 @@ https://github.com/DVBeckwitt/Videre
 
 Obtainium can then track new GitHub releases. Android can update an installed APK only when the new APK uses the same signing key.
 
+Videre uses its own Android application ID, `com.github.dvbeckwitt.videre`. Builds that used Clipious's `com.github.lamarios.clipious` ID cannot update in place to this package and may be installed alongside it. Android does not automatically transfer app data between the two packages, so configure Videre again before removing the old installation.
+
 ### Android TV
 
 Install the same release APK directly or track releases through Obtainium. Store-specific Clipious instructions do not apply unless Videre is explicitly published through that store.

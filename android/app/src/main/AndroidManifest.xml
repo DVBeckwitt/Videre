@@ -40,7 +40,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data android:scheme="clipious-auth" />
+                <data android:scheme="videre-auth" />
             </intent-filter>
         </activity>
         <activity
