@@ -4,7 +4,7 @@
 
 Videre is an independently maintained Android, tablet, and TV client for [Invidious](https://invidious.io), a privacy-focused YouTube frontend.
 
-It is a fork of [Clipious](https://github.com/lamarios/clipious), originally created by Paul Fauchon and contributors. Videre is now maintained by DVBeckwitt and is not affiliated with Google, YouTube, Invidious, or the original Clipious maintainers.
+It is a fork of [Clipious](https://github.com/lamarios/clipious), originally created by Paul Fauchon and contributors. I renamed it to Videre, "to watch", as an homage to Invidious' latin etymology. It not affiliated with Google, YouTube, Invidious, or the original Clipious maintainers.
 
 ## How it works
 
