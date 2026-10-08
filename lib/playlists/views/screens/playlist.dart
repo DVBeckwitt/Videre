@@ -1,5 +1,6 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -44,6 +45,28 @@ class PlaylistViewScreen extends StatelessWidget {
     });
   }
 
+  Future<void> downloadPlaylist(BuildContext context) async {
+    final state = context.read<PlaylistCubit>().state;
+    if (state.loading) return;
+    final locals = AppLocalizations.of(context)!;
+    try {
+      final count = await context.read<DownloadManagerCubit>().addDownloads(
+          state.playlist.videos
+              .where((v) => !v.filterHide)
+              .map((v) => v.videoId),
+          quality: '720p',
+          audioOnly: false);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text('${locals.downloadQueued}: ${locals.nVideos(count)}')));
+      }
+    } catch (error) {
+      if (context.mounted)
+        showAlertDialog(context, locals.error, [Text(error.toString())]);
+    }
+  }
+
   removeVideoFromPlayList(BuildContext context, Video v) async {
     if (canDeleteVideos) {
       var locals = AppLocalizations.of(context)!;
@@ -75,23 +98,35 @@ class PlaylistViewScreen extends StatelessWidget {
           return Scaffold(
               appBar: AppBar(
                 title: Text(
-                  playlistState.playlist.title,
+                  playlist.playlistId == localWatchLaterId
+                      ? locals.watchLater
+                      : playlistState.playlist.title,
                 ),
                 actions: [
-                  canDeleteVideos
-                      ? InkWell(
-                          onTap: () => deletePlayList(context),
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Icon(
-                              Icons.delete,
-                              color: colors.secondary,
-                            ),
-                          ),
-                        )
-                      : BellIcon(
-                          itemId: playlist.playlistId,
-                          type: BellIconType.playlist)
+                  IconButton(
+                    tooltip: locals.downloadPlaylist,
+                    onPressed: playlistState.loading ||
+                            playlistState.playlist.videos.isEmpty
+                        ? null
+                        : () => downloadPlaylist(context),
+                    icon: const Icon(Icons.download),
+                  ),
+                  if (canDeleteVideos &&
+                      playlist.playlistId != localWatchLaterId)
+                    InkWell(
+                      onTap: () => deletePlayList(context),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: Icon(
+                          Icons.delete,
+                          color: colors.secondary,
+                        ),
+                      ),
+                    ),
+                  if (!canDeleteVideos && !playlist.isLocal)
+                    BellIcon(
+                        itemId: playlist.playlistId,
+                        type: BellIconType.playlist)
                 ],
               ),
               backgroundColor: colors.surface,

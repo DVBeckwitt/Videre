@@ -5,8 +5,10 @@ import 'package:clipious/main.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/sleep_timer.dart';
+import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -426,13 +428,6 @@ class PlayerControls extends StatelessWidget {
                                         ))),
                               ],
                             )),
-                      if (playerState.errored)
-                        Container(
-                          color: Colors.black.withValues(alpha: 0.8),
-                          child: const Center(
-                            child: Icon(Icons.error),
-                          ),
-                        ),
                       Positioned(
                         left: 0,
                         right: 0,
@@ -475,6 +470,8 @@ class PlayerControls extends StatelessWidget {
                                                                         0.8)),
                                                   ),
                                                 )),
+                                              RemoteControlButton(
+                                                  player: player),
                                               IconButton(
                                                   onPressed: () =>
                                                       player.enterPip(),
@@ -746,6 +743,50 @@ class PlayerControls extends StatelessWidget {
                               end: 1,
                               duration: animationDuration * 0.75,
                               curve: animationCurve),
+                      // Keep recovery above the gesture layer so its buttons work.
+                      if (playerState.errored)
+                        Positioned.fill(
+                          child: ColoredBox(
+                            color: Colors.black.withValues(alpha: 0.8),
+                            child: Center(
+                              child: isMini || isPip
+                                  ? const Icon(Icons.error_outline)
+                                  : Wrap(
+                                      alignment: WrapAlignment.center,
+                                      children: [
+                                        TextButton.icon(
+                                          onPressed: () {
+                                            cubit.removeError();
+                                            if (currentlyPlaying != null) {
+                                              player.switchToVideo(
+                                                Video(
+                                                    videoId: currentlyPlaying
+                                                        .videoId),
+                                                startAt: player.state.position,
+                                              );
+                                            } else if (player.state
+                                                    .offlineCurrentlyPlaying !=
+                                                null) {
+                                              player.switchToOfflineVideo(player
+                                                  .state
+                                                  .offlineCurrentlyPlaying!);
+                                            }
+                                          },
+                                          icon: const Icon(Icons.refresh),
+                                          label: Text(locals.retry),
+                                        ),
+                                        if (currentlyPlaying != null)
+                                          TextButton.icon(
+                                            onPressed: () => AddServerScreen
+                                                .showConnectionHelp(context),
+                                            icon: const Icon(Icons.wifi_find),
+                                            label: Text(locals.connectionHelp),
+                                          ),
+                                      ],
+                                    ),
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),

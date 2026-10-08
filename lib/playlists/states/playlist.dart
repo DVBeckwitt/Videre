@@ -28,7 +28,9 @@ class PlaylistCubit extends Cubit<PlaylistState> {
     if (userPlaylist) {
       emit(state.copyWith(loading: true));
       final playlist = await service.getUserPlaylist(state.playlist.playlistId);
-      emit(state.copyWith(loading: false, playlist: playlist));
+      if (isClosed) return;
+      emit(state.copyWith(playlist: playlist));
+      await getAllVideos();
     }
   }
 
@@ -38,11 +40,12 @@ class PlaylistCubit extends Cubit<PlaylistState> {
 
   Future<bool> removeVideoFromPlayList(Video v) async {
     emit(state.copyWith(loading: true));
-    await service.deleteUserPlaylistVideo(
-        state.playlist.playlistId, v.indexId ?? '');
+    await service.deleteUserPlaylistVideo(state.playlist.playlistId,
+        state.playlist.isLocal ? v.videoId : v.indexId ?? '');
     var videos = List<Video>.from(state.playlist.videos);
     videos.remove(v);
-    var playlist = state.playlist.copyWith(videos: videos);
+    var playlist =
+        state.playlist.copyWith(videos: videos, videoCount: videos.length);
     emit(state.copyWith(playlist: playlist, loading: false));
     return false;
   }
@@ -64,8 +67,11 @@ class PlaylistCubit extends Cubit<PlaylistState> {
       // something is not right, let's get the full playlist
       Playlist pl;
       do {
-        pl = await service.getPublicPlaylists(state.playlist.playlistId,
-            page: page);
+        pl = state.playlist.type == invidiousPlaylist
+            ? await service.getUserPlaylist(state.playlist.playlistId,
+                page: page)
+            : await service.getPublicPlaylists(state.playlist.playlistId,
+                page: page);
 
         var toAdd = pl.videos
             .where((v) =>
@@ -92,7 +98,10 @@ class PlaylistCubit extends Cubit<PlaylistState> {
         } else {
           return;
         }
-      } while (!isClosed && pl.videos.isNotEmpty || pl.removedByFilter > 0);
+      } while (!isClosed &&
+          state.playlist.videos.length + totalFiltered <
+              state.playlist.videoCount &&
+          (pl.videos.isNotEmpty || pl.removedByFilter > 0));
     }
     if (!isClosed) emit(state.copyWith(loading: false));
   }

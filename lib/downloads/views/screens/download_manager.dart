@@ -17,6 +17,19 @@ class DownloadManagerScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(locals.downloads),
+        actions: [
+          BlocBuilder<DownloadManagerCubit, DownloadManagerState>(
+            builder: (context, state) => IconButton(
+              tooltip: locals.downloadsWifiOnly,
+              isSelected: state.wifiOnly,
+              icon: const Icon(Icons.wifi),
+              selectedIcon: const Icon(Icons.wifi_lock),
+              onPressed: () => context
+                  .read<DownloadManagerCubit>()
+                  .setWifiOnly(!state.wifiOnly),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         bottom: false,
@@ -29,6 +42,13 @@ class DownloadManagerScreen extends StatelessWidget {
                         horizontal: innerHorizontalPadding),
                     child: Column(
                       children: [
+                        if (state.wifiOnly)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(state.waitingForWifi
+                                ? locals.downloadsWaitingForWifi
+                                : locals.downloadsWifiOnly),
+                          ),
                         FilledButton.tonal(
                             onPressed:
                                 cubit.canPlayAll() ? cubit.playAll : null,

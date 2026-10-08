@@ -13,6 +13,7 @@ import '../../settings/models/errors/no_server_selected.dart';
 import '../../videos/models/db/dearrow_cache.dart';
 import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/db/progress.dart';
+import '../backup.dart';
 
 abstract class IDbClient {
   close();
@@ -77,6 +78,24 @@ abstract class IDbClient {
   double getVideoProgress(String videoId);
 
   saveProgress(Progress progress);
+
+  List<Progress> getAllProgress() =>
+      throw UnsupportedError('Progress is only available in the app database');
+
+  List<HistoryVideoCache> getLocalHistory() =>
+      throw UnsupportedError('History is only available in the app database');
+
+  Future<void> deleteLocalHistory(String videoId) async =>
+      throw UnsupportedError('History is only available in the app database');
+
+  Future<void> clearLocalHistory() async =>
+      throw UnsupportedError('History is only available in the app database');
+
+  Future<UserBackup> exportBackup() async =>
+      throw UnsupportedError('Backups require the app database');
+
+  Future<void> restoreBackup(UserBackup backup, {bool replace = false}) async =>
+      throw UnsupportedError('Backups require the app database');
 
   Future<void> useServer(Server server);
 

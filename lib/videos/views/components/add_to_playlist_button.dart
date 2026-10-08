@@ -3,9 +3,8 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/globals.dart';
-import 'package:clipious/settings/models/errors/invidious_service_error.dart';
-import 'package:clipious/utils.dart';
 import 'package:clipious/videos/states/add_to_playlist.dart';
+import 'package:clipious/videos/models/video.dart';
 
 import 'add_to_playlist_dialog.dart';
 
@@ -18,36 +17,25 @@ const buttonScaleOffset = 0.8;
 
 class AddToPlayListButton extends StatelessWidget {
   final String videoId;
+  final Video? video;
   final AddToPlayListButtonType type;
   final Function? afterAdd;
 
   const AddToPlayListButton(
       {super.key,
       required this.videoId,
+      this.video,
       this.type = AddToPlayListButtonType.appBar,
       this.afterAdd});
 
-  showAddToPlaylistDialog(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
+  showAddToPlaylistDialog(BuildContext context) async {
     var cubit = context.read<AddToPlaylistCubit>();
-    AddToPlaylistDialog.showAddToPlaylistDialog(context,
+    final added = await AddToPlaylistDialog.showAddToPlaylistDialog(context,
         playlists: cubit.state.playlists,
         videoId: videoId, onAdd: (selectedPlaylistId) async {
-      try {
-        await cubit.saveVideoToPlaylist(selectedPlaylistId);
-        if (afterAdd != null) {
-          afterAdd!();
-        }
-      } catch (err) {
-        if (context.mounted) {
-          showAlertDialog(context, locals.errorAddingVideoToPlaylist, [
-            (err is InvidiousServiceError)
-                ? Text(err.message)
-                : Text(err.runtimeType.toString())
-          ]);
-        }
-      }
+      await cubit.saveVideoToPlaylist(selectedPlaylistId);
     });
+    if (added == true && context.mounted) afterAdd?.call();
   }
 
   @override
@@ -58,7 +46,7 @@ class AddToPlayListButton extends StatelessWidget {
 
     return BlocProvider(
       create: (BuildContext context) =>
-          AddToPlaylistCubit(AddToPlaylistController(videoId)),
+          AddToPlaylistCubit(AddToPlaylistController(videoId), video: video),
       child: BlocBuilder<AddToPlaylistCubit, AddToPlaylistController>(
           builder: (context, state) {
         var cubit = context.read<AddToPlaylistCubit>();

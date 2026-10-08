@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:clipious/app/states/app.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:flutter_swipe_action_cell/core/cell.dart';
@@ -12,104 +13,131 @@ import '../../../utils/models/paginated_list.dart';
 import '../../../utils/views/components/placeholders.dart';
 import '../../states/history.dart';
 
-class HistoryView extends StatelessWidget {
+class HistoryView extends StatefulWidget {
   const HistoryView({super.key});
+
+  @override
+  State<HistoryView> createState() => _HistoryViewState();
+}
+
+class _HistoryViewState extends State<HistoryView> {
+  bool local = true;
 
   @override
   Widget build(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
+    final loggedIn = context.select((AppCubit app) => app.isLoggedIn);
+    final showLocal = local || !loggedIn;
     return MultiBlocProvider(
+      key: ValueKey(showLocal),
       providers: [
         BlocProvider(
             create: (BuildContext context) => ItemListCubit<String>(
                 ItemListState<String>(
                     itemList: PageBasedPaginatedList<String>(
-                        getItemsFunc: service.getUserHistory,
+                        getItemsFunc: showLocal
+                            ? service.getLocalHistoryPage
+                            : service.getUserHistory,
                         maxResults: 20)))),
         BlocProvider(
-          create: (context) =>
-              HistoryCubit(null, context.read<ItemListCubit<String>>()),
+          create: (context) => HistoryCubit(
+              null, context.read<ItemListCubit<String>>(),
+              local: showLocal),
         )
       ],
-      child: BlocBuilder<ItemListCubit<String>, ItemListState<String>>(
-          builder: (context, state) {
-        var listCubit = context.read<ItemListCubit<String>>();
-        var historyCubit = context.read<HistoryCubit>();
-        return Stack(
-          children: [
-            state.error != ItemListErrors.none
-                ? Center(
-                    child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Text(switch (state.error) {
-                      ItemListErrors.invalidScope =>
-                        locals.itemListErrorInvalidScope,
-                      _ => locals.itemlistErrorGeneric
-                    }),
-                  ))
-                : !state.loading && state.items.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Text(locals.noHistory),
-                        ),
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.only(top: 3),
-                        child: RefreshIndicator(
-                          onRefresh: () => listCubit.refreshItems(),
-                          child: ListView.builder(
-                            controller: listCubit.scrollController,
-                            scrollDirection: Axis.vertical,
-                            itemCount:
-                                state.items.length + (state.loading ? 5 : 0),
-                            itemBuilder: (context, index) => Padding(
-                              padding: EdgeInsets.only(
-                                  bottom: index == state.items.length - 1
-                                      ? 70.0
-                                      : 0),
-                              child: index >= state.items.length
-                                  ? const CompactVideoPlaceHolder()
-                                  : SwipeActionCell(
-                                      key: ValueKey(state.items[index]),
-                                      trailingActions: [
-                                        SwipeAction(
-                                          performsFirstActionWithFullSwipe:
-                                              true,
-                                          icon: const Icon(Icons.delete,
-                                              color: Colors.white),
-                                          onTap: (handler) async {
-                                            await handler(true);
-                                            historyCubit.removeFromHistory(
-                                                state.items[index]);
-                                          },
-                                        )
-                                      ],
-                                      child: HistoryVideoView(
+      child: Column(children: [
+        DropdownButton<bool>(
+          value: showLocal,
+          items: [
+            DropdownMenuItem(value: true, child: Text(locals.onDevice)),
+            if (loggedIn)
+              DropdownMenuItem(value: false, child: Text(locals.onServer)),
+          ],
+          onChanged: (value) => setState(() => local = value ?? true),
+        ),
+        Expanded(child:
+            BlocBuilder<ItemListCubit<String>, ItemListState<String>>(
+                builder: (context, state) {
+          var listCubit = context.read<ItemListCubit<String>>();
+          var historyCubit = context.read<HistoryCubit>();
+          return Stack(
+            children: [
+              state.error != ItemListErrors.none
+                  ? Center(
+                      child: Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Text(switch (state.error) {
+                        ItemListErrors.invalidScope =>
+                          locals.itemListErrorInvalidScope,
+                        _ => locals.itemlistErrorGeneric
+                      }),
+                    ))
+                  : !state.loading && state.items.isEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: Text(locals.noHistory),
+                          ),
+                        )
+                      : Padding(
+                          padding: const EdgeInsets.only(top: 3),
+                          child: RefreshIndicator(
+                            onRefresh: () => listCubit.refreshItems(),
+                            child: ListView.builder(
+                              controller: listCubit.scrollController,
+                              scrollDirection: Axis.vertical,
+                              itemCount:
+                                  state.items.length + (state.loading ? 5 : 0),
+                              itemBuilder: (context, index) => Padding(
+                                padding: EdgeInsets.only(
+                                    bottom: index == state.items.length - 1
+                                        ? 70.0
+                                        : 0),
+                                child: index >= state.items.length
+                                    ? const CompactVideoPlaceHolder()
+                                    : SwipeActionCell(
                                         key: ValueKey(state.items[index]),
-                                        videoId: state.items[index],
-                                      )),
+                                        trailingActions: [
+                                          SwipeAction(
+                                            performsFirstActionWithFullSwipe:
+                                                true,
+                                            icon: const Icon(Icons.delete,
+                                                color: Colors.white),
+                                            onTap: (handler) async {
+                                              await handler(true);
+                                              historyCubit.removeFromHistory(
+                                                  state.items[index]);
+                                            },
+                                          )
+                                        ],
+                                        child: HistoryVideoView(
+                                          key: ValueKey(state.items[index]),
+                                          videoId: state.items[index],
+                                        )),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-            if (state.loading) const TopListLoading(),
-            Positioned(
-                bottom: 15,
-                right: 15,
-                child: FloatingActionButton(
-                  onPressed: () {
-                    okCancelDialog(
-                        context,
-                        locals.clearHistoryQuestion,
-                        locals.clearHistoryQuestionExplanation,
-                        () => historyCubit.clearHistory());
-                  },
-                  child: const Icon(Icons.delete),
-                ))
-          ],
-        );
-      }),
+              if (state.loading) const TopListLoading(),
+              Positioned(
+                  bottom: 15,
+                  right: 15,
+                  child: FloatingActionButton(
+                    onPressed: () {
+                      okCancelDialog(
+                          context,
+                          locals.clearHistoryQuestion,
+                          showLocal
+                              ? locals.localHistoryClearDescription
+                              : locals.clearHistoryQuestionExplanation,
+                          () => historyCubit.clearHistory());
+                    },
+                    child: const Icon(Icons.delete),
+                  ))
+            ],
+          );
+        })),
+      ]),
     );
   }
 }

@@ -31,11 +31,8 @@ class AppCubit extends Cubit<AppState> {
       server = null;
     }
     HomeLayout homeLayout = db.getHomeLayout();
-    bool isLoggedIn = (server?.authToken?.isNotEmpty ?? false) ||
-        (server?.sidCookie?.isNotEmpty ?? false);
-
     var firstIndex = int.parse(db.getSettings(onOpenSettingName)?.value ?? '0');
-    if (!isLoggedIn && firstIndex > 1 || firstIndex < 0) {
+    if (firstIndex < 0) {
       firstIndex = 0;
     }
     emit(state.copyWith(

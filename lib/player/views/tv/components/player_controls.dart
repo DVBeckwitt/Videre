@@ -1,4 +1,7 @@
 import 'package:clipious/player/states/tv_player_controls.dart';
+import 'package:clipious/player/views/components/remote_control.dart';
+import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/player/views/tv/components/player_settings.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -42,6 +45,8 @@ class TvPlayerControls extends StatelessWidget {
               context.select((PlayerCubit value) => value.state.isPlaying);
           var position =
               context.select((PlayerCubit value) => value.state.position);
+          final errored = context.select((PlayerCubit value) =>
+              value.state.mediaEvent.state == MediaState.error);
 
           return BlocListener<PlayerCubit, PlayerState>(
             listenWhen: (previous, current) =>
@@ -51,8 +56,9 @@ class TvPlayerControls extends StatelessWidget {
             },
             child: Focus(
               autofocus: true,
-              onKeyEvent: (node, event) =>
-                  cubit.handleRemoteEvents(node, event),
+              onKeyEvent: errored
+                  ? null
+                  : (node, event) => cubit.handleRemoteEvents(node, event),
               child: Stack(
                 children: [
                   Positioned(
@@ -247,6 +253,26 @@ class TvPlayerControls extends StatelessWidget {
                                           Padding(
                                             padding: const EdgeInsets.only(
                                                 right: 16.0),
+                                            child: Tooltip(
+                                              message:
+                                                  locals.remoteControlTitle,
+                                              child: TvButton(
+                                                onPressed: (context) =>
+                                                    RemoteControlButton.show(
+                                                        context, player),
+                                                unfocusedColor:
+                                                    Colors.transparent,
+                                                child: const Padding(
+                                                  padding: EdgeInsets.all(8.0),
+                                                  child: Icon(Icons.cast,
+                                                      size: 30),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                right: 16.0),
                                             child: TvButton(
                                               onPressed: (context) =>
                                                   cubit.displayQueue(),
@@ -386,7 +412,43 @@ class TvPlayerControls extends StatelessWidget {
                                     ],
                                   ),
                                 ))
-                              : const SizedBox.shrink()))
+                              : const SizedBox.shrink())),
+                  if (errored)
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: Colors.black.withValues(alpha: 0.8),
+                        child: Center(
+                          child: FocusScope(
+                            autofocus: true,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(locals.couldntLoadVideo),
+                                TextButton.icon(
+                                  autofocus: true,
+                                  onPressed: currentlyPlaying == null
+                                      ? null
+                                      : () => player.switchToVideo(
+                                          Video(
+                                              videoId:
+                                                  currentlyPlaying.videoId),
+                                          startAt: position),
+                                  icon: const Icon(Icons.refresh),
+                                  label: Text(locals.retry),
+                                ),
+                                TextButton.icon(
+                                  onPressed: () =>
+                                      AddServerScreen.showConnectionHelp(
+                                          context),
+                                  icon: const Icon(Icons.wifi_find),
+                                  label: Text(locals.connectionHelp),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

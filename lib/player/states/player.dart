@@ -24,12 +24,15 @@ import 'package:simple_pip_mode/simple_pip.dart';
 import '../../downloads/models/downloaded_video.dart';
 import '../../main.dart';
 import '../../media_handler.dart';
+import '../../settings/models/db/settings.dart';
 import '../../settings/states/settings.dart';
 import '../../utils/models/pair.dart';
 import '../../videos/models/db/progress.dart' as db_progress;
+import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
+import '../models/playback_session.dart';
 
 part 'player.freezed.dart';
 
@@ -40,15 +43,124 @@ const stepMultiplier = 1.15;
 const maxInt = -1 >>> 1;
 
 var log = Logger('MiniPlayerController');
+final playbackHistoryRevision = ValueNotifier(0);
 
 enum PlayerRepeat { noRepeat, repeatAll, repeatOne }
 
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
+  static PlayerCubit? _sessionOwner;
+  static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
   late final AudioSession audioSession;
+  bool? _remotePlaying;
+  int _progressGeneration = 0;
+  final bool _resumeOnReady;
 
-  PlayerCubit(super.initialState, this.settings) {
+  PlayerCubit(super.initialState, this.settings, {bool resume = false})
+      : _resumeOnReady = resume {
     onReady();
+  }
+
+  PlaybackSession? get savedSession =>
+      PlaybackSession.decode(db.getSettings(playbackSessionSetting)?.value);
+
+  @override
+  void onChange(Change<PlayerState> change) {
+    super.onChange(change);
+    final before = change.currentState;
+    final after = change.nextState;
+    if (after.hasVideo &&
+        (before.currentlyPlaying != after.currentlyPlaying ||
+            before.offlineCurrentlyPlaying != after.offlineCurrentlyPlaying)) {
+      _sessionOwner = this;
+    }
+    if (before.videos != after.videos ||
+        before.offlineVideos != after.offlineVideos ||
+        before.currentlyPlaying != after.currentlyPlaying ||
+        before.offlineCurrentlyPlaying != after.offlineCurrentlyPlaying ||
+        before.playQueue != after.playQueue ||
+        before.isAudio != after.isAudio ||
+        before.position.inSeconds ~/ 5 != after.position.inSeconds ~/ 5) {
+      unawaited(_saveSession(after));
+    }
+  }
+
+  Future<void> _saveSession(PlayerState snapshot) {
+    final id = snapshot.currentlyPlaying?.videoId ??
+        snapshot.offlineCurrentlyPlaying?.videoId;
+    if (id == null || _sessionOwner != this) return _sessionWrite;
+    final database = db;
+    final setting = SettingsValue(
+        playbackSessionSetting,
+        PlaybackSession(
+          videos: snapshot.videos
+              .map((v) => v.videoId == id ? snapshot.currentlyPlaying ?? v : v)
+              .toList(),
+          offlineIds: snapshot.offlineVideos.map((v) => v.videoId).toList(),
+          currentId: id,
+          seconds: snapshot.position.inSeconds,
+          audio: snapshot.isAudio,
+          played: snapshot.playedVideos,
+          next: snapshot.playQueue.toList(),
+        ).encode());
+    // An older TV screen may close after its replacement has begun playing.
+    return _sessionWrite = _sessionWrite.then((_) async {
+      if (_sessionOwner == this) await database.saveSetting(setting);
+    }).catchError((Object error) {
+      log.warning('Could not save playback session', error);
+    });
+  }
+
+  void restoreSession() {
+    final saved = savedSession;
+    if (saved == null) return;
+    final offline = saved.offlineIds
+        .map(db.getDownloadByVideoId)
+        .whereType<DownloadedVideo>()
+        .where((v) => v.downloadComplete)
+        .toList();
+    final ids = {
+      ...saved.videos.map((v) => v.videoId),
+      ...offline.map((v) => v.videoId)
+    };
+    // Keep the player hidden until Resume is pressed; restoring must be silent.
+    emit(state.copyWith(
+        videos: saved.videos,
+        offlineVideos: offline,
+        currentlyPlaying: null,
+        offlineCurrentlyPlaying: null,
+        position: Duration(seconds: saved.seconds),
+        startAt: Duration(seconds: saved.seconds),
+        isHidden: true,
+        playedVideos: saved.played.where(ids.contains).toList(),
+        playQueue: ListQueue.from(saved.next.where(ids.contains)),
+        isAudio: saved.audio && !isTv));
+  }
+
+  Future<void> resumeSession() async {
+    _remotePlaying = null;
+    final saved = savedSession;
+    if (saved == null) return;
+    restoreSession();
+    final videos = state.videos.isNotEmpty ? state.videos : state.offlineVideos;
+    final current =
+        videos.where((v) => v.videoId == saved.currentId).firstOrNull;
+    if (current == null) return;
+    showBigPlayer();
+    await _switchToVideo(current, startAt: Duration(seconds: saved.seconds));
+  }
+
+  Future<void> playRemoteVideo(String videoId, int position, bool playing,
+      {bool Function()? isActive}) async {
+    final video =
+        await service.getVideo(videoId).timeout(const Duration(seconds: 10));
+    if (isClosed || (isActive != null && !isActive())) return;
+    await playVideo([
+      video.copyWith(
+        formatStreams: video.formatStreams ?? [],
+        adaptiveFormats: video.adaptiveFormats ?? [],
+      )
+    ], startAt: Duration(seconds: position), playing: playing);
   }
 
   void setEvent(MediaEvent event) {
@@ -65,6 +177,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       emit(state.copyWith(orientation: newOrientation));
 
       onOrientationChange();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+    if (lifecycle != AppLifecycleState.resumed && !isClosed) {
+      unawaited(_saveSession(state));
     }
   }
 
@@ -117,6 +236,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> onReady() async {
+    final startVideos = state.videos;
+    if (startVideos.isEmpty) restoreSession();
     emit(state.copyWith(
         orientation: getOrientation(),
         forwardStep: settings.state.skipStep,
@@ -128,9 +249,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       avAudioSessionCategoryOptions:
           AVAudioSessionCategoryOptions.allowBluetooth,
     ));
+    WidgetsBinding.instance.addObserver(this);
     if (!isTv) {
-      WidgetsBinding.instance.addObserver(this);
-
       audioSession.becomingNoisyEventStream.listen((event) {
         pause();
       });
@@ -146,10 +266,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       );
       BackButtonInterceptor.add(handleBackButton,
           name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
-    } else if (isTv && state.videos.isNotEmpty) {
-      await switchToVideo(state.videos[0]);
+    } else if (isTv && startVideos.isNotEmpty) {
+      await switchToVideo(startVideos[0], startAt: state.startAt);
       generatePlayQueue();
     }
+    if (_resumeOnReady) await resumeSession();
   }
 
   void handleMediaEvent(MediaEvent event) {
@@ -176,10 +297,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         onProgress(event.value);
         break;
       case MediaEventType.play:
-        _setPlaying(true);
+        _setPlaying(_remotePlaying != false);
+        // Native source setup may autoplay after a newer remote pause command.
+        // Retain the latest intent until another command or video replaces it.
+        if (_remotePlaying == false) pause();
         break;
       case MediaEventType.pause:
         _setPlaying(false);
+        unawaited(_saveSession(state));
+        playbackHistoryRevision.value++;
         break;
       case MediaEventType.volumeChanged:
         _setMuted(!event.value);
@@ -202,9 +328,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   @override
   close() async {
+    _progressGeneration++;
+    await _saveSession(state);
+    if (_sessionOwner == this) _sessionOwner = null;
+    playbackHistoryRevision.value++;
     BackButtonInterceptor.removeByName('miniPlayer');
     WidgetsBinding.instance.removeObserver(this);
-    super.close();
+    await super.close();
   }
 
   bool handleBackButton(bool stopDefaultButtonEvent, RouteInfo info) {
@@ -234,6 +364,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void hide() {
+    unawaited(_saveSession(state));
+    playbackHistoryRevision.value++;
     var mediaEvent = MediaEvent(
         state: MediaState.playing,
         type: MediaEventType.miniDisplayChanged,
@@ -265,17 +397,21 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   double get getBottom => state.isHidden ? -targetHeight : 0;
 
   Future<void> saveProgress(int timeInSeconds) async {
-    if (state.currentlyPlaying != null) {
+    final videoId = state.currentlyPlaying?.videoId ??
+        state.offlineCurrentlyPlaying?.videoId;
+    final length = state.currentlyPlaying?.lengthSeconds ??
+        state.offlineCurrentlyPlaying?.lengthSeconds ??
+        0;
+    if (videoId != null && length > 0) {
       int currentPosition = timeInSeconds;
       // saving progress
-      var currentProgress =
-          currentPosition / (state.currentlyPlaying!.lengthSeconds ?? 1);
+      var currentProgress = (currentPosition / length).clamp(0.0, 1.0);
       if (currentProgress >= 0.9) {
         currentProgress =
             1; // we consider a video with 90%+ progress as watched
       }
       var progress = db_progress.Progress.named(
-          progress: currentProgress, videoId: state.currentlyPlaying!.videoId);
+          progress: currentProgress, videoId: videoId);
 
       await db.saveProgress(progress);
 
@@ -334,12 +470,22 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> onProgress(Duration? position) async {
+    if (isClosed) return;
+    final generation = _progressGeneration;
+    final videoId = state.currentlyPlaying?.videoId ??
+        state.offlineCurrentlyPlaying?.videoId;
     var newPosition = position ?? Duration.zero;
     int currentPosition = newPosition.inSeconds;
-    await saveProgress(currentPosition);
-    log.fine("video progress event");
-
+    // Pause/background must see the latest position even while storage is busy.
     emit(state.copyWith(position: newPosition));
+    await saveProgress(currentPosition);
+    if (isClosed ||
+        generation != _progressGeneration ||
+        state.position != newPosition ||
+        videoId !=
+            (state.currentlyPlaying?.videoId ??
+                state.offlineCurrentlyPlaying?.videoId)) return;
+    log.fine("video progress event");
 
     // if we're already within the last 5 seconds we don't skip to avoid infinite skip loop on late outro segment
     if (state.sponsorSegments.isNotEmpty &&
@@ -510,6 +656,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   /// Switches to a video without changing the queue
   Future<void> _switchToVideo(IdedVideo video, {Duration? startAt}) async {
+    _progressGeneration++;
     try {
       // we move the existing video to the stack of played video
       await audioSession.setActive(true);
@@ -563,13 +710,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             MediaCommand(MediaCommandType.switchToOfflineVideo, value: video);
       }
 
+      final length = currentlyPlaying?.lengthSeconds ??
+          offlineCurrentlyPlaying?.lengthSeconds ??
+          0;
+      final progress = db.getVideoProgress(video.videoId);
+      final resumeAt = startAt ??
+          Duration(seconds: progress < 0.9 ? (length * progress).floor() : 0);
+      _sessionOwner = this;
       emit(state.copyWith(
-          position: Duration.zero,
+          position: resumeAt,
+          startAt: startAt,
+          sponsorSegments: [],
           forwardStep: settings.state.skipStep,
           rewindStep: settings.state.skipStep,
           mediaCommand: mediaCommand,
           currentlyPlaying: currentlyPlaying,
           offlineCurrentlyPlaying: offlineCurrentlyPlaying));
+      unawaited(_saveSession(state));
+
+      if (currentlyPlaying != null) {
+        await db.upsertHistoryVideo(HistoryVideoCache(
+            currentlyPlaying.videoId,
+            currentlyPlaying.title ?? '',
+            currentlyPlaying.author,
+            ImageObject.getBestThumbnail(currentlyPlaying.videoThumbnails)
+                    ?.url ??
+                '',
+            authorId: currentlyPlaying.authorId,
+            lengthSeconds: currentlyPlaying.lengthSeconds));
+        playbackHistoryRevision.value++;
+      }
 
       await setSponsorBlock();
 
@@ -594,12 +764,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> playOfflineVideos(List<DownloadedVideo> offlineVids) async {
+    _remotePlaying = null;
     log.fine('Playing ${offlineVids.length} offline videos');
     await _playVideos(offlineVids);
   }
 
   Future<void> playVideo(List<Video> v,
-      {bool? audio, Duration? startAt}) async {
+      {bool? audio, Duration? startAt, bool? playing}) async {
+    _remotePlaying = playing;
     List<Video> videos = v.where((element) => !element.filtered).toList();
     // TODO: find how to do this with auto router
     log.fine('Playing ${videos.length} videos');
@@ -622,13 +794,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void play() {
+    if (_remotePlaying != null) _remotePlaying = true;
     emit(state.copyWith(
         mediaCommand: const MediaCommand(MediaCommandType.play)));
   }
 
   void pause() {
-    emit(state.copyWith(
-        mediaCommand: const MediaCommand(MediaCommandType.pause)));
+    if (_remotePlaying != null) _remotePlaying = false;
+    emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
   }
 
   void removeVideoFromQueue(String videoId) {
@@ -726,14 +899,16 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> setSponsorBlock() async {
     List<Pair<int>> newSegments = [];
-    if (state.currentlyPlaying != null) {
+    final videoId = state.currentlyPlaying?.videoId;
+    if (videoId != null) {
       List<SponsorSegmentType> types = SponsorSegmentType.values
           .where((e) => db.getSettings(e.settingsName())?.value == 'true')
           .toList();
 
       if (types.isNotEmpty) {
-        List<SponsorSegment> sponsorSegments = await service.getSponsorSegments(
-            state.currentlyPlaying!.videoId, types);
+        List<SponsorSegment> sponsorSegments = await service
+            .getSponsorSegments(videoId, types)
+            .timeout(const Duration(seconds: 3), onTimeout: () => []);
         List<Pair<int>> segments = List.from(sponsorSegments.map((e) {
           Duration start = Duration(seconds: e.segment[0].floor());
           Duration end = Duration(seconds: e.segment[1].floor());
@@ -745,7 +920,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         log.fine('we found ${segments.length} segments to skip');
       }
     }
-    emit(state.copyWith(sponsorSegments: newSegments));
+    if (!isClosed && state.currentlyPlaying?.videoId == videoId) {
+      emit(state.copyWith(sponsorSegments: newSegments));
+    }
   }
 
   void seek(Duration duration) {

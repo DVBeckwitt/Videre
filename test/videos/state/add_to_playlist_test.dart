@@ -13,23 +13,29 @@ void main() {
     const videoId = 'dQw4w9WgXcQ';
     var cubit = AddToPlaylistCubit(const AddToPlaylistController(videoId));
     await cubit.onReady();
-    expect(cubit.state.playlists.length, 0);
+    expect(cubit.state.playlists.length, 1);
     expect(cubit.state.playListCount, 0);
     expect(cubit.state.isVideoLiked, false);
 
     await cubit.toggleLike();
     await cubit.onReady();
     // liking a video, should create the like playlist if it does not exist
-    expect(cubit.state.playlists.length, 1);
-    expect(cubit.state.playlists.any((element) => element.title == likePlaylistName), true);
+    expect(cubit.state.playlists.length, 2);
+    expect(
+        cubit.state.playlists
+            .any((element) => element.title == likePlaylistName),
+        true);
     expect(cubit.state.playListCount, 1);
     expect(cubit.state.isVideoLiked, true);
 
     await cubit.toggleLike();
     await cubit.onReady();
 
-    expect(cubit.state.playlists.length, 1);
-    expect(cubit.state.playlists.any((element) => element.title == likePlaylistName), true);
+    expect(cubit.state.playlists.length, 2);
+    expect(
+        cubit.state.playlists
+            .any((element) => element.title == likePlaylistName),
+        true);
     expect(cubit.state.playListCount, 0);
     expect(cubit.state.isVideoLiked, false);
   });
@@ -41,17 +47,17 @@ void main() {
     const videoId = 'dQw4w9WgXcQ';
     var cubit = AddToPlaylistCubit(const AddToPlaylistController(videoId));
     await cubit.onReady();
-    expect(cubit.state.playlists.length, 1);
+    expect(cubit.state.playlists.length, 2);
     expect(cubit.state.playListCount, 0);
     expect(cubit.state.isVideoLiked, false);
 
-    await cubit.addToPlaylist(cubit.state.playlists.first.playlistId);
+    await cubit.addToPlaylist(cubit.state.playlists
+        .firstWhere((playlist) => playlist.title == 'test playlist')
+        .playlistId);
     await cubit.onReady();
 
-    expect(cubit.state.playlists.length, 1);
+    expect(cubit.state.playlists.length, 2);
     expect(cubit.state.playListCount, 1);
     expect(cubit.state.isVideoLiked, false);
-
-
   });
 }

@@ -9,6 +9,12 @@ part 'playlist.g.dart';
 
 const youtubePlaylist = "youtubePlayList";
 const invidiousPlaylist = "invidiousPlaylist";
+const localPlaylistsSetting = 'local-playlists';
+const localWatchLaterId = 'local:watch-later';
+
+extension LocalPlaylist on Playlist {
+  bool get isLocal => playlistId.startsWith('local:');
+}
 
 @freezed
 sealed class Playlist with _$Playlist {

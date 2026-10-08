@@ -14,6 +14,7 @@ import 'package:clipious/search/models/search_results.dart';
 import 'package:clipious/search/models/search_sort_by.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/models/errors/missing_software_key.dart';
@@ -29,6 +30,7 @@ import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:logging/logging.dart';
+import 'package:uuid/uuid.dart';
 
 import 'channels/models/channel.dart';
 import 'channels/models/channel_playlists.dart';
@@ -77,6 +79,7 @@ const imgurClientId = 'Client-ID 2cfbc27ce77879d';
 class Service {
   final log = Logger('Service');
   final Client httpClient;
+  Future<void> _localPlaylistWrite = Future.value();
 
   Service({Client? httpClient}) : httpClient = httpClient ?? http.Client();
 
@@ -753,12 +756,19 @@ class Service {
   }
 
   Future<List<Playlist>> getUserPlaylists({bool postProcessing = true}) async {
+    var local = getLocalPlaylists();
+    if (postProcessing) {
+      local = await Future.wait(local.map((p) async =>
+          p.copyWith(videos: await VideoFilter.filterVideos(p.videos))));
+    }
     try {
+      if (!await isLoggedIn()) return local;
       var req = await buildRequest(urlGetUserPlaylists, authenticated: true);
 
       final response = await httpClient.get(req.uri, headers: req.headers);
       Iterable i = handleResponse(response);
-      var list = List<Playlist>.from(i.map((e) => Playlist.fromJson(e)));
+      var list = List<Playlist>.from(
+          i.map((e) => Playlist.fromJson(e).copyWith(type: invidiousPlaylist)));
       if (postProcessing) {
         for (int i = 0; i < list.length; i++) {
           var pl = list[i];
@@ -766,10 +776,40 @@ class Service {
           list[i] = pl;
         }
       }
-      return list.sortByReversed((e) => e.updated ?? 0).toList();
+      return [...local, ...list.sortByReversed((e) => e.updated ?? 0)];
     } catch (e) {
-      return [];
+      return local;
     }
+  }
+
+  List<Playlist> getLocalPlaylists() {
+    final stored = db.getSettings(localPlaylistsSetting)?.value;
+    final playlists = stored == null
+        ? <Playlist>[]
+        : (jsonDecode(stored) as List)
+            .map((item) => Playlist.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+    if (!playlists.any((p) => p.playlistId == localWatchLaterId)) {
+      playlists.insert(
+          0,
+          const Playlist(
+              title: 'Watch Later',
+              playlistId: localWatchLaterId,
+              author: '',
+              videoCount: 0));
+    }
+    return playlists;
+  }
+
+  Future<void> _updateLocalPlaylists(void Function(List<Playlist>) update) {
+    // Serialize saves so two quick additions cannot overwrite each other.
+    return _localPlaylistWrite =
+        _localPlaylistWrite.catchError((_) {}).then((_) async {
+      final playlists = getLocalPlaylists();
+      update(playlists);
+      await db.saveSetting(SettingsValue(localPlaylistsSetting,
+          jsonEncode(playlists.map((p) => p.toJson()).toList())));
+    });
   }
 
   Future<ChannelPlaylists> getChannelPlaylists(String channelId,
@@ -788,6 +828,14 @@ class Service {
   }
 
   Future<String?> createPlayList(String name, String type) async {
+    name = name.trim();
+    if (name.isEmpty) throw ArgumentError('Enter a playlist name');
+    if (type == 'local') {
+      final id = 'local:${const Uuid().v4()}';
+      await _updateLocalPlaylists((playlists) => playlists.add(
+          Playlist(title: name, playlistId: id, author: '', videoCount: 0)));
+      return id;
+    }
     var req = await buildRequest(urlPostUserPlaylists,
         authenticated: true, forceJson: true);
 
@@ -804,7 +852,40 @@ class Service {
     return playlist['playlistId'] as String;
   }
 
-  Future<void> addVideoToPlaylist(String playListId, String videoId) async {
+  Future<void> addVideoToPlaylist(String playListId, String videoId,
+      {Video? video}) async {
+    if (playListId.startsWith('local:')) {
+      final cached = video ??
+          db.getHistoryVideoByVideoId(videoId)?.toVideo() ??
+          getLocalPlaylists()
+              .expand((p) => p.videos)
+              .where((v) => v.videoId == videoId)
+              .firstOrNull;
+      final savedVideo = cached ?? await getVideo(videoId);
+      await _updateLocalPlaylists((playlists) {
+        final index = playlists.indexWhere((p) => p.playlistId == playListId);
+        if (index < 0) throw StateError('Playlist no longer exists');
+        final playlist = playlists[index];
+        if (playlist.videos.any((v) => v.videoId == videoId)) return;
+        // Keep display metadata; playback URLs expire and are fetched when needed.
+        final videos = [
+          ...playlist.videos,
+          Video(
+            videoId: videoId,
+            indexId: videoId,
+            title: savedVideo.title,
+            author: savedVideo.author,
+            authorId: savedVideo.authorId,
+            authorUrl: savedVideo.authorUrl,
+            lengthSeconds: savedVideo.lengthSeconds,
+            videoThumbnails: savedVideo.videoThumbnails,
+          )
+        ];
+        playlists[index] =
+            playlist.copyWith(videos: videos, videoCount: videos.length);
+      });
+      return;
+    }
     var req = await buildRequest(urlPostUserPlaylistVideo,
         pathParams: {":id": playListId}, authenticated: true, forceJson: true);
 
@@ -818,6 +899,12 @@ class Service {
   }
 
   Future<void> deleteUserPlaylist(String playListId) async {
+    if (playListId.startsWith('local:')) {
+      if (playListId == localWatchLaterId) return;
+      await _updateLocalPlaylists((playlists) =>
+          playlists.removeWhere((p) => p.playlistId == playListId));
+      return;
+    }
     var req = await buildRequest(urlDeleteUserPlaylist,
         pathParams: {":id": playListId}, authenticated: true, forceJson: true);
 
@@ -827,6 +914,17 @@ class Service {
 
   Future<void> deleteUserPlaylistVideo(
       String playListId, String indexId) async {
+    if (playListId.startsWith('local:')) {
+      await _updateLocalPlaylists((playlists) {
+        final index = playlists.indexWhere((p) => p.playlistId == playListId);
+        if (index < 0) return;
+        final videos =
+            playlists[index].videos.where((v) => v.videoId != indexId).toList();
+        playlists[index] = playlists[index]
+            .copyWith(videos: videos, videoCount: videos.length);
+      });
+      return;
+    }
     final req = await buildRequest(urlDeleteUserPlaylistVideo,
         pathParams: {':id': playListId, ':index': indexId},
         authenticated: true,
@@ -837,6 +935,9 @@ class Service {
   }
 
   Future<List<String>> getUserHistory(int page, int maxResults) async {
+    if (!await _hasHistoryAccount()) {
+      return getLocalHistoryPage(page, maxResults);
+    }
     final req = await buildRequest(urlGetClearHistory,
         query: {'page': page.toString(), 'max_results': maxResults.toString()},
         authenticated: true,
@@ -847,6 +948,13 @@ class Service {
 
     return List<String>.from(i.map((e) => e as String));
   }
+
+  Future<List<String>> getLocalHistoryPage(int page, int maxResults) async => db
+      .getLocalHistory()
+      .skip((page - 1) * maxResults)
+      .take(maxResults)
+      .map((v) => v.videoId)
+      .toList();
 
   void syncHistory() async {
     try {
@@ -864,6 +972,7 @@ class Service {
   }
 
   Future<void> clearUserHistory() async {
+    if (!await _hasHistoryAccount()) return db.clearLocalHistory();
     var req = await buildRequest(urlGetClearHistory,
         authenticated: true, forceJson: true);
 
@@ -872,6 +981,7 @@ class Service {
   }
 
   Future<void> deleteFromUserHistory(String videoId) async {
+    if (!await _hasHistoryAccount()) return db.deleteLocalHistory(videoId);
     var req = await buildRequest(urlAddDeleteHistory,
         pathParams: {':id': videoId}, authenticated: true, forceJson: true);
     final response = await httpClient.delete(req.uri, headers: req.headers);
@@ -886,17 +996,26 @@ class Service {
     handleResponse(response);
   }
 
+  Future<bool> _hasHistoryAccount() async {
+    try {
+      return await isLoggedIn();
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<Playlist> getPublicPlaylists(String playlistId,
       {int? page, bool saveLastSeen = true}) async {
+    if (playlistId.startsWith('local:')) return getUserPlaylist(playlistId);
     final req = await buildRequest(urlGetPublicPlaylist,
         pathParams: {':id': playlistId}, query: {'page': page?.toString()});
 
     final response = await httpClient.get(req.uri, headers: req.headers);
     var playlist = Playlist.fromJson(handleResponse(response));
     var oldLength = playlist.videos.length;
+    final videos = await postProcessVideos(playlist.videos);
     playlist = playlist.copyWith(
-        videos: await postProcessVideos(playlist.videos),
-        removedByFilter: oldLength - playlist.videos.length);
+        videos: videos, removedByFilter: oldLength - videos.length);
 
     if (saveLastSeen) {
       await fileDb.setPlaylistNotificationLastViewedVideo(
@@ -906,16 +1025,25 @@ class Service {
     return playlist;
   }
 
-  Future<Playlist> getUserPlaylist(String playlistId) async {
+  Future<Playlist> getUserPlaylist(String playlistId, {int? page}) async {
+    if (playlistId.startsWith('local:')) {
+      final playlist =
+          getLocalPlaylists().firstWhere((p) => p.playlistId == playlistId);
+      return playlist.copyWith(
+          videos: await VideoFilter.filterVideos(playlist.videos));
+    }
     final req = await buildRequest(urlGetUserPlaylist,
-        pathParams: {':id': playlistId}, authenticated: true);
+        pathParams: {':id': playlistId},
+        query: {'page': page?.toString()},
+        authenticated: true);
 
     final response = await httpClient.get(req.uri, headers: req.headers);
-    var playlist = Playlist.fromJson(handleResponse(response));
+    var playlist = Playlist.fromJson(handleResponse(response))
+        .copyWith(type: invidiousPlaylist);
     var oldLength = playlist.videos.length;
+    final videos = await postProcessVideos(playlist.videos);
     playlist = playlist.copyWith(
-        videos: await postProcessVideos(playlist.videos),
-        removedByFilter: oldLength - playlist.videos.length);
+        videos: videos, removedByFilter: oldLength - videos.length);
 
     return playlist;
   }

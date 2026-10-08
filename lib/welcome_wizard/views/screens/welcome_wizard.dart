@@ -6,6 +6,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
 import 'package:clipious/settings/views/components/manager_server_inner.dart';
+import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:clipious/welcome_wizard/states/welcome_wizard.dart';
 
@@ -44,18 +45,47 @@ class WelcomeWizardScreen extends StatelessWidget {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const SizedBox(
-                            width: 150, height: 150, child: AppIcon()),
+                        const SizedBox(width: 72, height: 72, child: AppIcon()),
                         Text(
                           'Videre',
                           style: textTheme.displaySmall
                               ?.copyWith(color: colors.primary),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Text(locals.addServer),
+                        Expanded(
+                          child: server == null
+                              ? ListView(
+                                  padding: const EdgeInsets.all(16),
+                                  children: [
+                                    Text(locals.setupConnectionTitle,
+                                        style: textTheme.titleLarge),
+                                    const SizedBox(height: 12),
+                                    Text(locals.setupInstanceDescription),
+                                    const SizedBox(height: 16),
+                                    ListTile(
+                                      leading: const Icon(Icons.public),
+                                      title: Text(locals.findPublicInstance),
+                                      subtitle: Text(
+                                          locals.setupDirectoryDescription),
+                                      trailing: const Icon(Icons.open_in_new),
+                                      onTap: () =>
+                                          AddServerScreen.openInstanceDirectory(
+                                              context),
+                                    ),
+                                    ListTile(
+                                      leading: const Icon(Icons.dns_outlined),
+                                      title: Text(locals.enterInstanceAddress),
+                                      subtitle:
+                                          Text(locals.setupAddressDescription),
+                                      trailing: const Icon(Icons.chevron_right),
+                                      onTap: () => const ManagerServersView()
+                                          .addServer(context),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(locals.setupInstanceAvailability),
+                                  ],
+                                )
+                              : const ManagerServersView(showAdvanced: false),
                         ),
-                        const Expanded(child: ManagerServersView()),
                         Padding(
                           padding: const EdgeInsets.all(8.0),
                           child: FilledButton.tonal(

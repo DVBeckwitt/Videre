@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -21,6 +22,7 @@ import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:uuid/uuid.dart';
 
 import '../settings/states/settings.dart';
+import 'backup.dart';
 
 const maxLogs = 1000;
 const singleId = 1;
@@ -240,6 +242,125 @@ class SembastSqfDb extends IDbClient {
   double getVideoProgress(String videoId) {
     var v = progressStore.record(videoId).getSync(db);
     return v != null ? Progress.fromJson(v).progress : 0;
+  }
+
+  @override
+  List<Progress> getAllProgress() => progressStore
+      .findSync(db)
+      .map((record) => Progress.fromJson(record.value))
+      .toList();
+
+  @override
+  List<HistoryVideoCache> getLocalHistory() => historyVideoCacheStore
+      .findSync(db, finder: Finder(sortOrders: [SortOrder('created', false)]))
+      .map((record) => HistoryVideoCache.fromJson(record.value))
+      .toList();
+
+  @override
+  Future<void> deleteLocalHistory(String videoId) =>
+      db.transaction((txn) async {
+        await historyVideoCacheStore.record(videoId).delete(txn);
+        await progressStore.record(videoId).delete(txn);
+        // A saved queue can bring a removed item back into Continue Watching.
+        await settingsStore.record('playback-session').delete(txn);
+      });
+
+  @override
+  Future<void> clearLocalHistory() => db.transaction((txn) async {
+        await historyVideoCacheStore.delete(txn);
+        await progressStore.delete(txn);
+        await settingsStore.record('playback-session').delete(txn);
+      });
+
+  @override
+  Future<UserBackup> exportBackup() async => UserBackup.parse(jsonEncode({
+        'format': 'videre',
+        'version': 1,
+        'settings': getAllSettings()
+            .where(UserBackup.validSetting)
+            .map((setting) => setting.toJson())
+            .toList(),
+        'subscriptions': (await getOfflineSubscriptions())
+            .map((sub) => sub.toJson())
+            .toList(),
+        'filters': getAllFilters()
+            .map((filter) => {...filter.toJson(), 'uuid': filter.uuid})
+            .toList(),
+        'progress':
+            getAllProgress().map((progress) => progress.toJson()).toList(),
+        'history': getLocalHistory().map((video) => video.toJson()).toList(),
+        'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
+      }));
+
+  @override
+  Future<void> restoreBackup(UserBackup backup, {bool replace = false}) async {
+    final stores = {
+      'settings': settingsStore,
+      'subscriptions': offlineSubscriptions,
+      'filters': videoFiltersStore,
+      'progress': progressStore,
+      'history': historyVideoCacheStore
+    };
+    const keys = {
+      'settings': 'name',
+      'subscriptions': 'channelId',
+      'filters': 'uuid',
+      'progress': 'videoId',
+      'history': 'videoId'
+    };
+    // Commit the library together; a failed restore must leave the old data usable.
+    await db.transaction((txn) async {
+      for (final entry in stores.entries) {
+        if (backup.subscriptionsOnly && entry.key != 'subscriptions') continue;
+        if (replace) {
+          if (entry.key == 'settings') {
+            for (final setting
+                in getAllSettings().where(UserBackup.validSetting)) {
+              await settingsStore.record(setting.name).delete(txn);
+            }
+          } else {
+            await entry.value.delete(txn);
+          }
+        }
+        for (final row in backup.sections[entry.key]!) {
+          final key = row[keys[entry.key]] as String;
+          if (!replace && await entry.value.record(key).exists(txn)) continue;
+          await entry.value.record(key).put(txn, row);
+        }
+      }
+      if (!backup.subscriptionsOnly) {
+        final old = replace
+            ? <dynamic>[]
+            : jsonDecode(getSettings('local-playlists')?.value ?? '[]') as List;
+        final lists = <String, dynamic>{
+          for (final playlist in old) playlist['playlistId'] as String: playlist
+        };
+        for (final playlist in backup.sections['playlists']!) {
+          final id = playlist['playlistId'] as String;
+          if (lists.containsKey(id)) {
+            final videos = <String, dynamic>{
+              for (final video in lists[id]['videos'] as List)
+                video['videoId'] as String: video
+            };
+            for (final video in playlist['videos'] as List) {
+              videos.putIfAbsent(video['videoId'] as String, () => video);
+            }
+            lists[id] = {
+              ...lists[id] as Map,
+              'videos': videos.values.toList(),
+              'videoCount': videos.length
+            };
+          } else {
+            lists[id] = playlist;
+          }
+        }
+        await settingsStore.record('local-playlists').put(
+            txn,
+            SettingsValue('local-playlists', jsonEncode(lists.values.toList()))
+                .toJson());
+        await settingsStore.record('playback-session').delete(txn);
+      }
+    });
   }
 
   @override

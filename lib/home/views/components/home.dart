@@ -9,6 +9,7 @@ import 'package:clipious/home/states/home.dart';
 import 'package:clipious/router.dart';
 
 import '../../../utils/views/components/app_icon.dart';
+import 'continue_watching.dart';
 
 const double smallVideoViewHeight = 140;
 
@@ -88,48 +89,66 @@ class HomeView extends StatelessWidget {
                       child: AppIcon(
                         height: 200,
                       ))
-                  : Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        AnimatedCrossFade(
-                          crossFadeState: scrolled
-                              ? CrossFadeState.showSecond
-                              : CrossFadeState.showFirst,
-                          firstCurve: Curves.easeInOutQuad,
-                          secondCurve: Curves.easeInOutQuad,
-                          sizeCurve: Curves.easeInOutQuad,
-                          duration: animationDuration,
-                          firstChild: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children:
-                                  getSmallSources(context, layout, isLoggedIn)),
-                          secondChild: const Row(
+                  : LayoutBuilder(
+                      builder: (context, constraints) => Column(
+                            mainAxisAlignment: MainAxisAlignment.start,
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              SizedBox.shrink(),
-                            ],
-                          ),
-                        ),
-                        if (layout.showBigSource)
-                          Row(
-                            children: [
-                              Text(
-                                layout.bigSource.getLabel(locals),
-                                style: textTheme.titleMedium
-                                    ?.copyWith(color: colors.secondary),
+                              AnimatedCrossFade(
+                                crossFadeState: scrolled
+                                    ? CrossFadeState.showSecond
+                                    : CrossFadeState.showFirst,
+                                firstCurve: Curves.easeInOutQuad,
+                                secondCurve: Curves.easeInOutQuad,
+                                sizeCurve: Curves.easeInOutQuad,
+                                duration: animationDuration,
+                                firstChild: ConstrainedBox(
+                                  // Keep space for the feed on short screens; the
+                                  // summaries remain available by scrolling them.
+                                  constraints: BoxConstraints(
+                                      maxHeight: constraints.maxHeight *
+                                          (layout.showBigSource ? 0.6 : 1)),
+                                  child:
+                                      NotificationListener<ScrollNotification>(
+                                    onNotification: (_) => true,
+                                    child: SingleChildScrollView(
+                                      child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const ContinueWatching(),
+                                            ...getSmallSources(
+                                                context, layout, isLoggedIn),
+                                          ]),
+                                    ),
+                                  ),
+                                ),
+                                secondChild: const Row(
+                                  children: [
+                                    SizedBox.shrink(),
+                                  ],
+                                ),
                               ),
+                              if (layout.showBigSource)
+                                Row(
+                                  children: [
+                                    Text(
+                                      layout.bigSource.getLabel(locals),
+                                      style: textTheme.titleMedium
+                                          ?.copyWith(color: colors.secondary),
+                                    ),
+                                  ],
+                                ),
+                              if (layout.showBigSource)
+                                Expanded(
+                                    key: ValueKey(layout.bigSource),
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(
+                                          right: innerHorizontalPadding),
+                                      child: layout.bigSource
+                                          .build(context, false),
+                                    ))
                             ],
-                          ),
-                        if (layout.showBigSource)
-                          Expanded(
-                              key: ValueKey(layout.bigSource),
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                    right: innerHorizontalPadding),
-                                child: layout.bigSource.build(context, false),
-                              ))
-                      ],
-                    )),
+                          ))),
         );
       }),
     );

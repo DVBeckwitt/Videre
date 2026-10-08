@@ -40,6 +40,12 @@ class FakeService extends Service {
   Future<bool> isLoggedIn() async => false;
 }
 
+class FailingVideoService extends FakeService {
+  @override
+  Future<Video> getVideo(String videoId, {Server? serverOverride}) async =>
+      throw StateError('Instance unavailable');
+}
+
 class RecordingPlayerCubit extends TestPlayerCubit {
   RecordingPlayerCubit(super.initialState, super.settings);
 
@@ -247,6 +253,39 @@ void main() {
     tearDown(() async {
       service = Service();
       await db.close();
+    });
+
+    test('retry clears a failed instance response and loads the video',
+        () async {
+      service = FailingVideoService();
+      final app = TestAppCubit(AppState(0, null, HomeLayout()));
+      app.intentDataStreamSubscription =
+          const Stream<void>.empty().listen((_) {});
+      await app.stream.firstWhere((state) => state.server != null);
+      final settings = TestSettingsCubit(SettingsState.init(), app);
+      final player =
+          TestPlayerCubit(PlayerState(playQueue: ListQueue()), settings);
+      final downloads =
+          DownloadManagerCubit(const DownloadManagerState(), player);
+      final video = VideoCubit(
+          VideoState.init(videoId: 'retry-video'), downloads, player, settings);
+
+      await video.stream.firstWhere((state) => !state.loadingVideo);
+      expect(video.state.error, coulnotLoadVideos);
+      service = FakeService();
+      final pending = video.onReady();
+      expect(video.state.error, isEmpty);
+      expect(video.state.loadingVideo, isTrue);
+      await pending;
+      expect(video.state.error, isEmpty);
+      expect(video.state.loadingVideo, isFalse);
+      expect(video.state.video?.videoId, 'retry-video');
+
+      await video.close();
+      await downloads.close();
+      await player.close();
+      await settings.close();
+      await app.close();
     });
 
     test('If youtube dislike is down, it should not break the video loading',

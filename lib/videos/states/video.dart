@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -20,6 +22,7 @@ class VideoCubit extends Cubit<VideoState> {
   final DownloadManagerCubit downloadManager;
   final PlayerCubit player;
   final SettingsCubit settings;
+  StreamSubscription<DownloadManagerState>? _downloadSubscription;
 
   VideoCubit(
       super.initialState, this.downloadManager, this.player, this.settings) {
@@ -27,6 +30,8 @@ class VideoCubit extends Cubit<VideoState> {
   }
 
   Future<void> onReady() async {
+    if (isClosed) return;
+    emit(state.copyWith(loadingVideo: true, error: ''));
     try {
       Video video = await service.getVideo(state.videoId);
       var dislikes = state.dislikes;
@@ -40,11 +45,13 @@ class VideoCubit extends Cubit<VideoState> {
         log.info("Failed to get dislikes for video ${state.videoId}");
       }
 
+      final isLoggedIn = await service.isLoggedIn();
+      if (isClosed) return;
       emit(state.copyWith(
           loadingVideo: false,
           video: video,
           dislikes: dislikes,
-          isLoggedIn: await service.isLoggedIn()));
+          isLoggedIn: isLoggedIn));
 
       getDownloadStatus();
     } catch (err) {
@@ -54,48 +61,42 @@ class VideoCubit extends Cubit<VideoState> {
       } else {
         error = coulnotLoadVideos;
       }
-      emit(state.copyWith(error: error, loadingVideo: false));
-      rethrow;
+      if (!isClosed) emit(state.copyWith(error: error, loadingVideo: false));
     }
   }
 
   getDownloadStatus() {
-    var downloadedVideo = db.getDownloadByVideoId(state.videoId);
-    initStreamListener();
-    if (!isClosed) emit(state.copyWith(downloadedVideo: downloadedVideo));
+    _downloadSubscription ??= downloadManager.stream.listen(_setDownloadStatus);
+    _setDownloadStatus(downloadManager.state);
+  }
+
+  void initStreamListener() => getDownloadStatus();
+
+  void _setDownloadStatus(DownloadManagerState downloads) {
+    if (isClosed) return;
+    final video =
+        downloads.videos.where((v) => v.videoId == state.videoId).firstOrNull;
+    final progress = downloads.downloadProgresses[state.videoId];
+    emit(state.copyWith(
+        downloadedVideo: video,
+        downloading: progress != null &&
+            !downloads.waitingForWifi &&
+            !downloads.pausedVideoIds.contains(state.videoId),
+        downloadProgress: video?.downloadComplete == true
+            ? 1
+            : progress != null && progress.total > 0
+                ? progress.count / progress.total
+                : 0));
   }
 
   @override
   close() async {
-    var state = this.state.copyWith();
-    if (downloadManager.state.downloadProgresses.containsKey(state.videoId)) {
-      downloadManager.removeListener(state.videoId, onDownloadProgress);
-    }
-    super.close();
+    await _downloadSubscription?.cancel();
+    return super.close();
   }
 
   onDownload() {
     emit(state.copyWith(downloading: true, downloadProgress: 0));
-  }
-
-  onDownloadProgress(double progress) {
-    if (state.video != null) {
-      late bool downloading;
-      if (progress < 1) {
-        downloading = true;
-      } else {
-        getDownloadStatus();
-        downloading = false;
-      }
-      emit(
-          state.copyWith(downloadProgress: progress, downloading: downloading));
-    }
-  }
-
-  initStreamListener() {
-    if (downloadManager.state.downloadProgresses.containsKey(state.videoId)) {
-      downloadManager.addListener(state.videoId, onDownloadProgress);
-    }
   }
 
   togglePlayRecommendedNext(bool? value) {

@@ -1305,10 +1305,19 @@ class TvPlayerRoute extends PageRouteInfo<TvPlayerRouteArgs> {
   TvPlayerRoute({
     Key? key,
     required List<Video> videos,
+    bool resumeSession = false,
+    Duration? startAt,
+    bool receiveRemote = false,
     List<PageRouteInfo>? children,
   }) : super(
           TvPlayerRoute.name,
-          args: TvPlayerRouteArgs(key: key, videos: videos),
+          args: TvPlayerRouteArgs(
+            key: key,
+            videos: videos,
+            resumeSession: resumeSession,
+            startAt: startAt,
+            receiveRemote: receiveRemote,
+          ),
           initialChildren: children,
           argsEquality: false,
         );
@@ -1319,21 +1328,39 @@ class TvPlayerRoute extends PageRouteInfo<TvPlayerRouteArgs> {
     name,
     builder: (data) {
       final args = data.argsAs<TvPlayerRouteArgs>();
-      return TvPlayerScreen(key: args.key, videos: args.videos);
+      return TvPlayerScreen(
+        key: args.key,
+        videos: args.videos,
+        resumeSession: args.resumeSession,
+        startAt: args.startAt,
+        receiveRemote: args.receiveRemote,
+      );
     },
   );
 }
 
 class TvPlayerRouteArgs {
-  const TvPlayerRouteArgs({this.key, required this.videos});
+  const TvPlayerRouteArgs({
+    this.key,
+    required this.videos,
+    this.resumeSession = false,
+    this.startAt,
+    this.receiveRemote = false,
+  });
 
   final Key? key;
 
   final List<Video> videos;
 
+  final bool resumeSession;
+
+  final Duration? startAt;
+
+  final bool receiveRemote;
+
   @override
   String toString() {
-    return 'TvPlayerRouteArgs{key: $key, videos: $videos}';
+    return 'TvPlayerRouteArgs{key: $key, videos: $videos, resumeSession: $resumeSession, startAt: $startAt, receiveRemote: $receiveRemote}';
   }
 }
 

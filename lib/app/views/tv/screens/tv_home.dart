@@ -14,6 +14,8 @@ import 'package:clipious/videos/views/components/subscriptions.dart';
 import 'package:clipious/videos/views/components/trending.dart';
 
 import '../../../../home/models/db/home_layout.dart';
+import '../../../../home/views/components/continue_watching.dart';
+import '../../../../player/views/tv/screens/tv_player_view.dart';
 import '../../../../router.dart';
 import '../../../../utils/views/components/app_icon.dart';
 import '../../../../videos/views/components/popular.dart';
@@ -186,6 +188,27 @@ class TvHomeScreen extends StatelessWidget {
                                 TvButton(
                                   onFocusChanged:
                                       homeCubit.menuItemFocusChanged,
+                                  onPressed: (context) => Navigator.of(context)
+                                      .push(MaterialPageRoute<void>(
+                                          builder: (_) => const TvPlayerScreen(
+                                              videos: [],
+                                              receiveRemote: true))),
+                                  unfocusedColor: Colors.transparent,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Row(children: [
+                                      const Padding(
+                                          padding: EdgeInsets.only(right: 8),
+                                          child: Icon(Icons.phonelink)),
+                                      if (homeState)
+                                        const MenuItemText(
+                                            'Receive from phone'),
+                                    ]),
+                                  ),
+                                ),
+                                TvButton(
+                                  onFocusChanged:
+                                      homeCubit.menuItemFocusChanged,
                                   onPressed: (context) => openSettings(context),
                                   unfocusedColor: colors.secondaryContainer
                                       .withValues(alpha: 0.0),
@@ -219,57 +242,61 @@ class TvHomeScreen extends StatelessWidget {
                             physics: const NeverScrollableScrollPhysics(),
                             shrinkWrap: true,
                             // crossAxisAlignment: CrossAxisAlignment.start,
-                            children: allowedPages
-                                .where((e) =>
-                                    e == HomeDataSource.subscription ||
-                                    e == HomeDataSource.trending ||
-                                    e == HomeDataSource.popular)
-                                .map((e) {
-                              GlobalKey? key = switch (e) {
-                                (HomeDataSource.popular) => popularTitle,
-                                (HomeDataSource.subscription) =>
-                                  subscriptionTitle,
-                                (HomeDataSource.trending) => trendingTitle,
-                                (_) => null,
-                              };
+                            children: [
+                              const ContinueWatching(),
+                              ...allowedPages
+                                  .where((e) =>
+                                      e == HomeDataSource.subscription ||
+                                      e == HomeDataSource.trending ||
+                                      e == HomeDataSource.popular)
+                                  .map((e) {
+                                GlobalKey? key = switch (e) {
+                                  (HomeDataSource.popular) => popularTitle,
+                                  (HomeDataSource.subscription) =>
+                                    subscriptionTitle,
+                                  (HomeDataSource.trending) => trendingTitle,
+                                  (_) => null,
+                                };
 
-                              focusFunction(video, index, focus) {
-                                if (key != null && focus) {
-                                  Scrollable.ensureVisible(key.currentContext!,
-                                      duration: animationDuration,
-                                      curve: Curves.easeInOutQuad,
-                                      alignmentPolicy:
-                                          ScrollPositionAlignmentPolicy
-                                              .keepVisibleAtStart);
-                                }
-                              }
-
-                              return Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Padding(
-                                    key: key,
-                                    padding: const EdgeInsets.only(top: 16.0),
-                                    child: Text(e.getLabel(locals),
-                                        style: textTheme.titleLarge),
-                                  ),
-                                  switch (e) {
-                                    (HomeDataSource.popular) => Popular(
-                                        onItemFocus: focusFunction,
-                                      ),
-                                    (HomeDataSource.subscription) =>
-                                      Subscriptions(
-                                        onItemFocus: focusFunction,
-                                      ),
-                                    (HomeDataSource.trending) => Trending(
-                                        onItemFocus: focusFunction,
-                                      ),
-                                    (_) => const SizedBox.shrink(),
+                                focusFunction(video, index, focus) {
+                                  if (key != null && focus) {
+                                    Scrollable.ensureVisible(
+                                        key.currentContext!,
+                                        duration: animationDuration,
+                                        curve: Curves.easeInOutQuad,
+                                        alignmentPolicy:
+                                            ScrollPositionAlignmentPolicy
+                                                .keepVisibleAtStart);
                                   }
-                                ],
-                              );
-                            }).toList(),
+                                }
+
+                                return Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Padding(
+                                      key: key,
+                                      padding: const EdgeInsets.only(top: 16.0),
+                                      child: Text(e.getLabel(locals),
+                                          style: textTheme.titleLarge),
+                                    ),
+                                    switch (e) {
+                                      (HomeDataSource.popular) => Popular(
+                                          onItemFocus: focusFunction,
+                                        ),
+                                      (HomeDataSource.subscription) =>
+                                        Subscriptions(
+                                          onItemFocus: focusFunction,
+                                        ),
+                                      (HomeDataSource.trending) => Trending(
+                                          onItemFocus: focusFunction,
+                                        ),
+                                      (_) => const SizedBox.shrink(),
+                                    }
+                                  ],
+                                );
+                              })
+                            ],
                           ),
                         ),
                       ),

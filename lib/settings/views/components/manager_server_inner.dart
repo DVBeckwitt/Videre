@@ -11,7 +11,9 @@ import '../../models/db/server.dart';
 import '../screens/settings.dart';
 
 class ManagerServersView extends StatelessWidget {
-  const ManagerServersView({super.key});
+  final bool showAdvanced;
+
+  const ManagerServersView({super.key, this.showAdvanced = true});
 
   Future<void> openServer(BuildContext context, Server s) async {
     var cubit = context.read<ServerListSettingsCubit>();
@@ -43,16 +45,18 @@ class ManagerServersView extends StatelessWidget {
               lightTheme: theme,
               darkTheme: theme,
               sections: [
-                SettingsSection(
-                  tiles: [
-                    SettingsTile.switchTile(
-                      title: Text(locals.skipSslVerification),
-                      description: Text(locals.skipSslVerificationDescription),
-                      initialValue: settings.state.skipSslVerification,
-                      onToggle: settings.toggleSslVerification,
-                    )
-                  ],
-                ),
+                if (showAdvanced)
+                  SettingsSection(
+                    tiles: [
+                      SettingsTile.switchTile(
+                        title: Text(locals.skipSslVerification),
+                        description:
+                            Text(locals.skipSslVerificationDescription),
+                        initialValue: settings.state.skipSslVerification,
+                        onToggle: settings.toggleSslVerification,
+                      )
+                    ],
+                  ),
                 SettingsSection(
                     title: Text(locals.yourServers),
                     tiles: state.dbServers.isNotEmpty

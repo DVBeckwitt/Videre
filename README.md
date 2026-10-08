@@ -1,190 +1,121 @@
 # Videre
 
-[![License: AGPL v3](https://shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.en.html)
+<img src="./assets/github-banner.png" alt="Videre" width="440">
 
-Videre is an independently maintained Android, tablet, and TV client for [Invidious](https://invidious.io), a privacy-focused YouTube frontend.
+**An open-source [Invidious](https://invidious.io) client for Android phones, tablets, and TVs.**
 
-It is a fork of [Clipious](https://github.com/lamarios/clipious), originally created by Paul Fauchon and contributors. I renamed it to Videre, "to watch", as an homage to Invidious' latin etymology. It not affiliated with Google, YouTube, Invidious, or the original Clipious maintainers.
+Connect to a public Invidious instance or your own server to watch, listen, and download videos. No Google account needed; an Invidious account is optional.
 
-## How it works
+**[Download the latest APK](https://github.com/DVBeckwitt/Videre/releases/latest)** · Android 7.0+ · [Report a bug](https://github.com/DVBeckwitt/Videre/issues)
 
-Videre connects to an Invidious instance selected by the user instead of communicating with YouTube as a normal YouTube app. You can use a public instance or host your own.
+[![Build](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml/badge.svg)](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml)
+[![License: AGPL v3+](https://shields.io/badge/License-AGPL%20v3%2B-blue.svg)](./LICENSE)
 
-A YouTube account is not required. Invidious accounts, subscriptions, and preferences belong to the selected instance. Privacy and reliability therefore depend partly on that instance and its operator.
+<p>
+  <a href="./screenshots/videre-invidious.png"><img src="./screenshots/videre-invidious.png" alt="An Invidious client: connect to a public instance or your own server" width="24%"></a>
+  <a href="./screenshots/videre-sponsorblock.png"><img src="./screenshots/videre-sponsorblock.png" alt="SponsorBlock playback controls" width="24%"></a>
+  <a href="./screenshots/videre-dislikes.png"><img src="./screenshots/videre-dislikes.png" alt="Estimated dislike counts" width="24%"></a>
+  <a href="./screenshots/videre-private-library.png"><img src="./screenshots/videre-private-library.png" alt="Local playlists" width="24%"></a>
+</p>
+
+*Illustrative screens with example content. Click to enlarge.*
 
 ## Features
 
-* Public and self-hosted Invidious instances
-* Subscriptions, playlists, viewing history, and progress tracking
-* Background, audio-only, live-stream, and Android TV playback
-* Video and audio downloads
-* SponsorBlock, DeArrow, and Return YouTube Dislikes
-* Video filtering
-* Swipe navigation between phone home tabs
-* Swipe navigation between video tabs, including after autoplay
-* Swipe down to minimize expanded phone playback
-* View, search, seek through, and copy transcripts when captions are available
+- **SponsorBlock.** Skip community-marked sponsor segments.
+- **Dislike counts.** View estimates from Return YouTube Dislike.
+- **Local library.** Save subscriptions, Watch Later, playlists, and history without an account. An Invidious account is optional.
+- **Listen your way.** Background and audio-only playback, picture-in-picture, live streams, and a sleep timer.
+- **Watch offline on phones and tablets.** Video and audio downloads with pause, resume, retry, Wi-Fi-only mode, and playlist downloads.
+- **Pick up where you left off.** Continue Watching on phone and TV, plus a saved playback queue.
+- **Take your library with you.** Export and restore a JSON backup, or import subscriptions from NewPipe.
+- **Send a video to your TV.** Pair two Videre installations, transfer the current video and position, and control play/pause from your phone.
 
-## Install
+Also included: searchable transcripts with seek and copy, subtitles, video filters, and DeArrow.
 
-Download Videre only from the official [GitHub Releases page](https://github.com/DVBeckwitt/Videre/releases/latest).
+## Start watching
 
-Each release includes a universal `app-release.apk` and smaller architecture-specific APKs. Use the universal APK unless you know which architecture your device uses. Android may ask you to allow installation from the browser or file manager that opens the APK.
+1. **Install Videre.** Download `app-release.apk` from [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases/latest). Allow installation if Android asks. The same APK supports phones, tablets, and TVs.
+2. **Connect to an Invidious instance.** This is the server Videre uses to find videos and playback links. Setup links to the [Invidious instance directory](https://docs.invidious.io/instances/). Copy an address, return to Videre, and enter it—or use your own server. Videre tests it before saving.
+3. **Find something to watch.** Follow channels or save videos to Watch Later. No account needed.
 
-Videre is not currently published on F-Droid, IzzyOnDroid, Accrescent, or Google Play. Clipious store listings are not Videre releases.
+If playback fails, **Connection help** lets you test, retry, or switch instances. You can also use **Settings → Manage servers**. A reachable instance may still fail for individual videos; switching instances does not move your account.
 
-### Obtainium
+This README describes the current source; check the release notes for features included in a downloaded APK.
 
-Add the repository as a GitHub source:
+## A few useful tips
 
-```text
-https://github.com/DVBeckwitt/Videre
-```
+**Backups.** In Settings, **Export backup** saves local subscriptions, playlists, history, filters, and preferences. **Restore or import subscriptions** accepts a Videre backup or NewPipe subscriptions JSON. Preview, then merge or replace the included local data. Logins and downloaded media are excluded. Reopen Videre after restoring.
 
-Obtainium can then track new GitHub releases. Android can update an installed APK only when the new APK uses the same signing key.
+**Downloads.** Available on phones and tablets; the TV interface does not support offline playback. The Wi-Fi button limits transfers to Wi-Fi. Pause/resume and retry are available per video; playlist downloads use 720p. Resume keeps partial downloads when the server supports it, otherwise restarts. Interrupted jobs recover when Videre reopens; transfers may stop while the app is closed.
 
-Videre uses its own Android application ID, `com.github.dvbeckwitt.videre`. Builds that used Clipious's `com.github.lamarios.clipious` ID cannot update in place to this package and may be installed alongside it. Android does not automatically transfer app data between the two packages, so configure Videre again before removing the old installation.
+**Continue Watching.** Resume an unfinished video or choose **Resume queue**. Startup stays silent. Progress and queues are local; playback positions do not sync through the cloud.
 
-### Android TV
+**Phone remote.** Keep Videre open on both devices on the same trusted Wi-Fi. Select **Receive from phone** on the TV home screen. On your phone, open **Send to TV / remote control**, enter the TV's IP address, port, and six-digit code, then **Send current video**. Position and playing/paused state transfer too; play/pause controls remain available. Pairing uses unencrypted local HTTP and a temporary code. Requires Videre on both devices; no Chromecast or automatic discovery.
 
-Install the same release APK directly or track releases through Obtainium. Store-specific Clipious instructions do not apply unless Videre is explicitly published through that store.
+## Updates, migration, and privacy
 
-## Build from source
+Track updates with Obtainium using `https://github.com/DVBeckwitt/Videre` as a GitHub source. APK updates require the same signing key. Videre is not on F-Droid, IzzyOnDroid, Accrescent, or Google Play; Clipious listings are a different app.
+
+Videre (`com.github.dvbeckwitt.videre`) installs alongside Clipious (`com.github.lamarios.clipious`). Android does not transfer their data. Set up Videre before removing Clipious; the backup importer cannot read its app storage directly.
+
+Local and server libraries stay separate. Your instance's operator affects privacy and reliability. Media proxying is optional; with it off, playback can connect directly to YouTube/Google servers. See the [privacy policy](./docs/privacy.html).
+
+## Contributing
+
+Bugs and suggestions: [GitHub Issues](https://github.com/DVBeckwitt/Videre/issues). Include your device, Android/Videre versions, instance, reproduction steps, and relevant logs or screenshots with private information removed.
+
+Videre is an independently maintained [Clipious](https://github.com/lamarios/clipious) fork, adding transcript search, navigation improvements, and the local library features above. Inherited translations live in `lib/l10n/*.arb`. Small, focused pull requests are welcome; reuse existing code and remove obsolete alternatives.
+
+<details>
+<summary><strong>Build and develop</strong></summary>
+
+Install Git, JDK 21, Android SDK 36, and a device/emulator. Flutter is pinned as a submodule:
 
 ```bash
 git clone --recurse-submodules https://github.com/DVBeckwitt/Videre.git
 cd Videre
 ./submodules/flutter/bin/flutter pub get
-./submodules/flutter/bin/flutter build apk
+./submodules/flutter/bin/flutter run
 ```
 
-If the Flutter submodule was not cloned:
+Existing clone: `git submodule update --init`. On Windows, use `flutter.bat` and `dart.bat`. Build a debug APK with:
 
 ```bash
-git submodule init
-git submodule update
+./submodules/flutter/bin/flutter build apk --debug
 ```
 
-Build output is written to:
+APKs appear in `build/app/outputs/flutter-apk/`. `flutter pub get` regenerates untracked localization files in `lib/l10n/generated/`.
 
-```text
-build/app/outputs/flutter-apk/
-```
-
-Files in `lib/l10n/generated/` are intentionally untracked. `flutter pub get` regenerates them from `lib/l10n/*.arb` using `l10n.yaml`.
-
-## Development
-
-Enable the repository's pre-commit formatting hooks:
+Enable formatting hooks and run the offline regression tests:
 
 ```bash
 ./submodules/flutter/bin/dart run tools/setup_git_hooks.dart
+./submodules/flutter/bin/flutter test test/widget_test.dart test/utils/image_object_test.dart test/utils/file_db_test.dart test/videos/state/video_test.dart
 ```
 
-The project pins Flutter as a submodule for reproducible builds. An Android SDK and a device or emulator are also required.
+`lib/` groups code by feature; `lib/utils/` handles Sembast/SQLite storage and `lib/service.dart` calls Invidious. See [CI checks](./.github/workflows/build.yml). `nix-shell` starts local Invidious (`test` / `test`); run all tests with `nix-shell --run './submodules/flutter/bin/flutter test'`.
 
-Keep the repository lean. Remove unused files, obsolete code, and commented-out alternatives rather than preserving them in-tree.
+</details>
 
-### Nix environment
+<details>
+<summary><strong>Signed releases on Windows</strong></summary>
 
-```bash
-nix-shell
-```
-
-This prepares the development environment and starts a local Invidious server with these test credentials:
-
-```text
-user: test
-password: test
-```
-
-### Tests
-
-Run the complete test suite inside Nix:
-
-```bash
-nix-shell --run './submodules/flutter/bin/flutter test'
-```
-
-The following regression tests do not require the local Invidious server:
-
-```bash
-./submodules/flutter/bin/flutter test test/widget_test.dart
-./submodules/flutter/bin/flutter test test/utils/image_object_test.dart
-./submodules/flutter/bin/flutter test test/utils/file_db_test.dart
-./submodules/flutter/bin/flutter test test/videos/state/video_test.dart
-```
-
-### Windows release builds
-
-`tools/build_android_release.ps1` creates signed APKs, app bundles, APK sets, and source archives from Windows. It installs pinned build tools under `%USERPROFILE%\.videre-build-tools` and verifies downloads with SHA-256.
-
-The script never creates a signing key. Point `ANDROID_KEY_FILE` to an existing Gradle signing-properties file stored outside the repository and managed build directories:
+[The release helper](./tools/build_android_release.ps1) installs pinned, hash-verified tools under `%USERPROFILE%\.videre-build-tools` and builds signed artifacts. Supply an existing Gradle signing-properties file outside the repository and managed build directories:
 
 ```powershell
 $env:ANDROID_KEY_FILE = 'C:\secure\videre\key.properties'
 pwsh -NoProfile -File .\tools\build_android_release.ps1
 ```
 
-Validate the directory configuration without downloading tools or reading signing material:
+`-ValidateOnly` checks directories without downloads or reading signing material. Helper tests: `pwsh -NoProfile -File .\tools\build_android_release.Tests.ps1`. Other release builds also need `ANDROID_KEY_FILE` before `flutter build apk --release`.
 
-```powershell
-pwsh -NoProfile -File .\tools\build_android_release.ps1 -ValidateOnly
-```
+</details>
 
-Run the release-helper regression tests:
+## Credits and license
 
-```powershell
-pwsh -NoProfile -File .\tools\build_android_release.Tests.ps1
-```
+The name Videre ("to watch") is a nod to Invidious' Latin roots.
 
-## Screenshots
+Original Clipious code: Copyright (C) 2023 Paul Fauchon and contributors. Videre modifications: Copyright (C) 2026 DVBeckwitt and Videre contributors.
 
-Selected screenshots are inherited from Clipious and may not yet show Videre branding.
-
-### Phone
-
-[![Phone home](./screenshots/mobile-home_small.png)](./fastlane/metadata/android/en-US/images/phoneScreenshots/1.png)
-[![Phone video](./screenshots/mobile-video_small.png)](./fastlane/metadata/android/en-US/images/phoneScreenshots/2.png)
-
-### Tablet
-
-[![Tablet home](./screenshots/tablet-home_small.png)](./fastlane/metadata/android/en-US/images/tenInchScreenshots/1.png)
-
-### TV
-
-[![TV home](./screenshots/tv-home_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/1.png)
-[![TV video](./screenshots/tv-video_small.png)](./fastlane/metadata/android/en-US/images/tvScreenshots/3.png)
-
-## Issues and contributions
-
-Report bugs through [GitHub Issues](https://github.com/DVBeckwitt/Videre/issues). Include:
-
-* Device model
-* Android version
-* Videre version or commit
-* Invidious instance
-* Steps to reproduce
-* Relevant logs or screenshots
-* Whether the issue also affects Clipious
-
-Code contributions are welcome. Fork the repository, initialize its submodules, enable the formatting hooks, and open a pull request.
-
-Videre does not currently have a separate community chat. Upstream Clipious discussion is available in the [Clipious Matrix room](https://matrix.to/#/#clipious:matrix.org).
-
-## Translations
-
-Videre currently inherits translations from Clipious.
-
-[![Translation status](https://hosted.weblate.org/widgets/clipious/-/app-translation/multi-auto.svg)](https://hosted.weblate.org/projects/clipious/app-translation/)
-
-## Upstream and license
-
-Videre is derived from [Clipious](https://github.com/lamarios/clipious), originally authored by Paul Fauchon and licensed under the GNU Affero General Public License v3.0 or later.
-
-```text
-Original Clipious code: Copyright (C) 2023 Paul Fauchon
-Videre modifications:   Copyright (C) 2026 DVBeckwitt and Videre contributors
-```
-
-Videre is free software licensed under the [GNU Affero General Public License v3.0 or later](./LICENSE). It is provided without warranty. Users are responsible for complying with laws and terms that apply to their use of Videre and their selected Invidious instance.
+Licensed under the [GNU Affero General Public License v3.0 or later](./LICENSE), without warranty. Videre is not affiliated with Google, YouTube, Invidious, or the original Clipious maintainers. Users are responsible for the laws and terms that apply to their use of the app and their selected instance.

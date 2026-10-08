@@ -41,7 +41,14 @@ jobs:
       - run: ./submodules/flutter/bin/dart format --output=none --set-exit-if-changed ./lib ./test/videos/state/video_test.dart ./test/utils/file_db_test.dart
       - run: ./submodules/flutter/bin/dart analyze --no-fatal-warnings ./lib
       - run: ./submodules/flutter/bin/dart analyze --fatal-infos ./test/videos/state/video_test.dart ./test/utils/file_db_test.dart
-      - run: ./submodules/flutter/bin/flutter test test/widget_test.dart test/utils/image_object_test.dart test/utils/file_db_test.dart test/videos/state/video_test.dart
+      - name: Run offline regression tests
+        run: >-
+          ./submodules/flutter/bin/flutter test
+          test/widget_test.dart test/service_test.dart test/service_local_library_test.dart
+          test/downloads test/player test/utils test/videos/models test/videos/view test/videos/state/video_test.dart
+          test/comments/models test/subscription_management/state/subscription_retry_test.dart
+          test/settings/state/add_server_test.dart test/settings/state/app_log_test.dart
+          test/settings/state/server_list_settings_test.dart test/settings/state/settings_test.dart
       - run: ./submodules/flutter/bin/flutter pub run flutter_native_splash:create
       - run: ./submodules/flutter/bin/flutter build apk --profile --split-per-abi
       - name: Archive build artifacts

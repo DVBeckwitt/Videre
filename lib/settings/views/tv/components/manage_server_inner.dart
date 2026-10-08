@@ -10,7 +10,9 @@ import '../../../states/server_list_settings.dart';
 import '../screens/settings.dart';
 
 class TvManageServersInner extends StatelessWidget {
-  const TvManageServersInner({super.key});
+  final bool showAdvanced;
+
+  const TvManageServersInner({super.key, this.showAdvanced = true});
 
   Future<void> openServer(BuildContext context, Server s) async {
     var cubit = context.read<ServerListSettingsCubit>();
@@ -35,14 +37,16 @@ class TvManageServersInner extends StatelessWidget {
       var cubit = context.read<ServerListSettingsCubit>();
       var settings = context.watch<SettingsCubit>();
       return ListView(children: [
-        SettingsTile(
-          title: locals.skipSslVerification,
-          description: locals.skipSslVerification,
-          onSelected: (context) => settings
-              .toggleSslVerification(!settings.state.skipSslVerification),
-          trailing: Switch(
-              onChanged: (value) {}, value: settings.state.skipSslVerification),
-        ),
+        if (showAdvanced)
+          SettingsTile(
+            title: locals.skipSslVerification,
+            description: locals.skipSslVerification,
+            onSelected: (context) => settings
+                .toggleSslVerification(!settings.state.skipSslVerification),
+            trailing: Switch(
+                onChanged: (value) {},
+                value: settings.state.skipSslVerification),
+          ),
         SettingsTitle(title: locals.yourServers),
         ...state.dbServers.map((s) => SettingsTile(
               leading: InkWell(

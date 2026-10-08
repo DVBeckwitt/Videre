@@ -48,6 +48,15 @@ class PlaylistInList extends StatelessWidget {
     ColorScheme colors = Theme.of(context).colorScheme;
     var textTheme = Theme.of(context).textTheme;
     var locals = AppLocalizations.of(context)!;
+    final title = playlist.playlistId == localWatchLaterId
+        ? locals.watchLater
+        : playlist.title;
+    final count = locals.nVideos(playlist.videoCount);
+    final detail = playlist.isLocal
+        ? '${locals.onDevice} · $count'
+        : canDeleteVideos
+            ? '${locals.onServer} · $count'
+            : count;
 
     return BlocProvider(
       create: (context) => PlaylistInListCubit(playlist),
@@ -73,12 +82,12 @@ class PlaylistInList extends StatelessWidget {
                           ),
                         )),
                     Text(
-                      playlist.title,
+                      title,
                       overflow: TextOverflow.ellipsis,
                       maxLines: 2,
                       style: TextStyle(color: colors.primary),
                     ),
-                    Text(locals.nVideos(playlist.videoCount)),
+                    Text(detail),
                   ],
                 ),
               ),
@@ -120,7 +129,7 @@ class PlaylistInList extends StatelessWidget {
                                         )),
                                     Expanded(
                                         child: Text(
-                                      playlist.title,
+                                      title,
                                       overflow: TextOverflow.ellipsis,
                                       style: textTheme.titleLarge
                                           ?.copyWith(color: colors.primary),
@@ -128,8 +137,7 @@ class PlaylistInList extends StatelessWidget {
                                     Padding(
                                         padding:
                                             const EdgeInsets.only(bottom: 8.0),
-                                        child: Text(locals
-                                            .nVideos(playlist.videoCount))),
+                                        child: Text(detail)),
                                   ],
                                 ),
                               ),
@@ -152,7 +160,7 @@ class PlaylistInList extends StatelessWidget {
                       videos: state.videos,
                     ),
                     Text(
-                      playlist.title,
+                      title,
                       overflow: TextOverflow.ellipsis,
                       maxLines: 1,
                       style:
@@ -186,12 +194,12 @@ class PlaylistInList extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                           Text(
-                            playlist.title,
+                            title,
                             overflow: TextOverflow.ellipsis,
                             maxLines: 2,
                             style: TextStyle(color: colors.primary),
                           ),
-                          Text(locals.nVideos(playlist.videoCount)),
+                          Text(detail),
                         ],
                       ),
                     )

@@ -1,1 +1,6 @@
-Bug fixes and performance improvements
+- Added local playlists, Watch Later, backups, and NewPipe imports.
+- Resume videos and saved queues on phone and TV.
+- Downloads now support pause/resume, retry, Wi-Fi-only mode, and playlists.
+- Send videos to Videre on TV and control playback from your phone.
+- Clearer Invidious setup, connection checks, and error messages.
+- Updated the README with simple feature images.

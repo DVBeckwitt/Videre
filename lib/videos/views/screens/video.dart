@@ -7,6 +7,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/views/components/device_widget.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/videos/states/video.dart';
@@ -176,8 +177,9 @@ class VideoScreen extends StatelessWidget {
                                                               context)
                                                       : () => downloadVideo(
                                                           context, videoState),
-                                                  icon: videoState
-                                                              .isDownloaded &&
+                                                  icon: videoState.downloadedVideo
+                                                                  ?.downloadComplete ==
+                                                              true &&
                                                           !videoState
                                                               .downloadFailed
                                                       ? const Icon(
@@ -202,7 +204,9 @@ class VideoScreen extends StatelessWidget {
                                   child: VideoShareButton(
                                       video: videoState.video!),
                                 ),
-                                AddToPlayListButton(videoId: videoState.videoId)
+                                AddToPlayListButton(
+                                    videoId: videoState.videoId,
+                                    video: videoState.video)
                               ],
                       ),
                       backgroundColor: colorScheme.surface,
@@ -234,10 +238,29 @@ class VideoScreen extends StatelessWidget {
                                 child: videoState.error.isNotEmpty
                                     ? Container(
                                         alignment: Alignment.center,
-                                        child: Text(videoState.error ==
-                                                coulnotLoadVideos
-                                            ? locals.couldntLoadVideo
-                                            : videoState.error),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(videoState.error ==
+                                                    coulnotLoadVideos
+                                                ? locals.couldntLoadVideo
+                                                : videoState.error),
+                                            TextButton.icon(
+                                              onPressed: context
+                                                  .read<VideoCubit>()
+                                                  .onReady,
+                                              icon: const Icon(Icons.refresh),
+                                              label: Text(locals.retry),
+                                            ),
+                                            TextButton.icon(
+                                              onPressed: () => AddServerScreen
+                                                  .showConnectionHelp(context),
+                                              icon: const Icon(Icons.wifi_find),
+                                              label:
+                                                  Text(locals.connectionHelp),
+                                            ),
+                                          ],
+                                        ),
                                       )
                                     : videoState.loadingVideo
                                         ? const DeviceWidget(

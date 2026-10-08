@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -6,7 +8,10 @@ import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/main.dart';
+import 'package:clipious/router.dart';
 import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
+import 'package:clipious/settings/models/errors/missing_software_key.dart';
+import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/screens/manage_single_server.dart';
@@ -19,6 +24,108 @@ import '../../../utils/string.dart';
 @RoutePage()
 class AddServerScreen extends StatelessWidget {
   const AddServerScreen({super.key});
+
+  static const instancesUrl = 'https://docs.invidious.io/instances/';
+
+  static Future<void> openInstanceDirectory(BuildContext context) async {
+    try {
+      if (!isTv &&
+          await launchUrl(Uri.parse(instancesUrl),
+              mode: LaunchMode.externalApplication)) return;
+    } catch (_) {
+      // TVs and devices without a browser can still show the address.
+    }
+    if (context.mounted) {
+      final locals = AppLocalizations.of(context)!;
+      await showAlertDialog(context, locals.findPublicInstance, [
+        Text(locals.instanceDirectoryHelp),
+        const SelectableText(instancesUrl),
+      ]);
+    }
+  }
+
+  static String connectionAdvice(Object error, AppLocalizations locals) {
+    if (error is FormatException) return locals.instanceAddressInvalid;
+    if (error is ServerAlreadyExists) {
+      return locals.instanceAlreadySavedHelp;
+    }
+    if (error is TimeoutException) {
+      return locals.instanceTimeoutHelp;
+    }
+    if (error is MissingSoftwareKeyError) {
+      return locals.instanceApiHelp;
+    }
+    if (error is WrongThumbnailUrl) {
+      return locals.instanceThumbnailHelp;
+    }
+    return locals.instanceConnectionHelp;
+  }
+
+  static Future<void> showConnectionHelp(BuildContext context) async {
+    final locals = AppLocalizations.of(context)!;
+    bool testing = false;
+    String? result;
+    final manage = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+              builder: (context, update) => AlertDialog(
+                    title: Text(locals.connectionHelp),
+                    content: SingleChildScrollView(
+                        child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(locals.connectionHelpDescription),
+                        const Gap(12),
+                        Text(locals.instanceAccountSeparation),
+                        if (result != null) ...[const Gap(12), Text(result!)],
+                      ],
+                    )),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: Text(locals.cancel)),
+                      TextButton(
+                          onPressed: testing
+                              ? null
+                              : () async {
+                                  update(() {
+                                    testing = true;
+                                    result = null;
+                                  });
+                                  try {
+                                    final server =
+                                        await db.getCurrentlySelectedServer();
+                                    await service
+                                        .validateServer(
+                                            server.url, server.customHeaders)
+                                        .timeout(const Duration(seconds: 15));
+                                    result = locals.instanceReachable;
+                                  } catch (error) {
+                                    result = connectionAdvice(error, locals);
+                                  }
+                                  if (context.mounted) {
+                                    update(() => testing = false);
+                                  }
+                                },
+                          child: Text(testing
+                              ? locals.testingConnection
+                              : locals.testConnection)),
+                      TextButton(
+                          onPressed: testing
+                              ? null
+                              : () => Navigator.of(context).pop(true),
+                          child: Text(locals.chooseInstance)),
+                    ],
+                  ));
+        });
+    if (manage == true && context.mounted) {
+      await AutoRouter.of(context).push(isTv
+          ? const TvSettingsManageServersRoute()
+          : const ManageServersRoute());
+    }
+  }
 
   void showAddHeaderDialog(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
@@ -77,7 +184,14 @@ class AddServerScreen extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(), child: Text(locals.ok))
     ];
 
-    showAlertDialog(context, locals.error, [Text(errorMessage)],
+    showAlertDialog(
+        context,
+        locals.error,
+        [
+          Text(connectionAdvice(e, locals)),
+          const Gap(12),
+          Text(errorMessage, style: Theme.of(context).textTheme.bodySmall),
+        ],
         actions: actions);
   }
 
@@ -115,9 +229,29 @@ class AddServerScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      const Text('Url'),
+                      Text(locals.instanceAddressDescription),
+                      Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () => openInstanceDirectory(context),
+                            icon: const Icon(Icons.open_in_new),
+                            label: Text(locals.findPublicInstance),
+                          )),
                       TextField(
                         controller: cubit.urlController,
+                        keyboardType: TextInputType.url,
+                        readOnly: state.loading,
+                        decoration: InputDecoration(
+                          labelText: locals.instanceAddress,
+                          hintText: 'https://invidious.example',
+                          helperText: locals.instanceAddressHelp,
+                          helperMaxLines: 2,
+                          errorText: cubit.urlController.text != 'https://' &&
+                                  !state.valid
+                              ? locals.instanceAddressError
+                              : null,
+                          errorMaxLines: 2,
+                        ),
                         autocorrect: false,
                         enableSuggestions: false,
                         enableIMEPersonalizedLearning: false,

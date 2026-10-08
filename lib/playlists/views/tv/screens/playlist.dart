@@ -17,6 +17,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../../../player/states/player.dart';
+import '../../../models/playlist.dart';
 import '../../../../videos/views/components/video_thumbnail.dart';
 
 @RoutePage()
@@ -166,7 +167,11 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                                               CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              playlistState.playlist.title,
+                                              playlist.playlistId ==
+                                                      localWatchLaterId
+                                                  ? locals.watchLater
+                                                  : playlistState
+                                                      .playlist.title,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                               style: textTheme.headlineLarge,

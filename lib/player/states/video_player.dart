@@ -602,12 +602,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
       newState = newState.copyWith(bufferPosition: Duration.zero);
 
-      if (startAt == null && !offline) {
+      if (startAt == null) {
         final progress = db.getVideoProgress(idedVideo.videoId);
         if (progress > 0 && progress < 0.90) {
           startAt = Duration(
-              seconds:
-                  ((newState.video!.lengthSeconds ?? 0) * progress).floor());
+              seconds: ((newState.video?.lengthSeconds ??
+                          newState.offlineVideo?.lengthSeconds ??
+                          0) *
+                      progress)
+                  .floor());
         }
       }
 

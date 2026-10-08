@@ -144,6 +144,21 @@ class SettingsScreen extends StatelessWidget {
                     onPressed: openAppearanceSettings,
                   ),
                 ]),
+                SettingsSection(tiles: [
+                  SettingsTile(
+                    leading: const Icon(Icons.save_alt),
+                    title: Text(locals.exportBackup),
+                    description: Text(locals.backupDescription),
+                    onPressed: (context) => cubit.backupLibrary(context),
+                  ),
+                  SettingsTile(
+                    leading: const Icon(Icons.restore),
+                    title: Text(locals.importBackup),
+                    description: Text(locals.importBackupDescription),
+                    onPressed: (context) =>
+                        cubit.backupLibrary(context, restore: true),
+                  ),
+                ]),
                 SettingsSection(title: (Text(locals.about)), tiles: [
                   SettingsTile(
                       title: const Center(

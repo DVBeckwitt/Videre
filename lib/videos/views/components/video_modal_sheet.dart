@@ -78,6 +78,7 @@ class VideoModalSheet extends StatelessWidget {
           children: [
             AddToPlayListButton(
               videoId: video.videoId,
+              video: video,
               type: AddToPlayListButtonType.modalSheet,
               afterAdd: () => Navigator.pop(context),
             ),

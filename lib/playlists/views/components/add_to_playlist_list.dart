@@ -41,25 +41,41 @@ class AddPlayListForm extends StatefulWidget {
 
 class _AddPlayListFormState extends State<AddPlayListForm> {
   final TextEditingController nameController = TextEditingController(text: '');
-  String privacyValue = 'public';
+  String privacyValue = 'local';
+  bool isLoggedIn = false;
+  bool saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    service.isLoggedIn().then((value) {
+      if (mounted) setState(() => isLoggedIn = value);
+    }).catchError((_) {});
+  }
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    super.dispose();
+  }
 
   addPlaylist(BuildContext context) async {
+    if (saving || nameController.text.trim().isEmpty) return;
+    setState(() => saving = true);
     var locals = AppLocalizations.of(context)!;
     try {
       var id =
           await service.createPlayList(nameController.value.text, privacyValue);
 
-      if (context.mounted) {
-        Navigator.pop(context);
-      }
-
-      if (context.mounted && id != null && widget.afterAdd != null) {
-        await widget.afterAdd!(id);
-      }
+      final afterAdd = widget.afterAdd;
+      if (context.mounted) Navigator.pop(context);
+      if (id != null) await afterAdd?.call(id);
     } catch (err) {
       if (context.mounted) {
         showAlertDialog(context, locals.error, [Text(err.toString())]);
       }
+    } finally {
+      if (mounted) setState(() => saving = false);
     }
   }
 
@@ -94,12 +110,18 @@ class _AddPlayListFormState extends State<AddPlayListForm> {
                     value: privacyValue,
                     items: [
                       DropdownMenuItem(
-                          value: 'public', child: Text(locals.publicPlaylist)),
-                      DropdownMenuItem(
-                          value: 'unlisted',
-                          child: Text(locals.unlistedPlaylist)),
-                      DropdownMenuItem(
-                          value: 'private', child: Text(locals.privatePlaylist))
+                          value: 'local', child: Text(locals.onDevice)),
+                      if (isLoggedIn) ...[
+                        DropdownMenuItem(
+                            value: 'public',
+                            child: Text(locals.publicPlaylist)),
+                        DropdownMenuItem(
+                            value: 'unlisted',
+                            child: Text(locals.unlistedPlaylist)),
+                        DropdownMenuItem(
+                            value: 'private',
+                            child: Text(locals.privatePlaylist)),
+                      ],
                     ],
                     onChanged: (value) {
                       setState(() {
@@ -120,9 +142,11 @@ class _AddPlayListFormState extends State<AddPlayListForm> {
                   child: Text(locals.cancel),
                 ),
                 TextButton(
-                  onPressed: () {
-                    addPlaylist(context);
-                  },
+                  onPressed: saving
+                      ? null
+                      : () {
+                          addPlaylist(context);
+                        },
                   child: Text(locals.add),
                 ),
               ],

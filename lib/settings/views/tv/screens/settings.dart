@@ -349,6 +349,17 @@ class TVSettingsScreen extends StatelessWidget {
                 ),
                 SettingsTitle(title: locals.about),
                 SettingsTile(
+                  title: locals.exportBackup,
+                  description: locals.backupDescription,
+                  onSelected: (context) => cubit.backupLibrary(context),
+                ),
+                SettingsTile(
+                  title: locals.importBackup,
+                  description: locals.importBackupDescription,
+                  onSelected: (context) =>
+                      cubit.backupLibrary(context, restore: true),
+                ),
+                SettingsTile(
                   title: '${locals.name}: ${state.packageInfo.appName}',
                   description:
                       '${locals.package}: ${state.packageInfo.packageName}',

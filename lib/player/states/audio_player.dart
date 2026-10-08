@@ -32,7 +32,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
 
   void onInit() {
     initPlayer();
-    playVideo(state.offlineVideo != null);
+    playVideo(state.offlineVideo != null, startAt: player.state.startAt);
   }
 
   @override
@@ -106,6 +106,14 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           seconds: offline
               ? state.offlineVideo!.lengthSeconds
               : (state.video!.lengthSeconds ?? 0));
+      if (startAt == null) {
+        final id = offline ? state.offlineVideo!.videoId : state.video!.videoId;
+        final progress = db.getVideoProgress(id);
+        if (progress > 0 && progress < 0.9) {
+          startAt =
+              Duration(seconds: (audioLength.inSeconds * progress).floor());
+        }
+      }
       emit(state.copyWith(
           audioPosition: Duration.zero,
           audioLength: audioLength,
@@ -129,14 +137,6 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
                 .sortByReversed((e) => int.parse(e.bitrate ?? "0"))
                 .first;
             if (audio != null) {
-              if (startAt == null) {
-                double progress = db.getVideoProgress(state.video!.videoId);
-                if (progress > 0 && progress < 0.90) {
-                  startAt = Duration(
-                      seconds: ((state.video!.lengthSeconds ?? 0) * progress)
-                          .floor());
-                }
-              }
               emit(state);
 
               source = AudioSource.uri(Uri.parse(audio.url),

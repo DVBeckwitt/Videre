@@ -10,6 +10,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/subscription_management/view/tv/tv_subscribe_button.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -77,11 +78,27 @@ class TvVideoScreen extends StatelessWidget {
                 ? Center(
                     child: Container(
                       alignment: Alignment.center,
-                      child: Text(
-                        videoState.error == coulnotLoadVideos
-                            ? locals.couldntLoadVideo
-                            : videoState.error,
-                        style: textTheme.bodyLarge,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                              videoState.error == coulnotLoadVideos
+                                  ? locals.couldntLoadVideo
+                                  : videoState.error,
+                              style: textTheme.bodyLarge),
+                          TextButton.icon(
+                            autofocus: true,
+                            onPressed: context.read<VideoCubit>().onReady,
+                            icon: const Icon(Icons.refresh),
+                            label: Text(locals.retry),
+                          ),
+                          TextButton.icon(
+                            onPressed: () =>
+                                AddServerScreen.showConnectionHelp(context),
+                            icon: const Icon(Icons.wifi_find),
+                            label: Text(locals.connectionHelp),
+                          ),
+                        ],
                       ),
                     ),
                   )

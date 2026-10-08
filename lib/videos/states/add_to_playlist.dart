@@ -13,18 +13,19 @@ const String likePlaylistName = '❤️';
 
 class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
   final log = Logger('AddToPlaylistcubit');
+  final Video? video;
 
-  AddToPlaylistCubit(super.initialState) {
+  AddToPlaylistCubit(super.initialState, {this.video}) {
     onReady();
   }
 
   addToPlaylist(String playlistId) async {
-    await service.addVideoToPlaylist(playlistId, state.videoId);
-    onReady();
+    await service.addVideoToPlaylist(playlistId, state.videoId, video: video);
+    await onReady();
   }
 
   Future<void> onReady() async {
-    emit(state.copyWith(isLoggedIn: await service.isLoggedIn()));
+    if (isClosed) return;
     await getAllPlaylists();
     await countPlaylistsForVideo();
     await checkVideoLikeStatus();
@@ -32,13 +33,8 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
 
   getAllPlaylists() async {
     emit(state.copyWith(loading: true));
-    late List<Playlist> playlists;
-    if (state.isLoggedIn) {
-      playlists = await service.getUserPlaylists(postProcessing: false);
-    } else {
-      playlists = List.empty();
-    }
-    emit(state.copyWith(playlists: playlists, loading: false));
+    final playlists = await service.getUserPlaylists(postProcessing: false);
+    if (!isClosed) emit(state.copyWith(playlists: playlists, loading: false));
   }
 
   Future<Playlist?> likePlaylist() async {
@@ -62,7 +58,7 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
   }
 
   Future<Playlist?> createPlayList() async {
-    await service.createPlayList(likePlaylistName, "private");
+    await service.createPlayList(likePlaylistName, 'local');
     await onReady();
     return likePlaylist();
   }
@@ -86,28 +82,27 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
     Playlist? p = await likePlaylist();
     p ??= await createPlayList();
 
-    bool isVideoLiked = state.isVideoLiked;
     if (p != null) {
-      if (isVideoLiked) {
+      if (state.isVideoLiked) {
         log.fine('Video is liked, unliking it');
         Video? v = p.videos
             .firstWhereOrNull((element) => element.videoId == state.videoId);
-        if (v?.indexId != null) {
-          await service.deleteUserPlaylistVideo(p.playlistId, v!.indexId!);
-          isVideoLiked = isVideoLiked;
+        final indexId = p.isLocal ? v?.videoId : v?.indexId;
+        if (indexId != null) {
+          await service.deleteUserPlaylistVideo(p.playlistId, indexId);
         }
       } else {
         log.fine('Video is not liked yet, we add it to the like playlist');
-        await service.addVideoToPlaylist(p.playlistId, state.videoId);
-        isVideoLiked = isVideoLiked;
+        await service.addVideoToPlaylist(p.playlistId, state.videoId,
+            video: video);
       }
     }
-    emit(state.copyWith(isVideoLiked: isVideoLiked, loading: false));
-    onReady();
+    if (!isClosed) await onReady();
   }
 
   saveVideoToPlaylist(String selectedPlaylistId) async {
-    await service.addVideoToPlaylist(selectedPlaylistId, state.videoId);
+    await service.addVideoToPlaylist(selectedPlaylistId, state.videoId,
+        video: video);
     await onReady();
   }
 }

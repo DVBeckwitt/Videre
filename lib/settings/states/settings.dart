@@ -7,6 +7,7 @@ import 'package:easy_debounce/easy_debounce.dart';
 import 'package:feedback/feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/app/states/app.dart';
@@ -17,9 +18,11 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../globals.dart';
+import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../player/states/player.dart';
 import '../../utils.dart';
+import '../../utils/backup.dart';
 import '../../utils/models/country.dart';
 import '../models/db/settings.dart';
 
@@ -40,6 +43,7 @@ var _log = Logger('SettingsController');
 
 class SettingsCubit extends Cubit<SettingsState> {
   final AppCubit appCubit;
+  bool _backupBusy = false;
 
   SettingsCubit(super.initialState, this.appCubit) {
     onReady();
@@ -296,6 +300,83 @@ class SettingsCubit extends Cubit<SettingsState> {
     var encoder = const JsonEncoder.withIndent('    ');
     String json = encoder.convert(state.settings);
     Clipboard.setData(ClipboardData(text: json));
+  }
+
+  Future<void> backupLibrary(BuildContext context,
+      {bool restore = false}) async {
+    if (_backupBusy) return;
+    _backupBusy = true;
+    final locals = AppLocalizations.of(context)!;
+    const files = MethodChannel('videre/files');
+    try {
+      if (!restore) {
+        final backup = await db.exportBackup();
+        final saved = await files.invokeMethod<bool>('save', {
+          'name':
+              'videre-${DateTime.now().toIso8601String().split('T').first}.json',
+          'text': backup.encode(),
+        });
+        if (saved == true && context.mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(locals.backupSaved)));
+        }
+        return;
+      }
+      final text = await files.invokeMethod<String>('open');
+      if (text == null || !context.mounted) return;
+      final backup = UserBackup.parse(text);
+      final replace = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+                title: Text(locals.importBackup),
+                content: Text(locals.backupPreview(backup.itemCount)),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text(locals.cancel)),
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: Text(locals.replaceBackup)),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: Text(locals.mergeBackup)),
+                ],
+              ));
+      if (replace == null || !context.mounted) return;
+      if (context.read<PlayerCubit>().state.hasVideo) {
+        showAlertDialog(
+            context, locals.importBackup, [Text(locals.backupStopPlayback)]);
+        return;
+      }
+      final downloads = backup.subscriptionsOnly
+          ? null
+          : context.read<DownloadManagerCubit>();
+      await db.restoreBackup(backup, replace: replace);
+      if (downloads != null) {
+        await downloads.setWifiOnly(
+            db.getSettings('downloads-wifi-only')?.value == 'true');
+      }
+      await fileDb.syncWithDb();
+      if (isClosed) return;
+      emit(state.copyWith(settings: {
+        for (final setting in db.getAllSettings()) setting.name: setting
+      }));
+      await appCubit.initState();
+      playbackHistoryRevision.value++;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(locals.backupRestored)));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        final message = error is PlatformException
+            ? error.message ?? error.code
+            : error.toString();
+        showAlertDialog(context, locals.error, [Text(message)]);
+      }
+    } finally {
+      _backupBusy = false;
+    }
   }
 
   saveSetting(SettingsValue settings) async {

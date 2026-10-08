@@ -34,7 +34,11 @@ class AddServerCubit extends Cubit<AddServerState> {
   Future<Server?> validateServer() async {
     emit(state.copyWith(loading: true));
     try {
-      var serverUrl = urlController.value.text.trim();
+      final serverUrl = normalizeUrl(urlController.text);
+      if (serverUrl == null) {
+        throw const FormatException(
+            'Enter an instance address, such as https://invidious.example.');
+      }
 
       final existingServer = db.getServer(serverUrl);
 
@@ -42,16 +46,15 @@ class AddServerCubit extends Cubit<AddServerState> {
         throw ServerAlreadyExists();
       }
 
-      if (serverUrl.endsWith("/")) {
-        serverUrl = serverUrl.substring(0, serverUrl.length - 1);
-      }
-
-      await service.validateServer(serverUrl, state.headers);
+      await service
+          .validateServer(serverUrl, state.headers)
+          .timeout(const Duration(seconds: 15));
 
       if (state.advancedTest) {
         Server server = Server(url: serverUrl, customHeaders: state.headers);
-        final video =
-            await service.getVideo('dQw4w9WgXcQ', serverOverride: server);
+        final video = await service
+            .getVideo('dQw4w9WgXcQ', serverOverride: server)
+            .timeout(const Duration(seconds: 15));
 
         final invalidThumbnailUrls = video.videoThumbnails
             .map(
@@ -66,7 +69,7 @@ class AddServerCubit extends Cubit<AddServerState> {
 
       return Server(url: serverUrl, customHeaders: state.headers);
     } finally {
-      emit(state.copyWith(loading: false));
+      if (!isClosed) emit(state.copyWith(loading: false));
     }
   }
 
@@ -86,19 +89,29 @@ class AddServerCubit extends Cubit<AddServerState> {
     emit(state.copyWith(headers: headers));
   }
 
-  bool get validUrl {
-    var regExp = RegExp(r'^(http://|https://)');
-    if (!urlController.text.trim().startsWith(regExp)) {
-      return false;
+  bool get validUrl => normalizeUrl(urlController.text) != null;
+
+  static String? normalizeUrl(String input) {
+    final value = input.trim();
+    if (value.isEmpty || RegExp(r'\s').hasMatch(value)) return null;
+    try {
+      final uri = Uri.parse(value.contains('://') ? value : 'https://$value');
+      if (!['http', 'https'].contains(uri.scheme) ||
+          uri.host.isEmpty ||
+          uri.userInfo.isNotEmpty ||
+          uri.hasQuery ||
+          uri.hasFragment ||
+          uri.port < 1 ||
+          uri.port > 65535) {
+        return null;
+      }
+      // Normalize before checking duplicates, including pasted trailing slashes.
+      return uri
+          .replace(path: uri.path.replaceFirst(RegExp(r'/+$'), ''))
+          .toString();
+    } on FormatException {
+      return null;
     }
-
-    final urlWithoutProtocol = urlController.text.replaceAll(regExp, "").trim();
-
-    if (urlWithoutProtocol.isEmpty) {
-      return false;
-    }
-
-    return true;
   }
 
   setAdvancedTest(bool advancedTest) {

@@ -22,6 +22,8 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:flutter/material.dart';
@@ -145,6 +147,7 @@ Future<void> _pumpHomepage(
   Size size, {
   PlayerState? playerState,
   SettingsState? settingsState,
+  bool settle = true,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -176,7 +179,7 @@ Future<void> _pumpHomepage(
     ),
   ));
 
-  await tester.pumpAndSettle();
+  if (settle) await tester.pumpAndSettle();
 }
 
 Future<void> _pumpExpandedPlayer(
@@ -650,6 +653,37 @@ void main() {
       tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
       1,
     );
+  });
+
+  testWidgets('landscape home keeps Continue Watching and the feed reachable',
+      (tester) async {
+    await tester.runAsync(() async {
+      await globals.db.upsertHistoryVideo(HistoryVideoCache('video-0',
+          'Resume this video', 'Channel', 'https://example.com/resume.png'));
+      await globals.db.saveProgress(Progress(0.5, 'video-0'));
+    });
+
+    await _withThumbnailCacheManager(tester, (cacheManager) async {
+      await _pumpHomepage(tester, const Size(640, 360), settle: false);
+      await _pumpUntilRequestCount(tester, cacheManager, 1);
+      cacheManager.failRequest(0);
+      await _pumpUntilThumbnailSettles(tester);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('Continue Watching'), findsOneWidget);
+      expect(find.text('Resume this video').hitTestable(), findsOneWidget);
+      expect(find.text('Trending').hitTestable(), findsOneWidget);
+
+      final summaries = find.ancestor(
+          of: find.text('Continue Watching'),
+          matching: find.byType(SingleChildScrollView));
+      await tester.drag(summaries, const Offset(0, -120));
+      await tester.pumpAndSettle();
+      expect(find.text('Popular').hitTestable(), findsOneWidget);
+      expect(find.text('Trending').hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   });
 
   testWidgets('tablet homepage tabs ignore horizontal swipes', (tester) async {

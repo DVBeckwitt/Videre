@@ -85,7 +85,6 @@ enum HomeDataSource {
 
   bool isPermitted(BuildContext context, bool isLoggedIn) {
     return switch (this) {
-      (HomeDataSource.playlist || HomeDataSource.history) => isLoggedIn,
       (HomeDataSource.searchHistory) =>
         context.read<SettingsCubit>().state.useSearchHistory,
       (_) => true
@@ -215,7 +214,7 @@ enum HomeDataSource {
                   paginatedVideoList: PageBasedPaginatedList<Video>(
                       getItemsFunc: (page, maxResults) =>
                           // we get the data for each video
-                          service.getUserHistory(page, maxResults).then(
+                          service.getLocalHistoryPage(page, maxResults).then(
                               (value) => Future.wait(value
                                   .map((e) async => (await HistoryVideoCache
                                           .fromVideoIdToVideo(e))
