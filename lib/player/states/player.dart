@@ -10,6 +10,7 @@ import 'package:clipious/videos/models/ided_video.dart';
 import 'package:easy_debounce/easy_debounce.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
@@ -55,9 +56,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   bool? _remotePlaying;
   int _progressGeneration = 0;
   final bool _resumeOnReady;
+  static const _pipChannel = MethodChannel('videre/pip');
+  SimplePip? _pip;
 
   PlayerCubit(super.initialState, this.settings, {bool resume = false})
       : _resumeOnReady = resume {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && !isTv) {
+      _pip = SimplePip(
+        onPipEntered: () => _setPip(true),
+        onPipExited: () => _setPip(false),
+      );
+      unawaited(_updateAutoPip(state));
+    }
     onReady();
   }
 
@@ -69,6 +79,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     super.onChange(change);
     final before = change.currentState;
     final after = change.nextState;
+    if (_autoPipEnabled(before) != _autoPipEnabled(after) ||
+        before.aspectRatio != after.aspectRatio) {
+      unawaited(_updateAutoPip(after));
+    }
     if (after.hasVideo &&
         (before.currentlyPlaying != after.currentlyPlaying ||
             before.offlineCurrentlyPlaying != after.offlineCurrentlyPlaying)) {
@@ -182,8 +196,38 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
-    if (lifecycle != AppLifecycleState.resumed && !isClosed) {
+    if (isClosed) return;
+    if (lifecycle == AppLifecycleState.resumed) {
+      // AudioService can outlive the Activity that held these parameters.
+      unawaited(_updateAutoPip(state));
+    } else {
       unawaited(_saveSession(state));
+    }
+  }
+
+  bool _autoPipEnabled(PlayerState snapshot) =>
+      snapshot.hasVideo &&
+      snapshot.isPlaying &&
+      !snapshot.isAudio &&
+      !snapshot.isHidden &&
+      !snapshot.isClosing;
+
+  double _pipAspectRatio(PlayerState snapshot) => snapshot.aspectRatio.isFinite
+      ? snapshot.aspectRatio.clamp(0.42, 2.39)
+      : 16 / 9;
+
+  Future<void> _updateAutoPip(PlayerState snapshot,
+      {bool disable = false}) async {
+    if (_pip == null) return;
+    try {
+      await _pipChannel.invokeMethod<void>('configure', {
+        'enabled': !disable && _autoPipEnabled(snapshot),
+        'aspectRatio': _pipAspectRatio(snapshot),
+      });
+    } on MissingPluginException {
+      // The background engine may currently have no Activity attached.
+    } on PlatformException catch (error) {
+      log.fine('Could not update picture-in-picture', error);
     }
   }
 
@@ -319,6 +363,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void _setPip(bool pip) {
+    if (isClosed) return;
+    // Keep the same decoder running when the window closes, including offline.
     emit(state.copyWith(isPip: pip));
   }
 
@@ -329,6 +375,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _progressGeneration++;
+    await _updateAutoPip(state, disable: true);
+    _pip?.onPipEntered = null;
+    _pip?.onPipExited = null;
     await _saveSession(state);
     if (_sessionOwner == this) _sessionOwner = null;
     playbackHistoryRevision.value++;
@@ -1036,17 +1085,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  void enterPip() {
-    setFullScreen(FullScreenState.fullScreen);
-    setEvent(const MediaEvent(
-        state: MediaState.playing, type: MediaEventType.enteredPip));
-    SimplePip(
-      onPipExited: () {
-        setEvent(const MediaEvent(
-            state: MediaState.playing, type: MediaEventType.exitedPip));
-        setFullScreen(FullScreenState.notFullScreen);
-      },
-    ).enterPipMode();
+  Future<void> enterPip() async {
+    if (_pip == null || !state.hasVideo || state.isAudio) return;
+    try {
+      if (!await SimplePip.isPipAvailable || isClosed) return;
+      await _pip!.enterPipMode(
+        aspectRatio: ((_pipAspectRatio(state) * 1000).round(), 1000),
+        autoEnter: _autoPipEnabled(state),
+      );
+    } on MissingPluginException {
+      // PiP is optional on Android devices.
+    } on PlatformException catch (error) {
+      log.fine('Could not enter picture-in-picture', error);
+    }
   }
 
   void setMuted(bool muted) {

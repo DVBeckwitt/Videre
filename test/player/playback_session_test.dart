@@ -25,6 +25,7 @@ import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast.dart';
@@ -53,6 +54,8 @@ class _GuestService extends Service {
 
 class _SessionPlayer extends TestPlayerCubit {
   _SessionPlayer(super.initialState, super.settings);
+
+  void seedState(PlayerState snapshot) => emit(snapshot);
 
   void seedVideo(Video video) => emit(state.copyWith(currentlyPlaying: video));
 
@@ -176,6 +179,110 @@ void main() {
           SettingsValue(SponsorSegmentType.intro.settingsName(), 'true'));
       await player.setSponsorBlock();
       expect(guest.requestedCategories, [SponsorSegmentType.intro]);
+    });
+
+    test('automatic PiP follows visible video playback, including downloads',
+        () async {
+      const channel = MethodChannel('videre/pip');
+      final calls = <MethodCall>[];
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final playing = player.state.copyWith(
+        currentlyPlaying: const Video(videoId: 'pip'),
+        isPlaying: true,
+        isHidden: false,
+      );
+      player.seedState(playing);
+      await Future<void>.delayed(Duration.zero);
+      expect(calls.last.arguments['enabled'], isTrue);
+
+      for (final ineligible in [
+        playing.copyWith(isPlaying: false),
+        playing.copyWith(isAudio: true),
+        playing.copyWith(isHidden: true),
+        playing.copyWith(isClosing: true),
+        playing.copyWith(currentlyPlaying: null),
+      ]) {
+        player.seedState(ineligible);
+        await Future<void>.delayed(Duration.zero);
+        expect(calls.last.arguments['enabled'], isFalse);
+        player.seedState(playing);
+      }
+      player.seedState(playing.copyWith(
+        currentlyPlaying: null,
+        offlineCurrentlyPlaying: const DownloadedVideo(
+            videoId: 'offline',
+            title: 'Offline',
+            lengthSeconds: 60,
+            quality: '720p'),
+        aspectRatio: 0.1,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      expect(calls.last.arguments['enabled'], isTrue);
+      expect(
+          calls.last.arguments['aspectRatio'], greaterThanOrEqualTo(1 / 2.39));
+      player.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(Duration.zero);
+      expect(calls.last.arguments['enabled'], isTrue);
+      await player.close();
+      expect(calls.last.arguments['enabled'], isFalse);
+    });
+
+    test('PiP callbacks preserve playback, position, and the previous layout',
+        () async {
+      const channel = MethodChannel('puntito.simple_pip_mode');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      for (final offline in [false, true]) {
+        final playing = player.state.copyWith(
+          currentlyPlaying: offline ? null : const Video(videoId: 'pip'),
+          offlineCurrentlyPlaying: offline
+              ? const DownloadedVideo(
+                  videoId: 'offline',
+                  title: 'Offline',
+                  lengthSeconds: 60,
+                  quality: '720p')
+              : null,
+          isPlaying: true,
+          isHidden: false,
+          isMini: true,
+          position: const Duration(seconds: 23),
+        );
+        player.seedState(playing);
+        for (final active in [true, false]) {
+          await messenger.handlePlatformMessage(
+              channel.name,
+              channel.codec.encodeMethodCall(
+                  MethodCall(active ? 'onPipEntered' : 'onPipExited')),
+              (_) {});
+          expect(player.state, playing.copyWith(isPip: active));
+        }
+      }
+    });
+
+    test('denied PiP does not change layout or playback', () async {
+      const channel = MethodChannel('puntito.simple_pip_mode');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+          channel, (call) async => call.method == 'isPipAvailable');
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      player.seedState(player.state.copyWith(
+          currentlyPlaying: const Video(videoId: 'pip'),
+          isPlaying: true,
+          isHidden: false));
+      final before = player.state;
+      await player.enterPip();
+      expect(player.state, before);
+      messenger.setMockMethodCallHandler(
+          channel, (call) async => throw PlatformException(code: 'denied'));
+      await player.enterPip();
+      expect(player.state, before);
     });
 
     test('restores a queue and timestamp without issuing playback commands',

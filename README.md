@@ -45,6 +45,8 @@ This README describes the current source; check the release notes for features i
 
 ## A few useful tips
 
+**Keep watching.** On phones, pull down from the top of the description or comments to minimize the player. On supported Android devices, going Home during video playback opens picture-in-picture. Closing that window keeps the audio playing; pause or stop it from the notification. Android must allow picture-in-picture for Videre.
+
 **Backups.** In Settings, **Export backup** saves local subscriptions, playlists, history, filters, and preferences. **Restore or import subscriptions** accepts a Videre backup or NewPipe subscriptions JSON. Preview, then merge or replace the included local data. Logins and downloaded media are excluded. Reopen Videre after restoring.
 
 **Downloads.** Available on phones and tablets; the TV interface does not support offline playback. The Wi-Fi button limits transfers to Wi-Fi. Pause/resume and retry are available per video; playlist downloads use 720p. Resume keeps partial downloads when the server supports it, otherwise restarts. Interrupted jobs recover when Videre reopens; transfers may stop while the app is closed.

@@ -4,14 +4,18 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/channels/models/channel_videos.dart';
+import 'package:clipious/comments/models/comment.dart';
 import 'package:clipious/comments/models/video_comments.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/expanded_player.dart';
+import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
@@ -26,6 +30,7 @@ import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
+import 'package:clipious/videos/views/screens/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -51,6 +56,8 @@ class _TestService extends Service {
 
   final List<Video> videos;
   final List<String> transcriptRequests = [];
+  bool loggedIn = true;
+  List<Comment> comments = [];
 
   @override
   Future<VideoTranscript> getTranscript(
@@ -102,7 +109,7 @@ class _TestService extends Service {
   void syncHistory() {}
 
   @override
-  Future<bool> isLoggedIn() async => true;
+  Future<bool> isLoggedIn() async => loggedIn;
 
   @override
   Future<List<Video>> getTrending({String? type}) async => videos;
@@ -117,7 +124,7 @@ class _TestService extends Service {
   @override
   Future<VideoComments> getComments(String videoId,
           {String? continuation, String? sortBy, String? source}) async =>
-      VideoComments(0, videoId, null, []);
+      VideoComments(comments.length, videoId, null, comments);
 
   @override
   Future<bool> isSubscribedToChannel(String channelId) async => false;
@@ -211,10 +218,11 @@ Future<void> _pumpExpandedPlayer(
   );
 }
 
-Future<void> _pumpVideo(WidgetTester tester, Size size) async {
+Future<void> _pumpVideo(WidgetTester tester, Size size,
+    {PlayerState? playerState}) async {
   tester.platformDispatcher.textScaleFactorTestValue = 0.9;
   addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-  await _pumpHomepage(tester, size);
+  await _pumpHomepage(tester, size, playerState: playerState);
   unawaited(appRouter.push(VideoRoute(videoId: 'video-0')));
   await tester.pumpAndSettle();
 }
@@ -942,6 +950,241 @@ void main() {
       findsNothing,
     );
   });
+
+  for (final loggedIn in [false, true]) {
+    for (final tab in [0, 1]) {
+      testWidgets(
+          'pulling down ${tab == 0 ? 'description' : 'comments'} at the top minimizes (${loggedIn ? 'account' : 'guest'})',
+          (tester) async {
+        final service = globals.service as _TestService;
+        service.loggedIn = loggedIn;
+        service.videos[0] = service.videos[0].copyWith(
+          description:
+              List.filled(60, 'A line from the description.').join('\n'),
+        );
+        service.comments = List.generate(
+          20,
+          (index) => Comment(
+              'Viewer $index',
+              [],
+              'viewer-$index',
+              '',
+              false,
+              'A comment about this video.',
+              'Today',
+              0,
+              '$index',
+              false,
+              null,
+              null),
+        );
+        await _pumpExpandedPlayer(tester, const Size(390, 844),
+            selectedIndex: tab);
+        final player =
+            tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+        final content = find
+            .descendant(
+              of: find.byType(ExpandedPlayer),
+              matching: find.byType(SingleChildScrollView),
+            )
+            .hitTestable()
+            .first;
+        final position = tester
+            .state<ScrollableState>(find
+                .descendant(
+                  of: content,
+                  matching: find.byType(Scrollable),
+                )
+                .first)
+            .position;
+        final start = tester.getTopLeft(content) + const Offset(180, 90);
+
+        await tester.dragFrom(
+            start + const Offset(0, 150), const Offset(0, -260));
+        await tester.pumpAndSettle();
+        expect(position.pixels, greaterThan(0));
+        expect(player.state.isMini, isFalse);
+
+        // Reaching the top during a scroll should not also dismiss the player.
+        position.jumpTo(80);
+        await tester.pump();
+        await tester.dragFrom(start, const Offset(0, 260));
+        await tester.pumpAndSettle();
+        expect(position.pixels, 0);
+        expect(player.state.isMini, isFalse);
+
+        await tester.dragFrom(start, const Offset(0, 260));
+        await tester.pumpAndSettle();
+        expect(player.state.isMini, isTrue);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
+  testWidgets('empty comments can be pulled down from the blank area',
+      (tester) async {
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 1);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New').last);
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    expect(
+        tester
+            .widget<DropdownButton<String>>(find.byType(DropdownButton<String>))
+            .value,
+        'new');
+
+    await tester.dragFrom(const Offset(180, 470), const Offset(0, 100));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    await tester.dragFrom(const Offset(180, 470), const Offset(0, 260));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isTrue);
+  });
+
+  for (final scrollOffset in [0.0, 200.0]) {
+    testWidgets(
+        'selecting description at offset $scrollOffset does not minimize',
+        (tester) async {
+      final service = globals.service as _TestService;
+      service.videos[0] = service.videos[0].copyWith(
+        description: List.filled(60, 'A line from the description.').join('\n'),
+      );
+      await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+      final player =
+          tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+      final content = find
+          .descendant(
+              of: find.byType(ExpandedPlayer),
+              matching: find.byType(SingleChildScrollView))
+          .hitTestable()
+          .first;
+      final position = tester
+          .state<ScrollableState>(find
+              .descendant(of: content, matching: find.byType(Scrollable))
+              .first)
+          .position;
+      position.jumpTo(scrollOffset);
+      await tester.pump();
+      final text = find
+          .descendant(of: content, matching: find.byType(EditableText))
+          .first;
+      final textTop = tester.getTopLeft(text);
+      final contentTop = tester.getTopLeft(content);
+      final selection = await tester.startGesture(Offset(textTop.dx + 80,
+          (textTop.dy > contentTop.dy ? textTop.dy : contentTop.dy) + 20));
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(tester.widget<EditableText>(text).controller.selection.isCollapsed,
+          isFalse);
+      await selection.moveBy(const Offset(0, 230),
+          timeStamp: const Duration(milliseconds: 600));
+      await tester.pump();
+      await selection.up();
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isFalse);
+    });
+  }
+
+  testWidgets('PiP fills the window and restores the mini player layout',
+      (tester) async {
+    final video = (globals.service as _TestService).videos[0];
+    await _pumpHomepage(tester, const Size(390, 844),
+        playerState: PlayerState.init([video])
+            .copyWith(currentlyPlaying: video, isMini: true, isHidden: false));
+    final playerView = find.byType(Player);
+    final player = tester.element(playerView).read<PlayerCubit>();
+    final videoSurface = find.ancestor(
+      of: find.byKey(const ValueKey('player')),
+      matching: find.byType(AspectRatio),
+    );
+    final miniWidth = tester.getSize(videoSurface).width;
+
+    player.handleMediaEvent(const MediaEvent(
+        state: MediaState.playing, type: MediaEventType.enteredPip));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(videoSurface).width, 390);
+    final positioned = tester.widget<AnimatedPositioned>(find.descendant(
+        of: playerView, matching: find.byType(AnimatedPositioned)));
+    expect(positioned.top, 0);
+    expect(positioned.bottom, 0);
+    expect(player.state.isMini, isTrue);
+    expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+    expect(find.descendant(of: playerView, matching: find.byType(AppBar)),
+        findsNothing);
+
+    player.handleMediaEvent(const MediaEvent(
+        state: MediaState.playing, type: MediaEventType.exitedPip));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(videoSurface).width, miniWidth);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final tab in [0, 1]) {
+    testWidgets('routed video tab $tab pulls down without starting playback',
+        (tester) async {
+      final service = globals.service as _TestService;
+      service.videos[0] = service.videos[0].copyWith(
+        description: List.filled(60, 'A line from the description.').join('\n'),
+      );
+      service.comments = List.generate(
+        20,
+        (index) => Comment(
+            'Viewer $index',
+            [],
+            'viewer-$index',
+            '',
+            false,
+            'A comment about this video.',
+            'Today',
+            0,
+            '$index',
+            false,
+            null,
+            null),
+      );
+      // An existing mini player should survive dismissing a different preview.
+      final playing = tab == 1 ? service.videos[1] : null;
+      await _pumpVideo(tester, const Size(390, 844),
+          playerState: playing == null
+              ? null
+              : PlayerState.init([playing]).copyWith(
+                  currentlyPlaying: playing, isMini: true, isHidden: false));
+      final screen = find.byType(VideoScreen);
+      final player = tester.element(screen).read<PlayerCubit>();
+      if (tab == 1) {
+        await tester.tap(find.descendant(
+            of: find.byType(NavigationBar).last,
+            matching: find.text('Comments')));
+        await tester.pumpAndSettle();
+      }
+      final content = find
+          .descendant(of: screen, matching: find.byType(SingleChildScrollView))
+          .hitTestable()
+          .first;
+      final position = tester
+          .state<ScrollableState>(find
+              .descendant(of: content, matching: find.byType(Scrollable))
+              .first)
+          .position;
+      final start = tester.getTopLeft(content) + const Offset(180, 90);
+
+      position.jumpTo(80);
+      await tester.pump();
+      await tester.dragFrom(start, const Offset(0, 260));
+      await tester.pumpAndSettle();
+      expect(screen, findsOneWidget);
+      expect(position.pixels, 0);
+
+      await tester.dragFrom(start, const Offset(0, 260));
+      await tester.pumpAndSettle();
+      expect(screen, findsNothing);
+      expect(player.state.currentlyPlaying, playing);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   group('VideoThumbnailView controls', () {
     testWidgets('remain tappable when no thumbnail is available',

@@ -1,8 +1,10 @@
 package com.github.dvbeckwitt.videre
 
 import android.app.Activity
+import android.app.PictureInPictureParams
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.Network
@@ -10,6 +12,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Rational
 import cl.puntito.simple_pip_mode.PipCallbackHelper
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,6 +31,9 @@ class MainActivity : AudioServiceActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val fileWorker = Executors.newSingleThreadExecutor()
     private var fileChannel: MethodChannel? = null
+    private var pipChannel: MethodChannel? = null
+    private var autoPip = false
+    private var pipAspectRatio = Rational(16, 9)
     private var pendingFile: FileRequest? = null
 
     private class FileRequest(val result: MethodChannel.Result, val bytes: ByteArray?)
@@ -39,6 +45,22 @@ class MainActivity : AudioServiceActivity() {
         val messenger = flutterEngine.dartExecutor.binaryMessenger
         fileChannel = MethodChannel(messenger, "videre/files").also {
             it.setMethodCallHandler(::pickFile)
+        }
+        pipChannel = MethodChannel(messenger, "videre/pip").also {
+            it.setMethodCallHandler { call, result ->
+                if (call.method != "configure") {
+                    result.notImplemented()
+                } else {
+                    autoPip = call.argument<Boolean>("enabled") == true
+                    val ratio = call.argument<Double>("aspectRatio") ?: (16.0 / 9)
+                    val safeRatio = if (ratio.isFinite()) ratio.coerceIn(0.42, 2.39) else 16.0 / 9
+                    pipAspectRatio = Rational((safeRatio * 10000).toInt(), 10000)
+                    if (supportsPip() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        runCatching { setPictureInPictureParams(pipParams()) }
+                    }
+                    result.success(null)
+                }
+            }
         }
         // AudioService retains this engine while the Activity is recreated.
         if (!flutterEngine.plugins.has(VidereNetworkPlugin::class.java)) {
@@ -144,6 +166,9 @@ class MainActivity : AudioServiceActivity() {
     private fun releaseChannels() {
         pendingFile?.let { finishFile(it, error = "ACTIVITY_CLOSED", message = "The file operation was interrupted. Please try again.") }
         fileChannel?.setMethodCallHandler(null)
+        fileChannel = null
+        pipChannel?.setMethodCallHandler(null)
+        pipChannel = null
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -158,7 +183,26 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun onPictureInPictureModeChanged(active: Boolean, newConfig: Configuration?) {
+        super.onPictureInPictureModeChanged(active, newConfig)
         callbackHelper.onPictureInPictureModeChanged(active)
+    }
+
+    private fun supportsPip() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+        packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    @android.annotation.TargetApi(Build.VERSION_CODES.O)
+    private fun pipParams(): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder().setAspectRatio(pipAspectRatio)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setAutoEnterEnabled(autoPip)
+        return builder.build()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Older Android versions need to enter before onPause reaches Flutter.
+        if (autoPip && supportsPip() && Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !isInPictureInPictureMode) {
+            runCatching { enterPictureInPictureMode(pipParams()) }
+        }
     }
 
     companion object {

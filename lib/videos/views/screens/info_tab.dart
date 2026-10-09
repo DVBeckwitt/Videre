@@ -1,5 +1,9 @@
-import 'package:auto_route/annotations.dart';
+import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
+import 'package:clipious/utils.dart';
 
 import '../../models/video.dart';
 import '../components/info.dart';
@@ -17,7 +21,13 @@ class VideoInfoTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return video == null
         ? const SizedBox.shrink()
-        : SingleChildScrollView(
+        : MinimizeOnSwipeDown(
+            enabled: getDeviceType() == DeviceType.phone,
+            scrollable: true,
+            onSwipeDown: () {
+              context.read<PlayerCubit>().showMiniPlayer();
+              AutoRouter.of(context).maybePop();
+            },
             child: VideoInfo(
               video: video!,
               dislikes: dislikes,

@@ -14,6 +14,7 @@ import '../../../videos/models/video.dart';
 import '../../../videos/views/components/info.dart';
 import '../../../videos/views/components/recommended_videos.dart';
 import 'mini_player_controls.dart';
+import 'minimize_on_swipe_down.dart';
 
 class ExpandedPlayer extends StatefulWidget {
   const ExpandedPlayer({super.key});
@@ -114,13 +115,19 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
                           }
                         },
                         children: <Widget>[
-                          SingleChildScrollView(
-                            child: VideoInfo(
-                              video: video,
-                            ),
+                          MinimizeOnSwipeDown(
+                            enabled: getDeviceType() == DeviceType.phone &&
+                                !controller.isPip,
+                            scrollable: true,
+                            onSwipeDown: player.showMiniPlayer,
+                            child: VideoInfo(video: video),
                           ),
                           if (!distractionFree)
-                            SingleChildScrollView(
+                            MinimizeOnSwipeDown(
+                              enabled: getDeviceType() == DeviceType.phone &&
+                                  !controller.isPip,
+                              scrollable: true,
+                              onSwipeDown: player.showMiniPlayer,
                               child: CommentsContainer(
                                 video: video,
                                 key: ValueKey('comms-${video.videoId}'),
