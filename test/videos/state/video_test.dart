@@ -46,6 +46,19 @@ class FailingVideoService extends FakeService {
       throw StateError('Instance unavailable');
 }
 
+class DelayedDislikesService extends FakeService {
+  final requested = Completer<void>();
+  final responses = <Completer<Dislike>>[];
+
+  @override
+  Future<Dislike> getDislikes(String videoId) {
+    final response = Completer<Dislike>();
+    responses.add(response);
+    if (!requested.isCompleted) requested.complete();
+    return response.future;
+  }
+}
+
 class RecordingPlayerCubit extends TestPlayerCubit {
   RecordingPlayerCubit(super.initialState, super.settings);
 
@@ -253,6 +266,73 @@ void main() {
     tearDown(() async {
       service = Service();
       await db.close();
+    });
+
+    group('optional dislikes', () {
+      late DelayedDislikesService dislikes;
+      late TestAppCubit app;
+      late TestSettingsCubit settings;
+      late TestPlayerCubit player;
+      late DownloadManagerCubit downloads;
+      late VideoCubit video;
+
+      setUp(() async {
+        service = dislikes = DelayedDislikesService();
+        app = TestAppCubit(AppState(0, null, HomeLayout()));
+        app.intentDataStreamSubscription =
+            const Stream<void>.empty().listen((_) {});
+        await app.stream.firstWhere((state) => state.server != null);
+        settings = TestSettingsCubit(SettingsState.init(), app);
+        player = TestPlayerCubit(PlayerState(playQueue: ListQueue()), settings);
+        downloads = DownloadManagerCubit(const DownloadManagerState(), player);
+        video = VideoCubit(VideoState.init(videoId: 'pending-dislikes'),
+            downloads, player, settings);
+        await dislikes.requested.future;
+      });
+
+      tearDown(() async {
+        if (!video.isClosed) await video.close();
+        await downloads.close();
+        await player.close();
+        await settings.close();
+        await app.close();
+      });
+
+      test('publishes video before optional dislikes finish', () async {
+        expect(video.state.loadingVideo, isFalse);
+        expect(video.state.video?.videoId, 'pending-dislikes');
+        expect(video.state.dislikes, isNull);
+        final loadedVideo = video.state.video;
+        video.onDownload();
+        final updated =
+            video.stream.firstWhere((state) => state.dislikes == 42);
+        dislikes.responses.single.complete(Dislike(42));
+        await updated;
+
+        expect(video.state.video, same(loadedVideo));
+        expect(video.state.loadingVideo, isFalse);
+        expect(video.state.downloading, isTrue);
+        expect(video.state.error, isEmpty);
+      });
+
+      test('ignores dislike responses from an older load or after close',
+          () async {
+        await video.onReady();
+        expect(dislikes.responses, hasLength(2));
+        final updated =
+            video.stream.firstWhere((state) => state.dislikes == 42);
+        dislikes.responses.last.complete(Dislike(42));
+        await updated;
+        dislikes.responses.first.complete(Dislike(7));
+        await Future<void>.delayed(Duration.zero);
+        expect(video.state.dislikes, 42);
+
+        await video.onReady();
+        await video.close();
+        dislikes.responses.last.complete(Dislike(99));
+        await Future<void>.delayed(Duration.zero);
+        expect(video.state.dislikes, 42);
+      });
     });
 
     test('retry clears a failed instance response and loads the video',

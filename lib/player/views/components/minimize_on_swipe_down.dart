@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 
 class MinimizeOnSwipeDown extends StatefulWidget {
   final bool enabled;
@@ -23,9 +22,9 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   static const _swipeDistance = 200.0;
 
   int? _pointer;
+  final _activePointers = <int>{};
   Offset? _startPosition;
-  Duration _pointerDownAt = Duration.zero;
-  bool _dragStarted = false;
+  bool _scrollDragStarted = false;
   final _scrollController = ScrollController();
 
   @override
@@ -35,6 +34,12 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   }
 
   void _pointerDown(PointerDownEvent event) {
+    _activePointers.add(event.pointer);
+    if (_activePointers.length > 1) {
+      _pointer = null;
+      _startPosition = null;
+      return;
+    }
     // Reaching the top during a scroll needs a fresh pull to minimize.
     if (widget.enabled &&
         _pointer == null &&
@@ -42,25 +47,20 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
             _scrollController.position.extentBefore == 0)) {
       _pointer = event.pointer;
       _startPosition = event.position;
-      _pointerDownAt = event.timeStamp;
-      _dragStarted = false;
+      _scrollDragStarted = false;
     }
   }
 
-  void _pointerMove(PointerMoveEvent event) {
-    if (event.pointer == _pointer && !_dragStarted) {
-      if (widget.scrollable &&
-          event.timeStamp - _pointerDownAt >= kLongPressTimeout) {
-        // Leave long-press selection to the description and comment text.
-        _pointer = null;
-        _startPosition = null;
-      } else if ((event.position - _startPosition!).distance > kTouchSlop) {
-        _dragStarted = true;
-      }
+  bool _scrollStart(ScrollStartNotification notification) {
+    if (notification.depth == 0 && notification.dragDetails != null) {
+      // Only the outer scroll view may minimize; text selection owns its drag.
+      _scrollDragStarted = true;
     }
+    return false;
   }
 
   void _pointerUp(PointerUpEvent event) {
+    _activePointers.remove(event.pointer);
     if (event.pointer != _pointer || _startPosition == null) {
       return;
     }
@@ -70,6 +70,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     _startPosition = null;
 
     if (widget.enabled &&
+        (!widget.scrollable || _scrollDragStarted) &&
         distance.dy > _swipeDistance &&
         distance.dy > distance.dx.abs()) {
       widget.onSwipeDown();
@@ -77,6 +78,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   }
 
   void _pointerCancel(PointerCancelEvent event) {
+    _activePointers.remove(event.pointer);
     if (event.pointer == _pointer) {
       _pointer = null;
       _startPosition = null;
@@ -88,12 +90,19 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _pointerDown,
-      onPointerMove: _pointerMove,
       onPointerUp: _pointerUp,
       onPointerCancel: _pointerCancel,
       child: widget.scrollable
-          ? SingleChildScrollView(
-              controller: _scrollController, child: widget.child)
+          ? NotificationListener<ScrollStartNotification>(
+              onNotification: _scrollStart,
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                physics: widget.enabled
+                    ? const AlwaysScrollableScrollPhysics()
+                    : null,
+                child: widget.child,
+              ),
+            )
           : widget.child,
     );
   }

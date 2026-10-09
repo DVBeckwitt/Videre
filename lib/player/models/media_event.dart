@@ -17,8 +17,6 @@ enum MediaEventType {
   progress,
   volumeChanged,
   fullScreenChanged,
-  enteredPip,
-  exitedPip,
   miniDisplayChanged,
   sponsorSkipped,
 }

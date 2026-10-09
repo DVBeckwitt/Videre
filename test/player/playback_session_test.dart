@@ -11,6 +11,7 @@ import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/audio_player.dart';
+import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -283,6 +284,46 @@ void main() {
           channel, (call) async => throw PlatformException(code: 'denied'));
       await player.enterPip();
       expect(player.state, before);
+    });
+
+    test('resizing into PiP preserves the expanded portrait layout', () async {
+      final view =
+          TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
+      view.devicePixelRatio = 1;
+      view.physicalSize = const Size(390, 844);
+      addTearDown(view.resetDevicePixelRatio);
+      addTearDown(view.resetPhysicalSize);
+      player.seedState(player.state.copyWith(
+        currentlyPlaying: const Video(videoId: 'pip'),
+        isHidden: false,
+        isMini: false,
+        orientation: Orientation.portrait,
+      ));
+      const channel = MethodChannel('puntito.simple_pip_mode');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      await messenger.handlePlatformMessage(
+          channel.name,
+          channel.codec.encodeMethodCall(const MethodCall('onPipEntered')),
+          (_) {});
+      view.physicalSize = const Size(320, 180);
+      player.didChangeMetrics();
+      expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+      expect(player.state.mediaCommand, isNull);
+
+      await messenger.handlePlatformMessage(
+          channel.name,
+          channel.codec.encodeMethodCall(const MethodCall('onPipExited')),
+          (_) {});
+      view.physicalSize = const Size(390, 844);
+      player.didChangeMetrics();
+      expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+      expect(player.state.isMini, isFalse);
+
+      // A real rotation still enters fullscreen after returning to the app.
+      view.physicalSize = const Size(844, 390);
+      player.didChangeMetrics();
+      expect(player.state.fullScreenState, FullScreenState.fullScreen);
     });
 
     test('restores a queue and timestamp without issuing playback commands',

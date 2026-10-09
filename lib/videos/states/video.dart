@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
-import 'package:clipious/videos/models/dislike.dart';
 import 'package:logging/logging.dart';
 
 import '../../downloads/states/download_manager.dart';
@@ -23,6 +22,7 @@ class VideoCubit extends Cubit<VideoState> {
   final PlayerCubit player;
   final SettingsCubit settings;
   StreamSubscription<DownloadManagerState>? _downloadSubscription;
+  int _loadGeneration = 0;
 
   VideoCubit(
       super.initialState, this.downloadManager, this.player, this.settings) {
@@ -31,29 +31,19 @@ class VideoCubit extends Cubit<VideoState> {
 
   Future<void> onReady() async {
     if (isClosed) return;
+    final generation = ++_loadGeneration;
     emit(state.copyWith(loadingVideo: true, error: ''));
     try {
       Video video = await service.getVideo(state.videoId);
-      var dislikes = state.dislikes;
-
-      try {
-        if (settings.state.useReturnYoutubeDislike) {
-          Dislike dislike = await service.getDislikes(state.videoId);
-          dislikes = dislike.dislikes;
-        }
-      } catch (e) {
-        log.info("Failed to get dislikes for video ${state.videoId}");
-      }
-
       final isLoggedIn = await service.isLoggedIn();
-      if (isClosed) return;
+      if (isClosed || generation != _loadGeneration) return;
       emit(state.copyWith(
-          loadingVideo: false,
-          video: video,
-          dislikes: dislikes,
-          isLoggedIn: isLoggedIn));
+          loadingVideo: false, video: video, isLoggedIn: isLoggedIn));
 
       getDownloadStatus();
+      if (settings.state.useReturnYoutubeDislike) {
+        unawaited(_loadDislikes(video.videoId, generation));
+      }
     } catch (err) {
       late String error;
       if (err is InvidiousServiceError) {
@@ -61,7 +51,20 @@ class VideoCubit extends Cubit<VideoState> {
       } else {
         error = coulnotLoadVideos;
       }
-      if (!isClosed) emit(state.copyWith(error: error, loadingVideo: false));
+      if (!isClosed && generation == _loadGeneration) {
+        emit(state.copyWith(error: error, loadingVideo: false));
+      }
+    }
+  }
+
+  Future<void> _loadDislikes(String videoId, int generation) async {
+    try {
+      final dislikes = await service.getDislikes(videoId);
+      if (!isClosed && generation == _loadGeneration) {
+        emit(state.copyWith(dislikes: dislikes.dislikes));
+      }
+    } catch (_) {
+      log.info('Failed to get dislikes for video $videoId');
     }
   }
 

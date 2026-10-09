@@ -1,8 +1,8 @@
-- SponsorBlock and dislike counts are now on by default.
-- Pull down from comments or the description to minimize.
-- Go Home for picture-in-picture; close the window to keep listening.
-- Added local playlists, Watch Later, backups, and NewPipe imports.
-- Resume videos and saved queues on phone and TV.
-- Downloads support pause/resume, retry, Wi-Fi-only mode, and playlists.
-- Send videos to Videre on TV and control playback from your phone.
+- SponsorBlock and dislikes on by default; dislike lookups no longer delay playback.
+- Pull down from comments or description to minimize. Text selection stays intact.
+- PiP on Home, background audio, and correct layout on return.
+- Local playlists, Watch Later, backups, and NewPipe imports.
+- Resume videos and queues on phone and TV.
+- Pause/resume downloads, Wi-Fi-only mode, and playlist downloads.
+- Phone-to-TV playback and controls.
 - Clearer Invidious setup and connection help.

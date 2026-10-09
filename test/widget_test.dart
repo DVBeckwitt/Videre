@@ -11,7 +11,6 @@ import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
-import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/expanded_player.dart';
@@ -1045,47 +1044,75 @@ void main() {
     expect(player.state.isMini, isTrue);
   });
 
-  for (final scrollOffset in [0.0, 200.0]) {
-    testWidgets(
-        'selecting description at offset $scrollOffset does not minimize',
-        (tester) async {
-      final service = globals.service as _TestService;
-      service.videos[0] = service.videos[0].copyWith(
-        description: List.filled(60, 'A line from the description.').join('\n'),
-      );
-      await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
-      final player =
-          tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
-      final content = find
-          .descendant(
-              of: find.byType(ExpandedPlayer),
-              matching: find.byType(SingleChildScrollView))
-          .hitTestable()
-          .first;
-      final position = tester
-          .state<ScrollableState>(find
-              .descendant(of: content, matching: find.byType(Scrollable))
-              .first)
-          .position;
-      position.jumpTo(scrollOffset);
-      await tester.pump();
-      final text = find
-          .descendant(of: content, matching: find.byType(EditableText))
-          .first;
-      final textTop = tester.getTopLeft(text);
-      final contentTop = tester.getTopLeft(content);
-      final selection = await tester.startGesture(Offset(textTop.dx + 80,
-          (textTop.dy > contentTop.dy ? textTop.dy : contentTop.dy) + 20));
-      await tester.pump(const Duration(milliseconds: 600));
-      expect(tester.widget<EditableText>(text).controller.selection.isCollapsed,
-          isFalse);
-      await selection.moveBy(const Offset(0, 230),
-          timeStamp: const Duration(milliseconds: 600));
-      await tester.pump();
-      await selection.up();
-      await tester.pumpAndSettle();
-      expect(player.state.isMini, isFalse);
-    });
+  for (final selectionGesture in [
+    'long press',
+    'double tap',
+    'long press with second touch'
+  ]) {
+    for (final scrollOffset
+        in selectionGesture == 'long press' ? [0.0, 200.0] : [0.0]) {
+      testWidgets(
+          '$selectionGesture selection at offset $scrollOffset does not minimize',
+          (tester) async {
+        final service = globals.service as _TestService;
+        service.videos[0] = service.videos[0].copyWith(
+          description:
+              List.filled(60, 'A line from the description.').join('\n'),
+        );
+        await _pumpExpandedPlayer(tester, const Size(390, 844),
+            selectedIndex: 0);
+        final player =
+            tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+        final content = find
+            .descendant(
+                of: find.byType(ExpandedPlayer),
+                matching: find.byType(SingleChildScrollView))
+            .hitTestable()
+            .first;
+        final position = tester
+            .state<ScrollableState>(find
+                .descendant(of: content, matching: find.byType(Scrollable))
+                .first)
+            .position;
+        position.jumpTo(scrollOffset);
+        await tester.pump();
+        final text = find
+            .descendant(of: content, matching: find.byType(EditableText))
+            .first;
+        final textTop = tester.getTopLeft(text);
+        final contentTop = tester.getTopLeft(content);
+        final start = Offset(textTop.dx + 80,
+            (textTop.dy > contentTop.dy ? textTop.dy : contentTop.dy) + 20);
+        if (selectionGesture == 'double tap') {
+          await tester.tapAt(start);
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        final selection = await tester.startGesture(start);
+        if (selectionGesture == 'double tap') {
+          // Start word selection before extending it vertically across lines.
+          await selection.moveBy(const Offset(40, 0));
+          await tester.pump();
+        } else {
+          await tester.pump(const Duration(milliseconds: 600));
+        }
+        expect(
+            tester.widget<EditableText>(text).controller.selection.isCollapsed,
+            isFalse);
+        if (selectionGesture == 'long press with second touch') {
+          final secondTouch = await tester
+              .startGesture(contentTop + const Offset(4, 10), pointer: 2);
+          await secondTouch.moveBy(const Offset(0, 40));
+          await tester.pump();
+          await secondTouch.up();
+        }
+        await selection.moveBy(const Offset(0, 230),
+            timeStamp: const Duration(milliseconds: 600));
+        await tester.pump();
+        await selection.up();
+        await tester.pumpAndSettle();
+        expect(player.state.isMini, isFalse);
+      });
+    }
   }
 
   testWidgets('PiP fills the window and restores the mini player layout',
@@ -1102,8 +1129,13 @@ void main() {
     );
     final miniWidth = tester.getSize(videoSurface).width;
 
-    player.handleMediaEvent(const MediaEvent(
-        state: MediaState.playing, type: MediaEventType.enteredPip));
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    await messenger.handlePlatformMessage(
+        'puntito.simple_pip_mode',
+        const StandardMethodCodec()
+            .encodeMethodCall(const MethodCall('onPipEntered')),
+        (_) {});
     await tester.pumpAndSettle();
     expect(tester.getSize(videoSurface).width, 390);
     final positioned = tester.widget<AnimatedPositioned>(find.descendant(
@@ -1115,8 +1147,11 @@ void main() {
     expect(find.descendant(of: playerView, matching: find.byType(AppBar)),
         findsNothing);
 
-    player.handleMediaEvent(const MediaEvent(
-        state: MediaState.playing, type: MediaEventType.exitedPip));
+    await messenger.handlePlatformMessage(
+        'puntito.simple_pip_mode',
+        const StandardMethodCodec()
+            .encodeMethodCall(const MethodCall('onPipExited')),
+        (_) {});
     await tester.pumpAndSettle();
     expect(tester.getSize(videoSurface).width, miniWidth);
     expect(tester.takeException(), isNull);

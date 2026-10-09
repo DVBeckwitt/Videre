@@ -331,12 +331,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
 
     switch (event.type) {
-      case MediaEventType.enteredPip:
-        _setPip(true);
-        break;
-      case MediaEventType.exitedPip:
-        _setPip(false);
-        break;
       case MediaEventType.progress:
         onProgress(event.value);
         break;
@@ -1151,7 +1145,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void onOrientationChange() {
-    if (getDeviceType() == DeviceType.phone &&
+    // A PiP window resize is not a rotation of the phone.
+    if (!state.isPip &&
+        getDeviceType() == DeviceType.phone &&
         (state.orientation == Orientation.landscape) &&
         !state.isMini &&
         settings.state.fullscreenOnRotate) {

@@ -66,7 +66,6 @@ class Player extends StatelessWidget {
         final canSwipeDownToMinimize = deviceType == DeviceType.phone &&
             !isAudio &&
             !isMini &&
-            !isPip &&
             !isFullScreen;
 
         final playerHorizontalPosition = orientation == Orientation.landscape &&
