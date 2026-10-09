@@ -48,19 +48,19 @@ This README describes the current source; check the release notes for features i
 
 Videre uses the [official Invidious directory](https://docs.invidious.io/instances/), with hosts reporting API support shown first. Listing is not a privacy guarantee or a promise that playback works. Public hosts often allow browser playback while restricting apps.
 
-Updated **9 October 2026**. Browser playback is confirmed by user testing. The separate Videre API results below come from anonymous checks on our development network.
+Status as of **9 October 2026**.
 
 | Public host | Browser playback | Videre API check |
 |---|---|---|
-| [invidious.f5.si](https://invidious.f5.si) | ✅ Working (user-tested) | Search worked; video metadata was empty or blocked (403). |
-| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working (user-tested) | Search and video API blocked (403). |
-| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working (user-tested) | Search and video API required authorization (401). |
-| [yt.chocolatemoo53.com](https://yt.chocolatemoo53.com) | ✅ Working (user-tested) | Search and video API blocked (403). |
-| [invidious.tiekoetter.com](https://invidious.tiekoetter.com) | ✅ Working (user-tested) | Stats returned invalid JSON; search and video API blocked (403). |
+| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | Search works; video unavailable |
+| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | Blocked (403) |
+| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Access denied (401) |
+| [yt.chocolatemoo53.com](https://yt.chocolatemoo53.com) | ✅ Working | Blocked (403) |
+| [invidious.tiekoetter.com](https://invidious.tiekoetter.com) | ✅ Working | Blocked (403) |
 
 All five are available through **Settings → Manage servers → Add server → Public instances** in Videre. The picker follows the live directory and checks your choice before saving. Browser playback can work even when a host restricts app access.
 
-These are dated results, not permanent ratings. Automated tests covered the homepage, stats, search, and video metadata; no host returned usable playback links to test streams. Passing the app's check still does not guarantee every video will play.
+API results are from our test network. Playback through Videre was not verified; availability can change.
 
 For your own server, see the [Invidious GitHub project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
 
