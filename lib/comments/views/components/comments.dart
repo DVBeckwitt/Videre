@@ -21,7 +21,6 @@ class CommentsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
-    var textTheme = Theme.of(context).textTheme;
     return BlocProvider(
       create: (context) => CommentsCubit(CommentsState.init(
           video: video,
@@ -40,19 +39,22 @@ class CommentsView extends StatelessWidget {
                 ))
             .toList(growable: true));
 
-        if (state.continuation != null && !state.loadingComments) {
+        if (state.error.isNotEmpty) {
+          widgets.add(Text(state.error));
+        }
+
+        if (!state.loadingComments &&
+            (state.continuation != null || state.error.isNotEmpty)) {
           widgets.add(
             Padding(
               padding: const EdgeInsets.only(top: 4.0),
-              child: SizedBox(
-                  height: 15,
-                  child: FilledButton.tonal(
-                      onPressed: cubit.loadMore,
-                      child: Text(
-                        locals.loadMore,
-                        style:
-                            TextStyle(fontSize: textTheme.labelSmall?.fontSize),
-                      ))),
+              child: FilledButton.tonal(
+                style: FilledButton.styleFrom(minimumSize: const Size(0, 48)),
+                onPressed:
+                    state.error.isNotEmpty ? cubit.getComments : cubit.loadMore,
+                child: Text(
+                    state.error.isNotEmpty ? locals.retry : locals.loadMore),
+              ),
             ),
           );
         }
@@ -71,11 +73,7 @@ class CommentsView extends StatelessWidget {
           ));
         }
 
-        return state.error.isNotEmpty
-            ? Text(state.error)
-            : Column(
-                children: widgets,
-              );
+        return Column(children: widgets);
       }),
     );
   }

@@ -9,56 +9,50 @@ import '../../settings/models/errors/invidious_service_error.dart';
 part 'comments.freezed.dart';
 
 class CommentsCubit extends Cubit<CommentsState> {
+  bool _loading = false;
+
   CommentsCubit(super.initialState) {
     onReady();
   }
 
-  onReady() {
+  void onReady() {
     getComments();
   }
 
-  loadMore() async {
-    var state = this.state.copyWith();
-    emit(state.copyWith(loadingComments: true));
-
-    state = this.state.copyWith();
-    VideoComments comments = await service.getComments(state.video.videoId,
-        continuation: state.continuation);
-
-    var stateComments = state.comments;
-    stateComments.comments.addAll(comments.comments);
-    emit(state.copyWith(
-        comments: stateComments,
-        continuation: comments.continuation,
-        loadingComments: false));
+  Future<void> loadMore() async {
+    if (state.continuation != null) await getComments();
   }
 
-  getComments() async {
-    var state = this.state.copyWith();
-    emit(state.copyWith(
-        error: '',
-        loadingComments: true,
-        comments: VideoComments(0, state.video.videoId, '', [])));
-
-    state = this.state.copyWith();
+  Future<void> getComments() async {
+    if (_loading || isClosed) return;
+    _loading = true;
+    final previous = state;
+    emit(state.copyWith(error: '', loadingComments: true));
 
     try {
-      VideoComments comments = await service.getComments(state.video.videoId,
-          continuation: state.continuation,
-          sortBy: state.sortBy,
-          source: state.source);
+      final comments = await service.getComments(previous.video.videoId,
+          continuation: previous.continuation,
+          sortBy: previous.sortBy,
+          source: previous.source);
+      if (isClosed) return;
       emit(state.copyWith(
-          comments: comments,
+          comments: VideoComments(
+              comments.commentCount ?? previous.comments.commentCount,
+              previous.video.videoId,
+              comments.continuation,
+              [...previous.comments.comments, ...comments.comments]),
           loadingComments: false,
           continuation: comments.continuation));
     } catch (err) {
-      state = this.state.copyWith();
-      if (err is InvidiousServiceError) {
-        emit(state.copyWith(error: err.message));
-      } else {
-        emit(state.copyWith(error: err.toString()));
-        rethrow;
+      if (!isClosed) {
+        // Leave the current page and continuation available for retry.
+        emit(state.copyWith(
+            loadingComments: false,
+            error:
+                err is InvidiousServiceError ? err.message : err.toString()));
       }
+    } finally {
+      _loading = false;
     }
   }
 }

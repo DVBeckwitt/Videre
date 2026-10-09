@@ -20,7 +20,7 @@ class SingleCommentView extends StatelessWidget {
   const SingleCommentView(
       {super.key, required this.comment, required this.video});
 
-  openChannel(BuildContext context, String authorId) {
+  void openChannel(BuildContext context, String authorId) {
     AutoRouter.of(context).push(ChannelRoute(channelId: authorId));
   }
 
@@ -29,7 +29,6 @@ class SingleCommentView extends StatelessWidget {
     var player = context.read<PlayerCubit>();
     var locals = AppLocalizations.of(context)!;
     ColorScheme colors = Theme.of(context).colorScheme;
-    var textTheme = Theme.of(context).textTheme;
 
     return BlocProvider(
       create: (context) =>
@@ -139,23 +138,19 @@ class SingleCommentView extends StatelessWidget {
                         ],
                       ),
                       Visibility(
-                          visible: state.comment.replies != null &&
-                              !state.showingChildren,
+                          visible: state.comment.replies != null,
                           child: Padding(
                             padding: const EdgeInsets.only(top: 4.0),
-                            child: SizedBox(
-                                height: 15,
-                                child: FilledButton.tonal(
-                                    onPressed: cubit.toggleShowChildren,
-                                    child: Text(
-                                      // locals.nReplies(comment.replies?.replyCount ?? 0).toString()),
-                                      locals.nReplies(
-                                          state.comment.replies?.replyCount ??
-                                              0),
-                                      style: TextStyle(
-                                          fontSize:
-                                              textTheme.labelSmall?.fontSize),
-                                    ))),
+                            child: FilledButton.tonalIcon(
+                              style: FilledButton.styleFrom(
+                                  minimumSize: const Size(0, 48)),
+                              onPressed: cubit.toggleShowChildren,
+                              icon: Icon(state.showingChildren
+                                  ? Icons.expand_less
+                                  : Icons.expand_more),
+                              label: Text(locals.nReplies(
+                                  state.comment.replies?.replyCount ?? 0)),
+                            ),
                           )),
                       Visibility(
                           visible: state.showingChildren,
