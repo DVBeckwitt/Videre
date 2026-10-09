@@ -459,6 +459,33 @@ void main() {
       await db.close();
     });
 
+    test('uninitialized progress cannot erase a pending resume position',
+        () async {
+      final setup = cubit.waitForSeekCount(cubit.seekPositions.length + 1);
+      cubit.playVideo(false, startAt: const Duration(seconds: 1309));
+      await setup;
+      player.events.clear();
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.progress));
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.seekTo));
+      expect(
+          player.events.where((event) => event.type == MediaEventType.progress),
+          isEmpty);
+
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.initialized));
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.progress));
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.seekTo));
+      expect(
+          player.events.where((event) => event.type == MediaEventType.progress),
+          isEmpty,
+          reason: 'Initialization can precede the initial seek.');
+
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.seekTo,
+          parameters: {'duration': Duration.zero}));
+      expect(player.events.last.type, MediaEventType.progress);
+      expect(player.events.last.value, Duration.zero,
+          reason: 'Seeking to the start must still work after initialization.');
+    });
+
     testWidgets('media controls reach the decoder in PiP without frame ticks',
         (tester) async {
       const native = MethodChannel('better_player_channel');

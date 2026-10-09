@@ -108,6 +108,18 @@ class _DelayedProgressPlayer extends _SessionPlayer {
       savedProgress.putIfAbsent(timeInSeconds, () => Completer<void>()).future;
 }
 
+Future<void> waitForSavedPosition(int seconds) async {
+  final database = db as SembastSqfDb;
+  await database.settingsStore
+      .record(playbackSessionSetting)
+      .onSnapshot(database.db)
+      .firstWhere((snapshot) =>
+          PlaybackSession.decode(snapshot?.value['value'] as String?)
+              ?.seconds ==
+          seconds)
+      .timeout(const Duration(seconds: 5));
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -387,7 +399,7 @@ void main() {
       await player.onProgress(const Duration(seconds: 38));
       player.setEvent(const MediaEvent(
           state: MediaState.playing, type: MediaEventType.pause));
-      await Future<void>.delayed(Duration.zero);
+      await waitForSavedPosition(38);
       expect(player.savedSession?.seconds, 38);
     });
 
@@ -395,17 +407,20 @@ void main() {
         () async {
       player.seedDownload(const DownloadedVideo(
           videoId: 'a', title: 'A', lengthSeconds: 100, quality: 'audio'));
-      for (final lifecycle in [
+      for (final (index, lifecycle) in [
         AppLifecycleState.inactive,
         AppLifecycleState.hidden,
         AppLifecycleState.paused,
         AppLifecycleState.detached,
-      ]) {
-        await player.onProgress(const Duration(seconds: 35));
-        await player.onProgress(const Duration(seconds: 38));
+      ].indexed) {
+        final checkpoint = 35 + index * 10;
+        await player.onProgress(Duration(seconds: checkpoint));
+        await waitForSavedPosition(checkpoint);
+        await player.onProgress(Duration(seconds: checkpoint + 3));
         player.didChangeAppLifecycleState(lifecycle);
-        await Future<void>.delayed(Duration.zero);
-        expect(player.savedSession?.seconds, 38, reason: lifecycle.name);
+        await waitForSavedPosition(checkpoint + 3);
+        expect(player.savedSession?.seconds, checkpoint + 3,
+            reason: lifecycle.name);
       }
     });
 
@@ -490,6 +505,8 @@ void main() {
         const Video(videoId: 'second'),
       ]);
       await app_main.mediaHandler.stop();
+      player.switchAudio(true);
+      expect(player.state.isAudio, isFalse);
       player.setEvent(const MediaEvent(state: MediaState.completed));
       await Future<void>.delayed(const Duration(milliseconds: 500));
       expect(player.state.currentlyPlaying, isNull);
@@ -591,18 +608,6 @@ void main() {
 
     test('pause and background save position while progress storage is pending',
         () async {
-      Future<void> waitForSavedPosition(int seconds) async {
-        final database = db as SembastSqfDb;
-        await database.settingsStore
-            .record(playbackSessionSetting)
-            .onSnapshot(database.db)
-            .firstWhere((record) =>
-                PlaybackSession.decode(record?.value['value'] as String?)
-                    ?.seconds ==
-                seconds)
-            .timeout(const Duration(seconds: 5));
-      }
-
       for (final pause in [true, false]) {
         final delayed =
             _DelayedProgressPlayer(PlayerState.init(null), settings);
@@ -731,6 +736,32 @@ void main() {
         expect(db.getVideoProgress('a'), 1);
         await audio.close();
       }
+    });
+
+    test('switching audio publishes the current position before mounting',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const video = Video(videoId: 'a', lengthSeconds: 2000);
+      await player.playVideo([video], startAt: const Duration(seconds: 1200));
+      await player.onProgress(const Duration(seconds: 1309));
+      player.pause();
+      player.switchAudio(true);
+      final audio = _AudioStartRecorder(
+          const AudioPlayerState(video: video), player, settings);
+      addTearDown(audio.close);
+      // A newly mounted decoder must not receive the original resume point.
+      final mountedAt = audio.startedAt;
+      await Future<void>.delayed(Duration.zero);
+      expect(mountedAt, const Duration(seconds: 1309));
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.isPlaying, isFalse);
+
+      await player.onProgress(const Duration(seconds: 1400));
+      player.switchAudio(false);
+      expect(player.state.startAt, const Duration(seconds: 1400));
+      expect(player.state.currentlyPlaying?.videoId, 'a');
     });
 
     test('closing an older player cannot replace the newer saved session',

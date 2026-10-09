@@ -1121,9 +1121,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       state.position.inMilliseconds / duration.inMilliseconds;
 
   void switchAudio(bool value) {
-    if (state.currentlyPlaying != null) {
-      emit(state.copyWith(isAudio: value));
-      switchToVideo(state.currentlyPlaying!, startAt: state.position);
+    if (state.currentlyPlaying != null &&
+        !state.isClosing &&
+        state.isAudio != value) {
+      _progressGeneration++;
+      // The replacement decoder reads its starting position when it mounts.
+      emit(state.copyWith(isAudio: value, startAt: state.position));
     }
   }
 

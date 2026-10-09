@@ -252,6 +252,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   Completer<void> _setupCancellation = Completer<void>();
   Function(BetterPlayerEvent)? _videoListener;
   Duration _playbackStartAt = Duration.zero;
+  bool _waitingForInitialSeek = false;
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
@@ -375,6 +376,16 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   void onVideoListener(BetterPlayerEvent event) {
     if (isClosed) return;
+    if (event.betterPlayerEventType == BetterPlayerEventType.progress ||
+        event.betterPlayerEventType == BetterPlayerEventType.seekTo) {
+      if (!_playbackInitialized) return;
+      // Initialization can report zero before the resume seek has finished.
+      if (_waitingForInitialSeek) {
+        if (event.betterPlayerEventType != BetterPlayerEventType.seekTo ||
+            event.parameters?['duration'] is! Duration) return;
+        _waitingForInitialSeek = false;
+      }
+    }
     if (event.betterPlayerEventType == BetterPlayerEventType.exception) {
       if (_playbackInitialized) {
         _emitTerminalPlaybackError();
@@ -650,6 +661,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         }
       }
       _playbackStartAt = startAt ?? Duration.zero;
+      _waitingForInitialSeek = _playbackStartAt > Duration.zero;
 
       WakelockPlus.enable();
 
