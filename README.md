@@ -18,8 +18,6 @@ Connect to a public Invidious instance or your own server to watch, listen, and 
   <a href="./screenshots/videre-private-library.png"><img src="./screenshots/videre-private-library.png" alt="Local playlists" width="24%"></a>
 </p>
 
-*Illustrative screens with example content. Click to enlarge.*
-
 ## Features
 
 - **SponsorBlock.** Skip community-marked sponsor segments by default.
