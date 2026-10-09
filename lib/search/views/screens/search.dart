@@ -14,11 +14,24 @@ import '../../states/search.dart';
 const searchPageSize = 20;
 
 @RoutePage()
-class SearchScreen extends StatelessWidget {
+class SearchScreen extends StatefulWidget {
   final String? query;
   final bool? searchNow;
 
   const SearchScreen({super.key, this.query, this.searchNow});
+
+  @override
+  State<SearchScreen> createState() => _SearchScreenState();
+}
+
+class _SearchScreenState extends State<SearchScreen> {
+  final _queryFocus = FocusNode();
+
+  @override
+  void dispose() {
+    _queryFocus.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,10 +43,17 @@ class SearchScreen extends StatelessWidget {
         final deviceOrientation = getOrientation();
         return BlocProvider(
           create: (context) => SearchCubit<SearchState>(
-              SearchState.init(query: query, searchNow: searchNow), settings),
+              SearchState.init(
+                  query: widget.query, searchNow: widget.searchNow),
+              settings),
           child: BlocBuilder<SearchCubit, SearchState>(
             builder: (context, state) {
               var cubit = context.read<SearchCubit>();
+              void submitQuery(String query) {
+                _queryFocus.unfocus();
+                cubit.setSearchQuery(query);
+              }
+
               return AutoTabsRouter.tabBar(
                   physics: const NeverScrollableScrollPhysics(),
                   routes: const [
@@ -65,16 +85,19 @@ class SearchScreen extends StatelessWidget {
                               : null,
                       appBar: AppBar(
                         title: TextField(
-                          autofocus: query == null,
+                          autofocus: widget.query == null,
+                          focusNode: _queryFocus,
                           controller: state.queryController,
                           textInputAction: TextInputAction.search,
-                          onSubmitted: cubit.search,
+                          onSubmitted: submitQuery,
                         ),
                         actions: [
                           IconButton(
                               onPressed: () {
                                 if (cubit.searchCleared()) {
                                   AutoRouter.of(context).maybePop();
+                                } else {
+                                  _queryFocus.requestFocus();
                                 }
                               },
                               icon: const Icon(Icons.clear)),
@@ -100,8 +123,7 @@ class SearchScreen extends StatelessWidget {
                                           .queryController.value.text.isEmpty
                                       ? state.searchHistory
                                           .map((e) => InkWell(
-                                                onTap: () =>
-                                                    cubit.setSearchQuery(e),
+                                                onTap: () => submitQuery(e),
                                                 child: Padding(
                                                   padding:
                                                       const EdgeInsets.all(8.0),
@@ -131,8 +153,7 @@ class SearchScreen extends StatelessWidget {
                                           .toList()
                                       : state.suggestions
                                           .map((e) => InkWell(
-                                                onTap: () =>
-                                                    cubit.setSearchQuery(e),
+                                                onTap: () => submitQuery(e),
                                                 child: Padding(
                                                   padding:
                                                       const EdgeInsets.all(8.0),

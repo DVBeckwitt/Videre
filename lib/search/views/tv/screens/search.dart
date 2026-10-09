@@ -125,8 +125,7 @@ class TvSearchScreen extends StatelessWidget {
                                           shrinkWrap: true,
                                           children: search.queryController.value
                                                   .text.isEmpty
-                                              ? searchCubit
-                                                  .getHistory()
+                                              ? search.searchHistory
                                                   .map((e) => buildSuggestion(
                                                       context, search, true, e))
                                                   .toList()

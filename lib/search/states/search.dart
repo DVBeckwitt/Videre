@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
 import 'package:clipious/videos/models/video.dart';
-import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
@@ -16,12 +17,16 @@ part 'search.freezed.dart';
 
 class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
   final SettingsCubit settings;
+  Timer? _suggestionTimer;
+  late String _query;
+  int _suggestionRequest = 0;
 
   SearchCubit(super.initialState, this.settings) {
     onInit();
   }
 
   void onInit() {
+    _query = state.queryController.text;
     state.queryController.addListener(getSuggestions);
     getHistory();
     if (state.searchNow) {
@@ -30,9 +35,10 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
   }
 
   @override
-  Future<void> close() async {
+  Future<void> close() {
+    _suggestionTimer?.cancel();
     state.queryController.dispose();
-    super.close();
+    return super.close();
   }
 
   void onFiltersChanged(SearchFiltersState newValue) {
@@ -50,30 +56,40 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
     }
   }
 
-  clearSearch() {
+  void clearSearch() {
     emit(state.copyWith(showResults: false));
   }
 
   void getSuggestions({bool hideResult = true}) {
-    emit(state.copyWith(showResults: !hideResult));
-    if (!settings.state.distractionFreeMode) {
-      EasyDebounce.debounce(
-          'search-suggestions', const Duration(milliseconds: 500), () async {
-        var suggestions = (await service
-                .getSearchSuggestion(state.queryController.value.text))
-            .suggestions;
-        emit(state.copyWith(suggestions: suggestions));
-      });
-    }
+    final query = state.queryController.text;
+    // Moving the cursor should not dismiss the results.
+    if (query == _query) return;
+    _query = query;
+    final request = ++_suggestionRequest;
+    _suggestionTimer?.cancel();
+    emit(state.copyWith(showResults: !hideResult, suggestions: []));
+    if (query.isEmpty || settings.state.distractionFreeMode) return;
+
+    _suggestionTimer = Timer(const Duration(milliseconds: 500), () async {
+      try {
+        final result = await service.getSearchSuggestion(query);
+        if (!isClosed && request == _suggestionRequest) {
+          emit(state.copyWith(suggestions: result.suggestions));
+        }
+      } catch (_) {
+        // Suggestions are optional; keep search usable if the instance fails.
+      }
+    });
   }
 
-  getHistory() {
+  void getHistory() {
+    if (isClosed) return;
     emit(state.copyWith(
         searchHistory:
             settings.state.useSearchHistory ? db.getSearchHistory() : []));
   }
 
-  search(String value) async {
+  Future<void> search(String value) async {
     emit(state.copyWith(showResults: true));
 
     final query = state.queryController.text;
@@ -84,12 +100,12 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
     getHistory();
   }
 
-  setSearchQuery(String e) {
+  void setSearchQuery(String e) {
     state.queryController.text = e;
     search(e);
   }
 
-  removeFromHistory(String e) async {
+  Future<void> removeFromHistory(String e) async {
     await db.deleteFromSearchHistory(e);
     getHistory();
   }
