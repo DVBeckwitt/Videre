@@ -1,4 +1,5 @@
 import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/states/thumbnail.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -68,5 +69,29 @@ void main() {
     final best = ImageObject.getBestThumbnail([maxres, maxresDefault]);
 
     expect(best, same(maxresDefault));
+  });
+
+  test('thumbnail failures try each fallback without changing the source list',
+      () async {
+    const urls = ['/maxres.jpg', '/medium.jpg'];
+    final cubit = ThumbnailCubit(const ThumbnailState(urls: urls));
+    expect(cubit.state.selected, urls.first);
+    cubit.onThumbnailFailed();
+    expect(cubit.state.selected, urls.last);
+    cubit.onThumbnailFailed();
+    expect(cubit.state.selected, isNull);
+    expect(cubit.state.urls, isEmpty);
+    expect(urls, hasLength(2));
+    await cubit.close();
+  });
+
+  test('thumbnail failure arriving after disposal is ignored', () async {
+    final cubit = ThumbnailCubit(
+        const ThumbnailState(urls: ['/maxres.jpg', '/medium.jpg']));
+    final lateImageError = cubit.onThumbnailFailed;
+    final before = cubit.state;
+    await cubit.close();
+    expect(lateImageError, returnsNormally);
+    expect(cubit.state, same(before));
   });
 }

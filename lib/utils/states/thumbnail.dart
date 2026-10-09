@@ -11,13 +11,14 @@ class ThumbnailCubit extends Cubit<ThumbnailState> {
     init();
   }
 
-  init() {
+  void init() {
     if (state.urls.isNotEmpty) {
       emit(state.copyWith(selected: state.urls.first));
     }
   }
 
-  onThumbnailFailed() {
+  void onThumbnailFailed() {
+    if (isClosed) return;
     _log.fine('Failed to load thumbnail ${state.selected}, trying another one');
     if (state.urls.isNotEmpty) {
       List<String> thumbnails = List.from(state.urls);
