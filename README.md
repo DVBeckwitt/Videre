@@ -41,8 +41,7 @@ Save more addresses in **Settings → Manage servers → Add server**. Choose **
 
 This README describes the current source; check the release notes for features included in a downloaded APK.
 
-<details>
-<summary><strong>Public instances: links and test results</strong></summary>
+## Public instances
 
 Videre uses the [official Invidious directory](https://docs.invidious.io/instances/), with hosts reporting API support shown first. Listing is not a privacy guarantee or a promise that playback works. Public hosts often allow browser playback while restricting apps.
 
@@ -61,8 +60,6 @@ All five are available through **Settings → Manage servers → Add server → 
 API results are from our test network. Playback through Videre was not verified; availability can change.
 
 For your own server, see the [Invidious GitHub project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
-
-</details>
 
 ## A few useful tips
 
