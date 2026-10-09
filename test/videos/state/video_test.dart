@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 // ignore: depend_on_referenced_packages
 import 'package:audio_service_platform_interface/audio_service_platform_interface.dart';
 // ignore: depend_on_referenced_packages
 import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
-import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -469,10 +469,12 @@ void main() {
           MethodChannel('com.ryanheise.audio_service.handler.methods');
       final messenger = tester.binding.defaultBinaryMessenger;
       final calls = StreamController<MethodCall>.broadcast();
+      final nativeCalls = <String>[];
       for (final channel in [events, audioClient, audioHandler]) {
         messenger.setMockMethodCallHandler(channel, (_) async => null);
       }
       messenger.setMockMethodCallHandler(native, (call) async {
+        nativeCalls.add(call.method);
         calls.add(call);
         if (call.method == 'create') return {'textureId': 1};
         if (call.method == 'position') return 0;
@@ -505,6 +507,8 @@ void main() {
               isMini: true,
               isHidden: false),
           settings);
+      player.audioSession =
+          (await tester.runAsync(() => AudioSession.instance))!;
       app_main.darkColorScheme = cubit.state.colors;
       tester.view.physicalSize = const Size(390, 844);
       tester.view.devicePixelRatio = 1;
@@ -559,10 +563,18 @@ void main() {
           if (action.$1 == 'seek') expect(call.arguments['location'], 17000);
         }
       }
+      nativeCalls.clear();
+      await messenger.handlePlatformMessage(
+          audioHandler.name,
+          audioHandler.codec.encodeMethodCall(const MethodCall('stop', {})),
+          (reply) => audioHandler.codec.decodeEnvelope(reply!));
+      await tester.idle();
+      // Background Stop cannot depend on a widget rebuild to silence audio.
+      final stoppedWithoutFrame = nativeCalls.contains('pause');
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpWidget(const SizedBox.shrink());
-      EasyDebounce.cancel('player-controls-hide');
       await tester.pump(const Duration(seconds: 4));
+      expect(stoppedWithoutFrame, isTrue);
     });
 
     test('rejects unsafe external media destinations', () async {

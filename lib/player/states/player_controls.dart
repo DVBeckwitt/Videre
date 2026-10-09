@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:bloc/bloc.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
-import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
@@ -20,6 +20,7 @@ final log = Logger('PlayerControlControllers');
 
 class PlayerControlsCubit extends Cubit<PlayerControlsState> {
   final PlayerCubit player;
+  final _timers = <String, Timer>{};
 
   PlayerControlsCubit(super.initialState, this.player) {
     onReady();
@@ -86,7 +87,7 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
         break;
       case MediaEventType.sponsorSkipped:
         emit(state.copyWith(showSponsorBlocked: true));
-        EasyDebounce.debounce('player-control-sponsor-blocked',
+        _debounce('player-control-sponsor-blocked',
             (animationDuration * 2) + const Duration(seconds: 1), () {
           emit(state.copyWith(showSponsorBlocked: false));
         });
@@ -99,14 +100,29 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
     emit(state.copyWith(errored: true));
   }
 
+  void _debounce(String name, Duration delay, VoidCallback callback) {
+    if (isClosed) return;
+    _timers.remove(name)?.cancel();
+    _timers[name] = Timer(delay, () {
+      _timers.remove(name);
+      callback();
+    });
+  }
+
   @override
-  emit(PlayerControlsState state) {
-    super.emit(state);
+  Future<void> close() {
+    // Mini and expanded controls can exist together; each owns its timers.
+    for (final timer in _timers.values) {
+      timer.cancel();
+    }
+    _timers.clear();
+    return super.close();
   }
 
   void hideControls() {
+    if (isClosed) return;
     // we don't want the controls to disappear if we're dragging the position slider
-    if (!state.draggingPositionSlider && !isClosed) {
+    if (!state.draggingPositionSlider) {
       emit(state.copyWith(displayControls: false));
       log.info("Hiding controls ${state.displayControls}");
     } else {
@@ -115,7 +131,7 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
   }
 
   void hideControlsDebounce() {
-    EasyDebounce.debounce(
+    _debounce(
       'player-controls-hide',
       const Duration(seconds: 3),
       hideControls,
@@ -165,13 +181,11 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
     player.fastForward();
     emit(state.copyWith(
         doubleTapFastForwardedOpacity: 1, justDoubleTappedSkip: true));
-    EasyDebounce.debounce('fast-forward', const Duration(milliseconds: 250),
-        () {
+    _debounce('fast-forward', const Duration(milliseconds: 250), () {
       emit(state.copyWith(doubleTapFastForwardedOpacity: 0));
     });
-    // we prevent controls showing to avoid issues where if hte user taps 3 times it will show the controls right after
-    EasyDebounce.debounce('preventControlsShowing', const Duration(seconds: 1),
-        () {
+    // Keep a third tap from reopening controls during a seek.
+    _debounce('preventControlsShowing', const Duration(seconds: 1), () {
       emit(state.copyWith(justDoubleTappedSkip: false));
     });
   }
@@ -180,18 +194,17 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
     player.rewind();
     emit(state.copyWith(
         doubleTapRewindedOpacity: 1, justDoubleTappedSkip: true));
-    EasyDebounce.debounce('fast-rewind', const Duration(milliseconds: 250), () {
+    _debounce('fast-rewind', const Duration(milliseconds: 250), () {
       emit(state.copyWith(doubleTapRewindedOpacity: 0));
     });
-    EasyDebounce.debounce('preventControlsShowing', const Duration(seconds: 1),
-        () {
-      // we prevent controls showing to avoid issues where if hte user taps 3 times it will show the controls right after
+    _debounce('preventControlsShowing', const Duration(seconds: 1), () {
       emit(state.copyWith(justDoubleTappedSkip: false));
     });
   }
 
   Future<void> startBrightnessAdjustments(DragStartDetails details) async {
     final currentBrightness = await ScreenBrightness().current;
+    if (isClosed) return;
     emit(state.copyWith(
         systemBrightness: currentBrightness,
         screenControlStartValue: currentBrightness,
@@ -209,6 +222,7 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
           min(1, max(0, state.screenControlStartValue + movedBy));
 
       await ScreenBrightness().setScreenBrightness(screenBrightness);
+      if (isClosed) return;
       emit(state.copyWith(
           systemBrightness: screenBrightness, showBrightnessSlider: true));
     }
@@ -221,6 +235,7 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
   Future<void> startVolumeAdjustments(DragStartDetails details) async {
     await FlutterVolumeController.updateShowSystemUI(false);
     final currentVolume = await FlutterVolumeController.getVolume();
+    if (isClosed) return;
     emit(state.copyWith(
         systemVolume: currentVolume ?? 0,
         screenControlStartValue: currentVolume ?? 0,
@@ -238,6 +253,7 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
       double volume = min(1, max(0, state.screenControlStartValue + movedBy));
 
       await FlutterVolumeController.setVolume(volume);
+      if (isClosed) return;
       emit(state.copyWith(systemVolume: volume, showVolumeSlider: true));
     }
   }

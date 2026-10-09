@@ -469,6 +469,34 @@ void main() {
       expect(player.state.mediaCommand?.type, MediaCommandType.switchVideo);
     });
 
+    test('opening a video during the closing animation keeps the new video',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playVideo([const Video(videoId: 'first')]);
+      player.hide();
+      await player.playVideo([const Video(videoId: 'second')]);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(player.state.currentlyPlaying?.videoId, 'second');
+      expect(player.state.isClosing, isFalse);
+      expect(player.state.isHidden, isFalse);
+    });
+
+    test('a late completion cannot restart the queue after Stop', () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playVideo([
+        const Video(videoId: 'first'),
+        const Video(videoId: 'second'),
+      ]);
+      await app_main.mediaHandler.stop();
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(player.state.currentlyPlaying, isNull);
+      expect(player.state.isHidden, isTrue);
+      expect(player.state.isClosing, isFalse);
+    });
+
     test('remote paused intent survives loading the initial video', () async {
       player.audioSession = await AudioSession.instance;
       app_main.mediaHandler = MediaHandler(player);

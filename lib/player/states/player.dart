@@ -323,7 +323,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         if (state.currentlyPlaying != null) {
           saveProgress(state.currentlyPlaying!.lengthSeconds ?? 0);
         }
-        playNext();
+        // A late completion must not undo a Stop already in progress.
+        if (!state.isClosing) playNext();
         _setPlaying(false);
         break;
       default:
@@ -406,6 +407,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void hide() {
+    if (isClosed || state.isClosing) return;
+    // Background playback must stop before the closing animation can run.
+    pause();
+    final generation = _progressGeneration;
     unawaited(_saveSession(state));
     playbackHistoryRevision.value++;
     var mediaEvent = MediaEvent(
@@ -417,6 +422,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     Future.delayed(
       animationDuration * 1.5,
       () {
+        if (isClosed || generation != _progressGeneration) return;
         emit(state.copyWith(
             isMini: true,
             mediaEvent: mediaEvent,
@@ -698,6 +704,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       {Duration? startAt, bool? playing}) async {
     _requestedPlaying = playing;
     _progressGeneration++;
+    if (state.isClosing) emit(state.copyWith(isClosing: false));
     try {
       // we move the existing video to the stack of played video
       await audioSession.setActive(true);
