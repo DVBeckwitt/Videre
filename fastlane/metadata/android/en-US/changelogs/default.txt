@@ -1,3 +1,4 @@
+- SponsorBlock and dislike counts are now on by default.
 - Added local playlists, Watch Later, backups, and NewPipe imports.
 - Resume videos and saved queues on phone and TV.
 - Downloads now support pause/resume, retry, Wi-Fi-only mode, and playlists.

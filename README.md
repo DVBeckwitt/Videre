@@ -22,8 +22,8 @@ Connect to a public Invidious instance or your own server to watch, listen, and 
 
 ## Features
 
-- **SponsorBlock.** Skip community-marked sponsor segments.
-- **Dislike counts.** View estimates from Return YouTube Dislike.
+- **SponsorBlock.** Skip community-marked sponsor segments by default.
+- **Dislike counts.** Estimates from Return YouTube Dislike, enabled by default.
 - **Local library.** Save subscriptions, Watch Later, playlists, and history without an account. An Invidious account is optional.
 - **Listen your way.** Background and audio-only playback, picture-in-picture, live streams, and a sleep timer.
 - **Watch offline on phones and tablets.** Video and audio downloads with pause, resume, retry, Wi-Fi-only mode, and playlist downloads.
@@ -60,6 +60,8 @@ Track updates with Obtainium using `https://github.com/DVBeckwitt/Videre` as a G
 Videre (`com.github.dvbeckwitt.videre`) installs alongside Clipious (`com.github.lamarios.clipious`). Android does not transfer their data. Set up Videre before removing Clipious; the backup importer cannot read its app storage directly.
 
 Local and server libraries stay separate. Your instance's operator affects privacy and reliability. Media proxying is optional; with it off, playback can connect directly to YouTube/Google servers. See the [privacy policy](./docs/privacy.html).
+
+SponsorBlock and Return YouTube Dislike contact their services directly. Both are on by default and can be turned off in Settings.
 
 ## Contributing
 

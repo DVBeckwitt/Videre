@@ -902,7 +902,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final videoId = state.currentlyPlaying?.videoId;
     if (videoId != null) {
       List<SponsorSegmentType> types = SponsorSegmentType.values
-          .where((e) => db.getSettings(e.settingsName())?.value == 'true')
+          .where((e) => e.isEnabled(db.getSettings(e.settingsName())?.value))
           .toList();
 
       if (types.isNotEmpty) {

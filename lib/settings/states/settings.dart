@@ -602,7 +602,7 @@ sealed class SettingsState with _$SettingsState {
   bool get autoplayVideoOnLoad => _get(playerAutoplayOnLoad)?.value == 'true';
 
   bool get useReturnYoutubeDislike =>
-      _get(useReturnYoutubeDislikeSettingName)?.value == 'true';
+      (_get(useReturnYoutubeDislikeSettingName)?.value ?? 'true') == 'true';
 
   String get returnYoutubeDislikeUrl =>
       _get(returnYoutubeDislikeUrlSettingName)?.value ?? '';

@@ -35,9 +35,8 @@ class SponsorBlockSettingsScreen extends StatelessWidget {
                     title: Text(locals.sponsorBlockSettingsQuickDescription),
                     tiles: SponsorSegmentType.values
                         .map((t) => SettingsTile.switchTile(
-                              initialValue:
-                                  state.settings[t.settingsName()]?.value ==
-                                      'true',
+                              initialValue: t.isEnabled(
+                                  state.settings[t.settingsName()]?.value),
                               onToggle: (bool value) => cubit.saveSetting(
                                   SettingsValue(
                                       t.settingsName(), value.toString())),

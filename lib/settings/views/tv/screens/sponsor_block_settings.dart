@@ -27,7 +27,7 @@ class TvSponsorBlockSettingsScreen extends StatelessWidget {
                     title: locals.sponsorBlockSettingsQuickDescription),
                 ...SponsorSegmentType.values.map((t) {
                   bool value =
-                      state.settings[t.settingsName()]?.value == 'true';
+                      t.isEnabled(state.settings[t.settingsName()]?.value);
                   return SettingsTile(
                     trailing: Switch(value: value, onChanged: (value) {}),
                     onSelected: (context) => cubit.saveSetting(

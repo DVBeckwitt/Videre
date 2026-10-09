@@ -19,6 +19,8 @@ import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/sponsor_segment.dart';
+import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
@@ -32,6 +34,15 @@ import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
 class _GuestService extends Service {
+  List<SponsorSegmentType>? requestedCategories;
+
+  @override
+  Future<List<SponsorSegment>> getSponsorSegments(
+      String videoId, List<SponsorSegmentType> categories) async {
+    requestedCategories = categories;
+    return [];
+  }
+
   @override
   Future<bool> isLoggedIn() async => false;
 
@@ -42,6 +53,8 @@ class _GuestService extends Service {
 
 class _SessionPlayer extends TestPlayerCubit {
   _SessionPlayer(super.initialState, super.settings);
+
+  void seedVideo(Video video) => emit(state.copyWith(currentlyPlaying: video));
 
   void seedDownload(DownloadedVideo video) => emit(state.copyWith(
       offlineCurrentlyPlaying: video,
@@ -144,6 +157,25 @@ void main() {
       if (!player.isClosed) await player.close();
       await settings.close();
       await db.close();
+    });
+
+    test('SponsorBlock loads sponsors by default and respects saved choices',
+        () async {
+      final guest = service as _GuestService;
+      player.seedVideo(const Video(videoId: 'sponsor-test'));
+      await player.setSponsorBlock();
+      expect(guest.requestedCategories, [SponsorSegmentType.sponsor]);
+
+      await settings.saveSetting(
+          SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+      guest.requestedCategories = null;
+      await player.setSponsorBlock();
+      expect(guest.requestedCategories, isNull);
+
+      await settings.saveSetting(
+          SettingsValue(SponsorSegmentType.intro.settingsName(), 'true'));
+      await player.setSponsorBlock();
+      expect(guest.requestedCategories, [SponsorSegmentType.intro]);
     });
 
     test('restores a queue and timestamp without issuing playback commands',

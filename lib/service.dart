@@ -1057,7 +1057,9 @@ class Service {
             : urlGetDislikes) +
         videoId);
 
-    final response = await httpClient.get(uri);
+    // Don't let the dislike service hold up the video.
+    final response =
+        await httpClient.get(uri).timeout(const Duration(seconds: 3));
     return Dislike.fromJson(handleResponse(response));
   }
 

@@ -17,6 +17,11 @@ enum SponsorSegmentType {
   const SponsorSegmentType(this.segmentName);
   String settingsName() => '$sponsorBlockPrefix$name';
 
+  // Skip sponsors by default; leave the other categories up to the user.
+  bool isEnabled(String? savedValue) => savedValue == null
+      ? this == SponsorSegmentType.sponsor
+      : savedValue == 'true';
+
   static String getLabel(SponsorSegmentType type, AppLocalizations locals) {
     switch (type) {
       case SponsorSegmentType.sponsor:

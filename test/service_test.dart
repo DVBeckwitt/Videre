@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clipious/globals.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -10,6 +12,18 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
+  test('a stalled dislike request times out', () async {
+    db = await SembastSqfDb.createInMemory();
+    final client = MockClient((_) => Completer<http.Response>().future);
+    addTearDown(() async {
+      client.close();
+      await db.close();
+    });
+
+    await expectLater(Service(httpClient: client).getDislikes('video-id'),
+        throwsA(isA<TimeoutException>()));
+  }, timeout: const Timeout(Duration(seconds: 5)));
+
   group('Invidious endpoint compatibility', () {
     test('keeps the current video and authenticated subscription endpoints',
         () {
