@@ -93,8 +93,9 @@ class TvVideoScreen extends StatelessWidget {
                             label: Text(locals.retry),
                           ),
                           TextButton.icon(
-                            onPressed: () =>
-                                AddServerScreen.showConnectionHelp(context),
+                            onPressed: () => AddServerScreen.showConnectionHelp(
+                                context,
+                                videoId: videoId),
                             icon: const Icon(Icons.wifi_find),
                             label: Text(locals.connectionHelp),
                           ),

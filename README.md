@@ -37,7 +37,7 @@ Also included: searchable transcripts with seek and copy, subtitles, video filte
 2. **Connect to an Invidious instance.** On the Add server screen, choose **Public instances** for the current Invidious directory, or enter your own server address. Select **Test and add server** to check it before saving.
 3. **Find something to watch.** Follow channels or save videos to Watch Later. No account needed.
 
-Save more addresses in **Settings → Manage servers → Add server**. Choose **Use this server** to switch; your saved addresses and per-server logins stay in place. **Connection help** also lets you test or switch when playback fails. Accounts belong to their original instance.
+Save more addresses in **Settings → Manage servers → Add server**. Choose **Use this server** to switch; your saved addresses and per-server logins stay in place. When playback fails, **Connection help** checks the video API and lets you switch instances or open the video in a browser. Accounts belong to their original instance.
 
 This README describes the current source; check the release notes for features included in a downloaded APK.
 
@@ -50,14 +50,14 @@ Status as of **9 October 2026**.
 | Public host | Browser playback | Videre API check |
 |---|---|---|
 | [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Video API and media reachable |
-| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | Blocked (403) |
+| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Video API and media reachable |
 | [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Access denied (401) |
 | [yt.chocolatemoo53.com](https://yt.chocolatemoo53.com) | ✅ Working | Blocked (403) |
-| [invidious.tiekoetter.com](https://invidious.tiekoetter.com) | ✅ Working | Blocked (403) |
+| [invidious.tiekoetter.com](https://invidious.tiekoetter.com) | ✅ Working | Browser challenge (403) |
 
 All five are available through **Settings → Manage servers → Add server → Public instances** in Videre. The picker follows the live directory and checks your choice before saving. Browser playback can work even when a host restricts app access.
 
-API results are from our test network. Playback through Videre was not verified; availability can change.
+API checks used Videre's request code from our test network. F5 and Nadeko returned search results, video metadata, and a media sample. Full playback on Android was not verified; availability can change.
 
 For your own server, see the [Invidious GitHub project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
 

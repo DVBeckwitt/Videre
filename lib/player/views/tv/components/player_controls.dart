@@ -439,7 +439,8 @@ class TvPlayerControls extends StatelessWidget {
                                 TextButton.icon(
                                   onPressed: () =>
                                       AddServerScreen.showConnectionHelp(
-                                          context),
+                                          context,
+                                          videoId: currentlyPlaying?.videoId),
                                   icon: const Icon(Icons.wifi_find),
                                   label: Text(locals.connectionHelp),
                                 ),

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
@@ -315,6 +317,404 @@ void main() {
         db.getServer('https://inv.example')!.authToken,
         'invidious-token',
       );
+    });
+  });
+
+  group('Invidious request handling', () {
+    setUp(() async {
+      db = await SembastSqfDb.createInMemory();
+      await db.upsertServer(const Server(url: 'https://inv.example'));
+    });
+    tearDown(() => db.close());
+
+    test('bodyless video GET requests JSON without a Content-Type', () async {
+      final client = MockClient((request) async {
+        expect(request.headers['Accept'], 'application/json');
+        expect(request.headers.containsKey('Content-Type'), isFalse);
+        return http.Response('{"videoId":"video-id"}', 200);
+      });
+      await Service(httpClient: client).getVideo('video-id');
+    });
+
+    test('simultaneous video requests share HTTP work but not decoded models',
+        () async {
+      var calls = 0;
+      final response = Completer<http.Response>();
+      final client = MockClient((_) {
+        calls++;
+        return response.future;
+      });
+      final service = Service(httpClient: client);
+      final first = service.getVideo('video-id');
+      final second = service.getVideo('video-id');
+      await Future<void>.delayed(Duration.zero);
+      response.complete(http.Response('{"videoId":"video-id"}', 200));
+      final videos = await Future.wait([first, second]);
+      expect(calls, 1);
+      expect(identical(videos.first, videos.last), isFalse);
+      await service.getVideo('video-id');
+      expect(calls, 2, reason: 'Playback URLs must not stay cached');
+    });
+
+    test('repeated public browsing reuses a recent response', () async {
+      var calls = 0;
+      final client = MockClient((_) async {
+        calls++;
+        return http.Response('[{"videoId":"video-id"}]', 200);
+      });
+      final service = Service(httpClient: client);
+      await service.getPopular();
+      await service.getPopular();
+      expect(calls, 1);
+    });
+
+    test('a GET retries a short explicit rate limit once', () async {
+      var calls = 0;
+      final client = MockClient((_) async => ++calls == 1
+          ? http.Response('Too many requests', 429,
+              headers: {'retry-after': '0'})
+          : http.Response('[{"videoId":"video-id"}]', 200));
+      expect(await Service(httpClient: client).getPopular(), hasLength(1));
+      expect(calls, 2);
+    });
+
+    test('honors custom Accept casing and keeps JSON mutation Content-Type',
+        () async {
+      await db.upsertServer(const Server(
+          url: 'https://inv.example',
+          authToken: 'token',
+          customHeaders: {'aCcEpT': 'application/vnd.custom+json'}));
+      final client = MockClient((request) async {
+        expect(request.headers['Accept'], 'application/vnd.custom+json');
+        expect(
+            request.headers.keys.where((key) => key.toLowerCase() == 'accept'),
+            hasLength(1));
+        expect(request.headers['Content-Type'], startsWith('application/json'));
+        expect(request.headers['Authorization'], 'Bearer token');
+        expect(request.method, 'POST');
+        return http.Response('{"playlistId":"PL-test"}', 201);
+      });
+      expect(
+          await Service(httpClient: client).createPlayList('test', 'private'),
+          'PL-test');
+    });
+
+    test('failed shared video requests are released for the next attempt',
+        () async {
+      var calls = 0;
+      final failed = Completer<http.Response>();
+      final client = MockClient((_) => ++calls == 1
+          ? failed.future
+          : Future.value(http.Response('{"videoId":"video-id"}', 200)));
+      final service = Service(httpClient: client);
+      final attempts = [
+        expectLater(
+            service.getVideo('video-id'), throwsA(isA<http.ClientException>())),
+        expectLater(
+            service.getVideo('video-id'), throwsA(isA<http.ClientException>())),
+      ];
+      await Future<void>.delayed(Duration.zero);
+      failed.completeError(http.ClientException('Connection closed'));
+      await Future.wait(attempts);
+      expect(calls, 1);
+      await service.getVideo('video-id');
+      expect(calls, 2);
+    });
+
+    testWidgets('a stalled shared video request expires so retry can recover',
+        (tester) async {
+      var calls = 0;
+      final service = Service(
+          httpClient: MockClient((_) => ++calls == 1
+              ? Completer<http.Response>().future
+              : Future.value(http.Response('{"videoId":"video-id"}', 200))));
+      final failed = expectLater(
+          service.getVideo('video-id'), throwsA(isA<TimeoutException>()));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 16));
+      await failed;
+      final retry = service.getVideo('video-id');
+      await tester.pump();
+      expect((await retry).videoId, 'video-id');
+      expect(calls, 2);
+    });
+
+    test(
+        'video request sharing stays separate for different hosts and accounts',
+        () async {
+      var calls = 0;
+      final pending = Completer<http.Response>();
+      final service = Service(httpClient: MockClient((_) {
+        calls++;
+        return pending.future;
+      }));
+      final requests = [
+        service.getVideo('video-id',
+            serverOverride:
+                const Server(url: 'https://one.example', authToken: 'one')),
+        service.getVideo('video-id',
+            serverOverride:
+                const Server(url: 'https://one.example', authToken: 'two')),
+        service.getVideo('video-id',
+            serverOverride:
+                const Server(url: 'https://two.example', authToken: 'one')),
+      ];
+      await Future<void>.delayed(Duration.zero);
+      pending.complete(http.Response('{"videoId":"video-id"}', 200));
+      await Future.wait(requests);
+      expect(calls, 3);
+    });
+
+    test('public cache expires and callers receive separate decoded lists',
+        () async {
+      var now = DateTime.utc(2026, 10, 9);
+      var calls = 0;
+      final service = Service(
+          now: () => now,
+          httpClient: MockClient((_) async {
+            calls++;
+            return http.Response('[{"videoId":"video-id"}]', 200);
+          }));
+      (await service.getPopular()).clear();
+      now = now.add(const Duration(seconds: 10));
+      expect(await service.getPopular(), hasLength(1));
+      expect(calls, 1);
+      now = now.add(const Duration(seconds: 6));
+      await service.getPopular();
+      expect(calls, 2);
+    });
+
+    test('public cache is bounded to twenty requests', () async {
+      var calls = 0;
+      final service = Service(httpClient: MockClient((_) async {
+        calls++;
+        return http.Response('[{"type":"video","videoId":"video-id"}]', 200);
+      }));
+      for (var index = 0; index < 21; index++) {
+        await service.search('query-$index');
+      }
+      await service.search('query-20');
+      expect(calls, 21);
+      await service.search('query-0');
+      expect(calls, 22);
+    });
+
+    test('public cache separates host, token, cookie, headers and proxy mode',
+        () async {
+      var calls = 0;
+      final service = Service(httpClient: MockClient((_) async {
+        calls++;
+        return http.Response('[{"videoId":"video-id"}]', 200);
+      }));
+      const configurations = [
+        Server(url: 'https://inv.example'),
+        Server(url: 'https://other.example'),
+        Server(url: 'https://inv.example', authToken: 'first'),
+        Server(url: 'https://inv.example', authToken: 'second'),
+        Server(url: 'https://inv.example', sidCookie: 'SID=first'),
+        Server(url: 'https://inv.example', sidCookie: 'SID=second'),
+        Server(
+            url: 'https://inv.example',
+            customHeaders: {'X-Instance-Key': 'first'}),
+        Server(
+            url: 'https://inv.example',
+            customHeaders: {'X-Instance-Key': 'second'}),
+      ];
+      for (final server in configurations) {
+        await db.upsertServer(server);
+        await db.useServer(server);
+        await service.getPopular();
+        await service.getPopular();
+      }
+      expect(calls, configurations.length);
+      await db.saveSetting(SettingsValue(useProxySettingName, 'true'));
+      await service.getPopular();
+      expect(calls, configurations.length + 1);
+    });
+
+    test('errors, empty data, HTML and invalid models are not cached',
+        () async {
+      for (final response in [
+        http.Response('Unavailable', 503),
+        http.Response('', 200),
+        http.Response('[]', 200),
+        http.Response('{bad-json', 200),
+        http.Response('<html>Challenge</html>', 200),
+        http.Response('[{"videoId":"id"}]', 200,
+            headers: {'content-type': 'text/html'}),
+        http.Response('[{"videoId":"id"}]', 200,
+            headers: {'cache-control': 'no-store'}),
+        http.Response('[{"error":"Unavailable"}]', 200),
+      ]) {
+        var calls = 0;
+        final service = Service(httpClient: MockClient((_) async {
+          calls++;
+          return response;
+        }));
+        for (var attempt = 0; attempt < 2; attempt++) {
+          try {
+            await service.getPopular();
+          } catch (_) {}
+        }
+        expect(calls, 2, reason: 'Must not retain ${response.body}');
+      }
+    });
+
+    test('authenticated reads stay fresh across an account mutation', () async {
+      await db.upsertServer(
+          const Server(url: 'https://inv.example', authToken: 'token'));
+      final methods = <String>[];
+      final service = Service(httpClient: MockClient((request) async {
+        methods.add(request.method);
+        return http.Response(request.method == 'GET' ? '[]' : '',
+            request.method == 'GET' ? 200 : 204);
+      }));
+      await service.getSubscriptions();
+      await service.subscribe('UC-test');
+      await service.getSubscriptions();
+      expect(methods, ['GET', 'POST', 'GET']);
+    });
+
+    test('integer and HTTP-date cooldowns delay one retry by the server value',
+        () async {
+      final now = DateTime.utc(2026, 10, 9, 12);
+      for (final value in [
+        '2',
+        HttpDate.format(now.add(const Duration(seconds: 1))),
+        HttpDate.format(now.subtract(const Duration(seconds: 1)))
+      ]) {
+        var calls = 0;
+        final delays = <Duration>[];
+        final service = Service(
+            now: () => now,
+            wait: (delay) async => delays.add(delay),
+            httpClient: MockClient((_) async => ++calls == 1
+                ? http.Response('', 429, headers: {'retry-after': value})
+                : http.Response('[{"videoId":"id"}]', 200)));
+        await service.getPopular();
+        expect(calls, 2);
+        expect(
+            delays,
+            value == '2'
+                ? [const Duration(seconds: 2)]
+                : value == HttpDate.format(now.add(const Duration(seconds: 1)))
+                    ? [const Duration(seconds: 1)]
+                    : isEmpty);
+      }
+    });
+
+    test('long, absent and malformed cooldowns return 429 without retrying',
+        () async {
+      final now = DateTime.utc(2026, 10, 9, 12);
+      for (final value in <String?>[
+        '30',
+        HttpDate.format(now.add(const Duration(minutes: 1))),
+        null,
+        '',
+        'soon',
+        'Fri, 1',
+        '-1',
+        '+1',
+        '1.5',
+        '99999999999999999999999'
+      ]) {
+        var calls = 0;
+        final service = Service(
+            now: () => now,
+            wait: (_) async =>
+                fail('Do not wait for an invalid or long cooldown'),
+            httpClient: MockClient((_) async {
+              calls++;
+              return http.Response('Blocked', 429,
+                  headers: {if (value != null) 'retry-after': value});
+            }));
+        final expectedDelay = value == '30'
+            ? const Duration(seconds: 30)
+            : value == HttpDate.format(now.add(const Duration(minutes: 1)))
+                ? const Duration(minutes: 1)
+                : null;
+        await expectLater(
+            service.getPopular(),
+            throwsA(isA<InvidiousServiceError>()
+                .having((error) => error.statusCode, 'status', 429)
+                .having(
+                    (error) => error.retryAfter, 'retryAfter', expectedDelay)),
+            reason: value);
+        expect(calls, 1);
+      }
+    });
+
+    test('repeated 429 stops after one automatic retry', () async {
+      var calls = 0;
+      final service = Service(httpClient: MockClient((_) async {
+        calls++;
+        return http.Response('', 429, headers: {'retry-after': '0'});
+      }));
+      await expectLater(
+          service.getPopular(),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.isRateLimited, 'rate limited', isTrue)));
+      expect(calls, 2);
+    });
+
+    test('401 and 403 are never automatically retried', () async {
+      for (final status in [401, 403]) {
+        var calls = 0;
+        final service = Service(httpClient: MockClient((_) async {
+          calls++;
+          return http.Response('{"error":"API access denied"}', status,
+              headers: {'retry-after': '0'});
+        }));
+        await expectLater(
+            service.getPopular(),
+            throwsA(isA<InvidiousServiceError>()
+                .having((error) => error.statusCode, 'status', status)));
+        expect(calls, 1);
+      }
+    });
+
+    test('POST, DELETE and external API rate limits are not replayed',
+        () async {
+      await db.upsertServer(
+          const Server(url: 'https://inv.example', authToken: 'token'));
+      final requests = <http.Request>[];
+      final service = Service(httpClient: MockClient((request) async {
+        requests.add(request);
+        return http.Response('', 429, headers: {'retry-after': '0'});
+      }));
+      for (final operation in [
+        () => service.subscribe('UC-test'),
+        () => service.unSubscribe('UC-test'),
+        () => service.getDislikes('video-id')
+      ]) {
+        await expectLater(
+            operation(),
+            throwsA(isA<InvidiousServiceError>().having(
+                (error) => error.isRateLimited, 'rate limited', isTrue)));
+      }
+      expect(
+          requests.map((request) => request.method), ['POST', 'DELETE', 'GET']);
+      expect(requests.last.url.host, 'returnyoutubedislikeapi.com');
+    });
+
+    test(
+        'instance validation preserves HTTP errors and classifies invalid stats',
+        () async {
+      for (final response in [
+        http.Response('', 200),
+        http.Response('[]', 200),
+        http.Response('Denied', 403),
+        http.Response('', 429, headers: {'retry-after': '30'})
+      ]) {
+        final service = Service(httpClient: MockClient((request) async {
+          expect(request.headers['Accept'], 'application/json');
+          return response;
+        }));
+        await expectLater(
+            service.validateServer('https://inv.example', {}),
+            throwsA(isA<InvidiousServiceError>().having(
+                (error) => error.statusCode, 'status', response.statusCode)));
+      }
     });
   });
 }

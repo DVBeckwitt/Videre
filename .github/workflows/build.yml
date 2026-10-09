@@ -49,7 +49,7 @@ jobs:
           test/comments test/search test/subscription_management/state/subscription_retry_test.dart
           test/settings/state/add_server_test.dart test/settings/state/app_log_test.dart
           test/settings/state/server_list_settings_test.dart test/settings/state/settings_test.dart
-          test/settings/public_instances_test.dart
+          test/settings/public_instances_test.dart test/settings/connection_help_test.dart
       - run: ./submodules/flutter/bin/flutter pub run flutter_native_splash:create
       - run: ./submodules/flutter/bin/flutter build apk --profile --split-per-abi
       - name: Archive build artifacts

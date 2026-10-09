@@ -1,4 +1,6 @@
+import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
@@ -18,7 +20,6 @@ import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/models/errors/missing_software_key.dart';
-import 'package:clipious/settings/models/errors/unreacheable_server.dart';
 import 'package:clipious/utils/models/imgur_error.dart';
 import 'package:clipious/utils/video_post_processing.dart';
 import 'package:clipious/videos/models/db/progress.dart';
@@ -79,9 +80,93 @@ const imgurClientId = 'Client-ID 2cfbc27ce77879d';
 class Service {
   final log = Logger('Service');
   final Client httpClient;
+  final DateTime Function() _now;
+  final Future<void> Function(Duration) _wait;
+  final _videoRequests = <String, Future<Response>>{};
+  final _browseCache = <String, ({DateTime expires, Response response})>{};
   Future<void> _localPlaylistWrite = Future.value();
 
-  Service({Client? httpClient}) : httpClient = httpClient ?? http.Client();
+  Service(
+      {Client? httpClient,
+      DateTime Function()? now,
+      Future<void> Function(Duration)? wait})
+      : httpClient = httpClient ?? http.Client(),
+        _now = now ?? DateTime.now,
+        _wait = wait ?? Future<void>.delayed;
+
+  Duration? _retryAfter(Response response) {
+    final value = response.headers['retry-after']?.trim();
+    if (value == null) return null;
+    final seconds =
+        RegExp(r'^\d+$').hasMatch(value) ? int.tryParse(value) : null;
+    if (seconds != null) {
+      final delay = Duration(seconds: seconds);
+      return seconds >= 0 && delay.inSeconds == seconds ? delay : null;
+    }
+    try {
+      final delay = HttpDate.parse(value).difference(_now());
+      return delay.isNegative ? Duration.zero : delay;
+    } catch (_) {
+      // HttpDate also throws HttpException/RangeError for malformed input.
+      return null;
+    }
+  }
+
+  Future<Response> _sendGet(ServerRequest request) async {
+    var response = await httpClient.get(request.uri, headers: request.headers);
+    if (response.statusCode == 429) {
+      final delay = _retryAfter(response);
+      // A long server cooldown belongs in the UI, not a hidden retry loop.
+      if (delay != null && delay <= const Duration(seconds: 2)) {
+        if (delay > Duration.zero) await _wait(delay);
+        response = await httpClient.get(request.uri, headers: request.headers);
+      }
+    }
+    return response;
+  }
+
+  Future<Response> _get(ServerRequest request,
+      {bool cache = false, bool coalesce = false}) async {
+    final key = request._cacheKey;
+    if (coalesce) {
+      // Share only the HTTP work. Each caller decodes and applies its settings.
+      return _videoRequests.putIfAbsent(
+          key,
+          () => _sendGet(request)
+                  .timeout(const Duration(seconds: 15))
+                  .whenComplete(() {
+                _videoRequests.remove(key);
+              }));
+    }
+    if (cache) {
+      _browseCache.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
+      final cached = _browseCache[key];
+      if (cached != null) return cached.response;
+    }
+    return _sendGet(request);
+  }
+
+  void _cacheBrowse(
+      ServerRequest request, Response response, Iterable results) {
+    if (results.isEmpty ||
+        response.statusCode != 200 ||
+        (response.headers['content-type'] ?? '')
+            .toLowerCase()
+            .contains('html') ||
+        (response.headers['cache-control'] ?? '')
+            .toLowerCase()
+            .contains('no-store')) {
+      return;
+    }
+    // Store only successfully decoded browsing data, never playback URLs.
+    _browseCache.putIfAbsent(
+        request._cacheKey,
+        () => (
+              expires: _now().add(const Duration(seconds: 15)),
+              response: response
+            ));
+    if (_browseCache.length > 20) _browseCache.remove(_browseCache.keys.first);
+  }
 
   String urlFormatForLog(Uri? uri) {
     return kDebugMode ? uri.toString() : '${uri?.replace(host: 'xxxxxxxxxx')}';
@@ -124,7 +209,9 @@ class Service {
   }
 
   dynamic handleResponse(Response response) {
-    final body = utf8.decode(response.bodyBytes).trim();
+    final body = utf8
+        .decode(response.bodyBytes, allowMalformed: response.statusCode == 429)
+        .trim();
     final contentType = response.headers['content-type']?.toLowerCase() ?? '';
     final isSuccessful =
         response.statusCode >= 200 && response.statusCode < 300;
@@ -132,6 +219,20 @@ class Service {
 
     log.info(
         "Response from ${response.request?.method} ${urlFormatForLog(response.request?.url)}, status: ${response.statusCode}");
+
+    if (response.statusCode == 429) {
+      final delay = _retryAfter(response);
+      final seconds =
+          delay == null ? null : (delay.inMilliseconds / 1000).ceil();
+      throw InvidiousServiceError(
+        seconds != null && seconds > 0
+            ? 'Too many requests. Try again in $seconds seconds.'
+            : 'Too many requests. Try again later.',
+        statusCode: 429,
+        responseWasHtml: isHtml,
+        retryAfter: delay,
+      );
+    }
 
     final json = _decodeJsonResponse(
       body,
@@ -176,7 +277,7 @@ class Service {
       {Map<String, String>? pathParams,
       Map<String, String?>? query,
       bool authenticated = false,
-      bool utf16 = false,
+      String accept = 'application/json',
       bool forceJson = false,
       Server? serverOverride}) async {
     try {
@@ -207,20 +308,19 @@ class Service {
       log.info('calling ${urlFormatForLog(uri)}');
 
       final Map<String, String> headers = Map.from(server.customHeaders);
+      if (!headers.keys.any((name) => name.toLowerCase() == 'accept')) {
+        headers['Accept'] = accept;
+      }
 
       if (authenticated) {
         headers.addAll(getAuthenticationHeaders(server));
-      }
-
-      if (utf16) {
-        headers['Content-Type'] = 'application/json; charset=utf-16';
       }
 
       if (forceJson) {
         headers['Content-Type'] = 'application/json';
       }
 
-      return ServerRequest(uri: uri, headers: headers);
+      return ServerRequest(uri: uri, headers: headers, server: server);
     } catch (err) {
       log.severe('Couldn\'t build url', err);
       rethrow;
@@ -229,10 +329,8 @@ class Service {
 
   Future<Video> getVideo(String videoId, {Server? serverOverride}) async {
     var req = await buildRequest(urlGetVideo,
-        pathParams: {':id': videoId},
-        utf16: true,
-        serverOverride: serverOverride);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+        pathParams: {':id': videoId}, serverOverride: serverOverride);
+    final response = await _get(req, coalesce: true);
 
     var video = Video.fromJson(handleResponse(response));
     video = (await DeArrow.processVideos([video]))[0];
@@ -254,8 +352,7 @@ class Service {
         pathParams: {':id': videoId},
         query: query,
       );
-      final response =
-          await httpClient.get(request.uri, headers: request.headers);
+      final response = await _get(request);
       final transcript = VideoTranscript.fromJson(handleResponse(response));
       if (transcript.lines.isNotEmpty) return transcript;
       throw const FormatException('Structured transcript has no usable lines');
@@ -271,9 +368,9 @@ class Service {
         urlGetCaptions,
         pathParams: {':id': videoId},
         query: query,
+        accept: 'text/vtt',
       );
-      final response =
-          await httpClient.get(request.uri, headers: request.headers);
+      final response = await _get(request);
       final body = utf8.decode(response.bodyBytes);
       final trimmedBody = body.trimLeft();
       final contentType = response.headers['content-type']?.toLowerCase() ?? '';
@@ -386,19 +483,21 @@ class Service {
     }
 
     var req = await buildRequest(urlGetTrending, query: query);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req, cache: true);
 
     Iterable i = handleResponse(response);
     var list = List<Video>.from(i.map((e) => Video.fromJson(e)));
+    _cacheBrowse(req, response, list);
     list = (await postProcessVideos(list));
     return list;
   }
 
   Future<List<Video>> getPopular() async {
     var req = await buildRequest(urlGetPopular);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req, cache: true);
     Iterable i = handleResponse(response);
     var list = List<Video>.from(i.map((e) => Video.fromJson(e)));
+    _cacheBrowse(req, response, list);
     list = (await postProcessVideos(list)).cast();
     return list;
   }
@@ -419,7 +518,7 @@ class Service {
       'date': date != SearchDate.any ? date.name : null,
       'duration': duration != SearchDuration.any ? duration.name : null,
     });
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req, cache: true);
     Iterable i = handleResponse(response);
     // only getting videos for now
     SearchResults results = SearchResults();
@@ -441,6 +540,8 @@ class Service {
       rethrow;
     }
     log.info(results);
+    _cacheBrowse(req, response,
+        [...results.videos, ...results.playlists, ...results.channels]);
 
     results.videos = (await postProcessVideos(results.videos)).cast();
     return results;
@@ -456,7 +557,7 @@ class Service {
         },
         authenticated: true);
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     var feed = UserFeed.fromJson(handleResponse(response));
     feed.videos = (await postProcessVideos(feed.videos ?? [])).cast();
     feed.notifications =
@@ -525,8 +626,7 @@ class Service {
     if (query.isEmpty) return SearchSuggestion(query, []);
     var request = await buildRequest(urlSearchSuggestions,
         query: {"q": Uri.encodeQueryComponent(query)});
-    final response =
-        await httpClient.get(request.uri, headers: request.headers);
+    final response = await _get(request);
     SearchSuggestion search =
         SearchSuggestion.fromJson(handleResponse(response));
     if (search.suggestions.any((element) => element.contains(";"))) {
@@ -546,19 +646,25 @@ class Service {
     try {
       String url = serverUrl + urlStats;
       log.info('Calling $url');
-      final response = await httpClient.get(Uri.parse(url), headers: headers);
-      Map<String, dynamic> json = handleResponse(response);
+      final requestHeaders = Map<String, String>.from(headers ?? {});
+      if (!requestHeaders.keys.any((name) => name.toLowerCase() == 'accept')) {
+        requestHeaders['Accept'] = 'application/json';
+      }
+      final response = await _get(
+          ServerRequest(uri: Uri.parse(url), headers: requestHeaders));
+      final json = handleResponse(response);
+      if (json is! Map<String, dynamic>) {
+        throw InvidiousServiceError('The instance returned invalid statistics.',
+            statusCode: response.statusCode);
+      }
 
-      if (json.containsKey("software") &&
-          json['software']['name'] == 'invidious') {
+      if (json['software'] is Map && json['software']['name'] == 'invidious') {
         return;
       } else {
         throw MissingSoftwareKeyError(jsonEncode(json));
       }
     } catch (err) {
-      if (err is InvidiousServiceError) {
-        throw UnreachableServerError(error: err.message);
-      } else if (err is CannotAddServerError) {
+      if (err is InvidiousServiceError || err is CannotAddServerError) {
         rethrow;
       } else {
         throw CannotAddServerError(error: err.toString());
@@ -576,7 +682,7 @@ class Service {
     final server = await db.getCurrentlySelectedServer();
     try {
       final req = await buildRequest(urlGetSubscriptions, authenticated: true);
-      final response = await httpClient.get(req.uri, headers: req.headers);
+      final response = await _get(req);
       final subscriptions = handleResponse(response);
       if (subscriptions is! Iterable) {
         throw InvidiousServiceError(
@@ -660,7 +766,7 @@ class Service {
 
     var req = await buildRequest(urlGetSubscriptions, authenticated: true);
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     Iterable i = handleResponse(response);
 
     return List<Subscription>.from(i.map((e) => Subscription.fromJson(e)));
@@ -677,17 +783,16 @@ class Service {
 
     var req = await buildRequest(urlGetComments,
         pathParams: {':id': videoId}, query: queryStr);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     return VideoComments.fromJson(handleResponse(response));
   }
 
   Future<Channel> getChannel(String channelId) async {
     // sometimes the api gives the channel with /channel/<channelid> format
     channelId = channelId.replaceAll("/channel/", '');
-    var req = await buildRequest(urlGetChannel,
-        pathParams: {':id': channelId}, utf16: true);
+    var req = await buildRequest(urlGetChannel, pathParams: {':id': channelId});
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
 
     var channel = Channel.fromJson(handleResponse(response));
     channel.latestVideos =
@@ -704,14 +809,13 @@ class Service {
       String channelId, String? continuation,
       {bool saveLastSeen = true,
       ChannelSortBy sortBy = ChannelSortBy.newest}) async {
-    final req = await buildRequest(urlGetChannelVideos,
-        pathParams: {':id': channelId},
-        query: {
-          'continuation': continuation,
-          'sort_by': sortBy.name,
-        },
-        utf16: true);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final req = await buildRequest(urlGetChannelVideos, pathParams: {
+      ':id': channelId
+    }, query: {
+      'continuation': continuation,
+      'sort_by': sortBy.name,
+    });
+    final response = await _get(req);
 
     var videosWithContinuation =
         VideosWithContinuation.fromJson(handleResponse(response));
@@ -728,10 +832,8 @@ class Service {
   Future<VideosWithContinuation> getChannelStreams(
       String channelId, String? continuation) async {
     final req = await buildRequest(urlGetChannelStreams,
-        pathParams: {':id': channelId},
-        query: {'continuation': continuation},
-        utf16: true);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+        pathParams: {':id': channelId}, query: {'continuation': continuation});
+    final response = await _get(req);
 
     var videosWithContinuation =
         VideosWithContinuation.fromJson(handleResponse(response));
@@ -743,10 +845,8 @@ class Service {
   Future<VideosWithContinuation> getChannelShorts(
       String channelId, String? continuation) async {
     final req = await buildRequest(urlGetChannelShorts,
-        pathParams: {':id': channelId},
-        query: {'continuation': continuation},
-        utf16: true);
-    final response = await httpClient.get(req.uri, headers: req.headers);
+        pathParams: {':id': channelId}, query: {'continuation': continuation});
+    final response = await _get(req);
 
     var videosWithContinuation =
         VideosWithContinuation.fromJson(handleResponse(response));
@@ -765,7 +865,7 @@ class Service {
       if (!await isLoggedIn()) return local;
       var req = await buildRequest(urlGetUserPlaylists, authenticated: true);
 
-      final response = await httpClient.get(req.uri, headers: req.headers);
+      final response = await _get(req);
       Iterable i = handleResponse(response);
       var list = List<Playlist>.from(
           i.map((e) => Playlist.fromJson(e).copyWith(type: invidiousPlaylist)));
@@ -817,7 +917,7 @@ class Service {
     final req = await buildRequest(urlGetChannelPlaylists,
         pathParams: {':id': channelId}, query: {'continuation': continuation});
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     var channelPlaylists = ChannelPlaylists.fromJson(handleResponse(response));
     for (int i = 0; i < channelPlaylists.playlists.length; i++) {
       var pl = channelPlaylists.playlists[i];
@@ -940,10 +1040,9 @@ class Service {
     }
     final req = await buildRequest(urlGetClearHistory,
         query: {'page': page.toString(), 'max_results': maxResults.toString()},
-        authenticated: true,
-        forceJson: true);
+        authenticated: true);
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     Iterable i = handleResponse(response);
 
     return List<String>.from(i.map((e) => e as String));
@@ -1010,7 +1109,7 @@ class Service {
     final req = await buildRequest(urlGetPublicPlaylist,
         pathParams: {':id': playlistId}, query: {'page': page?.toString()});
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     var playlist = Playlist.fromJson(handleResponse(response));
     var oldLength = playlist.videos.length;
     final videos = await postProcessVideos(playlist.videos);
@@ -1037,7 +1136,7 @@ class Service {
         query: {'page': page?.toString()},
         authenticated: true);
 
-    final response = await httpClient.get(req.uri, headers: req.headers);
+    final response = await _get(req);
     var playlist = Playlist.fromJson(handleResponse(response))
         .copyWith(type: invidiousPlaylist);
     var oldLength = playlist.videos.length;
@@ -1094,6 +1193,18 @@ class Service {
 class ServerRequest {
   final Uri uri;
   final Map<String, String> headers;
+  final String _cacheKey;
 
-  ServerRequest({required this.uri, required this.headers});
+  ServerRequest(
+      {required this.uri, required Map<String, String> headers, Server? server})
+      : headers = Map.unmodifiable(headers),
+        _cacheKey = jsonEncode([
+          uri.toString(),
+          server?.authToken,
+          server?.sidCookie,
+          SplayTreeMap.of({
+            for (final entry in headers.entries)
+              entry.key.toLowerCase(): entry.value,
+          })
+        ]);
 }

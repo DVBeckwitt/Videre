@@ -778,7 +778,9 @@ class PlayerControls extends StatelessWidget {
                                         if (currentlyPlaying != null)
                                           TextButton.icon(
                                             onPressed: () => AddServerScreen
-                                                .showConnectionHelp(context),
+                                                .showConnectionHelp(context,
+                                                    videoId: currentlyPlaying
+                                                        .videoId),
                                             icon: const Icon(Icons.wifi_find),
                                             label: Text(locals.connectionHelp),
                                           ),

@@ -9,7 +9,9 @@ import 'package:gap/gap.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/main.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/models/errors/missing_software_key.dart';
 import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
@@ -28,24 +30,58 @@ class AddServerScreen extends StatelessWidget {
 
   static const instancesUrl = 'https://docs.invidious.io/instances/';
 
-  static Future<void> openInstanceDirectory(BuildContext context) async {
+  static Future<void> _openExternalUrl(
+      BuildContext context, Uri url, String title, String help) async {
     try {
-      if (!isTv &&
-          await launchUrl(Uri.parse(instancesUrl),
-              mode: LaunchMode.externalApplication)) return;
+      if (!isTv && await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        return;
+      }
     } catch (_) {
       // TVs and devices without a browser can still show the address.
     }
     if (context.mounted) {
-      final locals = AppLocalizations.of(context)!;
-      await showAlertDialog(context, locals.findPublicInstance, [
-        Text(locals.instanceDirectoryHelp),
-        const SelectableText(instancesUrl),
+      await showAlertDialog(context, title, [
+        Text(help),
+        SelectableText(url.toString()),
       ]);
     }
   }
 
+  static Future<void> openInstanceDirectory(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    return _openExternalUrl(context, Uri.parse(instancesUrl),
+        locals.findPublicInstance, locals.instanceDirectoryHelp);
+  }
+
+  static Uri? instanceBrowserUrl(Server server, {String? videoId}) {
+    final address = AddServerCubit.normalizeUrl(server.url);
+    if (address == null) return null;
+    final uri = Uri.parse(address);
+    return videoId == null || videoId.isEmpty
+        ? uri
+        : uri.replace(
+            path: '${uri.path}/watch', queryParameters: {'v': videoId});
+  }
+
   static String connectionAdvice(Object error, AppLocalizations locals) {
+    if (error is InvidiousServiceError) {
+      if (error.isRateLimited) {
+        final delay = error.retryAfter;
+        return delay != null && delay > Duration.zero
+            ? locals
+                .instanceRetryAfterHelp((delay.inMilliseconds / 1000).ceil())
+            : locals.instanceRateLimitedHelp;
+      }
+      if (error.statusCode == 401) return locals.instanceUnauthorizedHelp;
+      if (error.responseWasHtml) return locals.instanceBrowserChallengeHelp;
+      if (error.statusCode == 403) return locals.instanceForbiddenHelp;
+      if (error.statusCode != null &&
+          error.statusCode! >= 200 &&
+          error.statusCode! < 300) {
+        return locals.instanceInvalidResponseHelp;
+      }
+    }
+    if (error is TypeError) return locals.instanceInvalidResponseHelp;
     if (error is FormatException) return locals.instanceAddressInvalid;
     if (error is ServerAlreadyExists) {
       return locals.instanceAlreadySavedHelp;
@@ -62,10 +98,25 @@ class AddServerScreen extends StatelessWidget {
     return locals.instanceConnectionHelp;
   }
 
-  static Future<void> showConnectionHelp(BuildContext context) async {
+  static Future<void> showConnectionHelp(BuildContext context,
+      {String? videoId}) async {
     final locals = AppLocalizations.of(context)!;
     bool testing = false;
     String? result;
+    Server? selectedServer;
+    try {
+      selectedServer = await db.getCurrentlySelectedServer();
+    } catch (error) {
+      result = connectionAdvice(error, locals);
+    }
+    if (!context.mounted) return;
+    // Keep retries and browser links on the instance that failed.
+    final server = selectedServer;
+    final browserUrl =
+        server == null ? null : instanceBrowserUrl(server, videoId: videoId);
+    if (server != null && browserUrl == null) {
+      result = locals.instanceAddressInvalid;
+    }
     final manage = await showDialog<bool>(
         context: context,
         builder: (dialogContext) {
@@ -88,7 +139,9 @@ class AddServerScreen extends StatelessWidget {
                           onPressed: () => Navigator.of(context).pop(),
                           child: Text(locals.cancel)),
                       TextButton(
-                          onPressed: testing
+                          onPressed: testing ||
+                                  server == null ||
+                                  browserUrl == null
                               ? null
                               : () async {
                                   update(() {
@@ -96,11 +149,17 @@ class AddServerScreen extends StatelessWidget {
                                     result = null;
                                   });
                                   try {
-                                    final server =
-                                        await db.getCurrentlySelectedServer();
                                     await service
                                         .validateServer(
                                             server.url, server.customHeaders)
+                                        .timeout(const Duration(seconds: 15));
+                                    if (!context.mounted) return;
+                                    await service
+                                        .getVideo(
+                                            videoId == null || videoId.isEmpty
+                                                ? 'dQw4w9WgXcQ'
+                                                : videoId,
+                                            serverOverride: server)
                                         .timeout(const Duration(seconds: 15));
                                     result = locals.instanceReachable;
                                   } catch (error) {
@@ -114,10 +173,16 @@ class AddServerScreen extends StatelessWidget {
                               ? locals.testingConnection
                               : locals.testConnection)),
                       TextButton(
-                          onPressed: testing
-                              ? null
-                              : () => Navigator.of(context).pop(true),
+                          onPressed: () => Navigator.of(context).pop(true),
                           child: Text(locals.chooseInstance)),
+                      if (browserUrl != null)
+                        TextButton(
+                            onPressed: () => _openExternalUrl(
+                                context,
+                                browserUrl,
+                                locals.openInBrowser,
+                                locals.instanceBrowserHelp),
+                            child: Text(locals.openInBrowser)),
                     ],
                   ));
         });
