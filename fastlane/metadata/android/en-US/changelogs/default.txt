@@ -1,8 +1,5 @@
-- SponsorBlock and dislikes on by default; dislike lookups no longer delay playback.
-- Pull down from comments or description to minimize. Text selection stays intact.
-- PiP on Home, background audio, and correct layout on return.
-- Local playlists, Watch Later, backups, and NewPipe imports.
-- Resume videos and queues on phone and TV.
-- Pause/resume downloads, Wi-Fi-only mode, and playlist downloads.
-- Phone-to-TV playback and controls.
-- Clearer Invidious setup and connection help.
+- Fixed play and pause controls in picture-in-picture and notifications.
+- Fixed background Stop and playback position when switching to audio.
+- Improved search editing, comment replies, and retries.
+- Added F5 and Nadeko to the public server picker and made saved servers easier to switch.
+- Reduced duplicate requests and added clearer connection checks with a browser option.
