@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/views/components/continue_watching.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -445,6 +447,40 @@ void main() {
       expect(player.state.mediaCommand?.type, MediaCommandType.play);
       expect(player.state.mediaCommand, isNot(same(firstPlay)),
           reason: 'The player listener must receive another play command.');
+    });
+
+    test('selecting another queued video clears the previous pause', () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const first = Video(videoId: 'first');
+      const second = Video(videoId: 'second');
+      await player.playVideo([first, second]);
+      await app_main.mediaHandler.pause();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+
+      await player.switchToVideo(second);
+      expect(player.state.currentlyPlaying?.videoId, 'second');
+      expect(player.state.videos.map((video) => video.videoId),
+          ['first', 'second']);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.isPlaying, isTrue);
+      expect(player.state.mediaCommand?.type, MediaCommandType.switchVideo);
+    });
+
+    test('remote paused intent survives loading the initial video', () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playRemoteVideo('dQw4w9WgXcQ', 23, false);
+      expect(player.state.currentlyPlaying?.videoId, 'dQw4w9WgXcQ');
+      expect(player.state.startAt, const Duration(seconds: 23));
+      expect(player.state.mediaCommand?.type, MediaCommandType.switchVideo);
+
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.isPlaying, isFalse);
+      expect(player.state.mediaCommand?.type, MediaCommandType.pause);
     });
 
     test('a newer pause wins over delayed remote autoplay events', () async {
