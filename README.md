@@ -8,8 +8,6 @@ Connect to a public Invidious instance or your own server to watch, listen, and 
 
 **[Download the latest APK](https://github.com/DVBeckwitt/Videre/releases/latest)** · Android 7.0+ · [Report a bug](https://github.com/DVBeckwitt/Videre/issues)
 
-For testing: [1.22.25-beta.1 prerelease](https://github.com/DVBeckwitt/Videre/releases/tag/v1.22.25-beta.1).
-
 [![Build](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml/badge.svg)](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml)
 [![License: AGPL v3+](https://shields.io/badge/License-AGPL%20v3%2B-blue.svg)](./LICENSE)
 
