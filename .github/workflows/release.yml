@@ -64,6 +64,12 @@ jobs:
           mkdir -p build/app/outputs/bundle/release
           cp /tmp/build/build/app/outputs/flutter-apk/* build/app/outputs/flutter-apk/
           cp /tmp/build/build/app/outputs/bundle/release/* build/app/outputs/bundle/release/
+      - name: Save APKs for device testing
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: videre-apks
+          path: build/app/outputs/flutter-apk/*.apk
       - name: Create apks file for accrescent
         env:
           BUNDLETOOL_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}

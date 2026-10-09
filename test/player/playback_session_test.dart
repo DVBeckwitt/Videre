@@ -7,6 +7,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/views/components/continue_watching.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -404,6 +405,46 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(player.savedSession?.seconds, 38, reason: lifecycle.name);
       }
+    });
+
+    test('media controls keep startup paused after delayed autoplay', () async {
+      final handler = MediaHandler(player);
+      player.seedVideo(const Video(videoId: 'loading'));
+      player.setEvent(const MediaEvent(state: MediaState.loading));
+      await handler.pause();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      final firstPause = player.state.mediaCommand;
+
+      // Source setup can finish after the notification or PiP pause request.
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.isPlaying, isFalse);
+      expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+      expect(player.state.mediaCommand, isNot(same(firstPause)));
+
+      await handler.play();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      expect(player.state.isPlaying, isTrue);
+    });
+
+    test('media controls deliver play again after the decoder pauses',
+        () async {
+      final handler = MediaHandler(player);
+      await handler.play();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      final firstPlay = player.state.mediaCommand;
+
+      // A decoder event does not issue a new command through PlayerCubit.
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      expect(player.state.isPlaying, isFalse);
+      await handler.play();
+      expect(player.state.mediaCommand?.type, MediaCommandType.play);
+      expect(player.state.mediaCommand, isNot(same(firstPlay)),
+          reason: 'The player listener must receive another play command.');
     });
 
     test('a newer pause wins over delayed remote autoplay events', () async {

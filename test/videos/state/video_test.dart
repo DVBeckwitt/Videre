@@ -1,16 +1,27 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:audio_service/audio_service.dart';
+// ignore: depend_on_referenced_packages
+import 'package:audio_service_platform_interface/audio_service_platform_interface.dart';
+// ignore: depend_on_referenced_packages
+import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
+import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/media_handler.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/player.dart' as widgets;
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -446,6 +457,112 @@ void main() {
       await player.close();
       await settings.close();
       await db.close();
+    });
+
+    testWidgets('media controls reach the decoder in PiP without frame ticks',
+        (tester) async {
+      const native = MethodChannel('better_player_channel');
+      const events = MethodChannel('better_player_channel/videoEvents1');
+      const audioClient =
+          MethodChannel('com.ryanheise.audio_service.client.methods');
+      const audioHandler =
+          MethodChannel('com.ryanheise.audio_service.handler.methods');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      final calls = StreamController<MethodCall>.broadcast();
+      for (final channel in [events, audioClient, audioHandler]) {
+        messenger.setMockMethodCallHandler(channel, (_) async => null);
+      }
+      messenger.setMockMethodCallHandler(native, (call) async {
+        calls.add(call);
+        if (call.method == 'create') return {'textureId': 1};
+        if (call.method == 'position') return 0;
+        if (call.method == 'isPictureInPictureSupported') return true;
+        if (call.method == 'setDataSource') {
+          await messenger.handlePlatformMessage(
+              events.name,
+              const StandardMethodCodec().encodeSuccessEnvelope({
+                'event': 'initialized',
+                'duration': 60000,
+                'width': 640,
+                'height': 360,
+                'isLiveStream': false,
+              }),
+              (_) {});
+        }
+        return null;
+      });
+      addTearDown(() async {
+        for (final channel in [native, events, audioClient, audioHandler]) {
+          messenger.setMockMethodCallHandler(channel, null);
+        }
+        await calls.close();
+      });
+      await tester.runAsync(() => settings.toggleDash(false));
+      await tester.runAsync(player.close);
+      player = RecordingPlayerCubit(
+          PlayerState.init([cubit.state.video!]).copyWith(
+              currentlyPlaying: cubit.state.video!.copyWith(lengthSeconds: 60),
+              isMini: true,
+              isHidden: false),
+          settings);
+      app_main.darkColorScheme = cubit.state.colors;
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MultiBlocProvider(
+        providers: [
+          BlocProvider<PlayerCubit>.value(value: player),
+          BlocProvider<SettingsCubit>.value(value: settings),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: Stack(children: [widgets.Player(844)])),
+        ),
+      ));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      final decoder =
+          tester.element(find.byType(BetterPlayer)).read<VideoPlayerCubit>();
+      const pip = MethodChannel('puntito.simple_pip_mode');
+      await messenger.handlePlatformMessage(pip.name,
+          pip.codec.encodeMethodCall(const MethodCall('onPipEntered')), (_) {});
+      tester.view.physicalSize = const Size(320, 180);
+      await tester.pump();
+      expect(player.state.isPip, isTrue);
+      expect(tester.element(find.byType(BetterPlayer)).read<VideoPlayerCubit>(),
+          same(decoder));
+      // Desktop tests default to a no-op service; exercise Android's channel.
+      AudioServicePlatform.instance = MethodChannelAudioService();
+      await AudioService.init(builder: () => MediaHandler(player));
+      for (final lifecycle in [
+        AppLifecycleState.inactive,
+        AppLifecycleState.paused,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(lifecycle);
+        // Native controls must work even when Flutter is not drawing frames.
+        for (final action in [
+          ('pause', 'pause', <String, int>{}),
+          ('play', 'play', <String, int>{}),
+          ('seek', 'seekTo', {'position': 17000000}),
+        ]) {
+          final delivered =
+              calls.stream.firstWhere((call) => call.method == action.$2);
+          await messenger.handlePlatformMessage(
+              audioHandler.name,
+              audioHandler.codec
+                  .encodeMethodCall(MethodCall(action.$1, action.$3)),
+              (reply) => audioHandler.codec.decodeEnvelope(reply!));
+          final call = await delivered;
+          if (action.$1 == 'seek') expect(call.arguments['location'], 17000);
+        }
+      }
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpWidget(const SizedBox.shrink());
+      EasyDebounce.cancel('player-controls-hide');
+      await tester.pump(const Duration(seconds: 4));
     });
 
     test('rejects unsafe external media destinations', () async {

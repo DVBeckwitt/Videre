@@ -53,7 +53,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
   late final AudioSession audioSession;
-  bool? _remotePlaying;
+  bool? _requestedPlaying;
   int _progressGeneration = 0;
   final bool _resumeOnReady;
   static const _pipChannel = MethodChannel('videre/pip');
@@ -152,7 +152,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> resumeSession() async {
-    _remotePlaying = null;
+    _requestedPlaying = null;
     final saved = savedSession;
     if (saved == null) return;
     restoreSession();
@@ -335,10 +335,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         onProgress(event.value);
         break;
       case MediaEventType.play:
-        _setPlaying(_remotePlaying != false);
-        // Native source setup may autoplay after a newer remote pause command.
-        // Retain the latest intent until another command or video replaces it.
-        if (_remotePlaying == false) pause();
+        _setPlaying(_requestedPlaying != false);
+        // Source setup can autoplay after a notification or PiP pause request.
+        if (_requestedPlaying == false) pause();
         break;
       case MediaEventType.pause:
         _setPlaying(false);
@@ -661,11 +660,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           top: 500));
 
       showBigPlayer();
-      if (isOffline) {
-        await switchToOfflineVideo(state.offlineVideos[0]);
-      } else {
-        await switchToVideo(state.videos[0], startAt: startAt);
-      }
+      await _switchToVideo(vids.first,
+          startAt: startAt, playing: _requestedPlaying);
       generatePlayQueue();
     }
   }
@@ -698,7 +694,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   /// Switches to a video without changing the queue
-  Future<void> _switchToVideo(IdedVideo video, {Duration? startAt}) async {
+  Future<void> _switchToVideo(IdedVideo video,
+      {Duration? startAt, bool? playing}) async {
+    _requestedPlaying = playing;
     _progressGeneration++;
     try {
       // we move the existing video to the stack of played video
@@ -807,14 +805,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> playOfflineVideos(List<DownloadedVideo> offlineVids) async {
-    _remotePlaying = null;
+    _requestedPlaying = null;
     log.fine('Playing ${offlineVids.length} offline videos');
     await _playVideos(offlineVids);
   }
 
   Future<void> playVideo(List<Video> v,
       {bool? audio, Duration? startAt, bool? playing}) async {
-    _remotePlaying = playing;
+    _requestedPlaying = playing;
     List<Video> videos = v.where((element) => !element.filtered).toList();
     // TODO: find how to do this with auto router
     log.fine('Playing ${videos.length} videos');
@@ -837,13 +835,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void play() {
-    if (_remotePlaying != null) _remotePlaying = true;
-    emit(state.copyWith(
-        mediaCommand: const MediaCommand(MediaCommandType.play)));
+    _requestedPlaying = true;
+    emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.play)));
   }
 
   void pause() {
-    if (_remotePlaying != null) _remotePlaying = false;
+    _requestedPlaying = false;
     emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
   }
 
