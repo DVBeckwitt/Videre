@@ -16,6 +16,11 @@ typedef PublicInstance = ({String url, bool api});
 
 class AddServerCubit extends Cubit<AddServerState> {
   static const directoryUrl = 'https://api.invidious.io/instances.json';
+  // Being listed in the directory does not mean a host accepts app requests.
+  static const _recommendedInstances = {
+    'https://invidious.f5.si',
+    'https://inv.nadeko.net',
+  };
 
   final TextEditingController urlController =
       TextEditingController(text: 'https://');
@@ -129,7 +134,9 @@ class AddServerCubit extends Cubit<AddServerState> {
       if (response.statusCode != 200) {
         throw const FormatException('The instance directory is unavailable.');
       }
-      return parsePublicInstances(jsonDecode(utf8.decode(response.bodyBytes)));
+      return parsePublicInstances(jsonDecode(utf8.decode(response.bodyBytes)))
+          .where((instance) => _recommendedInstances.contains(instance.url))
+          .toList();
     } finally {
       if (client == null) directoryClient.close();
     }

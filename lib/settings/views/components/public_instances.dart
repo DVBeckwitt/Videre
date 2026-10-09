@@ -108,18 +108,7 @@ class _PublicInstancesDialogState extends State<_PublicInstancesDialog> {
                           alignment: Alignment.centerLeft,
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(Uri.parse(host.url).host),
-                                  Text(
-                                      host.api
-                                          ? locals.publicInstanceApiReported
-                                          : locals.publicInstanceApiLimited,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall),
-                                ]),
+                            child: Text(Uri.parse(host.url).host),
                           ),
                         ),
                       );

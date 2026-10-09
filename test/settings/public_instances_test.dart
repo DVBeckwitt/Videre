@@ -58,7 +58,7 @@ void main() {
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(calls, 2);
-    expect(find.text('API access may be limited'), findsOneWidget);
+    expect(find.text('public.example'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     expect(cubit.urlController.text, 'https://custom.example');
@@ -72,7 +72,7 @@ void main() {
         tester, () async => [(url: 'https://public.example', api: true)]);
     await tester.tap(find.text('Public instances'));
     await tester.pumpAndSettle();
-    expect(find.text('API reported available'), findsOneWidget);
+    expect(find.text('public.example'), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);

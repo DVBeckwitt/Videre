@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/service.dart';
@@ -102,6 +103,32 @@ void main() {
       expect(await AddServerCubit.getPublicInstances(client: client), isEmpty);
     });
 
+    test('the fetched directory suggests only the two checked hosts', () async {
+      final requests = <Uri>[];
+      final client = MockClient((request) async {
+        requests.add(request.url);
+        return http.Response(
+            jsonEncode([
+              entry('https://invidious.f5.si'),
+              entry('https://inv.nadeko.net'),
+              entry('https://invidious.nerdvpn.de', api: true),
+              entry('https://yt.chocolatemoo53.com', api: true),
+              entry('https://invidious.tiekoetter.com', api: true),
+              entry('https://new.example', api: true),
+            ]),
+            200);
+      });
+
+      final instances = await AddServerCubit.getPublicInstances(client: client);
+      expect(
+          instances.map((instance) => instance.url),
+          unorderedEquals([
+            'https://invidious.f5.si',
+            'https://inv.nadeko.net',
+          ]));
+      expect(requests, [Uri.parse(AddServerCubit.directoryUrl)]);
+    });
+
     test('rejects HTTP failures and malformed directory data', () async {
       for (final response in [
         http.Response('Unavailable', 503),
@@ -145,18 +172,19 @@ void main() {
       expect(cubit.state.loading, isFalse);
     });
 
-    test('checks the normalized address with only its configured headers',
+    test('manual addresses omitted from suggestions can still use credentials',
         () async {
       service = Service(httpClient: MockClient((request) async {
-        expect(request.url.toString(), 'https://inv.example/api/v1/stats');
+        expect(request.url.toString(),
+            'https://invidious.nerdvpn.de/api/v1/stats');
         expect(request.headers['Authorization'], 'Basic own-server');
         return http.Response('{"software":{"name":"invidious"}}', 200);
       }));
-      cubit.urlController.text = 'inv.example/';
+      cubit.urlController.text = 'invidious.nerdvpn.de/';
       cubit.addHeader('Authorization', 'Basic own-server');
 
       final server = await cubit.validateServer();
-      expect(server?.url, 'https://inv.example');
+      expect(server?.url, 'https://invidious.nerdvpn.de');
       expect(server?.authToken, isNull);
       expect(server?.customHeaders['Authorization'], 'Basic own-server');
       expect(cubit.state.loading, isFalse);

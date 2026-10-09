@@ -43,21 +43,18 @@ This README describes the current source; check the release notes for features i
 
 ## Public instances
 
-Videre uses the [official Invidious directory](https://docs.invidious.io/instances/), with hosts reporting API support shown first. Listing is not a privacy guarantee or a promise that playback works. Public hosts often allow browser playback while restricting apps.
+Videre suggests these hosts from the [official Invidious directory](https://docs.invidious.io/instances/).
 
 Status as of **9 October 2026**.
 
-| Public host | Browser playback | Videre API check |
+| Public host | Browser | Videre |
 |---|---|---|
-| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Video API and media reachable |
-| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Video API and media reachable |
-| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Access denied (401) |
-| [yt.chocolatemoo53.com](https://yt.chocolatemoo53.com) | ✅ Working | Blocked (403) |
-| [invidious.tiekoetter.com](https://invidious.tiekoetter.com) | ✅ Working | Browser challenge (403) |
+| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* |
+| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* |
 
-All five are available through **Settings → Manage servers → Add server → Public instances** in Videre. The picker follows the live directory and checks your choice before saving. Browser playback can work even when a host restricts app access.
+Both are available through **Settings → Manage servers → Add server → Public instances**. Videre checks your choice before saving. You can also enter your own server address.
 
-API checks used Videre's request code from our test network. F5 and Nadeko returned search results, video metadata, and a media sample. Full playback on Android was not verified; availability can change.
+\* Videre checks cover search, video data, and a media sample using the current source. Full Android playback remains unverified; availability can change.
 
 For your own server, see the [Invidious GitHub project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
 
