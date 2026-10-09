@@ -6,7 +6,6 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
 import 'package:clipious/settings/views/components/manager_server_inner.dart';
-import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:clipious/welcome_wizard/states/welcome_wizard.dart';
 
@@ -66,10 +65,9 @@ class WelcomeWizardScreen extends StatelessWidget {
                                       title: Text(locals.findPublicInstance),
                                       subtitle: Text(
                                           locals.setupDirectoryDescription),
-                                      trailing: const Icon(Icons.open_in_new),
-                                      onTap: () =>
-                                          AddServerScreen.openInstanceDirectory(
-                                              context),
+                                      trailing: const Icon(Icons.chevron_right),
+                                      onTap: () => const ManagerServersView()
+                                          .addServer(context),
                                     ),
                                     ListTile(
                                       leading: const Icon(Icons.dns_outlined),

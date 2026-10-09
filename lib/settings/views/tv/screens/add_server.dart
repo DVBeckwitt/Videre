@@ -6,6 +6,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:gap/gap.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/add_server.dart';
+import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/settings/views/tv/screens/manage_single_server.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -78,10 +79,17 @@ class TvAddServerScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      const Text('Url'),
-                      TvTextField(
-                        controller: cubit.urlController,
-                        autocorrect: false,
+                      Text(locals.instanceAddressDescription),
+                      const Gap(12),
+                      const PublicInstancesButton(
+                          openDirectory: AddServerScreen.openInstanceDirectory),
+                      Text(locals.instanceAddress),
+                      ExcludeFocus(
+                        excluding: state.loading,
+                        child: TvTextField(
+                          controller: cubit.urlController,
+                          autocorrect: false,
+                        ),
                       ),
                       const Gap(10),
                       ListTile(
@@ -91,7 +99,9 @@ class TvAddServerScreen extends StatelessWidget {
                             turns: state.showAdvanced ? 0.5 : 0,
                             child: const Icon(Icons.expand_less)),
                         title: Text(locals.advancedConfiguration),
-                        onTap: () => cubit.setShowAdvanced(!state.showAdvanced),
+                        onTap: state.loading
+                            ? null
+                            : () => cubit.setShowAdvanced(!state.showAdvanced),
                       ),
                       if (state.showAdvanced)
                         Column(
@@ -173,8 +183,9 @@ class TvAddServerScreen extends StatelessWidget {
                           style: textTheme.bodySmall,
                         ),
                         value: state.advancedTest,
-                        onChanged: (value) =>
-                            cubit.setAdvancedTest(value ?? true),
+                        onChanged: state.loading || state.publicInstance != null
+                            ? null
+                            : (value) => cubit.setAdvancedTest(value ?? true),
                       )
                     ],
                   ),

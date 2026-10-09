@@ -62,21 +62,29 @@ class ManagerServersView extends StatelessWidget {
                     tiles: state.dbServers.isNotEmpty
                         ? state.dbServers
                             .map((s) => SettingsTile(
-                                  leading: InkWell(
-                                    onTap: () => cubit.switchServer(s),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8.0),
-                                      child: Icon(
-                                        Icons.done,
-                                        color: s.inUse
-                                            ? colorScheme.primary
-                                            : colorScheme.secondaryContainer,
-                                      ),
-                                    ),
+                                  enabled: !state.switching,
+                                  leading: Icon(
+                                    s.inUse
+                                        ? Icons.check_circle
+                                        : Icons.dns_outlined,
+                                    color: s.inUse ? colorScheme.primary : null,
                                   ),
                                   title: Text(s.url),
-                                  value: Text(
-                                      '${cubit.isLoggedInToServer(s.url) ? '${locals.loggedIn}, ' : ''} ${locals.tapToManage}'),
+                                  value: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                          '${cubit.isLoggedInToServer(s.url) ? '${locals.loggedIn}, ' : ''}${locals.tapToManage}'),
+                                      if (!s.inUse)
+                                        TextButton(
+                                          onPressed: state.switching
+                                              ? null
+                                              : () => cubit.switchServer(s),
+                                          child: Text(locals.useThisServer),
+                                        ),
+                                    ],
+                                  ),
                                   onPressed: (context) =>
                                       openServer(context, s),
                                 ))
@@ -89,11 +97,16 @@ class ManagerServersView extends StatelessWidget {
                           ]),
               ],
             ),
+            if (state.switching)
+              const Align(
+                  alignment: Alignment.topCenter,
+                  child: LinearProgressIndicator()),
             Positioned(
               right: 20,
               bottom: 20,
               child: FloatingActionButton(
-                onPressed: () => addServer(context),
+                tooltip: locals.addServer,
+                onPressed: state.switching ? null : () => addServer(context),
                 backgroundColor: colorScheme.primaryContainer,
                 child: const Icon(Icons.add),
               ),

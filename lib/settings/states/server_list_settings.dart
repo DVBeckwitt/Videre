@@ -13,7 +13,8 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
   }
 
   Future<void> refreshServers() async {
-    emit(state.copyWith(dbServers: await db.getServers()));
+    final servers = await db.getServers();
+    if (!isClosed) emit(state.copyWith(dbServers: servers));
   }
 
   bool isLoggedInToServer(String url) {
@@ -34,32 +35,41 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
   }
 
   Future<void> switchServer(Server s) async {
-    await db.useServer(s);
-    await service.validateCurrentSessionSafely();
-    final selectedServer = await db.getCurrentlySelectedServer();
-    await fileDb.useServer(selectedServer);
-    await refreshServers();
-    appCubit.setServer(selectedServer);
+    if (isClosed || state.switching) return;
+    emit(state.copyWith(switching: true));
+    try {
+      await appCubit.switchServer(s);
+      await refreshServers();
+    } finally {
+      if (!isClosed) emit(state.copyWith(switching: false));
+    }
   }
 }
 
 class ServerListSettingsState {
   final List<Server> dbServers;
+  final bool switching;
 
-  ServerListSettingsState({required List<Server> dbServers})
+  ServerListSettingsState(
+      {required List<Server> dbServers, this.switching = false})
       : dbServers = List.unmodifiable(dbServers);
 
-  ServerListSettingsState copyWith({List<Server>? dbServers}) =>
-      ServerListSettingsState(dbServers: dbServers ?? this.dbServers);
+  ServerListSettingsState copyWith(
+          {List<Server>? dbServers, bool? switching}) =>
+      ServerListSettingsState(
+          dbServers: dbServers ?? this.dbServers,
+          switching: switching ?? this.switching);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ServerListSettingsState &&
+          switching == other.switching &&
           listEquals(dbServers, other.dbServers);
 
   @override
-  int get hashCode => Object.hash(runtimeType, Object.hashAll(dbServers));
+  int get hashCode =>
+      Object.hash(runtimeType, switching, Object.hashAll(dbServers));
 
   @override
   String toString() => 'ServerListSettingsState(dbServers: $dbServers)';

@@ -37,6 +37,7 @@ class TvManageServersInner extends StatelessWidget {
       var cubit = context.read<ServerListSettingsCubit>();
       var settings = context.watch<SettingsCubit>();
       return ListView(children: [
+        if (state.switching) const LinearProgressIndicator(),
         if (showAdvanced)
           SettingsTile(
             title: locals.skipSslVerification,
@@ -48,25 +49,27 @@ class TvManageServersInner extends StatelessWidget {
                 value: settings.state.skipSslVerification),
           ),
         SettingsTitle(title: locals.yourServers),
-        ...state.dbServers.map((s) => SettingsTile(
-              leading: InkWell(
-                onTap: () => cubit.switchServer(s),
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Icon(
-                    Icons.done,
-                    color: s.inUse
-                        ? colorScheme.primary
-                        : colorScheme.secondaryContainer,
-                  ),
+        ...state.dbServers.expand((s) => [
+              SettingsTile(
+                enabled: !state.switching,
+                leading: Icon(
+                  s.inUse ? Icons.check_circle : Icons.dns_outlined,
+                  color: s.inUse ? colorScheme.primary : null,
                 ),
+                title: s.url,
+                description:
+                    '${cubit.isLoggedInToServer(s.url) ? '${locals.loggedIn}, ' : ''}${locals.tapToManage}',
+                onSelected: (context) => openServer(context, s),
               ),
-              title: s.url,
-              description:
-                  '${cubit.isLoggedInToServer(s.url) ? '${locals.loggedIn}, ' : ''} ${locals.tapToManage}',
-              onSelected: (context) => openServer(context, s),
-            )),
+              if (!s.inUse)
+                SettingsTile(
+                  enabled: !state.switching,
+                  title: locals.useThisServer,
+                  onSelected: (_) => cubit.switchServer(s),
+                ),
+            ]),
         SettingsTile(
+          enabled: !state.switching,
           title: locals.addServer,
           leading: Padding(
             padding: const EdgeInsets.all(8.0),

@@ -17,6 +17,7 @@ final log = Logger('HomeState');
 
 class AppCubit extends Cubit<AppState> {
   late final StreamSubscription intentDataStreamSubscription;
+  Future<void> _pendingServerSwitch = Future.value();
 
   AppCubit(super.initialState) {
     onReady();
@@ -110,6 +111,26 @@ class AppCubit extends Cubit<AppState> {
 
   rebuildApp() {
     emit(state.copyWith());
+  }
+
+  Future<Server?> switchServer(Server server) async {
+    final previous = _pendingServerSwitch;
+    final done = Completer<void>();
+    _pendingServerSwitch = done.future;
+    try {
+      // Settings can be reopened while the previous session check is pending.
+      await previous;
+      final saved = db.getServer(server.url);
+      if (saved == null) return null;
+      await db.useServer(saved);
+      await service.validateCurrentSessionSafely();
+      final selected = await db.getCurrentlySelectedServer();
+      await fileDb.useServer(selected);
+      if (!isClosed) setServer(selected);
+      return selected;
+    } finally {
+      done.complete();
+    }
   }
 
   setServer(Server s) {

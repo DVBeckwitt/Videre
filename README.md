@@ -36,12 +36,33 @@ Also included: searchable transcripts with seek and copy, subtitles, video filte
 ## Start watching
 
 1. **Install Videre.** Download `app-release.apk` from [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases/latest). Allow installation if Android asks. The same APK supports phones, tablets, and TVs.
-2. **Connect to an Invidious instance.** This is the server Videre uses to find videos and playback links. Setup links to the [Invidious instance directory](https://docs.invidious.io/instances/). Copy an address, return to Videre, and enter it—or use your own server. Videre tests it before saving.
+2. **Connect to an Invidious instance.** On the Add server screen, choose **Public instances** for the current Invidious directory, or enter your own server address. Select **Test and add server** to check it before saving.
 3. **Find something to watch.** Follow channels or save videos to Watch Later. No account needed.
 
-If playback fails, **Connection help** lets you test, retry, or switch instances. You can also use **Settings → Manage servers**. A reachable instance may still fail for individual videos; switching instances does not move your account.
+Save more addresses in **Settings → Manage servers → Add server**. Choose **Use this server** to switch; your saved addresses and per-server logins stay in place. **Connection help** also lets you test or switch when playback fails. Accounts belong to their original instance.
 
 This README describes the current source; check the release notes for features included in a downloaded APK.
+
+<details>
+<summary><strong>Public instances: links and test results</strong></summary>
+
+Videre uses the [official Invidious directory](https://docs.invidious.io/instances/), with hosts reporting API support shown first. Listing is not a privacy guarantee or a promise that playback works. Public hosts often allow browser playback while restricting apps.
+
+Checked **9 October 2026**, using anonymous HTTPS requests from our development network. None passed video API checks, so we cannot currently recommend any as working in Videre.
+
+| Public host | Result |
+|---|---|
+| [invidious.f5.si](https://invidious.f5.si) | Search worked; video metadata was empty or blocked (403). |
+| [inv.nadeko.net](https://inv.nadeko.net) | Server identified as Invidious; search and video API blocked (403). |
+| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | Server identified as Invidious; search and video API required authorization (401). |
+| [yt.chocolatemoo53.com](https://yt.chocolatemoo53.com) | Server identified as Invidious; search and video API blocked (403). |
+| [invidious.tiekoetter.com](https://invidious.tiekoetter.com) | Stats returned invalid JSON; search and video API blocked (403). |
+
+These are dated results, not permanent ratings. Tests covered the homepage, stats, search, and video metadata; no host returned usable playback links to test streams. The app checks a selected public host before saving it. Passing that check still does not guarantee every video will play.
+
+For your own server, see the [Invidious GitHub project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
+
+</details>
 
 ## A few useful tips
 

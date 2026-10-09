@@ -18,6 +18,7 @@ mixin _$AddServerState {
   bool get valid;
   bool get showAdvanced;
   bool get advancedTest;
+  String? get publicInstance;
   Map<String, String> get headers;
 
   /// Create a copy of AddServerState
@@ -39,16 +40,24 @@ mixin _$AddServerState {
                 other.showAdvanced == showAdvanced) &&
             (identical(other.advancedTest, advancedTest) ||
                 other.advancedTest == advancedTest) &&
+            (identical(other.publicInstance, publicInstance) ||
+                other.publicInstance == publicInstance) &&
             const DeepCollectionEquality().equals(other.headers, headers));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, loading, valid, showAdvanced,
-      advancedTest, const DeepCollectionEquality().hash(headers));
+  int get hashCode => Object.hash(
+      runtimeType,
+      loading,
+      valid,
+      showAdvanced,
+      advancedTest,
+      publicInstance,
+      const DeepCollectionEquality().hash(headers));
 
   @override
   String toString() {
-    return 'AddServerState(loading: $loading, valid: $valid, showAdvanced: $showAdvanced, advancedTest: $advancedTest, headers: $headers)';
+    return 'AddServerState(loading: $loading, valid: $valid, showAdvanced: $showAdvanced, advancedTest: $advancedTest, publicInstance: $publicInstance, headers: $headers)';
   }
 }
 
@@ -63,6 +72,7 @@ abstract mixin class $AddServerStateCopyWith<$Res> {
       bool valid,
       bool showAdvanced,
       bool advancedTest,
+      String? publicInstance,
       Map<String, String> headers});
 }
 
@@ -83,6 +93,7 @@ class _$AddServerStateCopyWithImpl<$Res>
     Object? valid = null,
     Object? showAdvanced = null,
     Object? advancedTest = null,
+    Object? publicInstance = freezed,
     Object? headers = null,
   }) {
     return _then(_self.copyWith(
@@ -102,6 +113,10 @@ class _$AddServerStateCopyWithImpl<$Res>
           ? _self.advancedTest
           : advancedTest // ignore: cast_nullable_to_non_nullable
               as bool,
+      publicInstance: freezed == publicInstance
+          ? _self.publicInstance
+          : publicInstance // ignore: cast_nullable_to_non_nullable
+              as String?,
       headers: null == headers
           ? _self.headers
           : headers // ignore: cast_nullable_to_non_nullable
@@ -201,8 +216,13 @@ extension AddServerStatePatterns on AddServerState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(bool loading, bool valid, bool showAdvanced,
-            bool advancedTest, Map<String, String> headers)?
+    TResult Function(
+            bool loading,
+            bool valid,
+            bool showAdvanced,
+            bool advancedTest,
+            String? publicInstance,
+            Map<String, String> headers)?
         $default, {
     required TResult orElse(),
   }) {
@@ -210,7 +230,7 @@ extension AddServerStatePatterns on AddServerState {
     switch (_that) {
       case _AddServerState() when $default != null:
         return $default(_that.loading, _that.valid, _that.showAdvanced,
-            _that.advancedTest, _that.headers);
+            _that.advancedTest, _that.publicInstance, _that.headers);
       case _:
         return orElse();
     }
@@ -231,15 +251,20 @@ extension AddServerStatePatterns on AddServerState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(bool loading, bool valid, bool showAdvanced,
-            bool advancedTest, Map<String, String> headers)
+    TResult Function(
+            bool loading,
+            bool valid,
+            bool showAdvanced,
+            bool advancedTest,
+            String? publicInstance,
+            Map<String, String> headers)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _AddServerState():
         return $default(_that.loading, _that.valid, _that.showAdvanced,
-            _that.advancedTest, _that.headers);
+            _that.advancedTest, _that.publicInstance, _that.headers);
     }
   }
 
@@ -257,15 +282,20 @@ extension AddServerStatePatterns on AddServerState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(bool loading, bool valid, bool showAdvanced,
-            bool advancedTest, Map<String, String> headers)?
+    TResult? Function(
+            bool loading,
+            bool valid,
+            bool showAdvanced,
+            bool advancedTest,
+            String? publicInstance,
+            Map<String, String> headers)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _AddServerState() when $default != null:
         return $default(_that.loading, _that.valid, _that.showAdvanced,
-            _that.advancedTest, _that.headers);
+            _that.advancedTest, _that.publicInstance, _that.headers);
       case _:
         return null;
     }
@@ -280,6 +310,7 @@ class _AddServerState implements AddServerState {
       this.valid = false,
       this.showAdvanced = false,
       this.advancedTest = true,
+      this.publicInstance,
       final Map<String, String> headers = const {}})
       : _headers = headers;
 
@@ -295,6 +326,8 @@ class _AddServerState implements AddServerState {
   @override
   @JsonKey()
   final bool advancedTest;
+  @override
+  final String? publicInstance;
   final Map<String, String> _headers;
   @override
   @JsonKey()
@@ -323,16 +356,24 @@ class _AddServerState implements AddServerState {
                 other.showAdvanced == showAdvanced) &&
             (identical(other.advancedTest, advancedTest) ||
                 other.advancedTest == advancedTest) &&
+            (identical(other.publicInstance, publicInstance) ||
+                other.publicInstance == publicInstance) &&
             const DeepCollectionEquality().equals(other._headers, _headers));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, loading, valid, showAdvanced,
-      advancedTest, const DeepCollectionEquality().hash(_headers));
+  int get hashCode => Object.hash(
+      runtimeType,
+      loading,
+      valid,
+      showAdvanced,
+      advancedTest,
+      publicInstance,
+      const DeepCollectionEquality().hash(_headers));
 
   @override
   String toString() {
-    return 'AddServerState(loading: $loading, valid: $valid, showAdvanced: $showAdvanced, advancedTest: $advancedTest, headers: $headers)';
+    return 'AddServerState(loading: $loading, valid: $valid, showAdvanced: $showAdvanced, advancedTest: $advancedTest, publicInstance: $publicInstance, headers: $headers)';
   }
 }
 
@@ -349,6 +390,7 @@ abstract mixin class _$AddServerStateCopyWith<$Res>
       bool valid,
       bool showAdvanced,
       bool advancedTest,
+      String? publicInstance,
       Map<String, String> headers});
 }
 
@@ -369,6 +411,7 @@ class __$AddServerStateCopyWithImpl<$Res>
     Object? valid = null,
     Object? showAdvanced = null,
     Object? advancedTest = null,
+    Object? publicInstance = freezed,
     Object? headers = null,
   }) {
     return _then(_AddServerState(
@@ -388,6 +431,10 @@ class __$AddServerStateCopyWithImpl<$Res>
           ? _self.advancedTest
           : advancedTest // ignore: cast_nullable_to_non_nullable
               as bool,
+      publicInstance: freezed == publicInstance
+          ? _self.publicInstance
+          : publicInstance // ignore: cast_nullable_to_non_nullable
+              as String?,
       headers: null == headers
           ? _self._headers
           : headers // ignore: cast_nullable_to_non_nullable

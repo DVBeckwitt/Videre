@@ -15,12 +15,8 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> useServer(bool value) async {
-    await db.useServer(state.server);
-    await service.validateCurrentSessionSafely();
-    final Server s = await db.getCurrentlySelectedServer();
-    await fileDb.useServer(s);
-    emit(state.copyWith(server: s));
-    app.setServer(s);
+    final server = await app.switchServer(state.server);
+    if (!isClosed && server != null) emit(state.copyWith(server: server));
   }
 
   Future<void> addHeader(String key, String value) async {
