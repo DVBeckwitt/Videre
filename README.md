@@ -49,7 +49,7 @@ Status as of **9 October 2026**.
 
 | Public host | Browser playback | Videre API check |
 |---|---|---|
-| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | Search works; video unavailable |
+| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Video API and media reachable |
 | [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | Blocked (403) |
 | [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Access denied (401) |
 | [yt.chocolatemoo53.com](https://yt.chocolatemoo53.com) | ✅ Working | Blocked (403) |
