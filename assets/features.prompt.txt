@@ -1,0 +1,12 @@
+Generator: built-in image_gen tool
+
+Use case: infographic-diagram.
+Asset type: polished feature overview graphic for the existing Videre Android app GitHub README.
+Primary request: a landscape graphic listing EXACTLY eight feature names with simple supporting icons, with NO descriptions.
+Style: precise, restrained, modern flat graphic design with generous spacing and consistent typography. Background solid deep navy #1e2546, icons bright violet #a416f4 with subtle lavender accents, text soft white. Match Videre's existing navy and purple brand palette.
+Composition: landscape 1536 by 864 proportions; an evenly spaced four-column, two-row grid, read left to right. Each cell has one large simple unified line icon above its feature label. Comfortable outside margins. Barely visible thin separators may organize the grid. Large readable semibold sans-serif labels. Labels can wrap to two centered lines where necessary. Consistent scale and baseline.
+Text (verbatim), in this exact grid order:
+Top row: "SponsorBlock" | "Dislike Counts" | "Local Library" | "Background Playback"
+Bottom row: "Watch Offline" | "Saved Playback" | "Export/Import Profiles" | "TV Streaming"
+Icons: skip-forward inside shield for SponsorBlock; thumbs-down with tiny count bars for Dislike Counts; stacked library folders for Local Library; headphones with a small play symbol for Background Playback; downward arrow into a tray for Watch Offline; circular resume arrow around a play symbol for Saved Playback; opposing import/export arrows around a profile silhouette for Export/Import Profiles; a television and phone linked by a subtle connecting line for TV Streaming. Icons have consistent clean line weight and optical size.
+Constraints: ONLY the eight exact labels are permitted text. Do not add a title, brand name, tagline, descriptions, numbers, extra features, badges, watermark, fake UI, photos, device screenshots, textures, neon bloom, 3D effects, or decorative illustrations. Prioritize accurate spelling and legibility at GitHub README width. This is a brand new graphic, not an edit.
