@@ -1,6 +1,15 @@
 # Videre
 
-<img src="./assets/github-banner.png" alt="Videre" width="440">
+<p>
+  <img src="./assets/github-banner.png" alt="Videre" width="400">
+  <a href="https://www.star-history.com/?repos=DVBeckwitt%2FVidere&amp;type=date&amp;legend=top-left">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=DVBeckwitt/Videre&amp;type=date&amp;theme=dark&amp;legend=top-left">
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=DVBeckwitt/Videre&amp;type=date&amp;legend=top-left">
+      <img src="https://api.star-history.com/chart?repos=DVBeckwitt/Videre&amp;type=date&amp;legend=top-left" alt="Videre GitHub stars over time" width="400">
+    </picture>
+  </a>
+</p>
 
 **An open-source [Invidious](https://invidious.io) client for Android phones, tablets, and TVs.**
 
