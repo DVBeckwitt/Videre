@@ -1,0 +1,85 @@
+name: Star history
+
+on:
+  schedule:
+    - cron: '37 11 * * *'
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/star-history.yml'
+      - 'tools/star_history.py'
+      - 'tools/test_star_history.py'
+      - 'assets/icon.svg'
+      - 'assets/star-history.json'
+      - 'assets/star-history.svg'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/star-history.yml'
+      - 'tools/star_history.py'
+      - 'tools/test_star_history.py'
+      - 'assets/icon.svg'
+      - 'assets/star-history.json'
+      - 'assets/star-history.svg'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: star-history-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate chart (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test data handling and chart generation
+        run: python -m unittest discover -s tools -p test_star_history.py -v
+      - name: Regenerate chart from committed data
+        run: python tools/star_history.py --input assets/star-history.json --output assets/star-history.svg
+      - name: Verify committed chart matches its data
+        run: git diff --exit-code -- assets/star-history.svg
+
+  update:
+    name: Refresh star history
+    needs: validate
+    if: github.event_name != 'pull_request' && github.repository == 'DVBeckwitt/Videre' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Fetch GitHub daily counts and render chart
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/star_history.py
+      - name: Commit refreshed chart and source data
+        shell: bash
+        run: |
+          git add -- assets/star-history.json assets/star-history.svg
+          if git diff --cached --quiet; then
+            echo "Star history is already current."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "Refresh star history"
+          git push origin HEAD:master

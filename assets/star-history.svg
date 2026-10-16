@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800" role="img" aria-labelledby="title description">
+<title id="title">Videre star history — 13 stars</title>
+<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-10-16 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
+<defs>
+<linearGradient id="panel" x2="1" y2="1"><stop stop-color="#20274f"/><stop offset="1" stop-color="#171c3a"/></linearGradient>
+<linearGradient id="violet"><stop stop-color="#5a00a8"/><stop offset="1" stop-color="#9c1ef5"/></linearGradient>
+<linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9c1ef5" stop-opacity=".30"/><stop offset="1" stop-color="#9c1ef5" stop-opacity=".01"/></linearGradient>
+<filter id="glow" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="4"/></filter>
+</defs>
+<rect x="3" y="3" width="1594" height="794" rx="38" fill="#1c2245"/>
+<rect x="4" y="4" width="1592" height="792" rx="37" fill="url(#panel)" stroke="#9c1ef5" stroke-opacity=".65" stroke-width="2"/>
+<g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<path d="M 409.41605,255.99999 102.58395,102.58253 V 409.41746 L 408.89726,256.37612" transform="translate(34 -4) scale(.4)" fill="none" stroke="url(#violet)" stroke-width="44.1447" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="225" y="145" fill="#9c1ef5" font-size="90" font-weight="600" letter-spacing="-2">Videre</text>
+<path d="M 1092 68 L 1097 85 L 1114 90 L 1097 95 L 1092 112 L 1087 95 L 1070 90 L 1087 85 Z" fill="#cda4ff" opacity=".8"/>
+<text x="1450" y="104" fill="#eee9ff" font-size="31" font-weight="600" letter-spacing="6" text-anchor="end">STAR HISTORY</text>
+<text x="1450" y="146" fill="#aaaac7" font-size="22" text-anchor="end">DVBeckwitt/Videre</text>
+<path d="M 409.41605,255.99999 102.58395,102.58253 V 409.41746 L 408.89726,256.37612" transform="translate(100 60) scale(1.45)" fill="none" stroke="url(#violet)" stroke-width="44.1447" stroke-linecap="round" stroke-linejoin="round" opacity=".13"/>
+<line x1="150" y1="625.00" x2="1440" y2="625.00" stroke="#a7a8d0" stroke-opacity=".14"/>
+<text x="126" y="632.00" fill="#bfc0d8" font-size="23.00" text-anchor="end">0</text>
+<line x1="150" y1="526.25" x2="1440" y2="526.25" stroke="#a7a8d0" stroke-opacity=".14"/>
+<text x="126" y="533.25" fill="#bfc0d8" font-size="23.00" text-anchor="end">4</text>
+<line x1="150" y1="427.50" x2="1440" y2="427.50" stroke="#a7a8d0" stroke-opacity=".14"/>
+<text x="126" y="434.50" fill="#bfc0d8" font-size="23.00" text-anchor="end">8</text>
+<line x1="150" y1="328.75" x2="1440" y2="328.75" stroke="#a7a8d0" stroke-opacity=".14"/>
+<text x="126" y="335.75" fill="#bfc0d8" font-size="23.00" text-anchor="end">12</text>
+<line x1="150" y1="230.00" x2="1440" y2="230.00" stroke="#a7a8d0" stroke-opacity=".14"/>
+<text x="126" y="237.00" fill="#bfc0d8" font-size="23.00" text-anchor="end">16</text>
+<line x1="150.00" y1="230" x2="150.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="150.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="start">Jul 05</text>
+<line x1="484.90" y1="230" x2="484.90" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="484.90" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Aug 01</text>
+<line x1="869.42" y1="230" x2="869.42" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="869.42" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Sep 01</text>
+<line x1="1241.54" y1="230" x2="1241.54" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="1241.54" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Oct 01</text>
+<line x1="1440.00" y1="230" x2="1440.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="1440.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="end">Oct 16</text>
+<path d="M 150 625 H 286.44 V 575.62 H 621.35 V 550.94 H 633.75 V 526.25 H 732.98 V 501.56 H 906.63 V 476.88 H 931.44 V 452.19 H 981.06 V 427.50 H 1129.90 V 402.81 H 1142.31 V 378.12 H 1328.37 V 353.44 H 1402.79 V 328.75 H 1415.19 V 304.06 H 1440.00 V 304.06 L 1440 625 Z" fill="url(#area)"/>
+<path d="M 150 625 H 286.44 V 575.62 H 621.35 V 550.94 H 633.75 V 526.25 H 732.98 V 501.56 H 906.63 V 476.88 H 931.44 V 452.19 H 981.06 V 427.50 H 1129.90 V 402.81 H 1142.31 V 378.12 H 1328.37 V 353.44 H 1402.79 V 328.75 H 1415.19 V 304.06 H 1440.00 V 304.06" fill="none" stroke="#9c1ef5" stroke-width="9" opacity=".35" filter="url(#glow)"/>
+<path d="M 150 625 H 286.44 V 575.62 H 621.35 V 550.94 H 633.75 V 526.25 H 732.98 V 501.56 H 906.63 V 476.88 H 931.44 V 452.19 H 981.06 V 427.50 H 1129.90 V 402.81 H 1142.31 V 378.12 H 1328.37 V 353.44 H 1402.79 V 328.75 H 1415.19 V 304.06 H 1440.00 V 304.06" fill="none" stroke="#b347ff" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="1440" cy="304.06" r="11" fill="#9c1ef5" opacity=".3"/>
+<circle cx="1440" cy="304.06" r="5" fill="#ead4ff"/>
+<text x="1440" y="277.06" fill="#eee5ff" font-size="34.00" font-weight="600" text-anchor="end">13 stars</text>
+<text x="100" y="746" fill="#a3a5c4" font-size="21">GitHub star history · cumulative daily counts</text>
+<text x="1500" y="746" fill="#a3a5c4" font-size="21" text-anchor="end">Updated 2026-10-16 UTC</text>
+</g>
+</svg>
