@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800" role="img" aria-labelledby="title description">
-<title id="title">Videre star history — 13 stars</title>
-<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-10-16 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
+<title id="title">Videre star history — 14 stars</title>
+<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-10-17 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
 <defs>
 <linearGradient id="panel" x2="1" y2="1"><stop stop-color="#20274f"/><stop offset="1" stop-color="#171c3a"/></linearGradient>
 <linearGradient id="violet"><stop stop-color="#5a00a8"/><stop offset="1" stop-color="#9c1ef5"/></linearGradient>
@@ -28,21 +28,21 @@
 <text x="126" y="237.00" fill="#bfc0d8" font-size="23.00" text-anchor="end">16</text>
 <line x1="150.00" y1="230" x2="150.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
 <text x="150.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="start">Jul 05</text>
-<line x1="484.90" y1="230" x2="484.90" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="484.90" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Aug 01</text>
-<line x1="869.42" y1="230" x2="869.42" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="869.42" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Sep 01</text>
-<line x1="1241.54" y1="230" x2="1241.54" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="1241.54" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Oct 01</text>
+<line x1="481.71" y1="230" x2="481.71" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="481.71" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Aug 01</text>
+<line x1="862.57" y1="230" x2="862.57" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="862.57" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Sep 01</text>
+<line x1="1231.14" y1="230" x2="1231.14" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="1231.14" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Oct 01</text>
 <line x1="1440.00" y1="230" x2="1440.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="1440.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="end">Oct 16</text>
-<path d="M 150 625 H 286.44 V 575.62 H 621.35 V 550.94 H 633.75 V 526.25 H 732.98 V 501.56 H 906.63 V 476.88 H 931.44 V 452.19 H 981.06 V 427.50 H 1129.90 V 402.81 H 1142.31 V 378.12 H 1328.37 V 353.44 H 1402.79 V 328.75 H 1415.19 V 304.06 H 1440.00 V 304.06 L 1440 625 Z" fill="url(#area)"/>
-<path d="M 150 625 H 286.44 V 575.62 H 621.35 V 550.94 H 633.75 V 526.25 H 732.98 V 501.56 H 906.63 V 476.88 H 931.44 V 452.19 H 981.06 V 427.50 H 1129.90 V 402.81 H 1142.31 V 378.12 H 1328.37 V 353.44 H 1402.79 V 328.75 H 1415.19 V 304.06 H 1440.00 V 304.06" fill="none" stroke="#9c1ef5" stroke-width="9" opacity=".35" filter="url(#glow)"/>
-<path d="M 150 625 H 286.44 V 575.62 H 621.35 V 550.94 H 633.75 V 526.25 H 732.98 V 501.56 H 906.63 V 476.88 H 931.44 V 452.19 H 981.06 V 427.50 H 1129.90 V 402.81 H 1142.31 V 378.12 H 1328.37 V 353.44 H 1402.79 V 328.75 H 1415.19 V 304.06 H 1440.00 V 304.06" fill="none" stroke="#b347ff" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="1440" cy="304.06" r="11" fill="#9c1ef5" opacity=".3"/>
-<circle cx="1440" cy="304.06" r="5" fill="#ead4ff"/>
-<text x="1440" y="277.06" fill="#eee5ff" font-size="34.00" font-weight="600" text-anchor="end">13 stars</text>
+<text x="1440.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="end">Oct 17</text>
+<path d="M 150 625 H 285.14 V 575.62 H 616.86 V 550.94 H 629.14 V 526.25 H 727.43 V 501.56 H 899.43 V 476.88 H 924.00 V 452.19 H 973.14 V 427.50 H 1120.57 V 402.81 H 1132.86 V 378.12 H 1317.14 V 353.44 H 1390.86 V 328.75 H 1403.14 V 304.06 H 1427.71 V 279.38 H 1440.00 V 279.38 L 1440 625 Z" fill="url(#area)"/>
+<path d="M 150 625 H 285.14 V 575.62 H 616.86 V 550.94 H 629.14 V 526.25 H 727.43 V 501.56 H 899.43 V 476.88 H 924.00 V 452.19 H 973.14 V 427.50 H 1120.57 V 402.81 H 1132.86 V 378.12 H 1317.14 V 353.44 H 1390.86 V 328.75 H 1403.14 V 304.06 H 1427.71 V 279.38 H 1440.00 V 279.38" fill="none" stroke="#9c1ef5" stroke-width="9" opacity=".35" filter="url(#glow)"/>
+<path d="M 150 625 H 285.14 V 575.62 H 616.86 V 550.94 H 629.14 V 526.25 H 727.43 V 501.56 H 899.43 V 476.88 H 924.00 V 452.19 H 973.14 V 427.50 H 1120.57 V 402.81 H 1132.86 V 378.12 H 1317.14 V 353.44 H 1390.86 V 328.75 H 1403.14 V 304.06 H 1427.71 V 279.38 H 1440.00 V 279.38" fill="none" stroke="#b347ff" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="1440" cy="279.38" r="11" fill="#9c1ef5" opacity=".3"/>
+<circle cx="1440" cy="279.38" r="5" fill="#ead4ff"/>
+<text x="1440" y="258.00" fill="#eee5ff" font-size="34.00" font-weight="600" text-anchor="end">14 stars</text>
 <text x="100" y="746" fill="#a3a5c4" font-size="21">GitHub star history · cumulative daily counts</text>
-<text x="1500" y="746" fill="#a3a5c4" font-size="21" text-anchor="end">Updated 2026-10-16 UTC</text>
+<text x="1500" y="746" fill="#a3a5c4" font-size="21" text-anchor="end">Updated 2026-10-17 UTC</text>
 </g>
 </svg>
