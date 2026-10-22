@@ -47,16 +47,17 @@ This README describes the current source. Check release notes for your APK's fea
 
 ## Public instances
 
-Suggested hosts from the [official Invidious directory](https://docs.invidious.io/instances/), with status as of **9 October 2026**:
+Suggested hosts from the [official Invidious directory](https://docs.invidious.io/instances/), with the last check date shown for each host:
 
-| Public host | Browser | Videre |
-|---|---|---|
-| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* |
-| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* |
+| Public host | Browser | Videre | Last checked |
+|---|---|---|---|
+| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
+| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* | 9 October 2026 |
+| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | Not verified | ✅ Working* | 22 October 2026 |
 
 Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
 
-\* Source checks cover search, video data, and a media sample. Full Android playback is unverified; availability may change.
+\* Source checks cover search, video data, and a media sample. NerdVPN also passed server stats, direct audio, and instance-proxied video sample checks. Full Android playback is unverified; availability may change.
 
 For self-hosting, see the [Invidious project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
 

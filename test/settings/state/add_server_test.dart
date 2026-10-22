@@ -103,7 +103,7 @@ void main() {
       expect(await AddServerCubit.getPublicInstances(client: client), isEmpty);
     });
 
-    test('the fetched directory suggests only the two checked hosts', () async {
+    test('suggests recommended hosts regardless of API reporting', () async {
       final requests = <Uri>[];
       final client = MockClient((request) async {
         requests.add(request.url);
@@ -111,7 +111,7 @@ void main() {
             jsonEncode([
               entry('https://invidious.f5.si'),
               entry('https://inv.nadeko.net'),
-              entry('https://invidious.nerdvpn.de', api: true),
+              entry('https://invidious.nerdvpn.de', api: false),
               entry('https://yt.chocolatemoo53.com', api: true),
               entry('https://invidious.tiekoetter.com', api: true),
               entry('https://new.example', api: true),
@@ -121,10 +121,11 @@ void main() {
 
       final instances = await AddServerCubit.getPublicInstances(client: client);
       expect(
-          instances.map((instance) => instance.url),
+          instances,
           unorderedEquals([
-            'https://invidious.f5.si',
-            'https://inv.nadeko.net',
+            (url: 'https://invidious.f5.si', api: false),
+            (url: 'https://inv.nadeko.net', api: false),
+            (url: 'https://invidious.nerdvpn.de', api: false),
           ]));
       expect(requests, [Uri.parse(AddServerCubit.directoryUrl)]);
     });
@@ -175,16 +176,15 @@ void main() {
     test('manual addresses omitted from suggestions can still use credentials',
         () async {
       service = Service(httpClient: MockClient((request) async {
-        expect(request.url.toString(),
-            'https://invidious.nerdvpn.de/api/v1/stats');
+        expect(request.url.toString(), 'https://private.example/api/v1/stats');
         expect(request.headers['Authorization'], 'Basic own-server');
         return http.Response('{"software":{"name":"invidious"}}', 200);
       }));
-      cubit.urlController.text = 'invidious.nerdvpn.de/';
+      cubit.urlController.text = 'private.example/';
       cubit.addHeader('Authorization', 'Basic own-server');
 
       final server = await cubit.validateServer();
-      expect(server?.url, 'https://invidious.nerdvpn.de');
+      expect(server?.url, 'https://private.example');
       expect(server?.authToken, isNull);
       expect(server?.customHeaders['Authorization'], 'Basic own-server');
       expect(cubit.state.loading, isFalse);

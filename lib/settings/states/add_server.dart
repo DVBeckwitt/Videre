@@ -20,6 +20,7 @@ class AddServerCubit extends Cubit<AddServerState> {
   static const _recommendedInstances = {
     'https://invidious.f5.si',
     'https://inv.nadeko.net',
+    'https://invidious.nerdvpn.de',
   };
 
   final TextEditingController urlController =
