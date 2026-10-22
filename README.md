@@ -53,7 +53,7 @@ Suggested hosts from the [official Invidious directory](https://docs.invidious.i
 |---|---|---|---|
 | [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
 | [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* | 9 October 2026 |
-| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | Not verified | ✅ Working* | 22 October 2026 |
+| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | ✅ Working* | 22 October 2026 |
 
 Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
 
