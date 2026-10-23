@@ -1,5 +1,5 @@
 name: clipious
-version: 1.22.26+60873
+version: 1.22.27+60874
 publish_to: none
 description: Client for invidious.
 environment: 
@@ -34,6 +34,7 @@ dependencies:
   flutter_web_auth_2: 4.1.0
   freezed_annotation: 3.1.0
   gap: 3.0.1
+  html: 0.15.5
   http: any
   intl: any
   json_annotation: 4.9.0

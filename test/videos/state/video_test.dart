@@ -32,6 +32,8 @@ import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video.dart';
 import 'package:river_player/river_player.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import '../../test_app_cubit.dart';
 import '../../test_player_cubit.dart';
@@ -453,11 +455,143 @@ void main() {
     });
 
     tearDown(() async {
+      service = Service();
       if (!cubit.isClosed) await cubit.close();
       await player.close();
       await settings.close();
       await db.close();
     });
+
+    test('resolves a signed DASH source before starting the native player',
+        () async {
+      const original =
+          'https://inv.example/companion/api/manifest/dash/id/signed';
+      const signed = '$original?local=true&check=test-signature';
+      final requests = <Uri>[];
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request.url);
+        if (request.url.queryParameters.containsKey('check')) {
+          return http.Response('<MPD/>', 200);
+        }
+        if (request.url.path == '/watch') {
+          return http.Response('''<video id="player"><source
+            type="application/dash+xml" src="$signed"></video>''', 200);
+        }
+        return http.Response('No check ID.', 400);
+      }));
+      cubit.switchVideo(
+          Video(
+            videoId: 'signed',
+            dashUrl: original,
+            formatStreams: [
+              _stream('https://inv.example/fallback.mp4', '360p')
+            ],
+          ),
+          startAt: const Duration(seconds: 20));
+      await controller.waitForSource(signed);
+      await cubit.waitForSeekCount(2);
+      expect(controller.sourceUrls, isNot(contains(original)));
+      expect(controller.sources.last.videoFormat, BetterPlayerVideoFormat.dash);
+      expect(requests, hasLength(3));
+      expect(cubit.seekPositions.last, const Duration(seconds: 20));
+    });
+
+    test(
+        'failed signed DASH recovery skips native retries and uses progressive',
+        () async {
+      var calls = 0;
+      service = Service(httpClient: MockClient((request) async {
+        calls++;
+        return request.url.path == '/watch'
+            ? http.Response('''<video id="player"><source
+                type="application/dash+xml"
+                src="/api/manifest/dash/id/broken?check=rejected"></video>''',
+                200)
+            : http.Response('No check ID.', 400);
+      }));
+      cubit.switchVideo(Video(
+        videoId: 'broken',
+        dashUrl: 'https://inv.example/api/manifest/dash/id/broken',
+        formatStreams: [_stream('https://inv.example/fallback.mp4', '360p')],
+      ));
+      await controller.waitForSource('https://inv.example/fallback.mp4');
+      expect(calls, 3);
+      expect(controller.sourceUrls, [
+        'https://r1.googlevideo.com/manifest.mpd',
+        'https://inv.example/fallback.mp4'
+      ]);
+      expect(player.errorEvents, isEmpty);
+    });
+
+    test('old native errors cannot skip a pending DASH resolution', () async {
+      final requested = Completer<void>();
+      final pending = Completer<http.Response>();
+      service = Service(httpClient: MockClient((_) {
+        requested.complete();
+        return pending.future;
+      }));
+      const dash = 'https://inv.example/api/manifest/dash/id/redirected';
+      const hls = 'https://inv.example/live.m3u8';
+      cubit.switchVideo(Video(
+        videoId: 'redirected',
+        hlsUrl: hls,
+        dashUrl: dash,
+        formatStreams: [_stream('https://inv.example/fallback.mp4', '360p')],
+      ));
+      await controller.waitForSource(hls);
+      final oldListener = controller.listeners.single;
+      oldListener(BetterPlayerEvent(BetterPlayerEventType.exception));
+      await requested.future;
+      oldListener(BetterPlayerEvent(BetterPlayerEventType.exception));
+      await _waitForDeferredFallback();
+      expect(controller.sourceUrls,
+          isNot(contains('https://inv.example/fallback.mp4')));
+      pending.complete(http.Response('<MPD/>', 200));
+      await controller.waitForSource(dash);
+      expect(player.errorEvents, isEmpty);
+    });
+
+    test('progressive preference does not preflight an unused DASH URL',
+        () async {
+      service = Service(httpClient: MockClient((_) async {
+        fail('Unused DASH source should not add startup requests');
+      }));
+      await settings.setUseDash(false);
+      cubit.switchVideo(Video(
+        videoId: 'progressive',
+        dashUrl: 'https://inv.example/api/manifest/dash/id/progressive',
+        formatStreams: [_stream('https://inv.example/first.mp4', '360p')],
+      ));
+      await controller.waitForSource('https://inv.example/first.mp4');
+      expect(
+          controller.sources.last.videoFormat, BetterPlayerVideoFormat.other);
+    });
+
+    for (final close in [false, true]) {
+      test(
+          'ignores pending DASH resolution after ${close ? 'close' : 'switch'}',
+          () async {
+        final requested = Completer<void>();
+        final pending = Completer<http.Response>();
+        service = Service(httpClient: MockClient((_) {
+          requested.complete();
+          return pending.future;
+        }));
+        const oldUrl = 'https://inv.example/api/manifest/dash/id/old';
+        cubit.switchVideo(Video(videoId: 'old', dashUrl: oldUrl));
+        await requested.future;
+        if (close) {
+          await cubit.close();
+        } else {
+          cubit.switchVideo(_videoWithFallback('new'));
+          await controller.waitForSource('https://r1.googlevideo.com/new.mpd');
+        }
+        pending.complete(http.Response('<MPD/>', 200));
+        await _waitForDeferredFallback();
+        expect(controller.sourceUrls, isNot(contains(oldUrl)));
+        expect(player.errorEvents, isEmpty);
+      });
+    }
 
     test('uninitialized progress cannot erase a pending resume position',
         () async {

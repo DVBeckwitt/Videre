@@ -242,6 +242,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   BetterPlayerController? videoController;
   final SettingsCubit settings;
   List<BetterPlayerDataSource> _playbackSources = const [];
+  Server? _playbackServer;
+  String? _playbackVideoId;
   int _playbackSourceIndex = 0;
   bool _playbackInitialized = false;
   bool _terminalErrorSent = false;
@@ -440,8 +442,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (_videoListener != null) {
       videoController?.removeEventsListener(_videoListener!);
     }
+    final sourceIndex = _playbackSourceIndex;
     _videoListener = (event) {
-      if (!isClosed && generation == _playbackGeneration) {
+      if (_isCurrentAttempt(generation, sourceIndex)) {
         onVideoListener(event);
       }
     };
@@ -505,6 +508,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return;
     }
     _sourceFailurePending = false;
+    final server = _playbackServer;
+    if (server != null) {
+      service.dashManifestResolver
+          .invalidate(_playbackSources[sourceIndex].url, server);
+    }
     if (_playbackSourceIndex + 1 >= _playbackSources.length) {
       _emitTerminalPlaybackError();
       return;
@@ -517,7 +525,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (isClosed) return;
     final generation = _playbackGeneration;
     final sourceIndex = _playbackSourceIndex;
-    final source = _playbackSources[sourceIndex];
+    var source = _playbackSources[sourceIndex];
     final cancelled = _setupCancellation.future;
     final previousSetup = _controllerSetup;
     if (previousSetup != null) {
@@ -525,6 +533,25 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         await Future.any([previousSetup, cancelled]);
       } catch (_) {}
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
+    }
+
+    final server = _playbackServer;
+    final videoId = _playbackVideoId;
+    if (source.videoFormat == BetterPlayerVideoFormat.dash &&
+        server != null &&
+        videoId != null) {
+      final resolved = await Future.any([
+        service.dashManifestResolver.resolve(source.url, videoId, server),
+        cancelled.then<String?>((_) => null),
+      ]);
+      if (!_isCurrentAttempt(generation, sourceIndex)) return;
+      if (resolved == null) {
+        _sourceFailurePending = true;
+        await _handleSourceFailure(generation, sourceIndex);
+        return;
+      }
+      source = source.copyWith(url: resolved);
+      _playbackSources[sourceIndex] = source;
     }
 
     _listenForPlaybackEvents(generation);
@@ -609,6 +636,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _terminalErrorSent = false;
     _sourceFailurePending = false;
     var newState = state.copyWith(startAt: startAt);
+    _playbackServer = null;
+    _playbackVideoId = null;
     if (newState.video != null || newState.offlineVideo != null) {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
       newState = newState.copyWith(bufferPosition: Duration.zero);
@@ -640,6 +669,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       } else {
         final server = await db.getCurrentlySelectedServer();
         if (isClosed || generation != _playbackGeneration) return;
+        _playbackServer = server;
+        _playbackVideoId = newState.video!.videoId;
         final sources = _buildPlaybackDataSources(
           newState.video!,
           server,

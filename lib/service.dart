@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/http.dart';
+import 'package:clipious/player/dash_manifest_resolver.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/extensions.dart';
 import 'package:clipious/globals.dart';
@@ -80,6 +81,7 @@ const imgurClientId = 'Client-ID 2cfbc27ce77879d';
 class Service {
   final log = Logger('Service');
   final Client httpClient;
+  late final dashManifestResolver = DashManifestResolver(httpClient);
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
   final _videoRequests = <String, Future<Response>>{};

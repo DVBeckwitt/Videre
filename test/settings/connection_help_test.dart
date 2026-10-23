@@ -232,4 +232,30 @@ void main() {
       expect(find.text('Open in browser'), findsOneWidget);
     });
   }
+
+  for (final status in [401, 500, 530]) {
+    testWidgets('HTTP $status offers recovery without automatic retry loops',
+        (tester) async {
+      var requests = 0;
+      service = Service(httpClient: MockClient((request) async {
+        requests++;
+        return request.url.path.endsWith('/stats')
+            ? http.Response('{"software":{"name":"invidious"}}', 200)
+            : http.Response('Instance unavailable', status);
+      }));
+      await pumpHelp(tester, videoId: 'failed-video');
+      await tester.tap(find.text('Test connection'));
+      await tester.pumpAndSettle();
+      expect(requests, 2);
+      for (final label in ['Choose instance', 'Test connection']) {
+        expect(
+            tester
+                .widget<TextButton>(find.widgetWithText(TextButton, label))
+                .onPressed,
+            isNotNull);
+      }
+      expect(find.text('Open in browser'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 }
