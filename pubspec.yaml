@@ -1,5 +1,5 @@
 name: clipious
-version: 1.22.27+60874
+version: 1.22.28+60875
 publish_to: none
 description: Client for invidious.
 environment: 
@@ -38,7 +38,8 @@ dependencies:
   http: any
   intl: any
   json_annotation: 4.9.0
-  just_audio: 0.10.5
+  just_audio:
+    path: packages/just_audio
   locale_names:  1.1.1
   logging: 1.3.0
   package_info_plus: 8.3.1
@@ -64,10 +65,10 @@ dependencies:
   flutter_localizations: 
     sdk: flutter
   river_player:
-    git: 
-      url: https://github.com/lamarios/river_player.git
-      ref: 55f1f374adbeeab7aefba5684dc2b014cbc87a63
+    path: packages/river_player
   simple_pip_mode: 1.1.0
+  videre_proxy:
+    path: packages/videre_proxy
 dev_dependencies: 
   auto_route_generator: any
   build_runner: ^2.7.0
@@ -79,6 +80,7 @@ dev_dependencies:
   flutter_native_splash: 2.4.6
   freezed: 3.2.0
   json_serializable: 6.10.0
+  just_audio_platform_interface: 4.6.0
   flutter_test: 
     sdk: flutter
 flutter: 

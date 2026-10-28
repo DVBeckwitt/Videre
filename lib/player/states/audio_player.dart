@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -19,15 +21,21 @@ Logger log = Logger('AudioPlayerController');
 class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   AudioPlayer? audioPlayer;
   final SettingsCubit settings;
+  int _playbackGeneration = 0;
+  Future<void>? _disposal;
+  final _playerSubscriptions = <StreamSubscription<dynamic>>[];
 
   AudioPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
   }
 
   @override
-  close() async {
-    disposeControllers();
-    super.close();
+  Future<void> close() async {
+    try {
+      await stopForProxyChange();
+    } finally {
+      await super.close();
+    }
   }
 
   void onInit() {
@@ -37,23 +45,57 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
 
   @override
   void disposeControllers() {
-    audioPlayer?.dispose();
+    unawaited(stopForProxyChange());
   }
 
-  initPlayer() {
+  @override
+  Future<void> stopForProxyChange() {
+    _playbackGeneration++;
+    final current = audioPlayer;
+    audioPlayer = null;
+    EasyThrottle.cancel('audio-progress');
+    EasyThrottle.cancel('audio-buffering');
+    final subscriptions = List.of(_playerSubscriptions);
+    _playerSubscriptions.clear();
+    if (current == null && subscriptions.isEmpty) {
+      return _disposal ?? Future<void>.value();
+    }
+    final disposal = () async {
+      for (final subscription in subscriptions) {
+        await subscription.cancel();
+      }
+      await current?.dispose();
+    }();
+    _disposal = disposal;
+    return disposal;
+  }
+
+  void initPlayer() {
     if (audioPlayer == null) {
-      audioPlayer = AudioPlayer();
-      audioPlayer?.playerStateStream.listen(onStateStreamChange,
-          onError: (e, st) {
-        return player.setEvent(const MediaEvent(state: MediaState.error));
-      });
-      audioPlayer?.positionStream.listen(onPositionChanged);
-      audioPlayer?.durationStream.listen(onDurationChanged);
-      audioPlayer?.bufferedPositionStream.listen(onBufferChanged);
+      final current = audioPlayer = AudioPlayer();
+      bool active() => !isClosed && identical(audioPlayer, current);
+      _playerSubscriptions.addAll([
+        current.playerStateStream.listen((value) {
+          if (active()) onStateStreamChange(value);
+        }, onError: (Object error, StackTrace stack) {
+          if (active()) {
+            player.setEvent(const MediaEvent(state: MediaState.error));
+          }
+        }),
+        current.positionStream.listen((value) {
+          if (active()) onPositionChanged(value);
+        }),
+        current.durationStream.listen((value) {
+          if (active()) onDurationChanged(value);
+        }),
+        current.bufferedPositionStream.listen((value) {
+          if (active()) onBufferChanged(value);
+        }),
+      ]);
     }
   }
 
-  onStateStreamChange(PlayerState state) {
+  void onStateStreamChange(PlayerState state) {
     log.fine('Player state event $state');
     switch (state.processingState) {
       case ProcessingState.idle:
@@ -75,17 +117,21 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     }
   }
 
-  onDurationChanged(Duration? duration) async {
+  void onDurationChanged(Duration? duration) {
+    if (isClosed || audioPlayer == null) return;
     emit(state.copyWith(loading: false));
-    if (!isClosed) emit(state);
     player.setEvent(MediaEvent(
         state: MediaState.playing,
         type: MediaEventType.durationChanged,
         value: duration ?? const Duration(seconds: 1)));
   }
 
-  onPositionChanged(Duration position) {
+  void onPositionChanged(Duration position) {
+    final current = audioPlayer;
     EasyThrottle.throttle('audio-progress', const Duration(seconds: 1), () {
+      if (isClosed || current == null || !identical(audioPlayer, current)) {
+        return;
+      }
       emit(state.copyWith(audioPosition: position));
       player.setEvent(MediaEvent(
           state: MediaState.playing,
@@ -95,13 +141,19 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   @override
-  playVideo(bool offline, {Duration? startAt}) async {
+  Future<void> playVideo(bool offline, {Duration? startAt}) async {
     if (!player.state.isAudio) {
       return;
     }
     if (state.video != null || state.offlineVideo != null) {
-      // disposeControllers();
+      final generation = ++_playbackGeneration;
       initPlayer();
+      final current = audioPlayer;
+      bool active() =>
+          !isClosed &&
+          generation == _playbackGeneration &&
+          current != null &&
+          identical(audioPlayer, current);
       var audioLength = Duration(
           seconds: offline
               ? state.offlineVideo!.lengthSeconds
@@ -122,6 +174,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       try {
         AudioSource? source;
         final server = await db.getCurrentlySelectedServer();
+        if (!active()) return;
 
         if (!offline) {
           assert(state.video!.formatStreams != null);
@@ -145,6 +198,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           }
         } else {
           String path = await state.offlineVideo!.effectivePath;
+          if (!active()) return;
           source = AudioSource.file(path);
         }
 
@@ -152,7 +206,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           throw Error();
         }
 
-        await audioPlayer?.setAudioSource(source, initialPosition: startAt);
+        await current!.setAudioSource(source, initialPosition: startAt);
+        if (!active()) return;
 
         play();
         // TODO: make this less duplicated between videos and audio
@@ -161,9 +216,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           speed = settings.state.lastSpeed;
 
           log.fine("Setting playback speed to $speed");
-          audioPlayer?.setSpeed(speed);
+          current.setSpeed(speed);
         }
       } catch (e) {
+        if (!active()) return;
         log.severe("Couldn't play video", e);
         player.setEvent(const MediaEvent(state: MediaState.error));
         if (!isClosed) {
@@ -343,7 +399,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   void onBufferChanged(Duration event) {
+    final current = audioPlayer;
     EasyThrottle.throttle('audio-buffering', const Duration(seconds: 1), () {
+      if (isClosed || current == null || !identical(audioPlayer, current)) {
+        return;
+      }
       player.setEvent(MediaEvent(
           state: MediaState.playing,
           type: MediaEventType.bufferChanged,

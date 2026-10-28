@@ -800,13 +800,12 @@ packages:
   just_audio:
     dependency: "direct main"
     description:
-      name: just_audio
-      sha256: "9694e4734f515f2a052493d1d7e0d6de219ee0427c7c29492e246ff32a219908"
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/just_audio"
+      relative: true
+    source: path
     version: "0.10.5"
   just_audio_platform_interface:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: just_audio_platform_interface
       sha256: "2532c8d6702528824445921c5ff10548b518b13f808c2e34c2fd54793b999a6a"
@@ -1105,11 +1104,9 @@ packages:
   river_player:
     dependency: "direct main"
     description:
-      path: "."
-      ref: "55f1f374adbeeab7aefba5684dc2b014cbc87a63"
-      resolved-ref: "55f1f374adbeeab7aefba5684dc2b014cbc87a63"
-      url: "https://github.com/lamarios/river_player.git"
-    source: git
+      path: "packages/river_player"
+      relative: true
+    source: path
     version: "0.1.4"
   rxdart:
     dependency: transitive
@@ -1556,6 +1553,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
+  videre_proxy:
+    dependency: "direct main"
+    description:
+      path: "packages/videre_proxy"
+      relative: true
+    source: path
+    version: "0.1.0"
   visibility_detector:
     dependency: transitive
     description:

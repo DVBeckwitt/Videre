@@ -18,6 +18,7 @@ import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/screens/manage_single_server.dart';
+import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/conditional_wrap.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -271,6 +272,14 @@ class AddServerScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(locals.addServer),
+        actions: [
+          IconButton(
+            tooltip: locals.networkProxy,
+            icon: const Icon(Icons.vpn_lock_outlined),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const NetworkProxySettingsScreen())),
+          ),
+        ],
       ),
       body: SafeArea(
         bottom: false,

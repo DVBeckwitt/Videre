@@ -267,13 +267,20 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> close() async {
+    await stopForProxyChange();
+    await super.close();
+  }
+
+  @override
+  Future<void> stopForProxyChange() async {
     _playbackGeneration++;
     _playbackSources = const [];
+    _playbackServer = null;
+    _playbackVideoId = null;
     _cancelSetup();
     _controllerSetup = null;
     _controllerSetupAttempt = null;
     disposeControllers();
-    await super.close();
   }
 
   @override
@@ -619,7 +626,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   @override
-  playVideo(bool offline, {Duration? startAt}) async {
+  Future<void> playVideo(bool offline, {Duration? startAt}) async {
     if (player.state.isAudio) {
       return;
     }

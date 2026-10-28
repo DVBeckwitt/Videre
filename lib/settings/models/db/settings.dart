@@ -11,6 +11,7 @@ const playerShuffle = 'player-shuffle';
 const playerAutoplayOnLoad = 'player-autoplay-on-load';
 const playRecommendedNextSettingName = 'play-recommended-next';
 const useProxySettingName = 'use-proxy';
+const networkSocksProxySettingName = 'network-socks-proxy';
 const useReturnYoutubeDislikeSettingName = 'use-return-youtube-dislike';
 const returnYoutubeDislikeUrlSettingName = 'custom-return-youtube-dislike-url';
 const blackBackgroundSettingName = 'black-background';

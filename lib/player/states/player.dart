@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
@@ -52,15 +53,28 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static PlayerCubit? _sessionOwner;
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
-  late final AudioSession audioSession;
+  late final AudioSession _audioSession;
+  bool _hasAudioSession = false;
+  AudioSession get audioSession => _audioSession;
+  set audioSession(AudioSession value) {
+    _audioSession = value;
+    _hasAudioSession = true;
+  }
+
   bool? _requestedPlaying;
   int _progressGeneration = 0;
+  int _videoSwitchGeneration = 0;
+  bool _isDisposing = false;
+  StreamSubscription<void>? _becomingNoisySubscription;
   final bool _resumeOnReady;
   static const _pipChannel = MethodChannel('videre/pip');
   SimplePip? _pip;
 
   PlayerCubit(super.initialState, this.settings, {bool resume = false})
       : _resumeOnReady = resume {
+    // Metadata can be pending before any decoder mounts and registers its own
+    // native teardown. The parent must invalidate that pending work as well.
+    NetworkProxy.instance.addBeforeApply(_proxyChanging);
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && !isTv) {
       _pip = SimplePip(
         onPipEntered: () => _setPip(true),
@@ -69,6 +83,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       unawaited(_updateAutoPip(state));
     }
     onReady();
+  }
+
+  Future<void> _proxyChanging() async {
+    if (isClosed) return;
+    if (state.isHidden && !state.hasVideo) {
+      // A restored queue is dormant, not active playback. Invalidate pending
+      // intents without clearing it or starting a closing animation.
+      _progressGeneration++;
+      _videoSwitchGeneration++;
+      return;
+    }
+    hide();
   }
 
   PlaybackSession? get savedSession =>
@@ -166,9 +192,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> playRemoteVideo(String videoId, int position, bool playing,
       {bool Function()? isActive}) async {
+    final generation = _videoSwitchGeneration;
     final video =
         await service.getVideo(videoId).timeout(const Duration(seconds: 10));
-    if (isClosed || (isActive != null && !isActive())) return;
+    if (isClosed ||
+        generation != _videoSwitchGeneration ||
+        (isActive != null && !isActive())) {
+      return;
+    }
     await playVideo([
       video.copyWith(
         formatStreams: video.formatStreams ?? [],
@@ -280,6 +311,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> onReady() async {
+    var startupGeneration = _videoSwitchGeneration;
+    bool startupActive() =>
+        !_isDisposing &&
+        !isClosed &&
+        startupGeneration == _videoSwitchGeneration;
     final startVideos = state.videos;
     if (startVideos.isEmpty) restoreSession();
     emit(state.copyWith(
@@ -287,7 +323,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         forwardStep: settings.state.skipStep,
         rewindStep: settings.state.skipStep));
     // setting up audio session
-    audioSession = await AudioSession.instance;
+    final session = await AudioSession.instance;
+    if (_isDisposing || isClosed) return;
+    audioSession = session;
     audioSession.configure(const AudioSessionConfiguration(
       avAudioSessionCategory: AVAudioSessionCategory.playback,
       avAudioSessionCategoryOptions:
@@ -295,11 +333,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     ));
     WidgetsBinding.instance.addObserver(this);
     if (!isTv) {
-      audioSession.becomingNoisyEventStream.listen((event) {
+      _becomingNoisySubscription =
+          audioSession.becomingNoisyEventStream.listen((event) {
         pause();
       });
 
-      mediaHandler = await AudioService.init(
+      final handler = await AudioService.init(
         builder: () => MediaHandler(this),
         config: const AudioServiceConfig(
           androidNotificationChannelId:
@@ -308,13 +347,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           androidNotificationOngoing: true,
         ),
       );
+      if (_isDisposing || isClosed) return;
+      mediaHandler = handler;
       BackButtonInterceptor.add(handleBackButton,
           name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
-    } else if (isTv && startVideos.isNotEmpty) {
-      await switchToVideo(startVideos[0], startAt: state.startAt);
+    } else if (startVideos.isNotEmpty && startupActive()) {
+      final switching = switchToVideo(startVideos[0], startAt: state.startAt);
+      startupGeneration = _videoSwitchGeneration;
+      await switching;
+      if (!startupActive()) return;
       generatePlayQueue();
     }
-    if (_resumeOnReady) await resumeSession();
+    // Stop and newer play requests can arrive while native services initialize.
+    // Finish that setup for future explicit playback, but discard stale autoplay.
+    if (_resumeOnReady && startupActive()) await resumeSession();
   }
 
   void handleMediaEvent(MediaEvent event) {
@@ -368,7 +414,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   @override
   close() async {
+    _isDisposing = true;
+    NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     _progressGeneration++;
+    _videoSwitchGeneration++;
+    await _becomingNoisySubscription?.cancel();
     await _updateAutoPip(state, disable: true);
     _pip?.onPipEntered = null;
     _pip?.onPipExited = null;
@@ -410,7 +460,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || state.isClosing) return;
     // Background playback must stop before the closing animation can run.
     pause();
-    final generation = _progressGeneration;
+    final generation = ++_progressGeneration;
+    _videoSwitchGeneration++;
     unawaited(_saveSession(state));
     playbackHistoryRevision.value++;
     var mediaEvent = MediaEvent(
@@ -439,7 +490,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       },
     );
 
-    audioSession.setActive(false);
+    if (_hasAudioSession) audioSession.setActive(false);
   }
 
   double get getBottom => state.isHidden ? -targetHeight : 0;
@@ -586,11 +637,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         }
       } else if (settings.state.playerRepeatMode == PlayerRepeat.repeatAll) {
         emit(state.copyWith(playedVideos: [], playQueue: ListQueue.from([])));
-        if (state.videos.isNotEmpty) {
-          await switchToVideo(state.videos[0]);
-        } else {
-          await switchToOfflineVideo(state.offlineVideos[0]);
-        }
+        final switching = state.videos.isNotEmpty
+            ? switchToVideo(state.videos[0])
+            : switchToOfflineVideo(state.offlineVideos[0]);
+        final generation = _videoSwitchGeneration;
+        await switching;
+        if (isClosed || generation != _videoSwitchGeneration) return;
         generatePlayQueue();
       }
     }
@@ -616,13 +668,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
         var playedVideos = List<String>.from(state.playedVideos);
         String toPlay = playedVideos.removeLast();
-        if (state.videos.isNotEmpty) {
-          await switchToVideo(
-              state.videos.firstWhere((element) => element.videoId == toPlay));
-        } else {
-          await switchToOfflineVideo(state.offlineVideos
-              .firstWhere((element) => element.videoId == toPlay));
-        }
+        final switching = state.videos.isNotEmpty
+            ? switchToVideo(
+                state.videos.firstWhere((element) => element.videoId == toPlay))
+            : switchToOfflineVideo(state.offlineVideos
+                .firstWhere((element) => element.videoId == toPlay));
+        final generation = _videoSwitchGeneration;
+        await switching;
+        if (isClosed || generation != _videoSwitchGeneration) return;
         emit(state.copyWith(playQueue: playQueue, playedVideos: playedVideos));
       } else {
         // if there's nothing to go back to, we just repeat the last video
@@ -666,8 +719,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           top: 500));
 
       showBigPlayer();
-      await _switchToVideo(vids.first,
+      final switching = _switchToVideo(vids.first,
           startAt: startAt, playing: _requestedPlaying);
+      final generation = _videoSwitchGeneration;
+      await switching;
+      if (isClosed || generation != _videoSwitchGeneration) return;
       generatePlayQueue();
     }
   }
@@ -702,12 +758,16 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// Switches to a video without changing the queue
   Future<void> _switchToVideo(IdedVideo video,
       {Duration? startAt, bool? playing}) async {
+    if (isClosed) return;
     _requestedPlaying = playing;
+    final generation = ++_videoSwitchGeneration;
+    bool active() => !isClosed && generation == _videoSwitchGeneration;
     _progressGeneration++;
     if (state.isClosing) emit(state.copyWith(isClosing: false));
     try {
       // we move the existing video to the stack of played video
       await audioSession.setActive(true);
+      if (!active()) return;
       bool isOffline = video is DownloadedVideo;
       // we want to switch to audio mode as soon as we can to prevent problems when switching from audio to video or the other way
       if (isOffline) {
@@ -748,6 +808,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           v = video;
         } else {
           v = await service.getVideo(video.videoId);
+          if (!active()) return;
         }
         currentlyPlaying = v;
         mediaCommand = MediaCommand(MediaCommandType.switchVideo,
@@ -786,15 +847,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                 '',
             authorId: currentlyPlaying.authorId,
             lengthSeconds: currentlyPlaying.lengthSeconds));
+        if (!active()) return;
         playbackHistoryRevision.value++;
       }
 
       await setSponsorBlock();
+      if (!active()) return;
 
       if (!isTv) {
         mediaHandler.skipToQueueItem(currentIndex);
       }
     } catch (err) {
+      if (!active()) return;
       if (state.videos.length == 1) {
         // if we can't get video details, we need to stop everything
         log.severe(
@@ -945,6 +1009,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> setSponsorBlock() async {
+    final generation = _videoSwitchGeneration;
     List<Pair<int>> newSegments = [];
     final videoId = state.currentlyPlaying?.videoId;
     if (videoId != null) {
@@ -967,7 +1032,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         log.fine('we found ${segments.length} segments to skip');
       }
     }
-    if (!isClosed && state.currentlyPlaying?.videoId == videoId) {
+    if (!isClosed &&
+        generation == _videoSwitchGeneration &&
+        state.currentlyPlaying?.videoId == videoId) {
       emit(state.copyWith(sponsorSegments: newSegments));
     }
   }

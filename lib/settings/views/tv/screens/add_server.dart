@@ -8,6 +8,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
+import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/settings/views/tv/screens/manage_single_server.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 
@@ -80,6 +81,17 @@ class TvAddServerScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
                       Text(locals.instanceAddressDescription),
+                      const Gap(12),
+                      OutlinedButton.icon(
+                        onPressed: state.loading
+                            ? null
+                            : () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        const NetworkProxySettingsScreen())),
+                        icon: const Icon(Icons.vpn_lock_outlined),
+                        label: Text(locals.networkProxy),
+                      ),
                       const Gap(12),
                       const PublicInstancesButton(
                           openDirectory: AddServerScreen.openInstanceDirectory),

@@ -14,6 +14,7 @@ import 'package:logging/logging.dart';
 
 import '../../../../globals.dart';
 import '../../../states/settings.dart';
+import '../../screens/network_proxy.dart';
 
 var log = Logger('TvSettings');
 
@@ -260,6 +261,13 @@ class TVSettingsScreen extends StatelessWidget {
                               : "",
                           onSelected: openManageServers);
                     }),
+                SettingsTile(
+                  title: locals.networkProxy,
+                  description: locals.networkProxySummary,
+                  onSelected: (context) => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                          builder: (_) => const NetworkProxySettingsScreen())),
+                ),
                 SettingsTitle(title: locals.videoPlayer),
                 SettingsTile(
                   title: locals.useDash,

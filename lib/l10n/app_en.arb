@@ -1392,5 +1392,22 @@
   "@remoteConnectedTo": {"placeholders": {"address": {"type": "String"}}},
   "localHistoryClearDescription": "Remove watch history, playback progress, and the saved queue from this device? Your server history will stay unchanged.",
   "forceTvUi": "Force TV interface",
-  "forceTvUiExplanation": "Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required"
+  "forceTvUiExplanation": "Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required",
+  "networkProxy": "Network proxy",
+  "networkProxySummary": "SOCKS5 connection with an Orbot preset",
+  "networkProxyDescription": "Route internet requests, playback, and downloads from Videre through a SOCKS5 proxy. This is separate from the Invidious video proxy setting.",
+  "networkProxyEnable": "Use SOCKS5 proxy",
+  "networkProxyHost": "Proxy host",
+  "networkProxyPort": "Proxy port",
+  "networkProxyInvalidHost": "Enter a host name or IP address without a URL, login, or spaces.",
+  "networkProxyInvalidPort": "Enter a port between 1 and 65535.",
+  "networkProxyOrbotPreset": "Use Orbot preset",
+  "networkProxyOrbotHelp": "Start Orbot with its SOCKS proxy enabled. The preset is 127.0.0.1:9050; change the port if your Orbot configuration uses another one. VPN mode in Orbot is not required.",
+  "networkProxyExceptions": "Browser sign-in uses the network settings of your browser. Phone/TV remote control stays on your local network.",
+  "networkProxyApplyHelp": "Saving stops active playback and downloads so new requests use the saved connection. If the proxy is unavailable, Videre will report a connection error instead of connecting directly.",
+  "networkProxyTestSucceeded": "The selected instance responded through this SOCKS5 proxy. Settings have not been saved.",
+  "networkProxyTestFailed": "Could not reach the selected instance through this proxy. Check that the proxy is running, verify its host and port, and select an instance before testing.",
+  "networkProxyTestNeedsServer": "Save proxy settings, then add a server before testing the connection.",
+  "networkProxySaved": "Network proxy settings saved.",
+  "networkProxySaveFailed": "Could not apply proxy settings. Check the host and port, then try again."
 }

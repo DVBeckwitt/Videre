@@ -11,6 +11,7 @@ import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../states/settings.dart';
+import 'network_proxy.dart';
 
 settingsTheme(ColorScheme colorScheme) => SettingsThemeData(
     settingsSectionBackground: colorScheme.surface,
@@ -100,6 +101,15 @@ class SettingsScreen extends StatelessWidget {
                             ? locals.currentServer(app.server!.url)
                             : "")),
                     onPressed: manageServers,
+                  ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.vpn_lock_outlined),
+                    title: Text(locals.networkProxy),
+                    description: Text(locals.networkProxySummary),
+                    onPressed: (context) => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                            builder: (_) =>
+                                const NetworkProxySettingsScreen())),
                   ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.video_settings),

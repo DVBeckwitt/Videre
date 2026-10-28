@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import '../network/direct_http_client.dart';
 import 'dart:math';
 
 /// Only playback intent crosses the network; each device uses its own instance.
@@ -220,7 +221,8 @@ class RemoteReceiver {
 
 class RemoteClient {
   final Uri address;
-  final HttpClient _http = HttpClient()
+  // This client only accepts literal LAN addresses and refuses redirects.
+  final HttpClient _http = createDirectHttpClient()
     ..connectionTimeout = const Duration(seconds: 5);
   String? _token;
 

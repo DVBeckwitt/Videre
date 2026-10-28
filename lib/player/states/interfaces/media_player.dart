@@ -2,6 +2,7 @@ import 'package:bloc/bloc.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/network/network_proxy.dart';
 
 import '../../../videos/models/video.dart';
 import '../../models/media_command.dart';
@@ -15,7 +16,23 @@ enum FullScreenState {
 abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
   final PlayerCubit player;
 
-  MediaPlayerCubit(super.initialState, this.player);
+  MediaPlayerCubit(super.initialState, this.player) {
+    NetworkProxy.instance.addBeforeApply(_proxyChanging);
+  }
+
+  Future<void> _proxyChanging() async {
+    player.hide();
+    await stopForProxyChange();
+  }
+
+  /// Invalidates pending setup before disposing the active native player.
+  Future<void> stopForProxyChange() async => disposeControllers();
+
+  @override
+  Future<void> close() async {
+    NetworkProxy.instance.removeBeforeApply(_proxyChanging);
+    await super.close();
+  }
 
   void disposeControllers();
 

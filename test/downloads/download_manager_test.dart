@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -206,6 +208,61 @@ void main() {
     expect(manager.state.videos, isEmpty);
     expect(db.getDownloadByVideoId(video.videoId), isNull);
     expect(manager.state.downloadProgresses, isEmpty);
+  });
+
+  test('proxy change cancels downloads before a slower consumer finishes',
+      () async {
+    final proxy = NetworkProxy.instance;
+    await proxy.initialize(saved: '{}', configureNative: false);
+    // Model playback being created before the downloads tab is first opened.
+    await manager.close();
+    final slowStarted = Completer<void>();
+    final releaseSlow = Completer<void>();
+    Future<void> stopSlowConsumer() {
+      slowStarted.complete();
+      return releaseSlow.future;
+    }
+
+    proxy.addBeforeApply(stopSlowConsumer);
+    await openManager();
+    final metadata = Completer<Video>();
+    var fetches = 0;
+    service = _DownloadService((_) {
+      fetches++;
+      return metadata.future;
+    });
+    Future<void>? applying;
+    try {
+      await manager.setWifiOnly(false);
+      final token =
+          manager.state.downloadProgresses[video.videoId]!.cancelToken;
+      var applied = false;
+      applying = proxy
+          .apply(SocksProxyConfig(enabled: true))
+          .then((_) => applied = true);
+      // Cancellation is synchronous; no other listener's native disposal can
+      // delay it. A connection failure after this point must not retry/fail.
+      expect(token.isCancelled, isTrue);
+      await slowStarted.future;
+      await waitFor((state) => state.pausedVideoIds.contains(video.videoId));
+      metadata.completeError(const SocketException('Connection reset'));
+      await waitFor((state) => state.downloadProgresses.isEmpty);
+      expect(fetches, 1);
+      expect(manager.state.videos.single.downloadFailed, isFalse);
+      expect(manager.state.videos.single.downloadComplete, isFalse);
+      expect(applied, isFalse);
+      releaseSlow.complete();
+      await applying;
+      expect(applied, isTrue);
+    } finally {
+      if (!metadata.isCompleted) {
+        metadata.completeError(const SocketException('Test cleanup'));
+      }
+      if (!releaseSlow.isCompleted) releaseSlow.complete();
+      await applying;
+      proxy.removeBeforeApply(stopSlowConsumer);
+      await proxy.initialize(saved: '{}', configureNative: false);
+    }
   });
 
   test('a failed job does not block the next queued audio download', () async {

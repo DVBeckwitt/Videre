@@ -65,6 +65,8 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Player controls.** On phones, pull down from the top of the description or comments to minimize the player. Press Home for picture-in-picture where supported and enabled in Android settings. Closing that window keeps audio playing; use the notification to pause or stop.
 
+**SOCKS5 / Orbot.** Open **Settings → Network proxy**, select **Use Orbot preset**, and start Orbot with its SOCKS listener enabled. The editable preset is `127.0.0.1:9050`; Orbot VPN mode is not required. Save proxy settings before adding your first server; once a server is selected, use **Test connection**. Applying a change stops playback and pauses unfinished downloads; resume them afterward. Saving unchanged settings does not interrupt them. Internet requests fail when the enabled proxy is unavailable. Browser sign-in uses the browser's connection, and phone/TV remote control stays on the LAN. Native and full-app Orbot playback have been checked on a Pixel 8 Pro; public-instance video availability remains separate. See [coverage and verification limits](./docs/socks-proxy.md).
+
 **Backups.** In Settings, use **Export backup** to save your local library, filters, and preferences. Use **Restore or import subscriptions** for Videre backups or NewPipe subscriptions JSON. Preview, then merge or replace local data. Logins and downloads are excluded. Reopen Videre after restoring.
 
 **Downloads.** Phones and tablets only. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos; playlists download at 720p. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.
@@ -109,14 +111,17 @@ Build a debug APK:
 
 APK output: `build/app/outputs/flutter-apk/`. Package restore regenerates untracked localization files in `lib/l10n/generated/`.
 
-Enable formatting hooks and run selected offline regression tests:
+Run CI's formatting, analysis, and offline tests:
 
 ```bash
-./submodules/flutter/bin/dart run tools/setup_git_hooks.dart
-./submodules/flutter/bin/flutter test test/widget_test.dart test/utils/image_object_test.dart test/utils/file_db_test.dart test/videos/state/video_test.dart
+./submodules/flutter/bin/dart tools/validate.dart
 ```
 
-See [CI](./.github/workflows/build.yml) for the full formatting, analysis, and offline test checks, Windows release-script safety tests, and Linux profile APK build.
+Add `format`, `analyze`, or `test` to run one stage. Windows: `./submodules/flutter/bin/dart.bat tools/validate.dart`.
+
+The helper uses the pinned SDK and repository root, checks formatting without rewriting files, and defines the offline test targets. After editing [the helper](./tools/validate.dart), run `./submodules/flutter/bin/dart tools/validate_test.dart`.
+
+[CI](./.github/workflows/build.yml) also runs Windows release-script safety tests and builds a profile APK on Linux; the offline helper covers neither.
 
 Run the full suite, including live Invidious tests:
 

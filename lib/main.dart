@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'network/network_proxy.dart';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:feedback/feedback.dart';
@@ -62,6 +63,7 @@ Future<void> main() async {
   // FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   db = await SembastSqfDb.create();
   await fileDb.syncWithDb();
+  await NetworkProxy.instance.initialize();
 
   late final bool hasServer;
   try {

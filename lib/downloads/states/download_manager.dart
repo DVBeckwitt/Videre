@@ -14,6 +14,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+import 'package:clipious/network/network_proxy.dart';
 
 import '../../player/states/player.dart';
 import '../../videos/models/adaptive_format.dart';
@@ -44,6 +45,29 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   DownloadManagerCubit(super.initialState, this.player) {
     _ready = onReady();
+    NetworkProxy.instance.addBeforeApply(_proxyChanging);
+  }
+
+  Future<void> _proxyChanging() async {
+    // Stop current transfers before yielding, even while another consumer is
+    // still disposing. Policy changes close the underlying HTTP connections;
+    // these failures must be treated as cancellation rather than retried jobs.
+    for (final progress in state.downloadProgresses.values) {
+      progress.cancelToken.cancel();
+    }
+    await _ready;
+    final paused = {
+      ...state.pausedVideoIds,
+      for (final video in state.videos)
+        if (!video.downloadComplete) video.videoId,
+    };
+    emit(state.copyWith(pausedVideoIds: paused));
+    for (final progress in state.downloadProgresses.values) {
+      progress.cancelToken.cancel();
+    }
+    await db.saveSetting(
+        SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+    await _activeJob;
   }
 
   Future<void> onReady() async {
@@ -391,6 +415,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   @override
   Future<void> close() async {
+    NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     _closing = true;
     for (final progress in state.downloadProgresses.values) {
       progress.cancelToken.cancel();

@@ -13,6 +13,8 @@ import 'package:workmanager/workmanager.dart';
 
 import 'notifications/notifications.dart';
 import 'videos/models/video.dart';
+import 'network/native_proxy_http_client.dart';
+import 'service.dart';
 
 var log = Logger('background-task');
 const taskName = "Clipious background refresh task";
@@ -64,6 +66,9 @@ _backgroundCheck() async {
           '[${record.level.name}] [${record.loggerName}] ${record.message}');
     });
     db = FileDB();
+    // The native transport reads the live, atomic proxy policy. A worker must
+    // not retain a direct-connection snapshot while foreground settings change.
+    service = Service(httpClient: NativeProxyHttpClient());
     await _handleSubscriptionsNotifications();
     await _handleChannelNotifications();
     await _handlePlaylistNotifications();
