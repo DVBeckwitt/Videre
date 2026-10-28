@@ -89,6 +89,11 @@ preference writes and TLS socket shutdown off Android's main thread. Queued HTTP
 requests still check engine attachment before registration, preserving detach
 cancellation. Policy failures record their phase, type and stack without logging
 settings, URLs or request headers.
+An isolated optimized Android target then completed two 2,429,896-byte HTTPS
+responses through the native bridge, which shares the media connection pool.
+Each was followed by a successful policy save and native configuration readback.
+This exercised the repaired native save operation while the secure lock screen
+remained active; it does not establish a new full-UI playback run after the fix.
 
 Run the canonical Dart checks with the pinned SDK:
 
