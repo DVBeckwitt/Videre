@@ -97,9 +97,16 @@ jobs:
           version=$(sed -n 's/^version: //p' pubspec.yaml)
           expected_name=${version%+*}
           expected_code=${version##*+}
+          # Public certificate fingerprint of the existing Videre releases.
+          expected_signer=e6f70a6eafad31f11a8d19eaf2458f4dbcbcf1944ea1699ef0598e008af7b3f5
           [[ "$version" == *+* && "$expected_code" =~ ^[0-9]+$ ]]
           for apk in build/release-assets/*.apk; do
-            "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+            signature=$("$build_tools/apksigner" verify --verbose --print-certs "$apk")
+            printf '%s\n' "$signature"
+            if [[ "$signature" != *"Signer #1 certificate SHA-256 digest: $expected_signer"* ]]; then
+              echo "APK signing identity does not match existing Videre releases: $apk" >&2
+              exit 1
+            fi
             badging=$("$build_tools/aapt" dump badging "$apk")
             package_line=${badging%%$'\n'*}
             echo "$package_line"
