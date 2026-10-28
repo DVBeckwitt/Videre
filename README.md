@@ -147,6 +147,8 @@ pwsh -NoProfile -File .\tools\build_android_release.ps1
 
 `-ValidateOnly` checks paths without downloading tools or reading signing material. Run safety tests with `pwsh -NoProfile -File .\tools\build_android_release.Tests.ps1`. Other release builds also require `ANDROID_KEY_FILE` before `flutter build apk --release`.
 
+Test APK signing-output verification with `python -m unittest discover -s tools -p test_apk_signing.py -v`. The release workflow checks the existing signing certificate across both older and current Android SDK output formats.
+
 </details>
 
 ## Credits and license

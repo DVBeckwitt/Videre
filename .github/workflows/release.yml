@@ -103,7 +103,7 @@ jobs:
           for apk in build/release-assets/*.apk; do
             signature=$("$build_tools/apksigner" verify --verbose --print-certs "$apk")
             printf '%s\n' "$signature"
-            if [[ "$signature" != *"Signer #1 certificate SHA-256 digest: $expected_signer"* ]]; then
+            if ! printf '%s\n' "$signature" | python3 tools/verify_apk_signing.py "$expected_signer"; then
               echo "APK signing identity does not match existing Videre releases: $apk" >&2
               exit 1
             fi

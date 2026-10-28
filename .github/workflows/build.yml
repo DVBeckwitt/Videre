@@ -19,6 +19,11 @@ jobs:
       - name: Test Windows release script
         shell: pwsh
         run: ./tools/build_android_release.Tests.ps1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test APK signing identity verification
+        run: python -m unittest discover -s tools -p test_apk_signing.py -v
 
   build:
     name: flutter analyze and build

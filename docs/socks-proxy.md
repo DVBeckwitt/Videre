@@ -123,9 +123,9 @@ The local fixture is synthetic H.264/AAC media; its source command is recorded i
 
 ## Observed verification and limits
 
-Verification on 27 October 2026 used Flutter 3.35.3 / Dart 3.9.2 and JDK 21 on
+Verification on 27–28 October 2026 used Flutter 3.35.3 / Dart 3.9.2 and JDK 21 on
 Windows. Canonical formatting/analysis and all 367 offline tests in the isolated
-1.22.28 release checkout passed, along
+1.22.29 release checkout passed, along
 with 19 native JVM tests, validation-helper tests and Windows release-script
 safety tests. Existing analyzer warnings remain. Profile APKs built for ARM64,
 ARMv7 and x86_64 under `build/app/outputs/flutter-apk/`.
