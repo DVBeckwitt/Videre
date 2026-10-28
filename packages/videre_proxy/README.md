@@ -32,6 +32,10 @@ the application. No external browser traffic is configured by this plugin.
 Policy updates cancel calls, including responses whose media bodies are still
 being read, and evict old pooled connections. Invalid stored configuration blocks
 network requests rather than selecting a direct route.
+The method channel uses Flutter's serial background task queue: committing proxy
+preferences and closing idle TLS sockets can perform I/O, including TLS shutdown,
+and must not run on Android's main thread. Configuration calls retain their order.
+Queued requests are rejected if their engine has detached.
 
 Native transport tests: from `android/`, run
 `./gradlew :videre_proxy:testDebugUnitTest` using the repository's JDK and SDK.

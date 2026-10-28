@@ -9,6 +9,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.StandardMethodCodec
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import okhttp3.Call
@@ -87,7 +88,14 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             attached = true
             engineEpoch++
         }
-        channel = MethodChannel(binding.binaryMessenger, "videre/proxy").also {
+        // Policy saves commit preferences and close idle TLS sockets. Keep that
+        // work serial and off Android's main thread, including TLS shutdown.
+        channel = MethodChannel(
+            binding.binaryMessenger,
+            "videre/proxy",
+            StandardMethodCodec.INSTANCE,
+            binding.binaryMessenger.makeBackgroundTaskQueue(),
+        ).also {
             it.setMethodCallHandler(this)
         }
     }
@@ -135,6 +143,11 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             return
         }
         val epoch = synchronized(pendingLock) {
+            if (!attached) {
+                httpCall.cancel()
+                result.error("NATIVE_HTTP_ERROR", "The network request was cancelled.", null)
+                return
+            }
             pending.add(httpCall)
             engineEpoch
         }

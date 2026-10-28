@@ -82,6 +82,14 @@ interface on the attached phone, accepted D-pad pause/resume, and released both
 test decoders when leaving playback without unhandled player errors. This used
 a local API fixture and direct sample media, not a physical TV or a new Tor run.
 
+The optimized release check also reproduced a native policy-save failure after
+HTTPS playback completed and left an idle TLS connection in the pool. Native
+channel handling now uses Flutter's serial background task queue, keeping
+preference writes and TLS socket shutdown off Android's main thread. Queued HTTP
+requests still check engine attachment before registration, preserving detach
+cancellation. Policy failures record their phase, type and stack without logging
+settings, URLs or request headers.
+
 Run the canonical Dart checks with the pinned SDK:
 
 ```powershell

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:logging/logging.dart';
 
 import '../globals.dart';
 import '../settings/models/db/settings.dart';
@@ -93,6 +94,7 @@ class NetworkProxy {
       return;
     }
     _changing = true;
+    var phase = 'stopping playback and downloads';
     ReloadableHttpClient.resetAll();
     try {
       // Start every cancellation before waiting for native teardown. A slow
@@ -100,6 +102,7 @@ class NetworkProxy {
       await Future.wait([
         for (final listener in List.of(_beforeApply)) Future.sync(listener),
       ]);
+      phase = 'saving the connection policy';
       if (_useNative) {
         await _channel.invokeMethod<void>('configure', config.toJson());
       } else {
@@ -112,8 +115,11 @@ class NetworkProxy {
       _config = config;
       _blocked = null;
       _initialized = true;
-    } catch (error) {
+    } catch (error, stack) {
       _blocked = error;
+      // Record the failing phase and stack without URLs, headers or settings.
+      Logger('NetworkProxy').severe(
+          'Proxy change failed while $phase (${error.runtimeType}).\n$stack');
       rethrow;
     } finally {
       _changing = false;
