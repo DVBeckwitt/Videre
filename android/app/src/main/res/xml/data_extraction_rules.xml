@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
+    <!-- Legacy verification browser data must not be backed up or transferred. -->
     <cloud-backup>
         <exclude domain="root" path="app_webview_videre_verification/" />
         <exclude domain="root" path="app_webview/" />

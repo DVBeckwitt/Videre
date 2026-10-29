@@ -39,7 +39,6 @@ import 'channels/models/channel_playlists.dart';
 import 'channels/models/channel_videos.dart';
 import 'comments/models/video_comments.dart';
 import 'notifications/models/db/subscription_notifications.dart';
-import 'network/onion_verification.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
 import 'subscription_management/models/subscription.dart';
@@ -85,27 +84,17 @@ class Service {
   late final dashManifestResolver = DashManifestResolver(httpClient);
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
-  final OnionVerification _onionVerification;
-  final bool allowOnionVerification;
   final _videoRequests = <String, Future<Response>>{};
   final _browseCache = <String, ({DateTime expires, Response response})>{};
   Future<void> _localPlaylistWrite = Future.value();
 
-  Service({
-    Client? httpClient,
-    DateTime Function()? now,
-    Future<void> Function(Duration)? wait,
-    OnionVerification? onionVerification,
-    this.allowOnionVerification = true,
-  })  : httpClient = httpClient ?? http.Client(),
+  Service(
+      {Client? httpClient,
+      DateTime Function()? now,
+      Future<void> Function(Duration)? wait})
+      : httpClient = httpClient ?? http.Client(),
         _now = now ?? DateTime.now,
-        _wait = wait ?? Future<void>.delayed,
-        _onionVerification = onionVerification ?? OnionVerification.instance;
-
-  Duration requestTimeoutFor(Uri uri) =>
-      allowOnionVerification && _onionVerification.eligible(uri)
-          ? OnionVerification.requestTimeout
-          : const Duration(seconds: 15);
+        _wait = wait ?? Future<void>.delayed;
 
   Duration? _retryAfter(Response response) {
     final value = response.headers['retry-after']?.trim();
@@ -125,76 +114,17 @@ class Service {
     }
   }
 
-  Future<Response> _requestGet(ServerRequest request) async {
-    if (!_onionVerification.eligible(request.uri)) {
-      return httpClient.get(request.uri, headers: request.headers);
-    }
-    // A session must never follow a redirect to another origin. Keep the
-    // challenge redirect visible so a native browser can complete it.
-    var target = request.uri;
-    for (var redirects = 0;; redirects++) {
-      final next = http.Request('GET', target)..followRedirects = false;
-      next.headers.addAll(request.headers);
-      final response = await http.Response.fromStream(
-        await httpClient.send(next),
-      );
-      if (_onionVerification.needsVerification(target, response) ||
-          response.statusCode < 300 ||
-          response.statusCode >= 400 ||
-          redirects >= 3 ||
-          response.headers['location'] == null) {
-        return response;
-      }
-      final Uri destination;
-      try {
-        destination = target.resolve(response.headers['location']!);
-      } on FormatException {
-        return response;
-      }
-      if (OnionVerification.origin(destination) !=
-          OnionVerification.origin(request.uri)) {
-        return response;
-      }
-      target = destination;
-    }
-  }
-
   Future<Response> _sendGet(ServerRequest request) async {
-    final previousSession = _onionVerification.sessionToken(request.uri);
-    final policyEpoch = _onionVerification.policyEpoch;
-    var response = await _requestGet(request);
-    if (allowOnionVerification &&
-        _onionVerification.needsVerification(request.uri, response) &&
-        await _onionVerification.verify(
-          request.uri,
-          previousSession: previousSession,
-          policyEpoch: policyEpoch,
-        )) {
-      // Retry this idempotent read once with the newly verified session. POST,
-      // DELETE and other mutations never enter this path.
-      response = await _requestGet(request);
-    }
+    var response = await httpClient.get(request.uri, headers: request.headers);
     if (response.statusCode == 429) {
       final delay = _retryAfter(response);
       // A long server cooldown belongs in the UI, not a hidden retry loop.
       if (delay != null && delay <= const Duration(seconds: 2)) {
         if (delay > Duration.zero) await _wait(delay);
-        response = await _requestGet(request);
+        response = await httpClient.get(request.uri, headers: request.headers);
       }
     }
     return response;
-  }
-
-  Future<Response> _mutate(
-    String method,
-    ServerRequest request, {
-    String? body,
-  }) async {
-    final outgoing = http.Request(method, request.uri)
-      ..followRedirects = !_onionVerification.eligible(request.uri)
-      ..headers.addAll(request.headers);
-    if (body != null) outgoing.body = body;
-    return http.Response.fromStream(await httpClient.send(outgoing));
   }
 
   Future<Response> _get(ServerRequest request,
@@ -205,7 +135,7 @@ class Service {
       return _videoRequests.putIfAbsent(
           key,
           () => _sendGet(request)
-                  .timeout(requestTimeoutFor(request.uri))
+                  .timeout(const Duration(seconds: 15))
                   .whenComplete(() {
                 _videoRequests.remove(key);
               }));
@@ -379,25 +309,20 @@ class Service {
       var uri = Uri.parse(url);
       log.info('calling ${urlFormatForLog(uri)}');
 
-      Map<String, String> headers = Map.from(server.customHeaders);
+      final Map<String, String> headers = Map.from(server.customHeaders);
       if (!headers.keys.any((name) => name.toLowerCase() == 'accept')) {
         headers['Accept'] = accept;
       }
 
       if (authenticated) {
-        headers = OnionVerification.mergeHeaders(
-            headers, getAuthenticationHeaders(server));
+        headers.addAll(getAuthenticationHeaders(server));
       }
 
       if (forceJson) {
         headers['Content-Type'] = 'application/json';
       }
 
-      return ServerRequest(
-          uri: uri,
-          headers: headers,
-          server: server,
-          onionVerification: _onionVerification);
+      return ServerRequest(uri: uri, headers: headers, server: server);
     } catch (err) {
       log.severe('Couldn\'t build url', err);
       rethrow;
@@ -727,10 +652,8 @@ class Service {
       if (!requestHeaders.keys.any((name) => name.toLowerCase() == 'accept')) {
         requestHeaders['Accept'] = 'application/json';
       }
-      final response = await _get(ServerRequest(
-          uri: Uri.parse(url),
-          headers: requestHeaders,
-          onionVerification: _onionVerification));
+      final response = await _get(
+          ServerRequest(uri: Uri.parse(url), headers: requestHeaders));
       final json = handleResponse(response);
       if (json is! Map<String, dynamic>) {
         throw InvidiousServiceError('The instance returned invalid statistics.',
@@ -816,7 +739,7 @@ class Service {
     final req = await buildRequest(urlAddDeleteSubscriptions,
         pathParams: {":ucid": channelId}, authenticated: true);
 
-    final response = await _mutate('POST', req);
+    final response = await httpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
     return true;
   }
@@ -827,7 +750,7 @@ class Service {
     final req = await buildRequest(urlAddDeleteSubscriptions,
         pathParams: {":ucid": channelId}, authenticated: true);
 
-    final response = await _mutate('DELETE', req);
+    final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
     return true;
   }
@@ -1025,7 +948,8 @@ class Service {
 
     log.info(jsonEncode(body));
 
-    final response = await _mutate('POST', req, body: jsonEncode(body));
+    final response = await httpClient.post(req.uri,
+        headers: req.headers, body: jsonEncode(body));
     Map<String, dynamic> playlist = handleResponse(response);
     return playlist['playlistId'] as String;
   }
@@ -1071,7 +995,8 @@ class Service {
       'videoId': videoId,
     };
 
-    final response = await _mutate('POST', req, body: jsonEncode(body));
+    final response = await httpClient.post(req.uri,
+        headers: req.headers, body: jsonEncode(body));
     handleResponse(response);
   }
 
@@ -1085,7 +1010,7 @@ class Service {
     var req = await buildRequest(urlDeleteUserPlaylist,
         pathParams: {":id": playListId}, authenticated: true, forceJson: true);
 
-    final response = await _mutate('DELETE', req);
+    final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -1107,7 +1032,7 @@ class Service {
         authenticated: true,
         forceJson: true);
 
-    final response = await _mutate('DELETE', req);
+    final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -1152,7 +1077,7 @@ class Service {
     var req = await buildRequest(urlGetClearHistory,
         authenticated: true, forceJson: true);
 
-    final response = await _mutate('DELETE', req);
+    final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -1160,7 +1085,7 @@ class Service {
     if (!await _hasHistoryAccount()) return db.deleteLocalHistory(videoId);
     var req = await buildRequest(urlAddDeleteHistory,
         pathParams: {':id': videoId}, authenticated: true, forceJson: true);
-    final response = await _mutate('DELETE', req);
+    final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -1168,7 +1093,7 @@ class Service {
     var req = await buildRequest(urlAddDeleteHistory,
         pathParams: {':id': videoId}, authenticated: true, forceJson: true);
 
-    final response = await _mutate('POST', req);
+    final response = await httpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -1269,29 +1194,19 @@ class Service {
 
 class ServerRequest {
   final Uri uri;
-  final Map<String, String> _headers;
-  final OnionVerification _onionVerification;
-  Map<String, String> get headers =>
-      _onionVerification.headersFor(uri, _headers);
+  final Map<String, String> headers;
   final String _cacheKey;
 
-  ServerRequest({
-    required this.uri,
-    required Map<String, String> headers,
-    Server? server,
-    OnionVerification? onionVerification,
-  })  : _headers = Map.unmodifiable(headers),
-        _onionVerification = onionVerification ?? OnionVerification.instance,
+  ServerRequest(
+      {required this.uri, required Map<String, String> headers, Server? server})
+      : headers = Map.unmodifiable(headers),
         _cacheKey = jsonEncode([
           uri.toString(),
           server?.authToken,
           server?.sidCookie,
           SplayTreeMap.of({
-            for (final entry
-                in (onionVerification ?? OnionVerification.instance)
-                    .headersFor(uri, headers)
-                    .entries)
+            for (final entry in headers.entries)
               entry.key.toLowerCase(): entry.value,
-          }),
+          })
         ]);
 }

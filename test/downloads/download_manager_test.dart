@@ -29,12 +29,15 @@ class _DownloadTestBinding extends AutomatedTestWidgetsFlutterBinding {
 
 class _DownloadService extends Service {
   final Future<Video> Function(String) fetch;
+  final void Function(Server?)? onServer;
 
-  _DownloadService(this.fetch);
+  _DownloadService(this.fetch, {this.onServer});
 
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) =>
-      fetch(videoId);
+  Future<Video> getVideo(String videoId, {Server? serverOverride}) {
+    onServer?.call(serverOverride);
+    return fetch(videoId);
+  }
 }
 
 class _VideoCubit extends VideoCubit {
@@ -80,11 +83,12 @@ void main() {
     }
   }
 
-  Future<Video> audioVideo(String videoId, {void Function()? onRequest}) async {
+  Future<Video> audioVideo(String videoId,
+      {void Function(HttpRequest)? onRequest}) async {
     const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
     mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     mediaServer!.listen((request) async {
-      onRequest?.call();
+      onRequest?.call(request);
       request.response.add(bytes);
       await request.response.close();
     });
@@ -177,7 +181,8 @@ void main() {
     await db.upsertDownload(audio);
     manager.setVideos();
     var requests = 0;
-    final remote = await audioVideo(audio.videoId, onRequest: () => requests++);
+    final remote =
+        await audioVideo(audio.videoId, onRequest: (_) => requests++);
     final metadata = Completer<Video>();
     final metadataStarted = Completer<void>();
     var fetches = 0;
@@ -202,6 +207,46 @@ void main() {
         [0, 1, 2, 3, 4, 5, 6, 7]);
   });
 
+  test('switching servers during metadata keeps the original transfer headers',
+      () async {
+    final audio = video.copyWith(audioOnly: true);
+    await db.upsertDownload(audio);
+    manager.setVideos();
+    final receivedKeys = <String?>[];
+    final remote = await audioVideo(audio.videoId,
+        onRequest: (request) =>
+            receivedKeys.add(request.headers.value('X-Instance-Key')));
+    final originalServer = Server(
+        url: 'http://127.0.0.1:${mediaServer!.port}',
+        customHeaders: {'X-Instance-Key': 'original-instance'});
+    final nextServer = Server(
+        url: 'http://localhost:${mediaServer!.port}',
+        customHeaders: {'X-Instance-Key': 'next-instance'});
+    await db.useServer(originalServer);
+    final metadata = Completer<Video>();
+    final metadataStarted = Completer<void>();
+    Server? metadataServer;
+    service = _DownloadService((_) {
+      metadataStarted.complete();
+      return metadata.future;
+    }, onServer: (server) => metadataServer = server);
+
+    await manager.setWifiOnly(false);
+    await metadataStarted.future;
+    await db.useServer(nextServer);
+    metadata.complete(remote);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete ||
+        state.videos.single.downloadFailed);
+
+    expect(manager.state.videos.single.downloadComplete, isTrue);
+    expect(receivedKeys, ['original-instance']);
+    expect(metadataServer?.url, originalServer.url);
+    expect(metadataServer?.customHeaders, originalServer.customHeaders);
+    expect((await db.getCurrentlySelectedServer()).url, nextServer.url);
+    expect(await File(await audio.downloadPath).readAsBytes(),
+        [0, 1, 2, 3, 4, 5, 6, 7]);
+  });
   test('deleting an active metadata request never restores the removed job',
       () async {
     final metadata = Completer<Video>();

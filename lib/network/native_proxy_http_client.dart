@@ -3,24 +3,16 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
-import 'network_proxy.dart';
-import 'onion_verification.dart';
-import 'socks_proxy.dart';
-
 /// Bounded JSON/API transport for background engines. Android owns its routing
 /// policy, so a stale worker cannot reset or bypass the foreground proxy.
 class NativeProxyHttpClient extends http.BaseClient {
   static const maxBodyBytes = 4 * 1024 * 1024;
   final MethodChannel _channel;
-  final SocksProxyConfig Function() _onionProxyConfig;
   bool _closed = false;
 
   NativeProxyHttpClient(
-      {MethodChannel channel = const MethodChannel('videre/proxy'),
-      SocksProxyConfig Function()? onionProxyConfig})
-      : _channel = channel,
-        _onionProxyConfig =
-            onionProxyConfig ?? (() => NetworkProxy.instance.config);
+      {MethodChannel channel = const MethodChannel('videre/proxy')})
+      : _channel = channel;
 
   void _checkOpen(Uri url) {
     if (_closed) throw http.ClientException('HTTP client is closed.', url);
@@ -36,12 +28,6 @@ class NativeProxyHttpClient extends http.BaseClient {
       throw http.ClientException(
           'Only HTTP and HTTPS URLs are supported.', url);
     }
-    // Workers retain the route used to load their private onion sessions.
-    // Native transport compares this snapshot atomically with its current
-    // policy; a foreground proxy change must reject stale session headers.
-    final expectedOnionProxy = OnionVerification.origin(url) == null
-        ? null
-        : _onionProxyConfig().toJson();
     final builder = BytesBuilder(copy: false);
     await for (final chunk in request.finalize()) {
       if (chunk.length > maxBodyBytes - builder.length) {
@@ -60,8 +46,6 @@ class NativeProxyHttpClient extends http.BaseClient {
         'body': builder.takeBytes(),
         'followRedirects': request.followRedirects,
         'maxRedirects': request.maxRedirects,
-        if (expectedOnionProxy != null)
-          'expectedOnionProxy': expectedOnionProxy,
       });
     } on PlatformException {
       // Platform messages may include URLs or request headers. Keep them out of

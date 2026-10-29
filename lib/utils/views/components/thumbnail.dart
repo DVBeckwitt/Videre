@@ -1,19 +1,11 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/globals.dart';
-import 'package:clipious/network/onion_image_client.dart';
-import 'package:clipious/network/onion_verification.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/states/thumbnail.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 class Thumbnail extends StatelessWidget {
-  // Keep the existing clearnet image cache unchanged. Onion images need a
-  // transport that cannot forward verification headers through redirects.
-  static final _onionCache = CacheManager(Config('videreOnionThumbnails',
-      fileService: HttpFileService(httpClient: OnionImageClient())));
-
   final Widget? child;
   final double? height;
   final double? width;
@@ -59,10 +51,6 @@ class Thumbnail extends StatelessWidget {
                       return CachedNetworkImage(
                         key: ValueKey(url),
                         cacheKey: url,
-                        cacheManager:
-                            OnionVerification.origin(Uri.parse(url)) != null
-                                ? _onionCache
-                                : null,
                         httpHeaders: server.data!.headersForUrl(url),
                         errorListener: (value) => cubit.onThumbnailFailed(),
                         imageBuilder: (context, imageProvider) =>

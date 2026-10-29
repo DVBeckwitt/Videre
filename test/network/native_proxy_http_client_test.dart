@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/network/native_proxy_http_client.dart';
-import 'package:clipious/network/socks_proxy.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -55,7 +54,6 @@ void main() {
     expect(utf8.decode(args['body'] as Uint8List), '{"id":"abc"}');
     expect(args['followRedirects'], isTrue);
     expect(args['maxRedirects'], 5);
-    expect(args.containsKey('expectedOnionProxy'), isFalse);
     expect(result.statusCode, 201);
     expect(result.headers['content-type'], 'application/json');
     expect(result.headers['x-test'], 'value');
@@ -79,48 +77,6 @@ void main() {
     expect(result.statusCode, 302);
     expect(result.isRedirect, isTrue);
     expect(result.headers['location'], '/next');
-  });
-
-  test('binds onion requests to the route that loaded the worker session',
-      () async {
-    final policy =
-        SocksProxyConfig(enabled: true, host: '127.0.0.1', port: 9050);
-    client.close();
-    client = NativeProxyHttpClient(onionProxyConfig: () => policy);
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      final args = call.arguments as Map;
-      expect(args['expectedOnionProxy'], policy.toJson());
-      expect((args['headers'] as Map)['Cookie'], 'gandalf=test-session');
-      return response();
-    });
-    await client.get(
-        Uri.parse(
-            'http://nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion/api/v1/stats'),
-        headers: {'Cookie': 'gandalf=test-session'});
-  });
-
-  test('a native onion route mismatch fails once without retry or direct IO',
-      () async {
-    final policy = SocksProxyConfig(enabled: true);
-    client.close();
-    client = NativeProxyHttpClient(onionProxyConfig: () => policy);
-    var calls = 0;
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      calls++;
-      expect((call.arguments as Map)['expectedOnionProxy'], policy.toJson());
-      throw PlatformException(
-          code: 'NATIVE_HTTP_ERROR', message: 'Cookie: do-not-log');
-    });
-    await expectLater(
-        client.get(
-            Uri.parse(
-                'http://nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion/api/v1/stats'),
-            headers: {
-              'Cookie': 'gandalf=test-session'
-            }),
-        throwsA(isA<http.ClientException>().having((error) => error.message,
-            'message', 'Native proxy request failed.')));
-    expect(calls, 1);
   });
 
   test('platform failures never expose native messages or use a fallback',

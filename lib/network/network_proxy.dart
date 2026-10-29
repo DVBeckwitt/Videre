@@ -10,7 +10,6 @@ import '../settings/models/db/settings.dart';
 import 'reloadable_http_client.dart';
 import 'direct_http_client.dart';
 import 'socks_proxy.dart';
-import 'onion_verification.dart';
 
 class ProxyTestNeedsServer implements Exception {}
 
@@ -62,14 +61,11 @@ class NetworkProxy {
       }
       _blocked = null;
       _initialized = true;
-      await OnionVerification.instance
-          .initialize(proxyEnabled: _config.enabled);
     } catch (error) {
       // Keep the UI usable for repairing a corrupt setting, but never silently
       // recover an enabled/unknown proxy configuration by connecting directly.
       _blocked = error;
       _initialized = false;
-      OnionVerification.instance.reset();
     }
     ReloadableHttpClient.resetAll();
   }
@@ -98,7 +94,6 @@ class NetworkProxy {
       return;
     }
     _changing = true;
-    OnionVerification.instance.reset();
     var phase = 'stopping playback and downloads';
     ReloadableHttpClient.resetAll();
     try {
@@ -120,8 +115,6 @@ class NetworkProxy {
       _config = config;
       _blocked = null;
       _initialized = true;
-      await OnionVerification.instance
-          .initialize(proxyEnabled: _config.enabled);
     } catch (error, stack) {
       _blocked = error;
       // Record the failing phase and stack without URLs, headers or settings.
@@ -156,18 +149,7 @@ class NetworkProxy {
       // This check must validate the selected instance itself. Automatic
       // redirects would forward arbitrary instance access headers off-origin.
       request.followRedirects = false;
-      // Verification cookies are bound to the saved proxy route. Testing a
-      // different, unsaved proxy must not reuse that private browser session.
-      final sameRoute = _initialized &&
-          _blocked == null &&
-          !_changing &&
-          _config.enabled &&
-          config.host == _config.host &&
-          config.port == _config.port;
-      final headers = sameRoute
-          ? server.headersForUrl(uri.toString())
-          : server.customHeaders;
-      headers?.forEach(request.headers.set);
+      server.headersForUrl(uri.toString())?.forEach(request.headers.set);
       final response =
           await request.close().timeout(const Duration(seconds: 20));
       if (response.statusCode != HttpStatus.ok) {

@@ -19,27 +19,6 @@ import org.junit.Test
 
 class NativeHttpRequestTest {
     @Test
-    fun `onion worker proxy bindings validate their route and reject stale configurations`() {
-        val proxy = ProxyPolicy(true, "127.0.0.1", 9050)
-        val onion = Request.Builder().url("http://${"a".repeat(56)}.onion/api/v1/stats").build()
-        val metadata = mapOf("expectedOnionProxy" to proxy.toMap())
-        assertEquals(proxy, expectedOnionProxy(metadata, onion))
-        assertEquals(null, expectedOnionProxy(emptyMap<Any, Any>(), onion))
-        requireMatchingOnionProxy(proxy, proxy)
-        requireMatchingOnionProxy(null, ProxyPolicy(false))
-        for (changed in listOf(null, ProxyPolicy(false), proxy.copy(port = 9150), proxy.copy(host = "localhost"))) {
-            assertThrows(IOException::class.java) { requireMatchingOnionProxy(proxy, changed) }
-        }
-        for (invalid in listOf(null, "proxy", mapOf("enabled" to true), proxy.toMap() + ("extra" to true))) {
-            assertThrows(IllegalArgumentException::class.java) {
-                expectedOnionProxy(mapOf("expectedOnionProxy" to invalid), onion)
-            }
-        }
-        val ordinary = Request.Builder().url("https://instance.example/api/v1/stats").build()
-        assertThrows(IllegalArgumentException::class.java) { expectedOnionProxy(metadata, ordinary) }
-    }
-
-    @Test
     fun `request accepts HTTP headers and body bytes`() {
         val request = buildApiRequest(mapOf(
             "method" to "POST",

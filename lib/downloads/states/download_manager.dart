@@ -15,7 +15,6 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:clipious/network/network_proxy.dart';
-import 'package:clipious/network/onion_verification.dart';
 
 import '../../player/states/player.dart';
 import '../../videos/models/adaptive_format.dart';
@@ -218,13 +217,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           // Signed media URLs expire. Refresh them before every retry.
           final server = await db.getCurrentlySelectedServer();
           if (token.isCancelled) throw token.cancelError!;
-          final requestTimeout =
-              service.requestTimeoutFor(Uri.parse(server.url));
           final vid = await service
               .getVideo(video.videoId, serverOverride: server)
-              .timeout(requestTimeout > const Duration(seconds: 30)
-                  ? requestTimeout
-                  : const Duration(seconds: 30));
+              .timeout(const Duration(seconds: 30));
           if (token.isCancelled) throw token.cancelError!;
           video = video.copyWith(
               title: vid.title ?? video.title,
@@ -281,10 +276,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             try {
               await dio.download(thumb, await video.thumbnailPath,
                   cancelToken: token,
-                  options: Options(
-                      followRedirects:
-                          OnionVerification.origin(Uri.parse(thumb)) == null,
-                      headers: server.headersForUrl(thumb)));
+                  options: Options(headers: server.headersForUrl(thumb)));
             } on DioException catch (error) {
               if (CancelToken.isCancel(error)) rethrow;
               log.fine(

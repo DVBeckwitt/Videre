@@ -14,7 +14,6 @@ import 'package:workmanager/workmanager.dart';
 import 'notifications/notifications.dart';
 import 'videos/models/video.dart';
 import 'network/native_proxy_http_client.dart';
-import 'network/network_proxy.dart';
 import 'service.dart';
 
 var log = Logger('background-task');
@@ -69,9 +68,7 @@ _backgroundCheck() async {
     db = FileDB();
     // The native transport reads the live, atomic proxy policy. A worker must
     // not retain a direct-connection snapshot while foreground settings change.
-    await NetworkProxy.instance.initialize();
-    service = Service(
-        httpClient: NativeProxyHttpClient(), allowOnionVerification: false);
+    service = Service(httpClient: NativeProxyHttpClient());
     await _handleSubscriptionsNotifications();
     await _handleChannelNotifications();
     await _handlePlaylistNotifications();

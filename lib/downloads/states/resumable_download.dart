@@ -2,8 +2,6 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 
-import '../../network/onion_verification.dart';
-
 /// Keeps a partial file only while it still belongs to the same media stream.
 Future<void> downloadResumable(Dio dio, String url, String path,
     {required CancelToken cancelToken,
@@ -39,8 +37,6 @@ Future<void> downloadResumable(Dio dio, String url, String path,
         cancelToken: cancelToken,
         options: Options(
             responseType: ResponseType.stream,
-            // A redirect must not carry onion verification headers elsewhere.
-            followRedirects: OnionVerification.origin(Uri.parse(url)) == null,
             validateStatus: (status) =>
                 status == 200 || status == 206 || status == 416,
             headers: {
