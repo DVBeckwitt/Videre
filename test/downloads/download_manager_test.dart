@@ -116,6 +116,8 @@ void main() {
     messenger.setMockMethodCallHandler(
         pathProvider, (_) async => documentsDirectory.path);
     db = await SembastSqfDb.createInMemory();
+    await db.upsertServer(
+        const Server(url: 'https://instance.invalid', inUse: true));
     await db.saveSetting(SettingsValue('downloads-wifi-only', 'true'));
     await db.upsertDownload(video);
     await openManager();
@@ -177,12 +179,15 @@ void main() {
     var requests = 0;
     final remote = await audioVideo(audio.videoId, onRequest: () => requests++);
     final metadata = Completer<Video>();
+    final metadataStarted = Completer<void>();
     var fetches = 0;
     service = _DownloadService((_) {
       fetches++;
+      if (fetches == 1) metadataStarted.complete();
       return fetches == 1 ? metadata.future : Future.value(remote);
     });
     await manager.setWifiOnly(false);
+    await metadataStarted.future;
     await manager.pauseDownload(audio);
     metadata.complete(remote);
     await waitFor((state) => state.downloadProgresses.isEmpty);
@@ -200,8 +205,13 @@ void main() {
   test('deleting an active metadata request never restores the removed job',
       () async {
     final metadata = Completer<Video>();
-    service = _DownloadService((_) => metadata.future);
+    final metadataStarted = Completer<void>();
+    service = _DownloadService((_) {
+      metadataStarted.complete();
+      return metadata.future;
+    });
     await manager.setWifiOnly(false);
+    await metadataStarted.future;
     final deleting = manager.deleteVideo(video);
     metadata.complete(Video(videoId: video.videoId, adaptiveFormats: []));
     await deleting;
@@ -226,14 +236,17 @@ void main() {
     proxy.addBeforeApply(stopSlowConsumer);
     await openManager();
     final metadata = Completer<Video>();
+    final metadataStarted = Completer<void>();
     var fetches = 0;
     service = _DownloadService((_) {
       fetches++;
+      metadataStarted.complete();
       return metadata.future;
     });
     Future<void>? applying;
     try {
       await manager.setWifiOnly(false);
+      await metadataStarted.future;
       final token =
           manager.state.downloadProgresses[video.videoId]!.cancelToken;
       var applied = false;

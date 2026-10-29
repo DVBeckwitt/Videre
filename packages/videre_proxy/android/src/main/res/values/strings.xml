@@ -1,0 +1,4 @@
+<resources>
+    <string name="onion_verification_title">Verify onion instance</string>
+    <string name="onion_verification_progress">Completing the instance’s browser check through your SOCKS5 proxy…</string>
+</resources>

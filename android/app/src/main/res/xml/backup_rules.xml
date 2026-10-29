@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- The verification browser must not export cookies, history or site storage. -->
+    <exclude domain="root" path="app_webview_videre_verification/" />
+    <exclude domain="root" path="app_webview/" />
+</full-backup-content>

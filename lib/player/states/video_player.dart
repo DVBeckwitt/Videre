@@ -198,6 +198,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   final streams = <({String resolution, String url})>[];
   final streamUrls = <String>{};
   for (final stream in (video.formatStreams ?? []).reversed) {
+    if (stream.isLegacyHd720) continue;
     final url = _mediaUrl(stream.url);
     if (url == null) continue;
     final safeUrl = _validMediaUrl(_proxyUrl(url, server, useProxy), server);

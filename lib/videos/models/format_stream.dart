@@ -17,6 +17,12 @@ class FormatStream {
   FormatStream(this.url, this.itag, this.type, this.quality, this.container,
       this.encoding, this.qualityLabel, this.resolution, this.size);
 
+  /// The retired combined 720p stream can still appear in instance metadata.
+  /// Adaptive 720p video is represented by AdaptiveFormat, not this format.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  bool get isLegacyHd720 =>
+      itag.trim() == '22' || quality.trim().toLowerCase() == 'hd720';
+
   factory FormatStream.fromJson(Map<String, dynamic> json) =>
       _$FormatStreamFromJson(json);
 

@@ -71,13 +71,13 @@ class AddServerCubit extends Cubit<AddServerState> {
 
       await service
           .validateServer(serverUrl, headers)
-          .timeout(const Duration(seconds: 15));
+          .timeout(service.requestTimeoutFor(Uri.parse(serverUrl)));
 
       if (advancedTest) {
         Server server = Server(url: serverUrl, customHeaders: headers);
         final video = await service
             .getVideo('dQw4w9WgXcQ', serverOverride: server)
-            .timeout(const Duration(seconds: 15));
+            .timeout(service.requestTimeoutFor(Uri.parse(serverUrl)));
 
         final invalidThumbnailUrls = video.videoThumbnails
             .map(

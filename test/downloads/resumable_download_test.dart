@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:clipious/downloads/states/resumable_download.dart';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -42,6 +43,62 @@ void main() {
           cancelToken: cancelToken ?? CancelToken(),
           expectedSize: size,
           onProgress: onProgress);
+
+  test('onion download redirects do not send session headers to another port',
+      () async {
+    const onionHost =
+        'nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion';
+    final destination = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => destination.close(force: true));
+    var destinationRequests = 0;
+    destination.listen((request) async {
+      destinationRequests++;
+      request.response.add(content);
+      await request.response.close();
+    });
+    dio.httpClientAdapter = IOHttpClientAdapter(createHttpClient: () {
+      final client = HttpClient();
+      client.findProxy = (_) => 'DIRECT';
+      client.connectionFactory = (uri, proxyHost, proxyPort) =>
+          Socket.startConnect(InternetAddress.loopbackIPv4,
+              uri.port == 80 ? server.port : destination.port);
+      return client;
+    });
+    respond = (request) async {
+      expect(
+          request.headers.value(HttpHeaders.cookieHeader), 'gandalf=session');
+      request.response.statusCode = 302;
+      request.response.headers.set(HttpHeaders.locationHeader,
+          'http://$onionHost:${destination.port}/media');
+      await request.response.close();
+    };
+
+    await expectLater(
+        downloadResumable(dio, 'http://$onionHost/media', path,
+            identity: 'onion-stream',
+            cancelToken: CancelToken(),
+            headers: {'Cookie': 'gandalf=session'}),
+        throwsA(isA<DioException>()));
+    expect(destinationRequests, 0);
+    expect(await File(path).exists(), isFalse);
+  });
+
+  test('clearnet downloads retain working redirects', () async {
+    var requests = 0;
+    respond = (request) async {
+      requests++;
+      if (request.uri.path == '/media') {
+        request.response.statusCode = 302;
+        request.response.headers.set(HttpHeaders.locationHeader, '/file');
+      } else {
+        request.response.add(content);
+      }
+      await request.response.close();
+    };
+    await download();
+    expect(requests, 2);
+    expect(await File(path).readAsBytes(), content);
+  });
 
   test('resumes a partial from the exact byte offset', () async {
     await partial(4);

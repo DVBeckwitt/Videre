@@ -1,6 +1,8 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:logging/logging.dart';
 
+import '../../../network/onion_verification.dart';
+
 part 'server.freezed.dart';
 
 part 'server.g.dart';
@@ -30,7 +32,9 @@ sealed class Server with _$Server {
         targetUri.port == serverUri.port;
 
     _log.fine('Use server headers: $useHeaders');
-    return useHeaders ? customHeaders : null;
+    return useHeaders
+        ? OnionVerification.instance.headersFor(targetUri, customHeaders)
+        : null;
   }
 
   factory Server.fromJson(Map<String, Object?> json) => _$ServerFromJson(json);

@@ -22,6 +22,8 @@
     <application
         android:name="${applicationName}"
         android:banner="@drawable/banner"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Videre"

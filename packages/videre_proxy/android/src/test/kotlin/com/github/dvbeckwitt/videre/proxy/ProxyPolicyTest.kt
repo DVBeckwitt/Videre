@@ -157,6 +157,97 @@ class ProxyPolicyTest {
         factory.block()
     }
 
+    @Test
+    fun `verified onion media refuses a changed proxy before creating calls`() {
+        val factory = PolicyCallFactory()
+        val original = ProxyPolicy(true, "127.0.0.1", 9050)
+        val sourceUrl = "http://${"a".repeat(56)}.onion/manifest.m3u8"
+        val request = Request.Builder().url(sourceUrl).build()
+        val headers = verifiedHeaders()
+        factory.configure(original)
+        try {
+            val source = factory.forSource(sourceUrl, headers, original)
+            val created = source.newCall(request)
+            factory.configure(original.copy(port = 9150))
+            assertTrue(created.isCanceled())
+            assertThrows(IOException::class.java) { source.newCall(request) }
+            assertThrows(IOException::class.java) { created.clone() }
+            factory.configure(original.copy(enabled = false))
+            assertThrows(IOException::class.java) { source.newCall(request) }
+            assertThrows(IOException::class.java) { factory.forSource(sourceUrl, headers) }
+            assertThrows(IOException::class.java) {
+                factory.forSource(sourceUrl, headers, original.copy(enabled = false))
+            }
+        } finally {
+            factory.block()
+        }
+    }
+
+    @Test
+    fun `verified onion media uses its unchanged SOCKS route`() {
+        FakeSocks().use { proxy ->
+            val host = "${"a".repeat(56)}.onion"
+            val served = proxy.serve { input, socket ->
+                assertEquals(host, readConnect(input, socket).first)
+                readHeaders(input)
+                socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray())
+            }
+            val factory = PolicyCallFactory()
+            val policy = ProxyPolicy(true, "127.0.0.1", proxy.port)
+            factory.configure(policy)
+            try {
+                val url = "http://$host/manifest.m3u8"
+                val source = factory.forSource(url, verifiedHeaders(), policy)
+                source.newCall(Request.Builder().url(url).build()).execute().use {
+                    assertEquals("ok", it.body!!.string())
+                }
+                served.get(10, TimeUnit.SECONDS)
+            } finally {
+                factory.block()
+            }
+        }
+    }
+
+    @Test
+    fun `ordinary sources retain the live proxy policy`() {
+        val onion = "${"a".repeat(56)}.onion"
+        listOf(
+            "ordinary-media.example.invalid" to verifiedHeaders(),
+            onion to mapOf("Cookie" to "sid=fake"),
+            onion to verifiedHeaders().filterKeys { !it.equals("Cookie", ignoreCase = true) },
+        ).forEach { (host, headers) ->
+            FakeSocks().use { proxy ->
+                val served = proxy.serve { input, socket ->
+                    assertEquals(host, readConnect(input, socket).first)
+                    readHeaders(input)
+                    socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray())
+                }
+                val factory = PolicyCallFactory()
+                val original = ProxyPolicy()
+                factory.configure(original)
+                try {
+                    val url = "http://$host/manifest.m3u8"
+                    val source = factory.forSource(url, headers, original)
+                    factory.configure(ProxyPolicy(true, "127.0.0.1", proxy.port))
+                    source.newCall(Request.Builder().url(url).build()).execute().use {
+                        assertEquals("ok", it.body!!.string())
+                    }
+                    served.get(10, TimeUnit.SECONDS)
+                } finally {
+                    factory.block()
+                }
+            }
+        }
+    }
+
+    private fun verifiedHeaders(): Map<String, String> = mapOf(
+        "cookie" to "verification=fake",
+        "USER-AGENT" to "Test browser",
+        "Accept" to "application/json",
+        "Accept-Language" to "en-US",
+        "Accept-Encoding" to "identity",
+    )
+
     private class FakeSocks : AutoCloseable {
         private val listener = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
         private val worker = Executors.newSingleThreadExecutor()

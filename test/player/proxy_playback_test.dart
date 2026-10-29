@@ -63,10 +63,12 @@ class _HeldAudioPlayer implements AudioPlayer {
   final sourceRequested = Completer<void>();
   final source = Completer<Duration?>();
   final disposal = Completer<void>();
+  AudioSource? requestedSource;
 
   @override
   Future<Duration?> setAudioSource(AudioSource audioSource,
       {bool preload = true, int? initialIndex, Duration? initialPosition}) {
+    requestedSource = audioSource;
     sourceRequested.complete();
     return source.future;
   }
@@ -348,13 +350,17 @@ void main() {
         AudioPlayerState(
             video: Video(videoId: 'audio', lengthSeconds: 60, formatStreams: [
           FormatStream('https://instance.example/audio', '18', 'audio/mp4',
-              'medium', null, null, null, null, null)
+              'medium', null, null, null, null, null),
+          FormatStream('https://instance.example/retired', '22', 'video/mp4',
+              'hd720', null, null, null, null, null),
         ])),
         audioPlayer,
         settings,
         native);
     final loading = cubit.playVideo(false);
     await native.sourceRequested.future;
+    expect((native.requestedSource as UriAudioSource).uri.toString(),
+        'https://instance.example/audio');
     var stopped = false;
     final stopping = cubit.stopForProxyChange().then((_) => stopped = true);
     await Future<void>.delayed(Duration.zero);

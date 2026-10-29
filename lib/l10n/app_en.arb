@@ -307,7 +307,7 @@
   "@useDash": {
     "description": "Label on video options if a user wants to switch to dash urls instead of the regular quality selection"
   },
-  "useDashDescription": "DASH adaptive streaming can sometimes be problematic, Youtube can throttle it.",
+  "useDashDescription": "DASH enables adaptive streaming. Leave it enabled unless you experience playback problems.",
   "@useDashDescription": {
     "description": "Description for dash in the settings screen"
   },

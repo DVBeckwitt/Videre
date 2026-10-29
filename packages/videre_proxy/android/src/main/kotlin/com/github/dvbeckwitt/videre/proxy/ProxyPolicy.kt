@@ -75,15 +75,35 @@ internal class SocksOnlySelector(policy: ProxyPolicy) : ProxySelector() {
 
 /** Media3 creates independent calls for manifest children, so their credential
  * origin must be anchored to the original media source rather than each call. */
-private data class SourceHeaderScope(val origin: HttpUrl?, val names: Set<String>)
+private data class SourceHeaderScope(
+    val origin: HttpUrl?,
+    val names: Set<String>,
+    val fingerprint: Map<String, String> = emptyMap(),
+    val expectedProxy: ProxyPolicy? = null,
+)
+
+private val fingerprintHeaderNames = setOf("user-agent", "accept", "accept-language", "accept-encoding")
+
+private fun sourceFingerprint(headers: Map<String, String>): Map<String, String> {
+    val fingerprint = linkedMapOf<String, String>()
+    for ((name, value) in headers) {
+        val normalized = name.lowercase(Locale.ROOT)
+        if (normalized !in fingerprintHeaderNames) continue
+        // Do not choose an arbitrary value from conflicting case variants.
+        require(!fingerprint.containsKey(normalized)) { "Duplicate browser fingerprint header." }
+        fingerprint[normalized] = value
+    }
+    return fingerprint
+}
 
 private fun sameOrigin(left: HttpUrl, right: HttpUrl): Boolean =
     left.scheme == right.scheme && left.host == right.host && left.port == right.port
 
-/** Keeps a live policy for sources that were created before a settings change. */
+/** Ordinary sources use the live policy; verified onion sessions retain their proxy binding. */
 internal class PolicyCallFactory : Call.Factory {
     private val lock = Any()
     private var client: OkHttpClient? = null
+    private var policy: ProxyPolicy? = null
     private val calls = mutableSetOf<Call>()
 
     fun configure(policy: ProxyPolicy) {
@@ -104,6 +124,13 @@ internal class PolicyCallFactory : Call.Factory {
                             (scope?.names ?: emptySet()))
                             .forEach { removeHeader(it) }
                     }.build()
+                } else if (scope != null && scope.fingerprint.isNotEmpty()) {
+                    // Media3 appends User-Agent and Accept-Encoding after its
+                    // caller headers. Restore the explicitly supplied values,
+                    // once each, only on the media source's original origin.
+                    outgoing = outgoing.newBuilder().apply {
+                        scope.fingerprint.forEach { (name, value) -> header(name, value) }
+                    }.build()
                 }
                 chain.proceed(outgoing)
             }
@@ -121,12 +148,14 @@ internal class PolicyCallFactory : Call.Factory {
         synchronized(lock) {
             invalidateLocked()
             client = nextClient
+            this.policy = policy
         }
     }
 
     fun block() = synchronized(lock) {
         invalidateLocked()
         client = null
+        policy = null
     }
 
     private fun invalidateLocked() {
@@ -139,11 +168,37 @@ internal class PolicyCallFactory : Call.Factory {
 
     override fun newCall(request: Request): Call = synchronized(lock) {
         val active = client ?: throw IOException("SOCKS5 transport settings have not been loaded or are invalid.")
+        requireMatchingOnionProxy(request.tag(SourceHeaderScope::class.java)?.expectedProxy, policy)
         trackCall(active.newCall(request))
     }
 
     fun forSource(sourceUri: String?, headerNames: Set<String>): Call.Factory {
         val scope = SourceHeaderScope(sourceUri?.toHttpUrlOrNull(), headerNames.toSet())
+        return forSource(scope)
+    }
+
+    fun forSource(
+        sourceUri: String?,
+        headers: Map<String, String>,
+        expectedProxy: ProxyPolicy? = null,
+    ): Call.Factory {
+        val origin = sourceUri?.toHttpUrlOrNull()
+        val fingerprint = sourceFingerprint(headers)
+        val hasVerifiedSession = origin != null && origin.scheme == "http" && origin.port == 80 &&
+            origin.host.matches(Regex("[a-z2-7]{56}\\.onion")) &&
+            origin.username.isEmpty() && origin.password.isEmpty() &&
+            fingerprint.keys.containsAll(fingerprintHeaderNames) && fingerprint.values.all { it.isNotBlank() } &&
+            headers.any { (name, value) -> name.equals("Cookie", ignoreCase = true) && value.isNotBlank() }
+        val binding = if (hasVerifiedSession) {
+            if (expectedProxy?.enabled != true) {
+                throw IOException("Verified onion media requires its SOCKS5 configuration.")
+            }
+            expectedProxy
+        } else null
+        return forSource(SourceHeaderScope(origin, headers.keys.toSet(), fingerprint, binding))
+    }
+
+    private fun forSource(scope: SourceHeaderScope): Call.Factory {
         return object : Call.Factory {
             override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
                 request.newBuilder().tag(SourceHeaderScope::class.java, scope).build(),

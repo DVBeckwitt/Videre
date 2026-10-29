@@ -13,6 +13,25 @@ internal const val MAX_API_BODY_BYTES = 4 * 1024 * 1024
 
 internal class ApiBodyTooLarge : IOException("Network response exceeds 4 MiB.")
 
+/** A worker's cached onion credentials must stay on the proxy it selected. */
+internal fun expectedOnionProxy(arguments: Map<*, *>, request: Request): ProxyPolicy? {
+    if (!arguments.containsKey("expectedOnionProxy")) return null
+    val values = arguments["expectedOnionProxy"] as? Map<*, *>
+        ?: throw IllegalArgumentException("Invalid onion proxy binding.")
+    require(values.keys == setOf("enabled", "host", "port")) { "Invalid onion proxy binding." }
+    val url = request.url
+    require(url.scheme == "http" && url.port == 80 &&
+        url.host.matches(Regex("[a-z2-7]{56}\\.onion")) &&
+        url.username.isEmpty() && url.password.isEmpty()) { "Invalid onion proxy binding." }
+    return ProxyPolicy.fromMap(values)
+}
+
+internal fun requireMatchingOnionProxy(expected: ProxyPolicy?, actual: ProxyPolicy?) {
+    if (expected != null && expected != actual) {
+        throw IOException("The onion proxy configuration changed.")
+    }
+}
+
 internal data class ApiRedirectOptions(val followRedirects: Boolean = true, val maxRedirects: Int = 5) {
     companion object {
         fun fromMap(values: Map<*, *>): ApiRedirectOptions {

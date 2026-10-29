@@ -132,6 +132,9 @@ class RecordingPlayerController extends BetterPlayerController {
   RecordingPlayerController() : super(const BetterPlayerConfiguration());
 
   final sources = <BetterPlayerDataSource>[];
+  final adaptiveTracks = <BetterPlayerAsmsTrack>[];
+  @override
+  List<BetterPlayerAsmsTrack> get betterPlayerAsmsTracks => adaptiveTracks;
   Iterable<String> get sourceUrls => sources.map((source) => source.url);
   @override
   BetterPlayerDataSource? get betterPlayerDataSource =>
@@ -1279,14 +1282,13 @@ void main() {
       await db.upsertServer(authenticatedServer);
       await db.useServer(authenticatedServer);
       await settings.toggleDash(false);
-      final started = controller.waitForSource('https://inv.example/720.mp4');
+      final started = controller.waitForSource('https://inv.example/360.mp4');
 
       cubit.switchVideo(Video(
         videoId: 'mixed-origin-video',
         formatStreams: [
-          _stream('https://r1.googlevideo.com/360.mp4', '360p', itag: '18'),
-          _stream('https://inv.example/720.mp4', '720p',
-              itag: '22', quality: 'hd720', size: '1280x720'),
+          _stream('https://r1.googlevideo.com/240.mp4', '240p', itag: '36'),
+          _stream('https://inv.example/360.mp4', '360p', itag: '18'),
         ],
       ));
       await started;
@@ -1295,8 +1297,54 @@ void main() {
         {'Authorization': 'Basic secret'},
       );
       expect(controller.sources.last.resolutions, {
-        '720p': 'https://inv.example/720.mp4',
+        '360p': 'https://inv.example/360.mp4',
       });
+    });
+
+    test('omits legacy hd720 from quality choices and fallback sources',
+        () async {
+      await settings.toggleDash(false);
+      const supported = 'https://inv.example/supported.mp4';
+      final started = controller.waitForSource(supported);
+      cubit.switchVideo(Video(
+        videoId: 'legacy-quality',
+        formatStreams: [
+          _stream(supported, '360p', itag: '18'),
+          _stream('https://inv.example/retired-itag.mp4', '720p', itag: '22'),
+          _stream('https://inv.example/retired-quality.mp4', 'hd720',
+              itag: 'legacy', quality: 'hd720'),
+        ],
+      ));
+      await started;
+
+      expect(cubit.getVideoTracks(), ['360p']);
+      expect(controller.sources.last.resolutions, {'360p': supported});
+      final failed = player.waitForError();
+      controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
+      await failed;
+      expect(controller.sourceUrls.where((url) => url.contains('retired')),
+          isEmpty);
+    });
+
+    test('retains adaptive 720p while omitting the retired progressive stream',
+        () async {
+      const manifest = 'https://r1.googlevideo.com/adaptive.mpd';
+      controller.adaptiveTracks.add(BetterPlayerAsmsTrack(
+          '720', 1280, 720, 2000000, 30, 'avc1', 'video/mp4'));
+      final started = controller.waitForSource(manifest);
+      cubit.switchVideo(Video(
+        videoId: 'adaptive-quality',
+        dashUrl: manifest,
+        formatStreams: [
+          _stream('https://inv.example/retired.mp4', 'hd720',
+              itag: '22', quality: 'hd720'),
+        ],
+      ));
+      await started;
+
+      expect(controller.sources.last.videoFormat, BetterPlayerVideoFormat.dash);
+      expect(cubit.getVideoTracks().single, startsWith('720p - '));
+      expect(controller.sources.last.resolutions, isNull);
     });
   });
 }

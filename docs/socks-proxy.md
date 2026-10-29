@@ -7,6 +7,12 @@ selected Invidious instance and requires a JSON stats response. A local loopback
 instance cannot establish Internet proxy coverage, so that test is rejected.
 Authentication for arbitrary SOCKS servers is outside this initial implementation.
 
+HTTP onion instances protected by Gandalf can complete their browser check in
+Videre and reuse a private verification session. This uses the system WebView
+through a local gateway, with exact-origin header scoping and encrypted session
+storage. See [onion verification](./onion-verification.md) for the routing,
+session protection and WebView requirements.
+
 This setting is separate from the Invidious **Proxy videos** setting. It applies
 to API requests, image loading, manifests, captions, downloads, background
 notification checks, and Android video/audio HTTP data sources. Destination
