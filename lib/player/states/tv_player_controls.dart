@@ -121,7 +121,8 @@ class TvPlayerControlsCubit extends Cubit<TvPlayerControlsState> {
 
   hideControls() {
     EasyDebounce.debounce('tv-controls', controlFadeOut, () {
-      if (!isClosed) {
+      // Settings remain open while sliders consume held remote key events.
+      if (!isClosed && !state.showSettings) {
         emit(state.copyWith(
             controlsOpacity: 0,
             showSettings: false,

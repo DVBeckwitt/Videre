@@ -5,6 +5,8 @@ import 'package:clipious/main.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/sleep_timer.dart';
+import 'package:clipious/player/views/components/playback_speed_controls.dart';
+import 'package:clipious/player/views/components/playback_speed_quick_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -28,44 +30,15 @@ class PlayerControls extends StatelessWidget {
   Future<void> showPlaybackSpeedSelection(
       BuildContext context, MediaPlayerCubit player) async {
     Navigator.of(context).pop();
-    showSafeModalBottomSheet(
+    await showSafeModalBottomSheet(
       isScrollControlled: true,
       showDragHandle: true,
       context: context,
       builder: (context) {
-        const double minValue = 0.1, maxValue = 6;
-        return StatefulBuilder(
-          builder: (context, setState) => Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Slider(
-                min: minValue,
-                max: maxValue,
-                divisions: maxValue ~/ minValue - 1,
-                value: player.getSpeed(),
-                label: '${player.getSpeed().toStringAsFixed(2)}x',
-                onChanged: (value) => setState(() => player.setSpeed(value)),
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                      onPressed: () => setState(() => player.setSpeed(
-                          max(minValue, player.getSpeed() - minValue))),
-                      icon: const Icon(Icons.remove)),
-                  SizedBox(
-                      width: 50,
-                      child: Text(
-                        '${player.getSpeed().toStringAsFixed(2)}x',
-                        textAlign: TextAlign.center,
-                      )),
-                  IconButton(
-                      onPressed: () => setState(() => player.setSpeed(
-                          min(maxValue, player.getSpeed() + minValue))),
-                      icon: const Icon(Icons.add)),
-                ],
-              )
-            ],
+        return SingleChildScrollView(
+          child: PlaybackSpeedControls(
+            initialSpeed: player.getSpeed(),
+            onChanged: player.setSpeed,
           ),
         );
       },
@@ -129,10 +102,10 @@ class PlayerControls extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ListTile(
-                onTap: () => showPlaybackSpeedSelection(context, pc),
-                leading: const Icon(Icons.speed),
-                title: Text(locals.playbackSpeed),
+              PlaybackSpeedQuickControls(
+                initialSpeed: pc.getSpeed(),
+                onChanged: pc.setSpeed,
+                onAdvanced: () => showPlaybackSpeedSelection(context, pc),
               ),
               if (subtitles.isNotEmpty)
                 ListTile(

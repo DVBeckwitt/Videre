@@ -4,8 +4,11 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
+import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_app_cubit.dart';
@@ -55,5 +58,40 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(second.state.displayControls, isFalse);
     await second.close();
+  });
+
+  testWidgets('TV settings stay open until Back, then controls auto-hide',
+      (tester) async {
+    final controls =
+        TvPlayerControlsCubit(const TvPlayerControlsState(), player);
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    addTearDown(controls.close);
+
+    controls.showUi();
+    controls.displaySettings();
+    // A held slider key is consumed by the child, so the parent sees no key
+    // events until release. The existing hide deadline must not close settings.
+    await tester.pump(controlFadeOut + const Duration(seconds: 1));
+    expect(controls.state.showSettings, isTrue);
+    expect(controls.state.controlsOpacity, 1);
+
+    expect(
+      controls.handleRemoteEvents(
+        focusNode,
+        const KeyUpEvent(
+          physicalKey: PhysicalKeyboardKey.browserBack,
+          logicalKey: LogicalKeyboardKey.goBack,
+          timeStamp: Duration.zero,
+        ),
+      ),
+      KeyEventResult.handled,
+    );
+    expect(controls.state.showSettings, isFalse);
+    expect(controls.state.displayControls, isTrue);
+
+    await tester.pump(controlFadeOut + const Duration(seconds: 1));
+    expect(controls.state.displayControls, isFalse);
+    expect(controls.state.controlsOpacity, 0);
   });
 }

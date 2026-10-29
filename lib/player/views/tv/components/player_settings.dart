@@ -2,6 +2,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/tv/components/sleep_timer.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -41,12 +42,13 @@ class TvPlayerSettings extends StatelessWidget {
                 ))
             .toList();
       case Tabs.playbackSpeed:
-        return tvAvailablePlaybackSpeeds
-            .map((e) => TvSettingButton(
-                  label: e,
-                  onPressed: cubit.changePlaybackSpeed,
-                ))
-            .toList();
+        return [
+          PlaybackSpeedControls(
+            initialSpeed: cubit.player.getSpeed(),
+            onChanged: cubit.player.setSpeed,
+            compact: true,
+          ),
+        ];
       case Tabs.sleepTimer:
         return [
           player.state.hasTimer
@@ -167,18 +169,39 @@ class TvPlayerSettings extends StatelessWidget {
                   ),
                 ],
               ),
-              SizedBox(
-                height: 90,
-                child: ListView(
-                  shrinkWrap: true,
-                  scrollDirection: Axis.horizontal,
-                  children: getContent(context)
-                      .map((e) => Center(
-                            child: e,
-                          ))
-                      .toList(),
-                ),
-              )
+              if (playerState.selected == Tabs.playbackSpeed)
+                Flexible(
+                  child: Center(
+                    heightFactor: 1,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: 640,
+                        maxHeight: 320,
+                      ),
+                      child: Material(
+                        color: colors.surface.withValues(alpha: 0.96),
+                        borderRadius: BorderRadius.circular(24),
+                        clipBehavior: Clip.antiAlias,
+                        child: SingleChildScrollView(
+                          child: getContent(context).single,
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              else
+                SizedBox(
+                  height: 90,
+                  child: ListView(
+                    shrinkWrap: true,
+                    scrollDirection: Axis.horizontal,
+                    children: getContent(context)
+                        .map((e) => Center(
+                              child: e,
+                            ))
+                        .toList(),
+                  ),
+                )
             ],
           ),
         );

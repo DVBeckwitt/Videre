@@ -482,6 +482,24 @@
     "description": "Name of TV ui subtitles settings"
   },
   "playbackSpeed": "Playback speed",
+  "playbackSpeedStep": "Button adjustment step",
+  "@playbackSpeedStep": {
+    "description": "Label for how much the minus and plus playback speed buttons change the speed"
+  },
+  "resetPlaybackSpeed": "Reset to normal speed",
+  "@resetPlaybackSpeed": {
+    "description": "Button that restores playback speed to 1x"
+  },
+  "decreasePlaybackSpeed": "Decrease speed by {step}",
+  "@decreasePlaybackSpeed": {
+    "description": "Tooltip for the button that reduces playback speed",
+    "placeholders": { "step": { "type": "String" } }
+  },
+  "increasePlaybackSpeed": "Increase speed by {step}",
+  "@increasePlaybackSpeed": {
+    "description": "Tooltip for the button that increases playback speed",
+    "placeholders": { "step": { "type": "String" } }
+  },
   "@playbackSpeed": {
     "description": "Name of TV ui Playback speed"
   },

@@ -9,19 +9,6 @@ import '../../settings/states/settings.dart';
 
 part 'tv_player_settings.freezed.dart';
 
-const List<String> tvAvailablePlaybackSpeeds = [
-  '0.5x',
-  '0.75x',
-  '1x',
-  '1.25x',
-  '1.5x',
-  '1.75x',
-  '2x',
-  '2.25x',
-  '2.5x',
-  '2.75x',
-  '3x'
-];
 final Logger log = Logger('TvSettingsController');
 
 enum Tabs {
@@ -138,11 +125,6 @@ class TvPlayerSettingsCubit extends Cubit<TvPlayerSettingsState> {
       log.fine('Changing subtitles to $selected');
       videoController?.setupSubtitleSource(track);
     }
-  }
-
-  changePlaybackSpeed(String selected) {
-    String speed = selected.replaceAll('x', '');
-    videoController?.setSpeed(double.parse(speed));
   }
 }
 
