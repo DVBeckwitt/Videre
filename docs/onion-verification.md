@@ -57,8 +57,8 @@ instance controls its challenge and cookie lifetime. Disabling the configured
 proxy disables use of the saved verification session.
 
 The verification activity runs in a separate app process. Android 9 and later use
-a dedicated WebView data-directory suffix. On Android 7 and 8 it is the app's only
-WebView owner; account browser sign-in uses the external browser. Provider startup
+a dedicated WebView data-directory suffix. The provider version is checked before
+creating the verification WebView. Unsupported providers and provider startup
 failures leave the original request failed rather than changing network routing.
 
 The connection restriction requires WebView based on Chromium 152 or later, plus
