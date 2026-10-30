@@ -558,7 +558,11 @@ internal class RiverPlayer(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                eventSink.error("VideoError", "Video player had error $error", "")
+                eventSink.error(
+                    "VideoError",
+                    "Video player had error $error",
+                    mapOf("backendRetryable" to BackendRetryability.isRetryable(error))
+                )
             }
         })
         val reply: MutableMap<String, Any> = HashMap()
@@ -614,9 +618,21 @@ internal class RiverPlayer(
     }
 
     fun setSpeed(value: Double) {
-        val bracketedValue = value.toFloat()
-        val playbackParameters = PlaybackParameters(bracketedValue)
-        exoPlayer?.playbackParameters = playbackParameters
+        require(value.isFinite() && value > 0 && value.toFloat().isFinite() && value.toFloat() > 0)
+        exoPlayer?.let { player ->
+            player.playbackParameters = PlaybackParameters(
+                value.toFloat(), player.playbackParameters.pitch
+            )
+        }
+    }
+
+    fun setPitch(value: Double) {
+        require(value.isFinite() && value > 0 && value.toFloat().isFinite() && value.toFloat() > 0)
+        exoPlayer?.let { player ->
+            player.playbackParameters = PlaybackParameters(
+                player.playbackParameters.speed, value.toFloat()
+            )
+        }
     }
 
     fun setTrackParameters(width: Int, height: Int, bitrate: Int) {

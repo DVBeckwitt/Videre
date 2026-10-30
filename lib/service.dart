@@ -22,6 +22,8 @@ import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/models/errors/missing_software_key.dart';
 import 'package:clipious/utils/models/imgur_error.dart';
+import 'package:clipious/utils/request_cookies.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/utils/video_post_processing.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/caption.dart';
@@ -309,13 +311,19 @@ class Service {
       var uri = Uri.parse(url);
       log.info('calling ${urlFormatForLog(uri)}');
 
-      final Map<String, String> headers = Map.from(server.customHeaders);
+      var headers = Map<String, String>.from(server.customHeaders);
       if (!headers.keys.any((name) => name.toLowerCase() == 'accept')) {
         headers['Accept'] = accept;
       }
 
       if (authenticated) {
-        headers.addAll(getAuthenticationHeaders(server));
+        for (final header in getAuthenticationHeaders(server).entries) {
+          if (header.key.toLowerCase() == 'cookie') {
+            headers = mergeRequestCookies(headers, header.value);
+          } else {
+            headers[header.key] = header.value;
+          }
+        }
       }
 
       if (forceJson) {
@@ -329,12 +337,138 @@ class Service {
     }
   }
 
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) async {
-    var req = await buildRequest(urlGetVideo,
-        pathParams: {':id': videoId}, serverOverride: serverOverride);
-    final response = await _get(req, coalesce: true);
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) async {
+    final server = serverOverride ?? await db.getCurrentlySelectedServer();
+    // Explicit callers (downloads and connection tests) own their server snapshot
+    // and subsequent request headers. Only normal playback may change routes.
+    final initialRequest =
+        serverOverride == null ? BackendPlayback(server) : null;
+    var playback = server.backendSelector == null ? null : initialRequest;
+    Video video;
+    while (true) {
+      try {
+        video = await _getVideoMetadata(videoId, playback?.server ?? server,
+            backendRequest: playback ?? initialRequest,
+            onBackendRequest: onBackendRequest);
+        break;
+      } catch (error) {
+        if (!isBackendRetryable(error) || playback?.canRetry != true) rethrow;
+        if (!playback!.matches(await db.getCurrentlySelectedServer())) rethrow;
+        final next = playback.next();
+        if (next == null) rethrow;
+        playback = next;
+      }
+    }
+    final processed =
+        await _processVideo(video.copyWith(backendPlayback: playback));
+    if (serverOverride == null &&
+        playback != null &&
+        !playback.matches(await db.getCurrentlySelectedServer())) {
+      throw StateError(
+          'The playback connection changed while loading this video.');
+    }
+    return processed;
+  }
 
-    var video = Video.fromJson(handleResponse(response));
+  /// A player-side choice uses a transient routing snapshot while retaining the
+  /// saved server as its admission baseline. It never bypasses proxy/auth checks.
+  Future<Video> getVideoForBackend(String videoId, BackendPlayback request,
+      {void Function(BackendPlayback request)? onBackendRequest,
+      bool Function()? isCurrent}) async {
+    var playback = request;
+    bool active() => isCurrent?.call() ?? true;
+    while (true) {
+      if (!active() ||
+          !playback.matches(await db.getCurrentlySelectedServer())) {
+        throw StateError('The playback connection changed.');
+      }
+      if (!active()) throw StateError('The video changed.');
+      Video loaded;
+      try {
+        loaded = await _getVideoMetadata(videoId, playback.server,
+            backendRequest: playback, onBackendRequest: onBackendRequest);
+      } catch (error) {
+        if (!active() || !isBackendRetryable(error) || !playback.canRetry) {
+          rethrow;
+        }
+        if (!playback.matches(await db.getCurrentlySelectedServer())) rethrow;
+        final next = playback.next();
+        if (next == null) rethrow;
+        playback = next;
+        continue;
+      }
+      final processed =
+          await _processVideo(loaded.copyWith(backendPlayback: playback));
+      if (!active() ||
+          !playback.matches(await db.getCurrentlySelectedServer())) {
+        throw StateError('The playback connection changed.');
+      }
+      return processed;
+    }
+  }
+
+  Future<Video> _getVideoMetadata(String videoId, Server server,
+      {BackendPlayback? backendRequest,
+      void Function(BackendPlayback request)? onBackendRequest}) async {
+    final request = await buildRequest(urlGetVideo,
+        pathParams: {':id': videoId}, serverOverride: server);
+    if (backendRequest != null) {
+      if (!backendRequest.matches(await db.getCurrentlySelectedServer())) {
+        throw StateError(
+            'The playback connection changed while loading this video.');
+      }
+      onBackendRequest?.call(backendRequest);
+    }
+    final response = await _get(request, coalesce: true);
+    return Video.fromJson(handleResponse(response));
+  }
+
+  /// Recovery changes only the server snapshot on this video, never the saved
+  /// preference. Instances may still choose a different extraction backend.
+  Future<Video?> retryVideoBackend(Video video,
+      {required bool Function() isCurrent,
+      void Function(BackendPlayback request)? onRetry}) async {
+    var playback = video.backendPlayback;
+    if (playback == null || !isCurrent() || !playback.acquireRecovery()) {
+      return null;
+    }
+    final original = playback;
+    try {
+      while (isCurrent() &&
+          playback!.matches(await db.getCurrentlySelectedServer())) {
+        if (!isCurrent()) return null;
+        final next = playback.next();
+        if (next == null) return null;
+        playback = next;
+        onRetry?.call(next);
+        Video loaded;
+        try {
+          loaded = await _getVideoMetadata(video.videoId, next.server);
+        } catch (error) {
+          if (!isBackendRetryable(error)) rethrow;
+          continue;
+        }
+        if (!isCurrent() ||
+            !next.matches(await db.getCurrentlySelectedServer())) {
+          return null;
+        }
+        final processed =
+            await _processVideo(loaded.copyWith(backendPlayback: next));
+        if (!isCurrent() ||
+            !next.matches(await db.getCurrentlySelectedServer())) {
+          return null;
+        }
+        return processed;
+      }
+      return null;
+    } finally {
+      original.releaseRecovery();
+    }
+  }
+
+  Future<Video> _processVideo(Video video) async {
     video = (await DeArrow.processVideos([video]))[0];
     video = video.copyWith(
         recommendedVideos:

@@ -1,6 +1,10 @@
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/backend_recovery.dart';
+import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/player/views/components/player_backend_picker.dart';
+import 'package:clipious/player/views/components/backend_request_indicator.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/player/views/tv/components/player_settings.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -21,7 +25,7 @@ import '../../../states/player.dart';
 class TvPlayerControls extends StatelessWidget {
   const TvPlayerControls({super.key});
 
-  onVideoQueueSelected(
+  void onVideoQueueSelected(
       BuildContext context, TvPlayerControlsCubit cubit, Video video) {
     cubit.playFromQueue(video);
   }
@@ -47,6 +51,13 @@ class TvPlayerControls extends StatelessWidget {
               context.select((PlayerCubit value) => value.state.position);
           final errored = context.select((PlayerCubit value) =>
               value.state.mediaEvent.state == MediaState.error);
+          final recovery = context
+              .select((PlayerCubit cubit) => cubit.state.backendRecovery);
+          final failedRecovery = recovery?.phase == BackendRecoveryPhase.failed;
+          final canChooseBackend = context.select(
+              (PlayerCubit cubit) => canChoosePlayerBackend(cubit.state));
+          final requestedBackend = context
+              .select((PlayerCubit cubit) => cubit.state.requestedBackend);
 
           return BlocListener<PlayerCubit, PlayerState>(
             listenWhen: (previous, current) =>
@@ -56,10 +67,11 @@ class TvPlayerControls extends StatelessWidget {
             },
             child: Focus(
               autofocus: true,
-              onKeyEvent: errored
+              onKeyEvent: failedRecovery || (recovery == null && errored)
                   ? null
                   : (node, event) => cubit.handleRemoteEvents(node, event),
               child: Stack(
+                fit: StackFit.expand,
                 children: [
                   Positioned(
                     top: 0,
@@ -413,40 +425,80 @@ class TvPlayerControls extends StatelessWidget {
                                   ),
                                 ))
                               : const SizedBox.shrink())),
-                  if (errored)
+                  if (recovery != null && !failedRecovery)
+                    Positioned.fill(
+                        child: BackendRecoveryNotice(recovery: recovery)),
+                  if (failedRecovery || (recovery == null && errored))
                     Positioned.fill(
                       child: ColoredBox(
                         color: Colors.black.withValues(alpha: 0.8),
                         child: Center(
-                          child: FocusScope(
-                            autofocus: true,
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(locals.couldntLoadVideo),
-                                TextButton.icon(
-                                  autofocus: true,
-                                  onPressed: currentlyPlaying == null
-                                      ? null
-                                      : () => player.switchToVideo(
-                                          Video(
-                                              videoId:
-                                                  currentlyPlaying.videoId),
-                                          startAt: position),
-                                  icon: const Icon(Icons.refresh),
-                                  label: Text(locals.retry),
-                                ),
-                                TextButton.icon(
-                                  onPressed: () =>
-                                      AddServerScreen.showConnectionHelp(
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 24),
+                            child: FocusScope(
+                              autofocus: true,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Semantics(
+                                    liveRegion: true,
+                                    child: Text(
+                                      failedRecovery
+                                          ? backendRecoveryFailureText(
+                                              locals, recovery!)
+                                          : locals.couldntLoadVideo,
+                                      style:
+                                          const TextStyle(color: Colors.white),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    autofocus: true,
+                                    onPressed: currentlyPlaying == null
+                                        ? null
+                                        : () => player.switchToVideo(
+                                            Video(
+                                                videoId:
+                                                    currentlyPlaying.videoId),
+                                            startAt: position),
+                                    icon: const Icon(Icons.refresh),
+                                    label: Text(locals.retry),
+                                  ),
+                                  if (canChooseBackend)
+                                    TextButton.icon(
+                                      key: const ValueKey(
+                                          'player-backend-error-open'),
+                                      onPressed: () => showPlayerBackendPicker(
                                           context,
-                                          videoId: currentlyPlaying?.videoId),
-                                  icon: const Icon(Icons.wifi_find),
-                                  label: Text(locals.connectionHelp),
-                                ),
-                              ],
+                                          player: player),
+                                      icon: const Icon(Icons.dns_outlined),
+                                      label: Text(locals.backendChoose),
+                                    ),
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        AddServerScreen.showConnectionHelp(
+                                            context,
+                                            videoId: currentlyPlaying?.videoId),
+                                    icon: const Icon(Icons.wifi_find),
+                                    label: Text(locals.connectionHelp),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
+                        ),
+                      ),
+                    ),
+                  if (requestedBackend != null)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: playerState.displayControls ? 144 : 48,
+                      child: TvOverscan(
+                        child: BackendRequestIndicator(
+                          playback: requestedBackend,
+                          overlay: true,
                         ),
                       ),
                     ),

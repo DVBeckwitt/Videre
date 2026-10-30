@@ -6,12 +6,17 @@ import 'network/network_proxy.dart';
 import 'network/reloadable_http_client.dart';
 
 class MyHttpOverrides extends HttpOverrides {
+  // A separately installed test build can use the normal app request identity.
+  // Release builds omit this define and keep their package-derived identity.
+  static const _buildUserAgent = String.fromEnvironment('VIDERE_USER_AGENT');
+
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     return ReloadableHttpClient(() {
       final client = super.createHttpClient(context)
-        ..userAgent =
-            'Videre/${packageInfo?.version ?? '0.0.0'} (${packageInfo?.packageName ?? ''})'
+        ..userAgent = _buildUserAgent.isNotEmpty
+            ? _buildUserAgent
+            : 'Videre/${packageInfo?.version ?? '0.0.0'} (${packageInfo?.packageName ?? ''})'
         ..badCertificateCallback =
             (X509Certificate cert, String host, int port) {
           // if true, it will allow all certs, if false it will throw error on a bad cert

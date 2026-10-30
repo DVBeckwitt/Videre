@@ -13,7 +13,7 @@ part of 'video_player.dart';
 T _$identity<T>(T value) => value;
 
 /// @nodoc
-mixin _$VideoPlayerState {
+mixin _$VideoPlayerState implements DiagnosticableTreeMixin {
   ColorScheme get colors;
   Color get overFlowTextColor;
   GlobalKey get key;
@@ -32,6 +32,22 @@ mixin _$VideoPlayerState {
   $VideoPlayerStateCopyWith<VideoPlayerState> get copyWith =>
       _$VideoPlayerStateCopyWithImpl<VideoPlayerState>(
           this as VideoPlayerState, _$identity);
+
+  @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    properties
+      ..add(DiagnosticsProperty('type', 'VideoPlayerState'))
+      ..add(DiagnosticsProperty('colors', colors))
+      ..add(DiagnosticsProperty('overFlowTextColor', overFlowTextColor))
+      ..add(DiagnosticsProperty('key', key))
+      ..add(DiagnosticsProperty('startAt', startAt))
+      ..add(DiagnosticsProperty('selectedNonDashTrack', selectedNonDashTrack))
+      ..add(DiagnosticsProperty('bufferPosition', bufferPosition))
+      ..add(DiagnosticsProperty('video', video))
+      ..add(DiagnosticsProperty('offlineVideo', offlineVideo))
+      ..add(DiagnosticsProperty('playNow', playNow))
+      ..add(DiagnosticsProperty('disableControls', disableControls));
+  }
 
   @override
   bool operator ==(Object other) {
@@ -70,7 +86,7 @@ mixin _$VideoPlayerState {
       disableControls);
 
   @override
-  String toString() {
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
     return 'VideoPlayerState(colors: $colors, overFlowTextColor: $overFlowTextColor, key: $key, startAt: $startAt, selectedNonDashTrack: $selectedNonDashTrack, bufferPosition: $bufferPosition, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls)';
   }
 }
@@ -412,7 +428,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
 
 /// @nodoc
 
-class _VideoPlayerState extends VideoPlayerState {
+class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
   const _VideoPlayerState(
       {required this.colors,
       required this.overFlowTextColor,
@@ -458,6 +474,22 @@ class _VideoPlayerState extends VideoPlayerState {
       __$VideoPlayerStateCopyWithImpl<_VideoPlayerState>(this, _$identity);
 
   @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    properties
+      ..add(DiagnosticsProperty('type', 'VideoPlayerState'))
+      ..add(DiagnosticsProperty('colors', colors))
+      ..add(DiagnosticsProperty('overFlowTextColor', overFlowTextColor))
+      ..add(DiagnosticsProperty('key', key))
+      ..add(DiagnosticsProperty('startAt', startAt))
+      ..add(DiagnosticsProperty('selectedNonDashTrack', selectedNonDashTrack))
+      ..add(DiagnosticsProperty('bufferPosition', bufferPosition))
+      ..add(DiagnosticsProperty('video', video))
+      ..add(DiagnosticsProperty('offlineVideo', offlineVideo))
+      ..add(DiagnosticsProperty('playNow', playNow))
+      ..add(DiagnosticsProperty('disableControls', disableControls));
+  }
+
+  @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
@@ -494,7 +526,7 @@ class _VideoPlayerState extends VideoPlayerState {
       disableControls);
 
   @override
-  String toString() {
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
     return 'VideoPlayerState(colors: $colors, overFlowTextColor: $overFlowTextColor, key: $key, startAt: $startAt, selectedNonDashTrack: $selectedNonDashTrack, bufferPosition: $bufferPosition, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls)';
   }
 }

@@ -17,7 +17,13 @@ mixin _$Server {
   String get url;
   String? get authToken;
   String? get sidCookie;
-  Map<String, String> get customHeaders;
+  Map<String, String>
+      get customHeaders; // Freezed copies this parameter annotation to the generated field.
+// ignore: invalid_annotation_target
+  @JsonKey(
+      fromJson: BackendSelector.tryFromJson,
+      toJson: BackendSelector.optionalToJson)
+  BackendSelector? get backendSelector;
   bool get inUse;
 
   /// Create a copy of Server
@@ -42,17 +48,25 @@ mixin _$Server {
                 other.sidCookie == sidCookie) &&
             const DeepCollectionEquality()
                 .equals(other.customHeaders, customHeaders) &&
+            (identical(other.backendSelector, backendSelector) ||
+                other.backendSelector == backendSelector) &&
             (identical(other.inUse, inUse) || other.inUse == inUse));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(runtimeType, url, authToken, sidCookie,
-      const DeepCollectionEquality().hash(customHeaders), inUse);
+  int get hashCode => Object.hash(
+      runtimeType,
+      url,
+      authToken,
+      sidCookie,
+      const DeepCollectionEquality().hash(customHeaders),
+      backendSelector,
+      inUse);
 
   @override
   String toString() {
-    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, inUse: $inUse)';
+    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
   }
 }
 
@@ -66,6 +80,10 @@ abstract mixin class $ServerCopyWith<$Res> {
       String? authToken,
       String? sidCookie,
       Map<String, String> customHeaders,
+      @JsonKey(
+          fromJson: BackendSelector.tryFromJson,
+          toJson: BackendSelector.optionalToJson)
+      BackendSelector? backendSelector,
       bool inUse});
 }
 
@@ -85,6 +103,7 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
     Object? authToken = freezed,
     Object? sidCookie = freezed,
     Object? customHeaders = null,
+    Object? backendSelector = freezed,
     Object? inUse = null,
   }) {
     return _then(_self.copyWith(
@@ -104,6 +123,10 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
           ? _self.customHeaders
           : customHeaders // ignore: cast_nullable_to_non_nullable
               as Map<String, String>,
+      backendSelector: freezed == backendSelector
+          ? _self.backendSelector
+          : backendSelector // ignore: cast_nullable_to_non_nullable
+              as BackendSelector?,
       inUse: null == inUse
           ? _self.inUse
           : inUse // ignore: cast_nullable_to_non_nullable
@@ -203,8 +226,16 @@ extension ServerPatterns on Server {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(String url, String? authToken, String? sidCookie,
-            Map<String, String> customHeaders, bool inUse)?
+    TResult Function(
+            String url,
+            String? authToken,
+            String? sidCookie,
+            Map<String, String> customHeaders,
+            @JsonKey(
+                fromJson: BackendSelector.tryFromJson,
+                toJson: BackendSelector.optionalToJson)
+            BackendSelector? backendSelector,
+            bool inUse)?
         $default, {
     required TResult orElse(),
   }) {
@@ -212,7 +243,7 @@ extension ServerPatterns on Server {
     switch (_that) {
       case _Server() when $default != null:
         return $default(_that.url, _that.authToken, _that.sidCookie,
-            _that.customHeaders, _that.inUse);
+            _that.customHeaders, _that.backendSelector, _that.inUse);
       case _:
         return orElse();
     }
@@ -233,15 +264,23 @@ extension ServerPatterns on Server {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(String url, String? authToken, String? sidCookie,
-            Map<String, String> customHeaders, bool inUse)
+    TResult Function(
+            String url,
+            String? authToken,
+            String? sidCookie,
+            Map<String, String> customHeaders,
+            @JsonKey(
+                fromJson: BackendSelector.tryFromJson,
+                toJson: BackendSelector.optionalToJson)
+            BackendSelector? backendSelector,
+            bool inUse)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _Server():
         return $default(_that.url, _that.authToken, _that.sidCookie,
-            _that.customHeaders, _that.inUse);
+            _that.customHeaders, _that.backendSelector, _that.inUse);
     }
   }
 
@@ -259,15 +298,23 @@ extension ServerPatterns on Server {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(String url, String? authToken, String? sidCookie,
-            Map<String, String> customHeaders, bool inUse)?
+    TResult? Function(
+            String url,
+            String? authToken,
+            String? sidCookie,
+            Map<String, String> customHeaders,
+            @JsonKey(
+                fromJson: BackendSelector.tryFromJson,
+                toJson: BackendSelector.optionalToJson)
+            BackendSelector? backendSelector,
+            bool inUse)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _Server() when $default != null:
         return $default(_that.url, _that.authToken, _that.sidCookie,
-            _that.customHeaders, _that.inUse);
+            _that.customHeaders, _that.backendSelector, _that.inUse);
       case _:
         return null;
     }
@@ -282,6 +329,10 @@ class _Server extends Server {
       this.authToken,
       this.sidCookie,
       final Map<String, String> customHeaders = const {},
+      @JsonKey(
+          fromJson: BackendSelector.tryFromJson,
+          toJson: BackendSelector.optionalToJson)
+      this.backendSelector,
       this.inUse = false})
       : _customHeaders = customHeaders,
         super._();
@@ -302,6 +353,13 @@ class _Server extends Server {
     return EqualUnmodifiableMapView(_customHeaders);
   }
 
+// Freezed copies this parameter annotation to the generated field.
+// ignore: invalid_annotation_target
+  @override
+  @JsonKey(
+      fromJson: BackendSelector.tryFromJson,
+      toJson: BackendSelector.optionalToJson)
+  final BackendSelector? backendSelector;
   @override
   @JsonKey()
   final bool inUse;
@@ -333,17 +391,25 @@ class _Server extends Server {
                 other.sidCookie == sidCookie) &&
             const DeepCollectionEquality()
                 .equals(other._customHeaders, _customHeaders) &&
+            (identical(other.backendSelector, backendSelector) ||
+                other.backendSelector == backendSelector) &&
             (identical(other.inUse, inUse) || other.inUse == inUse));
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(runtimeType, url, authToken, sidCookie,
-      const DeepCollectionEquality().hash(_customHeaders), inUse);
+  int get hashCode => Object.hash(
+      runtimeType,
+      url,
+      authToken,
+      sidCookie,
+      const DeepCollectionEquality().hash(_customHeaders),
+      backendSelector,
+      inUse);
 
   @override
   String toString() {
-    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, inUse: $inUse)';
+    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
   }
 }
 
@@ -358,6 +424,10 @@ abstract mixin class _$ServerCopyWith<$Res> implements $ServerCopyWith<$Res> {
       String? authToken,
       String? sidCookie,
       Map<String, String> customHeaders,
+      @JsonKey(
+          fromJson: BackendSelector.tryFromJson,
+          toJson: BackendSelector.optionalToJson)
+      BackendSelector? backendSelector,
       bool inUse});
 }
 
@@ -377,6 +447,7 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
     Object? authToken = freezed,
     Object? sidCookie = freezed,
     Object? customHeaders = null,
+    Object? backendSelector = freezed,
     Object? inUse = null,
   }) {
     return _then(_Server(
@@ -396,6 +467,10 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
           ? _self._customHeaders
           : customHeaders // ignore: cast_nullable_to_non_nullable
               as Map<String, String>,
+      backendSelector: freezed == backendSelector
+          ? _self.backendSelector
+          : backendSelector // ignore: cast_nullable_to_non_nullable
+              as BackendSelector?,
       inUse: null == inUse
           ? _self.inUse
           : inUse // ignore: cast_nullable_to_non_nullable

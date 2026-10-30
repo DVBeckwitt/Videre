@@ -73,6 +73,9 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
             type: MediaEventType.speedChanged,
             value: command.value));
         break;
+      case MediaCommandType.pitch:
+        setPitchSemitones(command.value);
+        break;
       case MediaCommandType.switchVideo:
         SwitchVideoValue val = command.value;
         switchVideo(val.video, startAt: val.startAt);
@@ -158,6 +161,10 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
   void setSpeed(double d);
 
   double getSpeed();
+
+  void setPitchSemitones(int semitones);
+
+  int getPitchSemitones();
 
   bool hasDashToggle();
 

@@ -55,6 +55,10 @@
             android:supportsPictureInPicture="true"
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">
+            <!-- ReceiveSharingIntent owns external URLs for both phone and TV. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
             <!-- android tv -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -82,9 +86,14 @@
                     android:host="m.youtube.com"
                     android:pathPrefix="/watch"
                     android:scheme="https" />
+            </intent-filter>
+            <!-- Short links use /VIDEO_ID, not YouTube's /watch path. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:host="youtu.be"
-                    android:pathPrefix="/watch"
                     android:scheme="https" />
             </intent-filter>
             <intent-filter>

@@ -4,6 +4,8 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import '../../app/states/app.dart';
 import '../../globals.dart';
 import '../models/db/server.dart';
+import '../models/backend_selector.dart';
+import '../services/backend_discovery.dart';
 
 part 'server_settings.freezed.dart';
 
@@ -17,6 +19,62 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   Future<void> useServer(bool value) async {
     final server = await app.switchServer(state.server);
     if (!isClosed && server != null) emit(state.copyWith(server: server));
+  }
+
+  Future<Server> discoverBackends() async {
+    final saved = db.getServer(state.server.url);
+    if (saved == null) throw StateError('Server no longer exists');
+    final selector = await BackendDiscovery(service.httpClient).discover(saved);
+    return _saveDiscoveredBackends(selector);
+  }
+
+  Future<Server> discoverBrowserBackends(
+      {required Uri pageUri, required String source}) async {
+    final saved = db.getServer(state.server.url);
+    if (saved == null) throw StateError('Server no longer exists');
+    final selector = await BackendDiscovery(service.httpClient)
+        .discoverBrowserPage(saved, pageUri: pageUri, source: source);
+    return _saveDiscoveredBackends(selector);
+  }
+
+  Future<Server> _saveDiscoveredBackends(BackendSelector selector) async {
+    // Discovery may finish after another settings edit. Preserve all current
+    // credentials, routing cookies and the user's automatic-fallback setting.
+    final latest = db.getServer(state.server.url);
+    if (latest == null) throw StateError('Server no longer exists');
+    final updated = latest.copyWith(
+        backendSelector: selector.copyWith(
+            automaticFallback:
+                latest.backendSelector?.automaticFallback ?? false));
+    await _saveBackendServer(updated);
+    return updated;
+  }
+
+  Future<void> setBackend(String? value, bool automaticFallback) async {
+    // Read the saved record so another settings change cannot lose its headers
+    // or credentials when this screen was opened with an older snapshot.
+    final saved = db.getServer(state.server.url);
+    if (saved == null) throw StateError('Server no longer exists');
+    final selector = saved.backendSelector;
+    if (selector == null) throw StateError('Discover available backends first');
+    final updated = selector
+        .copyWith(automaticFallback: automaticFallback)
+        .withSelection(saved, value);
+    await _saveBackendServer(updated);
+  }
+
+  Future<void> _saveBackendServer(Server updated) async {
+    await db.upsertServer(updated);
+
+    // Editing an inactive server must not switch background jobs to it.
+    final selected = await db.getCurrentlySelectedServer();
+    if (selected.url == updated.url) {
+      await fileDb.useServer(selected);
+      if (!app.isClosed && app.state.server?.url == selected.url) {
+        app.setServer(selected);
+      }
+    }
+    if (!isClosed) emit(state.copyWith(server: updated));
   }
 
   Future<void> addHeader(String key, String value) async {

@@ -1,6 +1,7 @@
 // ignore_for_file: invalid_annotation_target
 
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/models/sharelink.dart';
 import 'package:clipious/videos/models/ided_video.dart';
@@ -119,6 +120,8 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       bool deArrowed,
       @JsonKey(includeFromJson: false, includeToJson: false)
       String? deArrowThumbnailUrl,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      BackendPlayback? backendPlayback,
       String? viewCountText}) = _Video;
 
   const Video._();

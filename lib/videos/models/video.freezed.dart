@@ -64,6 +64,8 @@ mixin _$Video {
   bool get deArrowed;
   @JsonKey(includeFromJson: false, includeToJson: false)
   String? get deArrowThumbnailUrl;
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  BackendPlayback? get backendPlayback;
   String? get viewCountText;
 
   /// Create a copy of Video
@@ -151,6 +153,8 @@ mixin _$Video {
                 other.deArrowed == deArrowed) &&
             (identical(other.deArrowThumbnailUrl, deArrowThumbnailUrl) ||
                 other.deArrowThumbnailUrl == deArrowThumbnailUrl) &&
+            (identical(other.backendPlayback, backendPlayback) ||
+                other.backendPlayback == backendPlayback) &&
             (identical(other.viewCountText, viewCountText) ||
                 other.viewCountText == viewCountText));
   }
@@ -201,12 +205,13 @@ mixin _$Video {
         filterHide,
         deArrowed,
         deArrowThumbnailUrl,
+        backendPlayback,
         viewCountText
       ]);
 
   @override
   String toString() {
-    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, viewCountText: $viewCountText)';
+    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, viewCountText: $viewCountText)';
   }
 }
 
@@ -261,6 +266,8 @@ abstract mixin class $VideoCopyWith<$Res> {
       @JsonKey(includeFromJson: false, includeToJson: false) bool deArrowed,
       @JsonKey(includeFromJson: false, includeToJson: false)
       String? deArrowThumbnailUrl,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      BackendPlayback? backendPlayback,
       String? viewCountText});
 }
 
@@ -318,6 +325,7 @@ class _$VideoCopyWithImpl<$Res> implements $VideoCopyWith<$Res> {
     Object? filterHide = null,
     Object? deArrowed = null,
     Object? deArrowThumbnailUrl = freezed,
+    Object? backendPlayback = freezed,
     Object? viewCountText = freezed,
   }) {
     return _then(_self.copyWith(
@@ -489,6 +497,10 @@ class _$VideoCopyWithImpl<$Res> implements $VideoCopyWith<$Res> {
           ? _self.deArrowThumbnailUrl
           : deArrowThumbnailUrl // ignore: cast_nullable_to_non_nullable
               as String?,
+      backendPlayback: freezed == backendPlayback
+          ? _self.backendPlayback
+          : backendPlayback // ignore: cast_nullable_to_non_nullable
+              as BackendPlayback?,
       viewCountText: freezed == viewCountText
           ? _self.viewCountText
           : viewCountText // ignore: cast_nullable_to_non_nullable
@@ -638,6 +650,8 @@ extension VideoPatterns on Video {
             bool deArrowed,
             @JsonKey(includeFromJson: false, includeToJson: false)
             String? deArrowThumbnailUrl,
+            @JsonKey(includeFromJson: false, includeToJson: false)
+            BackendPlayback? backendPlayback,
             String? viewCountText)?
         $default, {
     required TResult orElse(),
@@ -688,6 +702,7 @@ extension VideoPatterns on Video {
             _that.filterHide,
             _that.deArrowed,
             _that.deArrowThumbnailUrl,
+            _that.backendPlayback,
             _that.viewCountText);
       case _:
         return orElse();
@@ -759,6 +774,8 @@ extension VideoPatterns on Video {
             bool deArrowed,
             @JsonKey(includeFromJson: false, includeToJson: false)
             String? deArrowThumbnailUrl,
+            @JsonKey(includeFromJson: false, includeToJson: false)
+            BackendPlayback? backendPlayback,
             String? viewCountText)
         $default,
   ) {
@@ -808,6 +825,7 @@ extension VideoPatterns on Video {
             _that.filterHide,
             _that.deArrowed,
             _that.deArrowThumbnailUrl,
+            _that.backendPlayback,
             _that.viewCountText);
     }
   }
@@ -876,6 +894,8 @@ extension VideoPatterns on Video {
             bool deArrowed,
             @JsonKey(includeFromJson: false, includeToJson: false)
             String? deArrowThumbnailUrl,
+            @JsonKey(includeFromJson: false, includeToJson: false)
+            BackendPlayback? backendPlayback,
             String? viewCountText)?
         $default,
   ) {
@@ -925,6 +945,7 @@ extension VideoPatterns on Video {
             _that.filterHide,
             _that.deArrowed,
             _that.deArrowThumbnailUrl,
+            _that.backendPlayback,
             _that.viewCountText);
       case _:
         return null;
@@ -985,6 +1006,8 @@ class _Video extends Video implements ShareLinks, IdedVideo {
       this.deArrowed = false,
       @JsonKey(includeFromJson: false, includeToJson: false)
       this.deArrowThumbnailUrl,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      this.backendPlayback,
       this.viewCountText})
       : _keywords = keywords,
         _allowedRegions = allowedRegions,
@@ -1158,6 +1181,9 @@ class _Video extends Video implements ShareLinks, IdedVideo {
   @JsonKey(includeFromJson: false, includeToJson: false)
   final String? deArrowThumbnailUrl;
   @override
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  final BackendPlayback? backendPlayback;
+  @override
   final String? viewCountText;
 
   /// Create a copy of Video
@@ -1250,6 +1276,8 @@ class _Video extends Video implements ShareLinks, IdedVideo {
                 other.deArrowed == deArrowed) &&
             (identical(other.deArrowThumbnailUrl, deArrowThumbnailUrl) ||
                 other.deArrowThumbnailUrl == deArrowThumbnailUrl) &&
+            (identical(other.backendPlayback, backendPlayback) ||
+                other.backendPlayback == backendPlayback) &&
             (identical(other.viewCountText, viewCountText) ||
                 other.viewCountText == viewCountText));
   }
@@ -1300,12 +1328,13 @@ class _Video extends Video implements ShareLinks, IdedVideo {
         filterHide,
         deArrowed,
         deArrowThumbnailUrl,
+        backendPlayback,
         viewCountText
       ]);
 
   @override
   String toString() {
-    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, viewCountText: $viewCountText)';
+    return 'Video(videoId: $videoId, viewCount: $viewCount, published: $published, index: $index, indexId: $indexId, publishedText: $publishedText, isUpcoming: $isUpcoming, premiereTimestamp: $premiereTimestamp, dashUrl: $dashUrl, description: $description, descriptionHtml: $descriptionHtml, keywords: $keywords, likeCount: $likeCount, dislikeCount: $dislikeCount, paid: $paid, premium: $premium, isFamilyFriendly: $isFamilyFriendly, allowedRegions: $allowedRegions, genre: $genre, genreUrl: $genreUrl, authorThumbnails: $authorThumbnails, subCountText: $subCountText, allowRatings: $allowRatings, rating: $rating, isListed: $isListed, liveNow: $liveNow, hlsUrl: $hlsUrl, adaptiveFormats: $adaptiveFormats, formatStreams: $formatStreams, captions: $captions, recommendedVideos: $recommendedVideos, title: $title, lengthSeconds: $lengthSeconds, author: $author, authorId: $authorId, authorUrl: $authorUrl, videoThumbnails: $videoThumbnails, filtered: $filtered, matchedFilters: $matchedFilters, filterHide: $filterHide, deArrowed: $deArrowed, deArrowThumbnailUrl: $deArrowThumbnailUrl, backendPlayback: $backendPlayback, viewCountText: $viewCountText)';
   }
 }
 
@@ -1361,6 +1390,8 @@ abstract mixin class _$VideoCopyWith<$Res> implements $VideoCopyWith<$Res> {
       @JsonKey(includeFromJson: false, includeToJson: false) bool deArrowed,
       @JsonKey(includeFromJson: false, includeToJson: false)
       String? deArrowThumbnailUrl,
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      BackendPlayback? backendPlayback,
       String? viewCountText});
 }
 
@@ -1418,6 +1449,7 @@ class __$VideoCopyWithImpl<$Res> implements _$VideoCopyWith<$Res> {
     Object? filterHide = null,
     Object? deArrowed = null,
     Object? deArrowThumbnailUrl = freezed,
+    Object? backendPlayback = freezed,
     Object? viewCountText = freezed,
   }) {
     return _then(_Video(
@@ -1589,6 +1621,10 @@ class __$VideoCopyWithImpl<$Res> implements _$VideoCopyWith<$Res> {
           ? _self.deArrowThumbnailUrl
           : deArrowThumbnailUrl // ignore: cast_nullable_to_non_nullable
               as String?,
+      backendPlayback: freezed == backendPlayback
+          ? _self.backendPlayback
+          : backendPlayback // ignore: cast_nullable_to_non_nullable
+              as BackendPlayback?,
       viewCountText: freezed == viewCountText
           ? _self.viewCountText
           : viewCountText // ignore: cast_nullable_to_non_nullable

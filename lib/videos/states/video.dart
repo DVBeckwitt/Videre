@@ -7,6 +7,7 @@ import 'package:logging/logging.dart';
 
 import '../../downloads/states/download_manager.dart';
 import '../../globals.dart';
+import '../../player/models/backend_playback.dart';
 import '../../player/states/player.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../settings/states/settings.dart';
@@ -32,9 +33,15 @@ class VideoCubit extends Cubit<VideoState> {
   Future<void> onReady() async {
     if (isClosed) return;
     final generation = ++_loadGeneration;
-    emit(state.copyWith(loadingVideo: true, error: ''));
+    emit(state.copyWith(loadingVideo: true, error: '', requestedBackend: null));
     try {
-      Video video = await service.getVideo(state.videoId);
+      Video video =
+          await service.getVideo(state.videoId, onBackendRequest: (request) {
+        if (!isClosed && generation == _loadGeneration) {
+          emit(state.copyWith(requestedBackend: request));
+        }
+      });
+      if (isClosed || generation != _loadGeneration) return;
       final isLoggedIn = await service.isLoggedIn();
       if (isClosed || generation != _loadGeneration) return;
       emit(state.copyWith(
@@ -94,6 +101,7 @@ class VideoCubit extends Cubit<VideoState> {
 
   @override
   close() async {
+    ++_loadGeneration;
     await _downloadSubscription?.cancel();
     return super.close();
   }
@@ -129,6 +137,7 @@ class VideoCubit extends Cubit<VideoState> {
 sealed class VideoState with _$VideoState {
   const factory VideoState(
       {Video? video,
+      BackendPlayback? requestedBackend,
       int? dislikes,
       @Default(true) loadingVideo,
       required String videoId,

@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/settings/states/server_settings.dart';
+import 'package:clipious/settings/views/components/backend_picker.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/string.dart';
 import 'package:settings_ui/settings_ui.dart';
@@ -172,6 +173,26 @@ class ManageSingleServerScreen extends StatelessWidget {
                           enabled: !server.inUse,
                         )
                       ]),
+                      SettingsSection(
+                        title: Text(locals.backend),
+                        tiles: [
+                          SettingsTile.navigation(
+                            key: const ValueKey('backend-setting'),
+                            leading: const Icon(Icons.dns_outlined),
+                            title: Text(backendLabel(context, server)),
+                            description: Text(locals.backendHelp),
+                            onPressed: (context) => showBackendPicker(
+                              context,
+                              server: server,
+                              onDiscover: cubit.discoverBackends,
+                              onDiscoverFromPage: (uri, source) =>
+                                  cubit.discoverBrowserBackends(
+                                      pageUri: uri, source: source),
+                              onSave: cubit.setBackend,
+                            ),
+                          ),
+                        ],
+                      ),
                       SettingsSection(
                           title: Text(locals.authentication),
                           tiles: [

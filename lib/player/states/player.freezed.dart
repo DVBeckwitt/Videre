@@ -30,6 +30,8 @@ mixin _$PlayerState {
   bool get muted;
   double get aspectRatio; // videos to play
   Video? get currentlyPlaying;
+  BackendPlayback? get requestedBackend;
+  BackendRecovery? get backendRecovery;
   DownloadedVideo? get offlineCurrentlyPlaying;
   List<Video> get videos;
   List<DownloadedVideo> get offlineVideos; // playlist controls
@@ -42,7 +44,8 @@ mixin _$PlayerState {
   Duration get position;
   Duration get bufferedPosition;
   bool get isPlaying;
-  double get speed; // events
+  double get speed;
+  int get pitchSemitones; // events
 // command we send down the stack, namely video / audio player
   MediaCommand? get mediaCommand; // events we receive from bottom of stack
   MediaEvent get mediaEvent; // sponsor block variables
@@ -72,8 +75,7 @@ mixin _$PlayerState {
             (identical(other.top, top) || other.top == top) &&
             (identical(other.isDragging, isDragging) ||
                 other.isDragging == isDragging) &&
-            (identical(
-                    other.selectedFullScreenIndex, selectedFullScreenIndex) ||
+            (identical(other.selectedFullScreenIndex, selectedFullScreenIndex) ||
                 other.selectedFullScreenIndex == selectedFullScreenIndex) &&
             (identical(other.isHidden, isHidden) ||
                 other.isHidden == isHidden) &&
@@ -93,6 +95,10 @@ mixin _$PlayerState {
                 other.aspectRatio == aspectRatio) &&
             (identical(other.currentlyPlaying, currentlyPlaying) ||
                 other.currentlyPlaying == currentlyPlaying) &&
+            (identical(other.requestedBackend, requestedBackend) ||
+                other.requestedBackend == requestedBackend) &&
+            (identical(other.backendRecovery, backendRecovery) ||
+                other.backendRecovery == backendRecovery) &&
             (identical(
                     other.offlineCurrentlyPlaying, offlineCurrentlyPlaying) ||
                 other.offlineCurrentlyPlaying == offlineCurrentlyPlaying) &&
@@ -113,6 +119,8 @@ mixin _$PlayerState {
             (identical(other.isPlaying, isPlaying) ||
                 other.isPlaying == isPlaying) &&
             (identical(other.speed, speed) || other.speed == speed) &&
+            (identical(other.pitchSemitones, pitchSemitones) ||
+                other.pitchSemitones == pitchSemitones) &&
             (identical(other.mediaCommand, mediaCommand) ||
                 other.mediaCommand == mediaCommand) &&
             (identical(other.mediaEvent, mediaEvent) ||
@@ -151,6 +159,8 @@ mixin _$PlayerState {
         muted,
         aspectRatio,
         currentlyPlaying,
+        requestedBackend,
+        backendRecovery,
         offlineCurrentlyPlaying,
         const DeepCollectionEquality().hash(videos),
         const DeepCollectionEquality().hash(offlineVideos),
@@ -164,6 +174,7 @@ mixin _$PlayerState {
         bufferedPosition,
         isPlaying,
         speed,
+        pitchSemitones,
         mediaCommand,
         mediaEvent,
         const DeepCollectionEquality().hash(sponsorSegments),
@@ -177,7 +188,7 @@ mixin _$PlayerState {
 
   @override
   String toString() {
-    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
+    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
   }
 }
 
@@ -203,6 +214,8 @@ abstract mixin class $PlayerStateCopyWith<$Res> {
       bool muted,
       double aspectRatio,
       Video? currentlyPlaying,
+      BackendPlayback? requestedBackend,
+      BackendRecovery? backendRecovery,
       DownloadedVideo? offlineCurrentlyPlaying,
       List<Video> videos,
       List<DownloadedVideo> offlineVideos,
@@ -216,6 +229,7 @@ abstract mixin class $PlayerStateCopyWith<$Res> {
       Duration bufferedPosition,
       bool isPlaying,
       double speed,
+      int pitchSemitones,
       MediaCommand? mediaCommand,
       MediaEvent mediaEvent,
       List<Pair<int>> sponsorSegments,
@@ -257,6 +271,8 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
     Object? muted = null,
     Object? aspectRatio = null,
     Object? currentlyPlaying = freezed,
+    Object? requestedBackend = freezed,
+    Object? backendRecovery = freezed,
     Object? offlineCurrentlyPlaying = freezed,
     Object? videos = null,
     Object? offlineVideos = null,
@@ -270,6 +286,7 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
     Object? bufferedPosition = null,
     Object? isPlaying = null,
     Object? speed = null,
+    Object? pitchSemitones = null,
     Object? mediaCommand = freezed,
     Object? mediaEvent = null,
     Object? sponsorSegments = null,
@@ -341,6 +358,14 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
           ? _self.currentlyPlaying
           : currentlyPlaying // ignore: cast_nullable_to_non_nullable
               as Video?,
+      requestedBackend: freezed == requestedBackend
+          ? _self.requestedBackend
+          : requestedBackend // ignore: cast_nullable_to_non_nullable
+              as BackendPlayback?,
+      backendRecovery: freezed == backendRecovery
+          ? _self.backendRecovery
+          : backendRecovery // ignore: cast_nullable_to_non_nullable
+              as BackendRecovery?,
       offlineCurrentlyPlaying: freezed == offlineCurrentlyPlaying
           ? _self.offlineCurrentlyPlaying
           : offlineCurrentlyPlaying // ignore: cast_nullable_to_non_nullable
@@ -393,6 +418,10 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
           ? _self.speed
           : speed // ignore: cast_nullable_to_non_nullable
               as double,
+      pitchSemitones: null == pitchSemitones
+          ? _self.pitchSemitones
+          : pitchSemitones // ignore: cast_nullable_to_non_nullable
+              as int,
       mediaCommand: freezed == mediaCommand
           ? _self.mediaCommand
           : mediaCommand // ignore: cast_nullable_to_non_nullable
@@ -569,6 +598,8 @@ extension PlayerStatePatterns on PlayerState {
             bool muted,
             double aspectRatio,
             Video? currentlyPlaying,
+            BackendPlayback? requestedBackend,
+            BackendRecovery? backendRecovery,
             DownloadedVideo? offlineCurrentlyPlaying,
             List<Video> videos,
             List<DownloadedVideo> offlineVideos,
@@ -582,6 +613,7 @@ extension PlayerStatePatterns on PlayerState {
             Duration bufferedPosition,
             bool isPlaying,
             double speed,
+            int pitchSemitones,
             MediaCommand? mediaCommand,
             MediaEvent mediaEvent,
             List<Pair<int>> sponsorSegments,
@@ -613,6 +645,8 @@ extension PlayerStatePatterns on PlayerState {
             _that.muted,
             _that.aspectRatio,
             _that.currentlyPlaying,
+            _that.requestedBackend,
+            _that.backendRecovery,
             _that.offlineCurrentlyPlaying,
             _that.videos,
             _that.offlineVideos,
@@ -626,6 +660,7 @@ extension PlayerStatePatterns on PlayerState {
             _that.bufferedPosition,
             _that.isPlaying,
             _that.speed,
+            _that.pitchSemitones,
             _that.mediaCommand,
             _that.mediaEvent,
             _that.sponsorSegments,
@@ -671,6 +706,8 @@ extension PlayerStatePatterns on PlayerState {
             bool muted,
             double aspectRatio,
             Video? currentlyPlaying,
+            BackendPlayback? requestedBackend,
+            BackendRecovery? backendRecovery,
             DownloadedVideo? offlineCurrentlyPlaying,
             List<Video> videos,
             List<DownloadedVideo> offlineVideos,
@@ -684,6 +721,7 @@ extension PlayerStatePatterns on PlayerState {
             Duration bufferedPosition,
             bool isPlaying,
             double speed,
+            int pitchSemitones,
             MediaCommand? mediaCommand,
             MediaEvent mediaEvent,
             List<Pair<int>> sponsorSegments,
@@ -714,6 +752,8 @@ extension PlayerStatePatterns on PlayerState {
             _that.muted,
             _that.aspectRatio,
             _that.currentlyPlaying,
+            _that.requestedBackend,
+            _that.backendRecovery,
             _that.offlineCurrentlyPlaying,
             _that.videos,
             _that.offlineVideos,
@@ -727,6 +767,7 @@ extension PlayerStatePatterns on PlayerState {
             _that.bufferedPosition,
             _that.isPlaying,
             _that.speed,
+            _that.pitchSemitones,
             _that.mediaCommand,
             _that.mediaEvent,
             _that.sponsorSegments,
@@ -769,6 +810,8 @@ extension PlayerStatePatterns on PlayerState {
             bool muted,
             double aspectRatio,
             Video? currentlyPlaying,
+            BackendPlayback? requestedBackend,
+            BackendRecovery? backendRecovery,
             DownloadedVideo? offlineCurrentlyPlaying,
             List<Video> videos,
             List<DownloadedVideo> offlineVideos,
@@ -782,6 +825,7 @@ extension PlayerStatePatterns on PlayerState {
             Duration bufferedPosition,
             bool isPlaying,
             double speed,
+            int pitchSemitones,
             MediaCommand? mediaCommand,
             MediaEvent mediaEvent,
             List<Pair<int>> sponsorSegments,
@@ -812,6 +856,8 @@ extension PlayerStatePatterns on PlayerState {
             _that.muted,
             _that.aspectRatio,
             _that.currentlyPlaying,
+            _that.requestedBackend,
+            _that.backendRecovery,
             _that.offlineCurrentlyPlaying,
             _that.videos,
             _that.offlineVideos,
@@ -825,6 +871,7 @@ extension PlayerStatePatterns on PlayerState {
             _that.bufferedPosition,
             _that.isPlaying,
             _that.speed,
+            _that.pitchSemitones,
             _that.mediaCommand,
             _that.mediaEvent,
             _that.sponsorSegments,
@@ -859,6 +906,8 @@ class _PlayerState extends PlayerState {
       this.muted = false,
       this.aspectRatio = 16 / 9,
       this.currentlyPlaying,
+      this.requestedBackend,
+      this.backendRecovery,
       this.offlineCurrentlyPlaying,
       final List<Video> videos = const [],
       final List<DownloadedVideo> offlineVideos = const [],
@@ -872,6 +921,7 @@ class _PlayerState extends PlayerState {
       this.bufferedPosition = Duration.zero,
       this.isPlaying = false,
       this.speed = 1.0,
+      this.pitchSemitones = 0,
       this.mediaCommand,
       this.mediaEvent = const MediaEvent(state: MediaState.idle),
       final List<Pair<int>> sponsorSegments = const [],
@@ -933,6 +983,10 @@ class _PlayerState extends PlayerState {
   @override
   final Video? currentlyPlaying;
   @override
+  final BackendPlayback? requestedBackend;
+  @override
+  final BackendRecovery? backendRecovery;
+  @override
   final DownloadedVideo? offlineCurrentlyPlaying;
   final List<Video> _videos;
   @override
@@ -989,6 +1043,9 @@ class _PlayerState extends PlayerState {
   @override
   @JsonKey()
   final double speed;
+  @override
+  @JsonKey()
+  final int pitchSemitones;
 // events
 // command we send down the stack, namely video / audio player
   @override
@@ -1047,8 +1104,7 @@ class _PlayerState extends PlayerState {
             (identical(other.top, top) || other.top == top) &&
             (identical(other.isDragging, isDragging) ||
                 other.isDragging == isDragging) &&
-            (identical(
-                    other.selectedFullScreenIndex, selectedFullScreenIndex) ||
+            (identical(other.selectedFullScreenIndex, selectedFullScreenIndex) ||
                 other.selectedFullScreenIndex == selectedFullScreenIndex) &&
             (identical(other.isHidden, isHidden) ||
                 other.isHidden == isHidden) &&
@@ -1068,6 +1124,10 @@ class _PlayerState extends PlayerState {
                 other.aspectRatio == aspectRatio) &&
             (identical(other.currentlyPlaying, currentlyPlaying) ||
                 other.currentlyPlaying == currentlyPlaying) &&
+            (identical(other.requestedBackend, requestedBackend) ||
+                other.requestedBackend == requestedBackend) &&
+            (identical(other.backendRecovery, backendRecovery) ||
+                other.backendRecovery == backendRecovery) &&
             (identical(
                     other.offlineCurrentlyPlaying, offlineCurrentlyPlaying) ||
                 other.offlineCurrentlyPlaying == offlineCurrentlyPlaying) &&
@@ -1088,6 +1148,8 @@ class _PlayerState extends PlayerState {
             (identical(other.isPlaying, isPlaying) ||
                 other.isPlaying == isPlaying) &&
             (identical(other.speed, speed) || other.speed == speed) &&
+            (identical(other.pitchSemitones, pitchSemitones) ||
+                other.pitchSemitones == pitchSemitones) &&
             (identical(other.mediaCommand, mediaCommand) ||
                 other.mediaCommand == mediaCommand) &&
             (identical(other.mediaEvent, mediaEvent) ||
@@ -1126,6 +1188,8 @@ class _PlayerState extends PlayerState {
         muted,
         aspectRatio,
         currentlyPlaying,
+        requestedBackend,
+        backendRecovery,
         offlineCurrentlyPlaying,
         const DeepCollectionEquality().hash(_videos),
         const DeepCollectionEquality().hash(_offlineVideos),
@@ -1139,6 +1203,7 @@ class _PlayerState extends PlayerState {
         bufferedPosition,
         isPlaying,
         speed,
+        pitchSemitones,
         mediaCommand,
         mediaEvent,
         const DeepCollectionEquality().hash(_sponsorSegments),
@@ -1152,7 +1217,7 @@ class _PlayerState extends PlayerState {
 
   @override
   String toString() {
-    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
+    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
   }
 }
 
@@ -1180,6 +1245,8 @@ abstract mixin class _$PlayerStateCopyWith<$Res>
       bool muted,
       double aspectRatio,
       Video? currentlyPlaying,
+      BackendPlayback? requestedBackend,
+      BackendRecovery? backendRecovery,
       DownloadedVideo? offlineCurrentlyPlaying,
       List<Video> videos,
       List<DownloadedVideo> offlineVideos,
@@ -1193,6 +1260,7 @@ abstract mixin class _$PlayerStateCopyWith<$Res>
       Duration bufferedPosition,
       bool isPlaying,
       double speed,
+      int pitchSemitones,
       MediaCommand? mediaCommand,
       MediaEvent mediaEvent,
       List<Pair<int>> sponsorSegments,
@@ -1236,6 +1304,8 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
     Object? muted = null,
     Object? aspectRatio = null,
     Object? currentlyPlaying = freezed,
+    Object? requestedBackend = freezed,
+    Object? backendRecovery = freezed,
     Object? offlineCurrentlyPlaying = freezed,
     Object? videos = null,
     Object? offlineVideos = null,
@@ -1249,6 +1319,7 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
     Object? bufferedPosition = null,
     Object? isPlaying = null,
     Object? speed = null,
+    Object? pitchSemitones = null,
     Object? mediaCommand = freezed,
     Object? mediaEvent = null,
     Object? sponsorSegments = null,
@@ -1320,6 +1391,14 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
           ? _self.currentlyPlaying
           : currentlyPlaying // ignore: cast_nullable_to_non_nullable
               as Video?,
+      requestedBackend: freezed == requestedBackend
+          ? _self.requestedBackend
+          : requestedBackend // ignore: cast_nullable_to_non_nullable
+              as BackendPlayback?,
+      backendRecovery: freezed == backendRecovery
+          ? _self.backendRecovery
+          : backendRecovery // ignore: cast_nullable_to_non_nullable
+              as BackendRecovery?,
       offlineCurrentlyPlaying: freezed == offlineCurrentlyPlaying
           ? _self.offlineCurrentlyPlaying
           : offlineCurrentlyPlaying // ignore: cast_nullable_to_non_nullable
@@ -1372,6 +1451,10 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
           ? _self.speed
           : speed // ignore: cast_nullable_to_non_nullable
               as double,
+      pitchSemitones: null == pitchSemitones
+          ? _self.pitchSemitones
+          : pitchSemitones // ignore: cast_nullable_to_non_nullable
+              as int,
       mediaCommand: freezed == mediaCommand
           ? _self.mediaCommand
           : mediaCommand // ignore: cast_nullable_to_non_nullable

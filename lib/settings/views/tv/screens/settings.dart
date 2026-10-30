@@ -13,6 +13,7 @@ import 'package:locale_names/locale_names.dart';
 import 'package:logging/logging.dart';
 
 import '../../../../globals.dart';
+import '../../../../feedback/views/open_feedback.dart';
 import '../../../states/settings.dart';
 import '../../screens/network_proxy.dart';
 
@@ -356,6 +357,11 @@ class TVSettingsScreen extends StatelessWidget {
                       Switch(onChanged: (value) {}, value: state.forceTvUi),
                 ),
                 SettingsTitle(title: locals.about),
+                SettingsTile(
+                  title: locals.feedbackFormTitle,
+                  description: locals.feedbackFormSummary,
+                  onSelected: openFeedbackForm,
+                ),
                 SettingsTile(
                   title: locals.exportBackup,
                   description: locals.backupDescription,

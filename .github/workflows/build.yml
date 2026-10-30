@@ -11,6 +11,18 @@ on:
   workflow_dispatch:
 
 jobs:
+  feedback-service:
+    name: feedback service tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Test feedback relay without external submissions
+        working-directory: services/feedback
+        run: npm test
+
   release-script:
     name: release script safety tests
     runs-on: windows-latest

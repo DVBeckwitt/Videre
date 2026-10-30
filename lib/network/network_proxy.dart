@@ -70,7 +70,8 @@ class NetworkProxy {
     ReloadableHttpClient.resetAll();
   }
 
-  void configureClient(HttpClient client, {SecurityContext? context}) {
+  void configureClient(HttpClient client,
+      {SecurityContext? context, bool requireValidCertificate = false}) {
     if (_changing || _blocked != null) {
       client.findProxy = (_) => 'DIRECT';
       client.connectionFactory = (_, __, ___) => Future.error(
@@ -78,7 +79,9 @@ class NetworkProxy {
       return;
     }
     configureSocksHttpClient(client, _config,
-        context: context, badCertificateCallback: _allowCertificate);
+        context: context,
+        badCertificateCallback:
+            requireValidCertificate ? null : _allowCertificate);
   }
 
   static bool _allowCertificate(X509Certificate cert, String host, int port) =>

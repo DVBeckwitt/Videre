@@ -25,6 +25,7 @@ import '../../../models/video.dart';
 import '../../../states/tv_video.dart';
 import '../../../states/video.dart';
 import '../../components/video_thumbnail.dart';
+import '../../components/backend_status.dart';
 
 @RoutePage()
 class TvVideoScreen extends StatelessWidget {
@@ -81,6 +82,7 @@ class TvVideoScreen extends StatelessWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          VideoBackendStatus(state: videoState),
                           Text(
                               videoState.error == coulnotLoadVideos
                                   ? locals.couldntLoadVideo
@@ -103,11 +105,17 @@ class TvVideoScreen extends StatelessWidget {
                       ),
                     ),
                   )
-                : const Center(
-                    child: SizedBox(
-                        width: 50,
-                        height: 50,
-                        child: CircularProgressIndicator())),
+                : Center(
+                    child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      VideoBackendStatus(state: videoState),
+                      const SizedBox(
+                          width: 50,
+                          height: 50,
+                          child: CircularProgressIndicator()),
+                    ],
+                  )),
             secondChild: videoState.video == null
                 ? const SizedBox.shrink()
                 : Stack(
@@ -151,6 +159,8 @@ class TvVideoScreen extends StatelessWidget {
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
+                                            VideoBackendStatus(
+                                                state: videoState),
                                             Row(
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.center,

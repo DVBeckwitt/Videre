@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/server_already_exists.dart';
@@ -23,7 +24,9 @@ class _ValidationService extends Service {
   }
 
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) async {
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) async {
     checked.add(serverOverride!);
     return Video(videoId: videoId);
   }

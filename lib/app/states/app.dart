@@ -8,6 +8,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../../globals.dart';
 import '../../home/models/db/home_layout.dart';
+import '../../main.dart' show isTv;
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
 
@@ -48,7 +49,7 @@ class AppCubit extends Cubit<AppState> {
           .map((e) => e.path)
           .firstOrNull;
       if (value != null) {
-        openAppLink(value, false);
+        unawaited(openAppLink(value, false));
       }
     }, onError: (err) {
       log.warning("getLinkStream error: $err");
@@ -61,7 +62,7 @@ class AppCubit extends Cubit<AppState> {
           .map((e) => e.path)
           .firstOrNull;
       if (value != null) {
-        openAppLink(value, true);
+        unawaited(openAppLink(value, true));
       }
       ReceiveSharingIntent.instance.reset();
     });
@@ -75,12 +76,14 @@ class AppCubit extends Cubit<AppState> {
     super.close();
   }
 
-  void openAppLink(String url, bool fullStack) {
+  Future<void> openAppLink(String url, bool fullStack) async {
+    if (isClosed) return;
     try {
       log.fine('opening $url, full stack: $fullStack');
       Uri uri = Uri.parse(url);
       String? videoId;
-      if (youtubeHosts.contains(uri.host)) {
+      if (const {'http', 'https'}.contains(uri.scheme) &&
+          youtubeHosts.contains(uri.host)) {
         if (uri.pathSegments.length == 1 &&
             uri.pathSegments.contains("watch") &&
             uri.queryParameters.containsKey('v')) {
@@ -90,16 +93,25 @@ class AppCubit extends Cubit<AppState> {
           videoId = uri.pathSegments[0];
         }
 
-        if (videoId != null) {
-          if (fullStack) {
-            appRouter.replaceAll([
+        if (videoId != null && videoId.isNotEmpty) {
+          if (isTv) {
+            if (fullStack) {
+              await appRouter.replaceAll([
+                const TvHomeRoute(),
+                TvVideoRoute(videoId: videoId),
+              ]);
+            } else {
+              await appRouter.push(TvVideoRoute(videoId: videoId));
+            }
+          } else if (fullStack) {
+            await appRouter.replaceAll([
               MainRoute(children: [
                 const MainContentRoute(),
                 VideoRoute(videoId: videoId)
               ])
             ]);
           } else {
-            appRouter.push(VideoRoute(videoId: videoId));
+            await appRouter.push(VideoRoute(videoId: videoId));
           }
         }
       }

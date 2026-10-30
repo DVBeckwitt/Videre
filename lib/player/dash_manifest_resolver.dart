@@ -2,6 +2,7 @@ import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 
 import '../settings/models/db/server.dart';
+import 'models/backend_playback.dart';
 
 /// Checks instance DASH manifests before the native player can retry a known
 /// failure. Signed URLs are kept only for this playback attempt.
@@ -57,7 +58,15 @@ class DashManifestResolver {
   }
 
   /// Null means this source failed; the caller should use its normal fallback.
-  Future<String?> resolve(String url, String videoId, Server server) async {
+  Future<String?> resolve(String url, String videoId, Server server,
+      {bool throwRetryable = false}) async {
+    void checkRetryable(http.Response response) {
+      if (throwRetryable &&
+          const [502, 503, 504].contains(response.statusCode)) {
+        throw const BackendPlaybackFailure();
+      }
+    }
+
     final instance = Uri.parse(server.url);
     final manifest = Uri.parse(url);
     // Direct YouTube manifests are outside this Invidious-specific workaround.
@@ -83,6 +92,7 @@ class DashManifestResolver {
     try {
       if (cached == null) {
         final response = await _get(manifest, server);
+        checkRetryable(response);
         if (response.statusCode == 200) {
           remember(false);
           return url;
@@ -103,6 +113,7 @@ class DashManifestResolver {
         'local': manifest.queryParameters['local'] ?? 'false',
       });
       final page = await _get(watch, server);
+      checkRetryable(page);
       if (page.statusCode != 200) return null;
       final document = html.parse(page.body);
       for (final source in document.querySelectorAll('video#player source')) {
@@ -123,9 +134,13 @@ class DashManifestResolver {
         // Use the URL exactly as supplied by the player, including its signature
         // and proxy parameters. Retry once; never loop on a rejected signature.
         final retry = await _get(recovered, server);
+        checkRetryable(retry);
         return retry.statusCode == 200 ? recovered.toString() : null;
       }
-    } catch (_) {
+    } catch (error) {
+      if (throwRetryable && isBackendRetryable(error)) {
+        throw const BackendPlaybackFailure();
+      }
       // Timeouts, malformed pages, and network errors use progressive fallback.
       // Do not log signed URLs, page contents, or custom authentication headers.
     }

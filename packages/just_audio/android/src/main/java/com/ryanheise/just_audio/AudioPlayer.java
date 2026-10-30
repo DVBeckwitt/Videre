@@ -418,10 +418,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 Log.e(TAG, "default ExoPlaybackException: " + exoError.getUnexpectedException().getMessage());
             }
             // TODO: send both errorCode and type
-            sendError(exoError.type, exoError.getMessage(), mapOf("index", currentIndex));
+            sendError(exoError.type, exoError.getMessage(), mapOf("index", currentIndex, "backendRetryable", BackendRetryability.isRetryable(error)));
         } else {
             Log.e(TAG, "default PlaybackException: " + error.getMessage());
-            sendError(error.errorCode, error.getMessage(), mapOf("index", currentIndex));
+            sendError(error.errorCode, error.getMessage(), mapOf("index", currentIndex, "backendRetryable", BackendRetryability.isRetryable(error)));
         }
     }
 

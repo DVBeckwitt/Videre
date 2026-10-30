@@ -9,6 +9,7 @@ import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -30,7 +31,9 @@ class _GuestService extends Service {
       [];
 
   @override
-  Future<Video> getVideo(String id, {Server? serverOverride}) async =>
+  Future<Video> getVideo(String id,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest}) async =>
       Video(videoId: id, formatStreams: const [], adaptiveFormats: const []);
 }
 

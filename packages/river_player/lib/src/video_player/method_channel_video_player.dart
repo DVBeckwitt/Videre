@@ -177,6 +177,17 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
   }
 
   @override
+  Future<void> setPitch(int? textureId, double pitch) {
+    return _channel.invokeMethod<void>(
+      'setPitch',
+      <String, dynamic>{
+        'textureId': textureId,
+        'pitch': pitch,
+      },
+    );
+  }
+
+  @override
   Future<void> setTrackParameters(
       int? textureId, int? width, int? height, int? bitrate) {
     return _channel.invokeMethod<void>(

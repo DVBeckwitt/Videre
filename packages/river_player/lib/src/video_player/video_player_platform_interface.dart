@@ -117,6 +117,14 @@ abstract class VideoPlayerPlatform {
     throw UnimplementedError('setSpeed() has not been implemented.');
   }
 
+  /// Sets audio pitch independently of speed. Neutral pitch is compatible with
+  /// platforms that have no independent pitch implementation.
+  Future<void> setPitch(int? textureId, double pitch) {
+    if (pitch == 1.0) return Future<void>.value();
+    throw UnsupportedError(
+        'Independent pitch is not supported on this platform.');
+  }
+
   /// Sets the video track parameters (used to select quality of the video)
   Future<void> setTrackParameters(
       int? textureId, int? width, int? height, int? bitrate) {

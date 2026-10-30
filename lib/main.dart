@@ -27,6 +27,7 @@ import 'package:logging/logging.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'settings/models/db/app_logs.dart';
+import 'feedback/views/feedback_screenshot.dart';
 
 const brandColor = Color(0xFF4f0096);
 
@@ -75,6 +76,8 @@ Future<void> main() async {
   if (hasServer) {
     await service.validateCurrentSessionSafely();
   }
+  // Resolve the interface before constructing its route table.
+  isTv = await isDeviceTv();
   appRouter = AppRouter(hasServer: hasServer);
 
   initializeNotifications();
@@ -86,8 +89,9 @@ Future<void> main() async {
     log.severe("failed to set high refresh mode", err);
   }
 
-  isTv = await isDeviceTv();
   runApp(BetterFeedback(
+    feedbackBuilder: buildFeedbackScreenshotForm,
+    localizationsDelegates: [AppLocalizations.delegate],
     child: MultiBlocProvider(providers: [
       BlocProvider(
         create: (context) {

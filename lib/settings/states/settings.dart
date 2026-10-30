@@ -2,9 +2,7 @@ import 'dart:convert';
 
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:bloc/bloc.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:easy_debounce/easy_debounce.dart';
-import 'package:feedback/feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -15,7 +13,6 @@ import 'package:clipious/workmanager.dart';
 import 'package:locale_names/locale_names.dart';
 import 'package:logging/logging.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../globals.dart';
 import '../../downloads/states/download_manager.dart';
@@ -511,38 +508,6 @@ class SettingsCubit extends Cubit<SettingsState> {
     emit(state.copyWith(
         subscriptionNotifications:
             await fileDb.getSubscriptionNotifications()));
-  }
-
-  sendFeedBack(UserFeedback feedback) async {
-    try {
-      appCubit.setGlobalLoading(true);
-      final deviceInfo = await DeviceInfoPlugin().androidInfo;
-      final androidInfo = deviceInfo.version;
-
-      final firstLine = feedback.text.split('\n')[0];
-
-      String body =
-          '**Runtime info:**\n[Device] Manufacturer: ${deviceInfo.manufacturer} / Brand: ${deviceInfo.brand} / Model: ${deviceInfo.model} / Hardware: ${deviceInfo.hardware}';
-      body +=
-          '\n[Android] Version: ${androidInfo.release}.${androidInfo.incremental} (${androidInfo.codename})';
-      body +=
-          '\n[Videre] Version: ${state.packageInfo.version} Build: ${state.packageInfo.buildNumber}';
-
-      body += '\n\n\n**Feedback:**\n${feedback.text}\n\n\n';
-
-      String screenshotUrl =
-          await service.uploadImageToImgur(base64Encode(feedback.screenshot));
-      body += '\n**Screenshot:**\n![app screenshot]($screenshotUrl)';
-
-      final url =
-          'https://github.com/DVBeckwitt/Videre/issues/new?title=${Uri.encodeComponent('[App Feedback] $firstLine')}&body=${Uri.encodeComponent(body)}';
-      await launchUrl(Uri.parse(url));
-    } catch (err) {
-      _log.severe("Issue while submitting feedback", err);
-      rethrow;
-    } finally {
-      appCubit.setGlobalLoading(false);
-    }
   }
 }
 

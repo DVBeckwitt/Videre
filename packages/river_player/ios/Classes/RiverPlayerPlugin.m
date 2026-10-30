@@ -391,6 +391,14 @@ bool _remoteCommandsInitialized = false;
             result(nil);
         } else if ([@"setSpeed" isEqualToString:call.method]) {
             [player setSpeed:[[argsMap objectForKey:@"speed"] doubleValue] result:result];
+        } else if ([@"setPitch" isEqualToString:call.method]) {
+            if ([[argsMap objectForKey:@"pitch"] doubleValue] == 1.0) {
+                result(nil);
+            } else {
+                result([FlutterError errorWithCode:@"UnsupportedPitch"
+                                          message:@"Independent pitch is only supported on Android"
+                                          details:nil]);
+            }
         }else if ([@"setTrackParameters" isEqualToString:call.method]) {
             int width = [argsMap[@"width"] intValue];
             int height = [argsMap[@"height"] intValue];

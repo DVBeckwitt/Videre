@@ -7,6 +7,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -34,7 +35,9 @@ class _DownloadService extends Service {
   _DownloadService(this.fetch, {this.onServer});
 
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) {
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) {
     onServer?.call(serverOverride);
     return fetch(videoId);
   }

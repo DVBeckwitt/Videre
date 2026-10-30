@@ -85,7 +85,9 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 ## Contributing
 
-Report bugs and suggestions through [GitHub Issues](https://github.com/DVBeckwitt/Videre/issues). Include your device, Android and Videre versions, instance, steps to reproduce, and logs or screenshots with private details removed.
+Report bugs and suggestions through **Settings → Bugs and suggestions** in builds connected to the feedback service, or through [GitHub Issues](https://github.com/DVBeckwitt/Videre/issues). The in-app form supports bugs and suggestions without a GitHub account. Diagnostics and screenshots are optional and off by default. Review the public report before sending; drafts stay in app storage until you send them. Failed or unconfirmed submissions keep the same report for retry, and confirmed issue links are saved under **My reports**.
+
+The account-free flow requires a hosted relay and a repository-scoped GitHub App. Deployment, privacy boundaries, local testing, and build configuration are documented in [services/feedback/README.md](services/feedback/README.md). An APK without a configured relay can save drafts but cannot submit them. No GitHub credentials belong in the APK.
 
 Videre is an independently maintained [Clipious](https://github.com/lamarios/clipious) fork with transcript search, improved navigation, and local library features. Translations live in `lib/l10n/*.arb`. Keep pull requests focused; reuse existing code and remove obsolete alternatives.
 

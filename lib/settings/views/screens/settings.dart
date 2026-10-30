@@ -1,15 +1,13 @@
 import 'package:auto_route/auto_route.dart';
-import 'package:feedback/feedback.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
-import 'package:clipious/utils.dart';
-import 'package:clipious/utils/models/imgur_error.dart';
 import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:settings_ui/settings_ui.dart';
 
+import '../../../feedback/views/open_feedback.dart';
 import '../../states/settings.dart';
 import 'network_proxy.dart';
 
@@ -199,26 +197,11 @@ class SettingsScreen extends StatelessWidget {
                     description: Text(locals.copySettingsAsJsonDescription),
                     onPressed: cubit.copySettingsAsJson,
                   ),
-                  SettingsTile(
+                  SettingsTile.navigation(
                     leading: const Icon(Icons.feedback_outlined),
-                    title: Text(locals.submitFeedback),
-                    description: Text(locals.submitFeedbackDescription),
-                    onPressed: (context) {
-                      okCancelDialog(
-                          context,
-                          locals.submitFeedback,
-                          locals.feedbackDisclaimer,
-                          () => BetterFeedback.of(context).show((feedback) {
-                                try {
-                                  cubit.sendFeedBack(feedback);
-                                } catch (err) {
-                                  showAlertDialog(context, locals.error, [
-                                    Text(locals.feedbackScreenshotError),
-                                    if (err is ImgurError) Text(err.error)
-                                  ]);
-                                }
-                              }));
-                    },
+                    title: Text(locals.feedbackFormTitle),
+                    description: Text(locals.feedbackFormSummary),
+                    onPressed: openFeedbackForm,
                   )
                 ])
               ],

@@ -35,6 +35,9 @@ import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
 import '../models/playback_session.dart';
+import '../models/playback_pitch.dart';
+import '../models/backend_playback.dart';
+import '../models/backend_recovery.dart';
 
 part 'player.freezed.dart';
 
@@ -51,6 +54,7 @@ enum PlayerRepeat { noRepeat, repeatAll, repeatOne }
 
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static PlayerCubit? _sessionOwner;
+  String? _pitchVideoId;
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
   late final AudioSession _audioSession;
@@ -64,6 +68,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   bool? _requestedPlaying;
   int _progressGeneration = 0;
   int _videoSwitchGeneration = 0;
+  String? _requestedBackendVideoId;
+  bool _backendSwitchPending = false;
+  bool _manualSelectionPending = false;
+  Timer? _backendSuccessTimer;
+  Duration? _backendProgressPosition;
+
+  /// The current user's play/pause intent also applies to a replacement source.
+  bool get requestedPlaying => _requestedPlaying ?? state.isPlaying;
+
+  /// Changes before a new video's metadata is awaited, invalidating the old
+  /// decoder's pending backend recovery as well as its native callbacks.
+  int get backendPlaybackGeneration => _videoSwitchGeneration;
   bool _isDisposing = false;
   StreamSubscription<void>? _becomingNoisySubscription;
   final bool _resumeOnReady;
@@ -164,10 +180,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       ...offline.map((v) => v.videoId)
     };
     // Keep the player hidden until Resume is pressed; restoring must be silent.
+    _requestedBackendVideoId = null;
+    _clearBackendProgress();
     emit(state.copyWith(
+        backendRecovery: null,
         videos: saved.videos,
         offlineVideos: offline,
         currentlyPlaying: null,
+        requestedBackend: null,
         offlineCurrentlyPlaying: null,
         position: Duration(seconds: saved.seconds),
         startAt: Duration(seconds: saved.seconds),
@@ -208,7 +228,119 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     ], startAt: Duration(seconds: position), playing: playing);
   }
 
+  bool setRequestedBackend(String videoId, BackendPlayback? request) {
+    // The old decoder may still report progress while the same video reloads.
+    // Until metadata returns, only the new load's observer owns this status.
+    if (isClosed ||
+        _isDisposing ||
+        _backendSwitchPending ||
+        state.isClosing ||
+        state.offlineCurrentlyPlaying != null ||
+        (_requestedBackendVideoId ?? state.currentlyPlaying?.videoId) !=
+            videoId) {
+      return false;
+    }
+    _recordBackendRequest(videoId, request);
+    return true;
+  }
+
+  void _recordBackendRequest(String videoId, BackendPlayback? request) {
+    var recovery = state.backendRecovery;
+    if (request != null &&
+        (request.retryIndex > 0 || request.manualSelection) &&
+        !identical(recovery?.request, request) &&
+        !identical(state.requestedBackend, request)) {
+      _clearBackendProgress();
+      recovery = BackendRecovery(
+          phase: BackendRecoveryPhase.trying,
+          request: request,
+          videoId: videoId,
+          manual: request.manualSelection);
+    }
+    emit(state.copyWith(requestedBackend: request, backendRecovery: recovery));
+  }
+
+  void _clearBackendProgress() {
+    _backendSuccessTimer?.cancel();
+    _backendSuccessTimer = null;
+    _backendProgressPosition = null;
+  }
+
+  bool _isRecoveryAttempt(String videoId, BackendPlayback? request) =>
+      !isClosed &&
+      !_isDisposing &&
+      !_backendSwitchPending &&
+      !state.isClosing &&
+      state.offlineCurrentlyPlaying == null &&
+      state.currentlyPlaying?.videoId == videoId &&
+      request != null &&
+      identical(state.requestedBackend, request) &&
+      identical(state.backendRecovery?.request, request) &&
+      state.backendRecovery?.videoId == videoId;
+
+  /// Called only after a native source has initialized. A paused source is ready,
+  /// but it has not proved that playback resumed.
+  void reportBackendPlaybackReady(String videoId, BackendPlayback? request,
+      {required bool playing}) {
+    if (!_isRecoveryAttempt(videoId, request) || playing) return;
+    final recovery = state.backendRecovery!;
+    if (recovery.phase != BackendRecoveryPhase.trying) return;
+    _backendProgressPosition = null;
+    emit(state.copyWith(
+        backendRecovery: recovery.withPhase(BackendRecoveryPhase.ready)));
+  }
+
+  /// Native playing samples, not metadata, seek, or generic ready events, prove
+  /// recovery. Two advancing samples avoid a resume seek being called success.
+  void reportBackendPlaybackProgress(
+      String videoId, BackendPlayback? request, Duration position,
+      {required bool playing}) {
+    if (!_isRecoveryAttempt(videoId, request)) return;
+    final recovery = state.backendRecovery!;
+    if (recovery.phase != BackendRecoveryPhase.trying &&
+        recovery.phase != BackendRecoveryPhase.ready) {
+      return;
+    }
+    if (!playing) {
+      _backendProgressPosition = null;
+      return;
+    }
+    if (recovery.phase == BackendRecoveryPhase.ready) {
+      emit(state.copyWith(
+          backendRecovery: recovery.withPhase(BackendRecoveryPhase.trying)));
+    }
+    final previous = _backendProgressPosition;
+    if (previous == null || position < previous) {
+      _backendProgressPosition = position;
+      return;
+    }
+    if (position - previous < const Duration(milliseconds: 250)) return;
+    final succeeded = recovery.withPhase(BackendRecoveryPhase.succeeded);
+    emit(state.copyWith(backendRecovery: succeeded));
+    _backendSuccessTimer?.cancel();
+    _backendSuccessTimer = Timer(const Duration(seconds: 4), () {
+      if (!isClosed && identical(state.backendRecovery, succeeded)) {
+        emit(state.copyWith(backendRecovery: null));
+      }
+    });
+  }
+
   void setEvent(MediaEvent event) {
+    if (isClosed || _isDisposing || state.isClosing) return;
+    // The previous decoder can still emit while replacement metadata loads.
+    if (_backendSwitchPending && event.type != MediaEventType.backendRetry) {
+      return;
+    }
+    if (event.state == MediaState.error && state.backendRecovery != null) {
+      _clearBackendProgress();
+      emit(state.copyWith(
+          backendRecovery:
+              state.backendRecovery!.withPhase(BackendRecoveryPhase.failed)));
+    }
+    if (event.type == MediaEventType.seek ||
+        event.type == MediaEventType.pause) {
+      _backendProgressPosition = null;
+    }
     handleMediaEvent(event);
     mapMediaEventToMediaHandler(event);
 
@@ -397,6 +529,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       case MediaEventType.aspectRatioChanged:
         emit(state.copyWith(aspectRatio: event.value));
         break;
+      case MediaEventType.pitchChanged:
+        final pitch = event.value;
+        if (pitch is int &&
+            pitch >= minimumPitchSemitones &&
+            pitch <= maximumPitchSemitones) {
+          emit(state.copyWith(pitchSemitones: pitch));
+        }
+        break;
+      case MediaEventType.speedChanged:
+        final speed = event.value;
+        if (speed is num && speed.isFinite && speed > 0) {
+          emit(state.copyWith(speed: speed.toDouble()));
+        }
+        break;
       default:
         break;
     }
@@ -415,9 +561,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    _clearBackendProgress();
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     _progressGeneration++;
     _videoSwitchGeneration++;
+    _requestedBackendVideoId = null;
     await _becomingNoisySubscription?.cancel();
     await _updateAutoPip(state, disable: true);
     _pip?.onPipEntered = null;
@@ -460,15 +608,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || state.isClosing) return;
     // Background playback must stop before the closing animation can run.
     pause();
+    _pitchVideoId = null;
     final generation = ++_progressGeneration;
     _videoSwitchGeneration++;
+    _requestedBackendVideoId = null;
+    _clearBackendProgress();
     unawaited(_saveSession(state));
     playbackHistoryRevision.value++;
     var mediaEvent = MediaEvent(
         state: MediaState.playing,
         type: MediaEventType.miniDisplayChanged,
         value: state.isMini);
-    emit(state.copyWith(isClosing: true));
+    emit(state.copyWith(
+        isClosing: true, requestedBackend: null, backendRecovery: null));
     cancelSleep();
     Future.delayed(
       animationDuration * 1.5,
@@ -483,6 +635,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             videos: [],
             playedVideos: [],
             currentlyPlaying: null,
+            requestedBackend: null,
             offlineCurrentlyPlaying: null,
             offlineVideos: [],
             isClosing: false));
@@ -757,13 +910,22 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   /// Switches to a video without changing the queue
   Future<void> _switchToVideo(IdedVideo video,
-      {Duration? startAt, bool? playing}) async {
+      {Duration? startAt,
+      bool? playing,
+      BackendPlayback? backendRequest}) async {
     if (isClosed) return;
     _requestedPlaying = playing;
     final generation = ++_videoSwitchGeneration;
     bool active() => !isClosed && generation == _videoSwitchGeneration;
     _progressGeneration++;
-    if (state.isClosing) emit(state.copyWith(isClosing: false));
+    _requestedBackendVideoId = video is Video ? video.videoId : null;
+    _backendSwitchPending = true;
+    _clearBackendProgress();
+    emit(state.copyWith(
+        isClosing: false, requestedBackend: null, backendRecovery: null));
+    if (backendRequest != null) {
+      _recordBackendRequest(video.videoId, backendRequest);
+    }
     try {
       // we move the existing video to the stack of played video
       await audioSession.setActive(true);
@@ -802,12 +964,33 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       offlineCurrentlyPlaying = state.offlineCurrentlyPlaying;
       if (!isOffline) {
         late Video v;
-        if (video is Video &&
+        var reuseLoaded = video is Video &&
             video.formatStreams != null &&
-            video.adaptiveFormats != null) {
+            video.adaptiveFormats != null;
+        if (reuseLoaded && video.backendPlayback != null) {
+          final currentServer = await db.getCurrentlySelectedServer();
+          if (!active()) return;
+          reuseLoaded = video.backendPlayback!.matches(currentServer);
+        }
+        if (reuseLoaded && video is Video && backendRequest == null) {
           v = video;
         } else {
-          v = await service.getVideo(video.videoId);
+          void onBackendRequest(BackendPlayback request) {
+            if (!active()) return;
+            _recordBackendRequest(video.videoId, request);
+            if (request.retryIndex > 0 || request.manualSelection) {
+              setEvent(MediaEvent(
+                  state: MediaState.loading,
+                  type: MediaEventType.backendRetry,
+                  value: request.label));
+            }
+          }
+
+          v = backendRequest == null
+              ? await service.getVideo(video.videoId,
+                  onBackendRequest: onBackendRequest)
+              : await service.getVideoForBackend(video.videoId, backendRequest,
+                  onBackendRequest: onBackendRequest, isCurrent: active);
           if (!active()) return;
         }
         currentlyPlaying = v;
@@ -826,6 +1009,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final resumeAt = startAt ??
           Duration(seconds: progress < 0.9 ? (length * progress).floor() : 0);
       _sessionOwner = this;
+      _backendSwitchPending = false;
+      if (currentlyPlaying != null) {
+        _recordBackendRequest(
+            currentlyPlaying.videoId, currentlyPlaying.backendPlayback);
+      }
       emit(state.copyWith(
           position: resumeAt,
           startAt: startAt,
@@ -834,6 +1022,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           rewindStep: settings.state.skipStep,
           mediaCommand: mediaCommand,
           currentlyPlaying: currentlyPlaying,
+          requestedBackend: currentlyPlaying?.backendPlayback,
           offlineCurrentlyPlaying: offlineCurrentlyPlaying));
       unawaited(_saveSession(state));
 
@@ -859,6 +1048,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
     } catch (err) {
       if (!active()) return;
+      _backendSwitchPending = false;
+      if (state.backendRecovery != null && video is Video) {
+        pause();
+        emit(state.copyWith(currentlyPlaying: video));
+        setEvent(const MediaEvent(state: MediaState.error));
+        return;
+      }
       if (state.videos.length == 1) {
         // if we can't get video details, we need to stop everything
         log.severe(
@@ -872,6 +1068,73 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         removeVideoFromQueue(video.videoId);
         _playNextNow();
       }
+    }
+  }
+
+  /// Retry the current video with a user-selected backend. This does not change
+  /// the preferred backend unless the picker explicitly asks to save it.
+  Future<void> selectBackend(String? value,
+      {bool saveAsPreferred = false,
+      String? expectedVideoId,
+      BackendPlayback? expectedRequest}) async {
+    final video = state.currentlyPlaying;
+    final request = state.requestedBackend ?? video?.backendPlayback;
+    if (isClosed ||
+        state.isClosing ||
+        _manualSelectionPending ||
+        _backendSwitchPending ||
+        video == null ||
+        state.offlineCurrentlyPlaying != null ||
+        request == null ||
+        request.server.backendSelector == null ||
+        (expectedVideoId != null && expectedVideoId != video.videoId) ||
+        (expectedRequest != null && !identical(expectedRequest, request))) {
+      throw StateError('The current video or connection changed.');
+    }
+    final generation = _videoSwitchGeneration;
+    bool active() =>
+        !isClosed &&
+        !state.isClosing &&
+        generation == _videoSwitchGeneration &&
+        state.currentlyPlaying?.videoId == video.videoId &&
+        identical(
+            state.requestedBackend ?? state.currentlyPlaying?.backendPlayback,
+            request);
+    _manualSelectionPending = true;
+    try {
+      var saved = await db.getCurrentlySelectedServer();
+      if (!active() || !request.matches(saved)) {
+        throw StateError('The current video or connection changed.');
+      }
+      // Validation and merging are shared with server settings: no arbitrary
+      // cookie names or values, and unrelated preferences/login cookies survive.
+      final updated = saved.backendSelector!.withSelection(saved, value);
+      if (saveAsPreferred) {
+        await db.upsertServer(updated);
+        final selected = await db.getCurrentlySelectedServer();
+        if (selected.url == updated.url) {
+          await fileDb.useServer(selected);
+          final app = settings.appCubit;
+          if (!app.isClosed && app.state.server?.url == selected.url) {
+            app.setServer(selected);
+          }
+        }
+        saved = updated;
+      }
+      if (!active()) throw StateError('The current video changed.');
+      final selection = BackendPlayback.manual(saved, value);
+      if (!selection.matches(await db.getCurrentlySelectedServer()) ||
+          !active()) {
+        throw StateError('The playback connection changed.');
+      }
+      final startAt = state.position;
+      final playing =
+          state.mediaEvent.state == MediaState.error ? true : requestedPlaying;
+      pause();
+      await _switchToVideo(video,
+          startAt: startAt, playing: playing, backendRequest: selection);
+    } finally {
+      _manualSelectionPending = false;
     }
   }
 
@@ -907,7 +1170,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void play() {
     _requestedPlaying = true;
-    emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.play)));
+    final recovery = state.backendRecovery;
+    emit(state.copyWith(
+        backendRecovery:
+            recovery != null && recovery.phase == BackendRecoveryPhase.ready
+                ? recovery.withPhase(BackendRecoveryPhase.trying)
+                : recovery,
+        mediaCommand: MediaCommand(MediaCommandType.play)));
   }
 
   void pause() {
@@ -1120,6 +1389,22 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         mediaCommand: MediaCommand(MediaCommandType.speed, value: d)));
   }
 
+  /// Retain pitch across decoders/retries for this video, never across videos.
+  int pitchForVideo(String videoId) {
+    if (_pitchVideoId != videoId) {
+      _pitchVideoId = videoId;
+      emit(state.copyWith(pitchSemitones: 0));
+    }
+    return state.pitchSemitones;
+  }
+
+  void setPitchSemitones(int semitones) {
+    final pitch = clampPitchSemitones(semitones);
+    emit(state.copyWith(
+        pitchSemitones: pitch,
+        mediaCommand: MediaCommand(MediaCommandType.pitch, value: pitch)));
+  }
+
   void setFullScreen(FullScreenState fsState) {
     // emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.fullScreen, value: fsState)));
     emit(state.copyWith(
@@ -1273,6 +1558,8 @@ sealed class PlayerState with _$PlayerState {
 
       // videos to play
       Video? currentlyPlaying,
+      BackendPlayback? requestedBackend,
+      BackendRecovery? backendRecovery,
       DownloadedVideo? offlineCurrentlyPlaying,
       @Default([]) List<Video> videos,
       @Default([]) List<DownloadedVideo> offlineVideos,
@@ -1290,6 +1577,7 @@ sealed class PlayerState with _$PlayerState {
       @Default(Duration.zero) Duration bufferedPosition,
       @Default(false) bool isPlaying,
       @Default(1.0) double speed,
+      @Default(0) int pitchSemitones,
 
       // events
       // command we send down the stack, namely video / audio player

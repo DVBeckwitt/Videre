@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:gap/gap.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
+import 'package:clipious/settings/views/components/backend_picker.dart';
 import 'package:clipious/utils/string.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -252,6 +253,22 @@ class TvManageSingleServerScreen extends StatelessWidget {
                   trailing: Switch(
                       onChanged: server.inUse ? null : (value) {},
                       value: server.inUse),
+                ),
+                SettingsTitle(title: locals.backend),
+                SettingsTile(
+                  key: const ValueKey('backend-setting'),
+                  title: backendLabel(context, server),
+                  description: locals.backendHelp,
+                  leading: const Icon(Icons.dns_outlined),
+                  trailing: const Icon(Icons.chevron_right),
+                  onSelected: (context) => showBackendPicker(
+                    context,
+                    server: server,
+                    onDiscover: cubit.discoverBackends,
+                    onDiscoverFromPage: (uri, source) => cubit
+                        .discoverBrowserBackends(pageUri: uri, source: source),
+                    onSave: cubit.setBackend,
+                  ),
                 ),
                 SettingsTitle(title: locals.authentication),
                 SettingsTile(

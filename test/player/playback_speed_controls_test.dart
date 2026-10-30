@@ -11,6 +11,8 @@ void main() {
     WidgetTester tester, {
     double speed = 1,
     required ValueChanged<double> onChanged,
+    int pitch = 0,
+    ValueChanged<int>? onPitchChanged,
     bool compact = false,
     double textScale = 1,
   }) async {
@@ -27,6 +29,8 @@ void main() {
           child: PlaybackSpeedControls(
             initialSpeed: speed,
             onChanged: onChanged,
+            initialPitchSemitones: pitch,
+            onPitchChanged: onPitchChanged,
             compact: compact,
           ),
         ),
@@ -45,6 +49,114 @@ void main() {
 
   Slider slider(WidgetTester tester) =>
       tester.widget<Slider>(control('slider'));
+
+  Finder pitchControl(String name) =>
+      find.byKey(ValueKey('playback-pitch-$name'));
+
+  Future<void> tapPitch(WidgetTester tester, String name) async {
+    final target = pitchControl(name);
+    await tester.ensureVisible(target);
+    await tester.pumpAndSettle();
+    await tester.tap(target);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('pitch steps and resets independently of speed', (tester) async {
+    final speeds = <double>[];
+    final pitches = <int>[];
+    await pumpControls(tester,
+        speed: 1.5, onChanged: speeds.add, onPitchChanged: pitches.add);
+
+    await tapPitch(tester, 'increase');
+    await tapPitch(tester, 'increase');
+    expect(pitches, [1, 2]);
+    expect(speeds, isEmpty);
+    expect(slider(tester).value, 1.5);
+    await tapControl(tester, 'reset');
+    expect(speeds, [1]);
+    expect(pitches, [1, 2]);
+    expect(tester.widget<Slider>(pitchControl('slider')).value, 2);
+    await tapPitch(tester, 'reset');
+    expect(pitches, [1, 2, 0]);
+    expect(speeds, [1]);
+    expect(tester.widget<Slider>(pitchControl('slider')).value, 0);
+  });
+
+  testWidgets('pitch clamps to an octave and ignores repeated bound presses',
+      (tester) async {
+    final pitches = <int>[];
+    await pumpControls(tester,
+        pitch: 11, onChanged: (_) {}, onPitchChanged: pitches.add);
+    await tapPitch(tester, 'increase');
+    await tapPitch(tester, 'increase');
+    expect(pitches, [12]);
+    expect(
+        tester.widget<IconButton>(pitchControl('increase')).onPressed, isNull);
+
+    await pumpControls(tester,
+        pitch: -11, onChanged: (_) {}, onPitchChanged: pitches.add);
+    await tapPitch(tester, 'decrease');
+    await tapPitch(tester, 'decrease');
+    expect(pitches, [12, -12]);
+    expect(
+        tester.widget<IconButton>(pitchControl('decrease')).onPressed, isNull);
+  });
+
+  testWidgets('external pitch updates and reopening reflect current pitch',
+      (tester) async {
+    final pitches = <int>[];
+    await pumpControls(tester,
+        pitch: 4, onChanged: (_) {}, onPitchChanged: pitches.add);
+    await tapPitch(tester, 'decrease');
+    expect(pitches, [3]);
+    await pumpControls(tester,
+        pitch: -2, onChanged: (_) {}, onPitchChanged: pitches.add);
+    expect(tester.widget<Slider>(pitchControl('slider')).value, -2);
+    expect(pitches, [3]);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpControls(tester,
+        pitch: -2, onChanged: (_) {}, onPitchChanged: pitches.add);
+    expect(tester.widget<Slider>(pitchControl('slider')).value, -2);
+    expect(pitches, [3]);
+  });
+
+  testWidgets('TV select and horizontal navigation adjust pitch in semitones',
+      (tester) async {
+    final pitches = <int>[];
+    await pumpControls(tester,
+        compact: true, onChanged: (_) {}, onPitchChanged: pitches.add);
+    await tester.ensureVisible(pitchControl('increase'));
+    await tester.pumpAndSettle();
+    final increaseIcon = find.descendant(
+        of: pitchControl('increase'), matching: find.byType(Icon));
+    Focus.of(tester.element(increaseIcon)).requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(pitches, [1]);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(pitches, [1, 0]);
+  });
+
+  testWidgets('pitch remains usable on a narrow screen with large text',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final pitches = <int>[];
+    await pumpControls(tester,
+        textScale: 2, onChanged: (_) {}, onPitchChanged: pitches.add);
+    expect(tester.takeException(), isNull);
+    await tapPitch(tester, 'increase');
+    await tapPitch(tester, 'reset');
+    expect(pitches, [1, 0]);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
       'fine steps update immediately without accumulated rounding error',

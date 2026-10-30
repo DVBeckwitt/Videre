@@ -14,6 +14,7 @@ _Server _$ServerFromJson(Map<String, dynamic> json) => _Server(
             (k, e) => MapEntry(k, e as String),
           ) ??
           const {},
+      backendSelector: BackendSelector.tryFromJson(json['backendSelector']),
       inUse: json['inUse'] as bool? ?? false,
     );
 
@@ -22,5 +23,7 @@ Map<String, dynamic> _$ServerToJson(_Server instance) => <String, dynamic>{
       'authToken': instance.authToken,
       'sidCookie': instance.sidCookie,
       'customHeaders': instance.customHeaders,
+      'backendSelector':
+          BackendSelector.optionalToJson(instance.backendSelector),
       'inUse': instance.inUse,
     };

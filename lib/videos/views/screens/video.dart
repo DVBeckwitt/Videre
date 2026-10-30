@@ -19,6 +19,7 @@ import 'package:clipious/videos/views/components/video_share_button.dart';
 
 import '../../../player/states/player.dart';
 import '../../../utils.dart';
+import '../components/backend_status.dart';
 
 @RoutePage()
 class VideoScreen extends StatelessWidget {
@@ -233,57 +234,75 @@ class VideoScreen extends StatelessWidget {
                             color: colorScheme.surface,
                             width: double.infinity,
                             height: double.infinity,
-                            child: AnimatedSwitcher(
-                                duration: animationDuration,
-                                child: videoState.error.isNotEmpty
-                                    ? Container(
-                                        alignment: Alignment.center,
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(videoState.error ==
-                                                    coulnotLoadVideos
-                                                ? locals.couldntLoadVideo
-                                                : videoState.error),
-                                            TextButton.icon(
-                                              onPressed: context
-                                                  .read<VideoCubit>()
-                                                  .onReady,
-                                              icon: const Icon(Icons.refresh),
-                                              label: Text(locals.retry),
-                                            ),
-                                            TextButton.icon(
-                                              onPressed: () => AddServerScreen
-                                                  .showConnectionHelp(context,
-                                                      videoId: videoId),
-                                              icon: const Icon(Icons.wifi_find),
-                                              label:
-                                                  Text(locals.connectionHelp),
-                                            ),
-                                          ],
-                                        ),
-                                      )
-                                    : videoState.loadingVideo
-                                        ? const DeviceWidget(
-                                            portraitTabletAsPhone: true,
-                                            phone: VideoPlaceHolder(),
-                                            tablet: TabletVideoPlaceHolder())
-                                        : DeviceWidget(
-                                            portraitTabletAsPhone: true,
-                                            phone: VideoInnerView(
-                                              video: videoState.video!,
-                                              playNow: playNow,
-                                              videoController: videoState,
-                                              child: child,
-                                            ),
-                                            tablet: VideoTabletInnerView(
-                                              video: videoState.video!,
-                                              playNow: playNow,
-                                              videoController: videoState,
-                                              tabController: controller,
-                                              child: child,
-                                            ),
-                                          )),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                VideoBackendStatus(state: videoState),
+                                Expanded(
+                                    child: AnimatedSwitcher(
+                                        duration: animationDuration,
+                                        child: videoState.error.isNotEmpty
+                                            ? Container(
+                                                alignment: Alignment.center,
+                                                child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Text(videoState.error ==
+                                                            coulnotLoadVideos
+                                                        ? locals
+                                                            .couldntLoadVideo
+                                                        : videoState.error),
+                                                    TextButton.icon(
+                                                      onPressed: context
+                                                          .read<VideoCubit>()
+                                                          .onReady,
+                                                      icon: const Icon(
+                                                          Icons.refresh),
+                                                      label: Text(locals.retry),
+                                                    ),
+                                                    TextButton.icon(
+                                                      onPressed: () =>
+                                                          AddServerScreen
+                                                              .showConnectionHelp(
+                                                                  context,
+                                                                  videoId:
+                                                                      videoId),
+                                                      icon: const Icon(
+                                                          Icons.wifi_find),
+                                                      label: Text(locals
+                                                          .connectionHelp),
+                                                    ),
+                                                  ],
+                                                ),
+                                              )
+                                            : videoState.loadingVideo
+                                                ? const DeviceWidget(
+                                                    portraitTabletAsPhone: true,
+                                                    phone: VideoPlaceHolder(),
+                                                    tablet:
+                                                        TabletVideoPlaceHolder())
+                                                : DeviceWidget(
+                                                    portraitTabletAsPhone: true,
+                                                    phone: VideoInnerView(
+                                                      video: videoState.video!,
+                                                      playNow: playNow,
+                                                      videoController:
+                                                          videoState,
+                                                      child: child,
+                                                    ),
+                                                    tablet:
+                                                        VideoTabletInnerView(
+                                                      video: videoState.video!,
+                                                      playNow: playNow,
+                                                      videoController:
+                                                          videoState,
+                                                      tabController: controller,
+                                                      child: child,
+                                                    ),
+                                                  ))),
+                              ],
+                            ),
                           ),
                         ),
                       ),

@@ -32,6 +32,8 @@ class MainActivity : AudioServiceActivity() {
     private val fileWorker = Executors.newSingleThreadExecutor()
     private var fileChannel: MethodChannel? = null
     private var pipChannel: MethodChannel? = null
+    private var backendChannel: MethodChannel? = null
+    private var backendBrowser: BackendDiscoveryBrowser? = null
     private var autoPip = false
     private var pipAspectRatio = Rational(16, 9)
     private var pendingFile: FileRequest? = null
@@ -61,6 +63,11 @@ class MainActivity : AudioServiceActivity() {
                     result.success(null)
                 }
             }
+        }
+        backendBrowser = BackendDiscoveryBrowser(this)
+        backendChannel = MethodChannel(messenger, "videre/backend_discovery").also {
+            it.setMethodCallHandler { call, result -> backendBrowser?.open(call, result)
+                ?: result.error("BROWSER_UNAVAILABLE", null, null) }
         }
         // AudioService retains this engine while the Activity is recreated.
         if (!flutterEngine.plugins.has(VidereNetworkPlugin::class.java)) {
@@ -164,6 +171,10 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun releaseChannels() {
+        backendChannel?.setMethodCallHandler(null)
+        backendChannel = null
+        backendBrowser?.close()
+        backendBrowser = null
         pendingFile?.let { finishFile(it, error = "ACTIVITY_CLOSED", message = "The file operation was interrupted. Please try again.") }
         fileChannel?.setMethodCallHandler(null)
         fileChannel = null

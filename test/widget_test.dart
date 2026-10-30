@@ -17,6 +17,7 @@ import 'package:clipious/player/views/components/expanded_player.dart';
 import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -117,7 +118,9 @@ class _TestService extends Service {
   Future<List<Video>> getPopular() async => videos;
 
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) async =>
+  Future<Video> getVideo(String videoId,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest}) async =>
       videos.singleWhere((video) => video.videoId == videoId);
 
   @override

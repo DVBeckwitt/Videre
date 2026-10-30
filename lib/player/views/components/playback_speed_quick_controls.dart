@@ -2,7 +2,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-/// Common speeds stay one drag away; tapping the header opens fine controls.
+/// Common speeds stay one drag away, with an explicit path to fine controls.
 class PlaybackSpeedQuickControls extends StatefulWidget {
   final double initialSpeed;
   final ValueChanged<double> onChanged;
@@ -148,6 +148,15 @@ class _PlaybackSpeedQuickControlsState
                       ))
                   .toList(),
             ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: OutlinedButton.icon(
+            key: const ValueKey('playback-speed-advanced-button'),
+            onPressed: widget.onAdvanced,
+            icon: const Icon(Icons.tune),
+            label: Text(locals.advancedPlaybackSpeed),
           ),
         ),
       ],

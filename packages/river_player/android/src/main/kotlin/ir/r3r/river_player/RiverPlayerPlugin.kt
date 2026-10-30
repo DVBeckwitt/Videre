@@ -177,9 +177,15 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 player.sendBufferingUpdate(false)
             }
             ABSOLUTE_POSITION_METHOD -> result.success(player.absolutePosition)
-            SET_SPEED_METHOD -> {
-                player.setSpeed(call.argument(SPEED_PARAMETER)!!)
-                result.success(null)
+            SET_SPEED_METHOD, SET_PITCH_METHOD -> {
+                val parameter = if (call.method == SET_SPEED_METHOD) SPEED_PARAMETER else PITCH_PARAMETER
+                val value = call.argument<Number>(parameter)?.toDouble()
+                if (value == null || !value.isFinite() || value <= 0 || !value.toFloat().isFinite() || value.toFloat() <= 0) {
+                    result.error("InvalidPlaybackParameter", "Playback factor must be positive and finite", null)
+                } else {
+                    if (call.method == SET_SPEED_METHOD) player.setSpeed(value) else player.setPitch(value)
+                    result.success(null)
+                }
             }
             SET_TRACK_PARAMETERS_METHOD -> {
                 player.setTrackParameters(
@@ -497,6 +503,7 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val VOLUME_PARAMETER = "volume"
         private const val LOCATION_PARAMETER = "location"
         private const val SPEED_PARAMETER = "speed"
+        private const val PITCH_PARAMETER = "pitch"
         private const val WIDTH_PARAMETER = "width"
         private const val HEIGHT_PARAMETER = "height"
         private const val BITRATE_PARAMETER = "bitrate"
@@ -535,6 +542,7 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         private const val POSITION_METHOD = "position"
         private const val ABSOLUTE_POSITION_METHOD = "absolutePosition"
         private const val SET_SPEED_METHOD = "setSpeed"
+        private const val SET_PITCH_METHOD = "setPitch"
         private const val SET_TRACK_PARAMETERS_METHOD = "setTrackParameters"
         private const val SET_AUDIO_TRACK_METHOD = "setAudioTrack"
         private const val ENABLE_PICTURE_IN_PICTURE_METHOD = "enablePictureInPicture"

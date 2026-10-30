@@ -1,0 +1,39 @@
+# Prepared configuration only. Creating this service incurs paid compute/disk costs.
+# Select this file as the Blueprint path when deployment is explicitly authorized.
+services:
+  - type: web
+    name: videre-feedback
+    runtime: node
+    plan: 0.5c-512mb
+    rootDir: services/feedback
+    buildCommand: node --test test/*.test.mjs
+    startCommand: node server.mjs
+    autoDeployTrigger: 'off'
+    numInstances: 1
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    disk:
+      name: feedback-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 24.22.1
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: '10000'
+      - key: FEEDBACK_DB
+        value: /var/data/feedback.sqlite
+      - key: GITHUB_OWNER
+        value: DVBeckwitt
+      - key: GITHUB_REPO
+        value: Videre
+      - key: GITHUB_PRIVATE_KEY_FILE
+        value: /etc/secrets/github-app.pem
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_INSTALLATION_ID
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

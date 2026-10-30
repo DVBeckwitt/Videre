@@ -16,6 +16,7 @@ import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -52,7 +53,9 @@ class _GuestService extends Service {
   Future<bool> isLoggedIn() async => false;
 
   @override
-  Future<Video> getVideo(String id, {Server? serverOverride}) async =>
+  Future<Video> getVideo(String id,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest}) async =>
       Video(videoId: id);
 }
 

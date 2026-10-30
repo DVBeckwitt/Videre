@@ -6,7 +6,11 @@
 
 <p>Opening Public instances contacts api.invidious.io to load the official directory without sending saved server credentials. Selecting a suggestion fills the address; the chosen server is contacted when you test or use it. Public server operators have their own privacy policies.</p>
 
-<p>If a user chooses to submit app feedback, Videre prepares a GitHub issue that can include device details, the user's feedback text, and a screenshot uploaded to Imgur. Users can review this information before submitting the issue.</p>
+<p>Bug reports and suggestions are sent only when you choose Send after reviewing the report. The feedback service creates a public issue in the Videre GitHub repository on your behalf; a GitHub account is not required. The title, description, and any attachments you choose become public. Do not include passwords or other private information in your text or screenshot.</p>
+
+<p>Diagnostics and screenshots are optional and off by default. Diagnostics use a limited list of app and Android versions, device model, playback mode, proxy enabled status, and backend recovery state. They exclude saved login cookies, authorization headers, server addresses, video IDs, watch history, and raw application logs. A selected screenshot is sent to the feedback service and hosted there for display in the public issue, without uploading it to Imgur.</p>
+
+<p>Drafts and recent submission receipts are stored in the app. There is no background submission. The feedback service stores submission records to prevent duplicate issues and uses short-lived, hashed network-address information and request limits to reduce spam. As with any network service, its host receives connection information; app feedback follows the configured SOCKS5/Orbot routing policy. Public GitHub issues and their attachments may be copied or cached by others.</p>
 
 <p><b>Videre developers do not own, collect, or share user data outside user-initiated feedback.</b></p>
 </body>

@@ -571,7 +571,9 @@ class BetterPlayerController {
 
     final startAt = betterPlayerConfiguration.startAt;
     if (startAt != null) {
-      seekTo(startAt);
+      // Finish the resume seek before the caller can play. Its captured paused
+      // state must not arrive later and override that explicit play command.
+      await seekTo(startAt);
     }
   }
 
@@ -703,6 +705,23 @@ class BetterPlayerController {
     );
   }
 
+  /// Sets audio pitch independently of speed. A factor of 1.0 is unchanged.
+  /// Independent pitch is supported by the Android player.
+  Future<void> setPitch(double pitch) async {
+    if (!pitch.isFinite || pitch <= 0) {
+      throw ArgumentError.value(pitch, 'pitch', 'Must be positive and finite');
+    }
+    final controller = videoPlayerController;
+    if (controller == null) {
+      throw StateError('The data source has not been initialized');
+    }
+    await controller.setPitch(pitch);
+    _postEvent(BetterPlayerEvent(
+      BetterPlayerEventType.setPitch,
+      parameters: <String, dynamic>{'pitch': pitch},
+    ));
+  }
+
   ///Flag which determines whenever player is playing or not.
   bool? isPlaying() {
     if (videoPlayerController == null) {
@@ -766,7 +785,8 @@ class BetterPlayerController {
         BetterPlayerEvent(
           BetterPlayerEventType.exception,
           parameters: <String, dynamic>{
-            "exception": currentVideoPlayerValue.errorDescription
+            "exception": currentVideoPlayerValue.errorDescription,
+            "backendRetryable": currentVideoPlayerValue.backendRetryable,
           },
         ),
       );
@@ -963,7 +983,7 @@ class BetterPlayerController {
     final wasPlayingBeforeChange = isPlaying()!;
     pause();
     await setupDataSource(betterPlayerDataSource!.copyWith(url: url));
-    seekTo(position!);
+    await seekTo(position!);
     if (wasPlayingBeforeChange) {
       play();
     }

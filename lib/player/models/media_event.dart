@@ -12,6 +12,7 @@ enum MediaEventType {
   pause,
   seek,
   speedChanged,
+  pitchChanged,
   durationChanged,
   bufferChanged,
   progress,
@@ -19,6 +20,7 @@ enum MediaEventType {
   fullScreenChanged,
   miniDisplayChanged,
   sponsorSkipped,
+  backendRetry,
 }
 
 enum MediaState {

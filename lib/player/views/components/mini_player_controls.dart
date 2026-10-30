@@ -1,4 +1,8 @@
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/views/components/playback_speed_controls.dart';
+import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/utils/views/components/multi_value_switch.dart';
 
@@ -124,6 +128,33 @@ class MiniPlayerControls extends StatelessWidget {
                         ),
                       ),
                       Expanded(child: Container()),
+                      if (context.select((PlayerCubit player) =>
+                          canChoosePlayerBackend(player.state)))
+                        IconButton(
+                          key: const ValueKey('player-backend-shortcut'),
+                          style: buttonStyle,
+                          tooltip: AppLocalizations.of(context)!.backendChoose,
+                          icon: const Icon(Icons.dns_outlined),
+                          onPressed: () =>
+                              showPlayerBackendPicker(context, player: player),
+                        ),
+                      IconButton(
+                        key: const ValueKey('playback-speed-open'),
+                        style: buttonStyle,
+                        tooltip: AppLocalizations.of(context)!.playbackSpeed,
+                        icon: const Icon(Icons.speed),
+                        onPressed: () => showPlaybackSpeedSheet(
+                          context,
+                          initialSpeed: player.state.speed,
+                          onChanged: player.setSpeed,
+                          initialPitchSemitones: player.state.pitchSemitones,
+                          onPitchChanged: !kIsWeb &&
+                                  defaultTargetPlatform ==
+                                      TargetPlatform.android
+                              ? player.setPitchSemitones
+                              : null,
+                        ),
+                      ),
                       IconButton(
                           style: buttonStyle,
                           onPressed: cubit.setNextRepeatMode,

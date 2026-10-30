@@ -4,6 +4,10 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/main.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/models/backend_recovery.dart';
+import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/player/views/components/player_backend_picker.dart';
+import 'package:clipious/player/views/components/backend_request_indicator.dart';
 import 'package:clipious/player/views/components/sleep_timer.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/playback_speed_quick_controls.dart';
@@ -12,6 +16,7 @@ import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -30,18 +35,14 @@ class PlayerControls extends StatelessWidget {
   Future<void> showPlaybackSpeedSelection(
       BuildContext context, MediaPlayerCubit player) async {
     Navigator.of(context).pop();
-    await showSafeModalBottomSheet(
-      isScrollControlled: true,
-      showDragHandle: true,
-      context: context,
-      builder: (context) {
-        return SingleChildScrollView(
-          child: PlaybackSpeedControls(
-            initialSpeed: player.getSpeed(),
-            onChanged: player.setSpeed,
-          ),
-        );
-      },
+    await showPlaybackSpeedSheet(
+      context,
+      initialSpeed: player.getSpeed(),
+      onChanged: player.setSpeed,
+      initialPitchSemitones: player.getPitchSemitones(),
+      onPitchChanged: !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+          ? player.setPitchSemitones
+          : null,
     );
   }
 
@@ -107,6 +108,16 @@ class PlayerControls extends StatelessWidget {
                 onChanged: pc.setSpeed,
                 onAdvanced: () => showPlaybackSpeedSelection(context, pc),
               ),
+              if (canChoosePlayerBackend(player.state))
+                ListTile(
+                  key: const ValueKey('player-backend-open'),
+                  leading: const Icon(Icons.dns_outlined),
+                  title: Text(locals.backendChoose),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    showPlayerBackendPicker(context, player: player);
+                  },
+                ),
               if (subtitles.isNotEmpty)
                 ListTile(
                   onTap: () {
@@ -222,6 +233,16 @@ class PlayerControls extends StatelessWidget {
                 context.select((PlayerCubit cubit) => cubit.state.hasQueue);
             bool isPip =
                 context.select((PlayerCubit cubit) => cubit.state.isPip);
+            final recovery = context
+                .select((PlayerCubit cubit) => cubit.state.backendRecovery);
+            final retryingBackend =
+                recovery?.phase == BackendRecoveryPhase.trying;
+            final failedRecovery =
+                recovery?.phase == BackendRecoveryPhase.failed;
+            final canChooseBackend = context.select(
+                (PlayerCubit cubit) => canChoosePlayerBackend(cubit.state));
+            final requestedBackend = context
+                .select((PlayerCubit cubit) => cubit.state.requestedBackend);
             int totalFastForward = context
                 .select((PlayerCubit cubit) => cubit.state.totalFastForward);
             int totalRewind =
@@ -244,6 +265,24 @@ class PlayerControls extends StatelessWidget {
                     value.state.playerRepeatMode == PlayerRepeat.noRepeat);
 
             var cubit = context.read<PlayerControlsCubit>();
+            final indicatorStyle = Theme.of(context).textTheme.bodySmall;
+            final indicatorLineHeight = MediaQuery.textScalerOf(context)
+                    .scale(indicatorStyle?.fontSize ?? 12) *
+                (indicatorStyle?.height ?? 1.33);
+            final requestIndicatorTop = max(
+                playerState.displayControls &&
+                        playerState.fullScreenState ==
+                            FullScreenState.fullScreen
+                    ? 52.0
+                    : 8.0,
+                playerState.showSponsorBlocked
+                    ? indicatorLineHeight + 34
+                    : 8.0);
+            final showRequestedBackend = requestedBackend != null &&
+                !(recovery != null && (isMini || isPip));
+            final retryTop = showRequestedBackend
+                ? requestIndicatorTop + indicatorLineHeight + 16
+                : 0.0;
 
             // to allow or not dragging to adjust brightness and volume
             var canDragToAdjustDeviceSettings = screenControlsEnabled &&
@@ -638,7 +677,7 @@ class PlayerControls extends StatelessWidget {
                             ],
                           ),
                         ),
-                      if (playerState.buffering)
+                      if (playerState.buffering && recovery == null)
                         const Center(
                           child: FractionallySizedBox(
                             heightFactor: 0.3,
@@ -716,50 +755,116 @@ class PlayerControls extends StatelessWidget {
                               end: 1,
                               duration: animationDuration * 0.75,
                               curve: animationCurve),
-                      // Keep recovery above the gesture layer so its buttons work.
-                      if (playerState.errored)
+                      // Recovery status stays visible when the controls fade.
+                      if (recovery != null && !failedRecovery)
+                        Positioned.fill(
+                          top: retryTop,
+                          child: BackendRecoveryNotice(
+                            recovery: recovery,
+                            compact: isMini || isPip,
+                          ),
+                        ),
+                      if (failedRecovery ||
+                          (recovery == null && playerState.errored))
                         Positioned.fill(
                           child: ColoredBox(
                             color: Colors.black.withValues(alpha: 0.8),
                             child: Center(
                               child: isMini || isPip
-                                  ? const Icon(Icons.error_outline)
-                                  : Wrap(
-                                      alignment: WrapAlignment.center,
-                                      children: [
-                                        TextButton.icon(
-                                          onPressed: () {
-                                            cubit.removeError();
-                                            if (currentlyPlaying != null) {
-                                              player.switchToVideo(
-                                                Video(
-                                                    videoId: currentlyPlaying
-                                                        .videoId),
-                                                startAt: player.state.position,
-                                              );
-                                            } else if (player.state
-                                                    .offlineCurrentlyPlaying !=
-                                                null) {
-                                              player.switchToOfflineVideo(player
-                                                  .state
-                                                  .offlineCurrentlyPlaying!);
-                                            }
-                                          },
-                                          icon: const Icon(Icons.refresh),
-                                          label: Text(locals.retry),
-                                        ),
-                                        if (currentlyPlaying != null)
-                                          TextButton.icon(
-                                            onPressed: () => AddServerScreen
-                                                .showConnectionHelp(context,
-                                                    videoId: currentlyPlaying
-                                                        .videoId),
-                                            icon: const Icon(Icons.wifi_find),
-                                            label: Text(locals.connectionHelp),
+                                  ? const Icon(Icons.error_outline,
+                                      color: Colors.white)
+                                  : SingleChildScrollView(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 36),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Semantics(
+                                            liveRegion: true,
+                                            child: Text(
+                                              failedRecovery
+                                                  ? backendRecoveryFailureText(
+                                                      locals, recovery!)
+                                                  : locals.couldntLoadVideo,
+                                              style: const TextStyle(
+                                                  color: Colors.white),
+                                              textAlign: TextAlign.center,
+                                            ),
                                           ),
-                                      ],
+                                          const SizedBox(height: 8),
+                                          Wrap(
+                                            alignment: WrapAlignment.center,
+                                            children: [
+                                              TextButton.icon(
+                                                onPressed: () {
+                                                  cubit.removeError();
+                                                  if (currentlyPlaying !=
+                                                      null) {
+                                                    player.switchToVideo(
+                                                      Video(
+                                                          videoId:
+                                                              currentlyPlaying
+                                                                  .videoId),
+                                                      startAt:
+                                                          player.state.position,
+                                                    );
+                                                  } else if (player.state
+                                                          .offlineCurrentlyPlaying !=
+                                                      null) {
+                                                    player.switchToOfflineVideo(
+                                                        player.state
+                                                            .offlineCurrentlyPlaying!);
+                                                  }
+                                                },
+                                                icon: const Icon(Icons.refresh),
+                                                label: Text(locals.retry),
+                                              ),
+                                              if (canChooseBackend)
+                                                TextButton.icon(
+                                                  key: const ValueKey(
+                                                      'player-backend-error-open'),
+                                                  onPressed: () =>
+                                                      showPlayerBackendPicker(
+                                                          context,
+                                                          player: player),
+                                                  icon: const Icon(
+                                                      Icons.dns_outlined),
+                                                  label: Text(
+                                                      locals.backendChoose),
+                                                ),
+                                              if (currentlyPlaying != null)
+                                                TextButton.icon(
+                                                  onPressed: () => AddServerScreen
+                                                      .showConnectionHelp(
+                                                          context,
+                                                          videoId:
+                                                              currentlyPlaying
+                                                                  .videoId),
+                                                  icon: const Icon(
+                                                      Icons.wifi_find),
+                                                  label: Text(
+                                                      locals.connectionHelp),
+                                                ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
                                     ),
                             ),
+                          ),
+                        ),
+                      if (showRequestedBackend)
+                        Positioned(
+                          left: 8,
+                          right:
+                              playerState.displayControls && !isMini && !isPip
+                                  ? 152
+                                  : 8,
+                          top: requestIndicatorTop,
+                          child: BackendRequestIndicator(
+                            playback: requestedBackend,
+                            overlay: true,
+                            compact: isMini || isPip || retryingBackend,
                           ),
                         ),
                     ],

@@ -11,6 +11,7 @@ import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -108,7 +109,9 @@ class _QueuedMetadataService extends Service {
       _results.putIfAbsent(id, Completer<Video>.new);
 
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) {
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) {
     _requested.putIfAbsent(videoId, Completer<void>.new).complete();
     return result(videoId).future;
   }

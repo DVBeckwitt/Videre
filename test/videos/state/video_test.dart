@@ -18,11 +18,13 @@ import 'package:clipious/media_handler.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/player.dart' as widgets;
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -31,6 +33,9 @@ import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video.dart';
+import 'package:clipious/videos/views/components/backend_status.dart';
+import 'package:clipious/player/views/components/backend_request_indicator.dart';
+import 'package:clipious/player/views/components/backend_retry_notice.dart';
 import 'package:river_player/river_player.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -41,7 +46,9 @@ import '../../test_settings_cubit.dart';
 
 class FakeService extends Service {
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) async =>
+  Future<Video> getVideo(String videoId,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest}) async =>
       Video(videoId: videoId, adaptiveFormats: [], formatStreams: []);
 
   @override
@@ -55,8 +62,31 @@ class FakeService extends Service {
 
 class FailingVideoService extends FakeService {
   @override
-  Future<Video> getVideo(String videoId, {Server? serverOverride}) async =>
+  Future<Video> getVideo(String videoId,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest}) async =>
       throw StateError('Instance unavailable');
+}
+
+class MetadataStatusPlayerCubit extends TestPlayerCubit {
+  MetadataStatusPlayerCubit(super.initialState, super.settings);
+
+  void showState(PlayerState value) => emit(value);
+}
+
+class ControlledMetadataService extends FakeService {
+  final responses = <Completer<Video>>[];
+  final observers = <void Function(BackendPlayback)?>[];
+
+  @override
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) {
+    final response = Completer<Video>();
+    responses.add(response);
+    observers.add(onBackendRequest);
+    return response.future;
+  }
 }
 
 class DelayedDislikesService extends FakeService {
@@ -117,7 +147,7 @@ class TestVideoPlayerCubit extends VideoPlayerCubit {
   }
 
   @override
-  void seek(Duration position) {
+  Future<void> seek(Duration position) async {
     seekPositions.add(position);
     for (final waiter in List.of(seekWaiters)) {
       if (seekPositions.length >= waiter.count) {
@@ -212,6 +242,11 @@ class RecordingPlayerController extends BetterPlayerController {
   }
 
   @override
+  Future<void> play() async {
+    playing = true;
+  }
+
+  @override
   Future<void> pause() async {
     pauseCalls++;
     playing = false;
@@ -282,6 +317,197 @@ void main() {
     tearDown(() async {
       service = Service();
       await db.close();
+    });
+
+    group('metadata backend status', () {
+      late ControlledMetadataService metadata;
+      late TestAppCubit app;
+      late TestSettingsCubit settings;
+      late MetadataStatusPlayerCubit player;
+      late DownloadManagerCubit downloads;
+      late VideoCubit video;
+      late BackendPlayback initialRequest;
+
+      setUp(() async {
+        service = metadata = ControlledMetadataService();
+        app = TestAppCubit(AppState(0, null, HomeLayout()));
+        app.intentDataStreamSubscription =
+            const Stream<void>.empty().listen((_) {});
+        await app.stream.firstWhere((state) => state.server != null);
+        settings = TestSettingsCubit(SettingsState.init(), app);
+        player = MetadataStatusPlayerCubit(
+            PlayerState(playQueue: ListQueue()), settings);
+        downloads = DownloadManagerCubit(const DownloadManagerState(), player);
+        video = VideoCubit(VideoState.init(videoId: 'metadata-status'),
+            downloads, player, settings);
+        final selector = BackendSelector(
+            'ROUTE',
+            const [
+              BackendOption('0', 'First'),
+              BackendOption('1', 'Second'),
+              BackendOption('2', 'Third'),
+            ],
+            automaticFallback: true);
+        initialRequest = BackendPlayback(selector.withSelection(
+            const Server(url: 'https://inv.example'), '0'));
+      });
+
+      tearDown(() async {
+        if (!video.isClosed) await video.close();
+        for (final response in metadata.responses) {
+          if (!response.isCompleted) {
+            response.complete(Video(videoId: 'metadata-status'));
+          }
+        }
+        await downloads.close();
+        if (!player.isClosed) await player.close();
+        await settings.close();
+        await app.close();
+      });
+
+      test('publishes each metadata request and retains it on success',
+          () async {
+        metadata.observers.single!(initialRequest);
+        expect(video.state.requestedBackend, same(initialRequest));
+        expect(video.state.loadingVideo, isTrue);
+        final alternate = initialRequest.next()!;
+        metadata.observers.single!(alternate);
+        expect(video.state.requestedBackend, same(alternate));
+        final loaded = video.stream.firstWhere((state) => !state.loadingVideo);
+        metadata.responses.single.complete(Video(videoId: 'metadata-status'));
+        await loaded;
+        expect(video.state.requestedBackend, same(alternate));
+        expect(video.state.error, isEmpty);
+      });
+
+      test('failed request remains visible and retry clears the old snapshot',
+          () async {
+        final alternate = initialRequest.next()!;
+        metadata.observers.single!(alternate);
+        final failed = video.stream.firstWhere((state) => !state.loadingVideo);
+        metadata.responses.single.completeError(StateError('Unavailable'));
+        await failed;
+        expect(video.state.requestedBackend, same(alternate));
+        expect(video.state.error, coulnotLoadVideos);
+        final retry = video.onReady();
+        expect(video.state.requestedBackend, isNull);
+        expect(video.state.loadingVideo, isTrue);
+        metadata.observers.last!(initialRequest);
+        metadata.responses.last.complete(Video(videoId: 'metadata-status'));
+        await retry;
+        expect(video.state.requestedBackend, same(initialRequest));
+      });
+
+      test('old loads and disposal cannot publish request snapshots', () async {
+        final oldObserver = metadata.observers.single!;
+        final retry = video.onReady();
+        metadata.observers.last!(initialRequest);
+        oldObserver(initialRequest.next()!);
+        expect(video.state.requestedBackend, same(initialRequest));
+        metadata.responses.first.complete(Video(videoId: 'old-result'));
+        await Future<void>.delayed(Duration.zero);
+        expect(video.state.video, isNull);
+        final snapshot = video.state;
+        final closing = video.close();
+        metadata.observers.last!(initialRequest.next()!);
+        expect(video.state, same(snapshot));
+        await closing;
+        metadata.responses.last.complete(Video(videoId: 'metadata-status'));
+        await retry;
+        expect(video.state, same(snapshot));
+      });
+
+      testWidgets('loaded details follow only their active playback request',
+          (tester) async {
+        Future<void> update(VoidCallback change) async {
+          // The real player lifecycle persists session changes in the database.
+          await tester.runAsync(() async => change());
+          await tester.pumpAndSettle();
+        }
+
+        final loaded = video.state.copyWith(
+            loadingVideo: false,
+            requestedBackend: initialRequest,
+            video: Video(videoId: 'metadata-status'));
+        final alternate = initialRequest.next()!;
+        final active = player.state.copyWith(
+            currentlyPlaying: loaded.video, requestedBackend: initialRequest);
+        try {
+          await update(() => player.showState(active));
+          await tester.pumpWidget(MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: BlocProvider<PlayerCubit>.value(
+                value: player,
+                child: Scaffold(body: VideoBackendStatus(state: loaded))),
+          ));
+          expect(find.textContaining('First'), findsOneWidget);
+          await update(() {
+            expect(player.setRequestedBackend('metadata-status', alternate),
+                isTrue);
+          });
+          expect(find.textContaining('Second'), findsOneWidget);
+          expect(find.textContaining('First'), findsNothing);
+          await update(() {
+            expect(player.setRequestedBackend('metadata-status', null), isTrue);
+            expect(player.state.requestedBackend, isNull);
+          });
+          expect(find.textContaining('Second'), findsNothing);
+          expect(find.textContaining('First'), findsNothing);
+          await update(() => player.showState(active.copyWith(
+              currentlyPlaying: Video(videoId: 'different'),
+              requestedBackend: alternate)));
+          expect(find.textContaining('First'), findsOneWidget);
+          await update(() => player.showState(
+              active.copyWith(requestedBackend: alternate, isClosing: true)));
+          expect(find.textContaining('First'), findsOneWidget);
+          expect(find.textContaining('Second'), findsNothing);
+          expect(tester.takeException(), isNull);
+        } finally {
+          // Drain session writes outside fake async even if an assertion fails.
+          await tester.runAsync(() async {
+            player.showState(player.state
+                .copyWith(currentlyPlaying: null, requestedBackend: null));
+            await player.close();
+          });
+        }
+      });
+
+      testWidgets(
+          'details show retry only while loading and retain last request',
+          (tester) async {
+        Future<void> show(VideoState state) => tester.pumpWidget(MaterialApp(
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: BlocProvider<PlayerCubit>.value(
+                  value: player,
+                  child: Scaffold(body: VideoBackendStatus(state: state))),
+            ));
+        final initial = video.state.copyWith(requestedBackend: initialRequest);
+        await show(initial);
+        expect(find.textContaining('First'), findsOneWidget);
+        expect(find.byType(BackendRetryNotice), findsNothing);
+        final alternate = initialRequest.next()!;
+        final retrying = initial.copyWith(requestedBackend: alternate);
+        await show(retrying);
+        expect(find.byType(BackendRetryNotice), findsOneWidget);
+        expect(find.textContaining('Second'), findsNWidgets(2));
+        for (final terminal in [
+          retrying.copyWith(loadingVideo: false, error: 'Unavailable'),
+          retrying.copyWith(
+              loadingVideo: false, video: Video(videoId: 'metadata-status')),
+        ]) {
+          await show(terminal);
+          expect(find.byType(BackendRetryNotice), findsNothing);
+          expect(find.textContaining('Second'), findsOneWidget);
+        }
+        await show(initial.copyWith(
+            requestedBackend: null,
+            video: Video(videoId: 'old', backendPlayback: alternate)));
+        expect(find.textContaining('Second'), findsNothing);
+        expect(find.byType(BackendRequestIndicator), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
     });
 
     group('optional dislikes', () {

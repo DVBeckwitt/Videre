@@ -1,6 +1,8 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:logging/logging.dart';
 
+import '../backend_selector.dart';
+
 part 'server.freezed.dart';
 
 part 'server.g.dart';
@@ -14,6 +16,12 @@ sealed class Server with _$Server {
       String? authToken,
       String? sidCookie,
       @Default({}) Map<String, String> customHeaders,
+      // Freezed copies this parameter annotation to the generated field.
+      // ignore: invalid_annotation_target
+      @JsonKey(
+          fromJson: BackendSelector.tryFromJson,
+          toJson: BackendSelector.optionalToJson)
+      BackendSelector? backendSelector,
       @Default(false) bool inUse}) = _Server;
 
   const Server._();

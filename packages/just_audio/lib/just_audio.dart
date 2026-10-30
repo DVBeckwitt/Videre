@@ -140,6 +140,7 @@ class AudioPlayer {
   final _icyMetadataSubject = BehaviorSubject<IcyMetadata?>.seeded(null);
   final _androidAudioSessionIdSubject = BehaviorSubject<int?>.seeded(null);
   final _errorSubject = PublishSubject<PlayerException>();
+  PlayerException? _nativePlaybackError;
 
   // independent streams
   final _playingSubject = BehaviorSubject.seeded(false);
@@ -345,11 +346,16 @@ class AudioPlayer {
               code: event.errorCode,
               message: event.errorMessage,
               index: event.currentIndex,
+              backendRetryable: event.backendRetryable,
             ))
         .distinct()
         .where((error) => error.code != null)
-        .map((error) =>
-            PlayerException(error.code!, error.message, error.index)));
+        .map((error) => PlayerException(
+              error.code!,
+              error.message,
+              error.index,
+              backendRetryable: error.backendRetryable,
+            )));
     _playerStateSubject.addStream(playerEventStream
         .map((event) =>
             PlayerState(event.playing, event.playbackEvent.processingState))
@@ -1552,6 +1558,7 @@ class AudioPlayer {
       });
       _playbackEventSubscription =
           platform.playbackEventMessageStream.listen((message) {
+        if (message.errorCode == null) _nativePlaybackError = null;
         var duration = message.duration;
         var index = message.currentIndex ?? currentIndex;
         if (index != null && index < sequence.length) {
@@ -1582,6 +1589,10 @@ class AudioPlayer {
           androidAudioSessionId: message.androidAudioSessionId,
           errorCode: message.errorCode,
           errorMessage: message.errorMessage,
+          backendRetryable: _nativePlaybackError?.code == message.errorCode &&
+              _nativePlaybackError?.message == message.errorMessage &&
+              _nativePlaybackError?.index == index &&
+              (_nativePlaybackError?.backendRetryable ?? false),
         );
         _loadFuture = Future.value(newPlaybackEvent.duration);
         if (newPlaybackEvent == playbackEvent) {
@@ -1596,7 +1607,12 @@ class AudioPlayer {
             _active) {
           _setPlatformActive(false)?.catchError((dynamic e) async => null);
         }
-      }, onError: (Object e, [StackTrace? st]) {});
+      }, onError: (Object e, [StackTrace? st]) {
+        // Android sends structured details before the matching error event.
+        // Keep using the normal event pipeline so errorStream emits once.
+        final error = e is PlatformException ? _convertException(e) : null;
+        _nativePlaybackError = error is PlayerException ? error : null;
+      });
     }
 
     Future<AudioPlayerPlatform> setPlatform() async {
@@ -1812,7 +1828,8 @@ class AudioPlayer {
     } else if (code == kInterruptedErrorCode) {
       return PlayerInterruptedException(e.message);
     } else {
-      return PlayerException(code, e.message, index);
+      return PlayerException(code, e.message, index,
+          backendRetryable: details?['backendRetryable'] == true);
     }
   }
 }
@@ -1833,7 +1850,12 @@ class PlayerException implements Exception {
   /// The index of the audio source associated with this error.
   final int? index;
 
-  PlayerException(this.code, this.message, this.index);
+  /// True only when the native platform identified a transient backend
+  /// transport or gateway failure. Other errors default to false.
+  final bool backendRetryable;
+
+  PlayerException(this.code, this.message, this.index,
+      {this.backendRetryable = false});
 
   @override
   String toString() => "($code) $message";
@@ -1927,6 +1949,9 @@ class PlaybackEvent {
   /// documentation of the respective platform implementation.
   final String? errorMessage;
 
+  /// Whether this error was identified as a transient backend failure.
+  final bool backendRetryable;
+
   PlaybackEvent({
     this.processingState = ProcessingState.idle,
     DateTime? updateTime,
@@ -1938,6 +1963,7 @@ class PlaybackEvent {
     this.androidAudioSessionId,
     this.errorCode,
     this.errorMessage,
+    this.backendRetryable = false,
   }) : updateTime = updateTime ?? DateTime.now();
 
   /// Returns a copy of this event with given properties replaced.
@@ -1952,6 +1978,7 @@ class PlaybackEvent {
     int? androidAudioSessionId,
     int? errorCode,
     String? errorMessage,
+    bool? backendRetryable,
   }) =>
       PlaybackEvent(
         processingState: processingState ?? this.processingState,
@@ -1965,6 +1992,7 @@ class PlaybackEvent {
             androidAudioSessionId ?? this.androidAudioSessionId,
         errorCode: errorCode ?? this.errorCode,
         errorMessage: errorMessage ?? this.errorMessage,
+        backendRetryable: backendRetryable ?? this.backendRetryable,
       );
 
   @override
@@ -1979,6 +2007,7 @@ class PlaybackEvent {
         androidAudioSessionId,
         errorCode,
         errorMessage,
+        backendRetryable,
       );
 
   @override
@@ -1994,7 +2023,8 @@ class PlaybackEvent {
       currentIndex == other.currentIndex &&
       androidAudioSessionId == other.androidAudioSessionId &&
       errorCode == other.errorCode &&
-      errorMessage == other.errorMessage;
+      errorMessage == other.errorMessage &&
+      backendRetryable == other.backendRetryable;
 
   @override
   String toString() =>

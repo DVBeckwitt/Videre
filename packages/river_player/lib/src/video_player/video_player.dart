@@ -32,7 +32,9 @@ class VideoPlayerValue {
     this.isBuffering = false,
     this.volume = 1.0,
     this.speed = 1.0,
+    this.pitch = 1.0,
     this.errorDescription,
+    this.backendRetryable = false,
     this.isPip = false,
     this.isLiveStream = false,
   });
@@ -76,10 +78,17 @@ class VideoPlayerValue {
   /// The current speed of the playback
   final double speed;
 
+  /// Audio pitch factor, independent of playback speed (1.0 is unchanged).
+  final double pitch;
+
   /// A description of the error if present.
   ///
   /// If [hasError] is false this is [null].
   final String? errorDescription;
+
+  /// Whether the native error is a transient backend transport or gateway
+  /// failure. Unknown errors and unsupported platforms default to false.
+  final bool backendRetryable;
 
   /// The [size] of the currently loaded video.
   ///
@@ -125,7 +134,9 @@ class VideoPlayerValue {
     bool? isBuffering,
     double? volume,
     String? errorDescription,
+    bool? backendRetryable,
     double? speed,
+    double? pitch,
     bool? isPip,
     bool? isLiveStream,
   }) {
@@ -140,7 +151,9 @@ class VideoPlayerValue {
       isBuffering: isBuffering ?? this.isBuffering,
       volume: volume ?? this.volume,
       speed: speed ?? this.speed,
+      pitch: pitch ?? this.pitch,
       errorDescription: errorDescription ?? this.errorDescription,
+      backendRetryable: backendRetryable ?? this.backendRetryable,
       isPip: isPip ?? this.isPip,
       isLiveStream: isLiveStream ?? this.isLiveStream,
     );
@@ -271,9 +284,17 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     void errorListener(Object object) {
       if (object is PlatformException) {
         final PlatformException e = object;
-        value = value.copyWith(errorDescription: e.message);
+        final details = e.details;
+        value = value.copyWith(
+          errorDescription: e.message,
+          backendRetryable:
+              details is Map && details['backendRetryable'] == true,
+        );
       } else {
-        value.copyWith(errorDescription: object.toString());
+        value = value.copyWith(
+          errorDescription: object.toString(),
+          backendRetryable: false,
+        );
       }
       _timer?.cancel();
       if (!_initializingCompleter.isCompleted) {
@@ -410,6 +431,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       duration: null,
       isLooping: value.isLooping,
       volume: value.volume,
+      pitch: value.pitch,
     );
 
     if (!_creatingCompleter.isCompleted) await _creatingCompleter.future;
@@ -586,6 +608,27 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       await _applySpeed();
     } catch (exception) {
       value = value.copyWith(speed: previousSpeed);
+      rethrow;
+    }
+  }
+
+  /// Changes audio pitch independently of playback speed. Android supports
+  /// positive finite factors; a factor of 2.0 raises pitch by one octave.
+  Future<void> setPitch(double pitch) async {
+    if (!pitch.isFinite || pitch <= 0) {
+      throw ArgumentError.value(pitch, 'pitch', 'Must be positive and finite');
+    }
+    if (_isDisposed) return;
+    final previousPitch = value.pitch;
+    value = value.copyWith(pitch: pitch);
+    try {
+      await _creatingCompleter.future;
+      if (_isDisposed) return;
+      await _videoPlayerPlatform.setPitch(_textureId, pitch);
+    } catch (_) {
+      if (!_isDisposed && value.pitch == pitch) {
+        value = value.copyWith(pitch: previousPitch);
+      }
       rethrow;
     }
   }

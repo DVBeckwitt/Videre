@@ -3,10 +3,12 @@ import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
+import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/tv/components/sleep_timer.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
@@ -46,6 +48,11 @@ class TvPlayerSettings extends StatelessWidget {
           PlaybackSpeedControls(
             initialSpeed: cubit.player.getSpeed(),
             onChanged: cubit.player.setSpeed,
+            initialPitchSemitones: cubit.player.getPitchSemitones(),
+            onPitchChanged:
+                !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+                    ? cubit.player.setPitchSemitones
+                    : null,
             compact: true,
           ),
         ];
@@ -169,6 +176,15 @@ class TvPlayerSettings extends StatelessWidget {
                   ),
                 ],
               ),
+              if (context.select(
+                  (PlayerCubit player) => canChoosePlayerBackend(player.state)))
+                TextButton.icon(
+                  key: const ValueKey('player-backend-open'),
+                  onPressed: () => showPlayerBackendPicker(context,
+                      player: context.read<PlayerCubit>()),
+                  icon: const Icon(Icons.dns_outlined),
+                  label: Text(locals.backendChoose),
+                ),
               if (playerState.selected == Tabs.playbackSpeed)
                 Flexible(
                   child: Center(

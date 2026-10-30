@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   final slider = find.byKey(const ValueKey('playback-speed-quick-slider'));
   final advanced = find.byKey(const ValueKey('playback-speed-quick-advanced'));
+  final advancedButton =
+      find.byKey(const ValueKey('playback-speed-advanced-button'));
   final value = find.byKey(const ValueKey('playback-speed-quick-value'));
 
   Future<void> pumpControls(
@@ -84,6 +86,25 @@ void main() {
     expect(speeds, isEmpty);
   });
 
+  testWidgets(
+      'visible Advanced button opens fine controls without changing speed',
+      (tester) async {
+    final speeds = <double>[];
+    var advancedCount = 0;
+    await pumpControls(tester,
+        speed: 1.37, onChanged: speeds.add, onAdvanced: () => advancedCount++);
+
+    expect(advancedButton, findsOneWidget);
+    expect(find.descendant(of: advancedButton, matching: find.text('Advanced')),
+        findsOneWidget);
+    await tester.tap(advancedButton);
+    await tester.pumpAndSettle();
+
+    expect(advancedCount, 1);
+    expect(speeds, isEmpty);
+    expect(tester.widget<Text>(value).data, '1.37×');
+  });
+
   testWidgets('quick entry fits a narrow screen with large text',
       (tester) async {
     tester.view.physicalSize = const Size(320, 640);
@@ -103,6 +124,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(advancedCount, 1);
     expect(speeds, isEmpty);
+    await tester.ensureVisible(advancedButton);
+    await tester.tap(advancedButton);
+    await tester.pumpAndSettle();
+    expect(advancedCount, 2);
+    expect(speeds, isEmpty);
+    await tester.ensureVisible(slider);
     await tester.drag(slider, const Offset(500, 0));
     await tester.pumpAndSettle();
     expect(speeds.last, 4);

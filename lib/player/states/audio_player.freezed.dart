@@ -13,7 +13,7 @@ part of 'audio_player.dart';
 T _$identity<T>(T value) => value;
 
 /// @nodoc
-mixin _$AudioPlayerState {
+mixin _$AudioPlayerState implements DiagnosticableTreeMixin {
   Duration get audioLength;
   Duration get audioPosition;
   int get previousSponsorCheck;
@@ -31,6 +31,21 @@ mixin _$AudioPlayerState {
   $AudioPlayerStateCopyWith<AudioPlayerState> get copyWith =>
       _$AudioPlayerStateCopyWithImpl<AudioPlayerState>(
           this as AudioPlayerState, _$identity);
+
+  @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    properties
+      ..add(DiagnosticsProperty('type', 'AudioPlayerState'))
+      ..add(DiagnosticsProperty('audioLength', audioLength))
+      ..add(DiagnosticsProperty('audioPosition', audioPosition))
+      ..add(DiagnosticsProperty('previousSponsorCheck', previousSponsorCheck))
+      ..add(DiagnosticsProperty('video', video))
+      ..add(DiagnosticsProperty('offlineVideo', offlineVideo))
+      ..add(DiagnosticsProperty('playNow', playNow))
+      ..add(DiagnosticsProperty('disableControls', disableControls))
+      ..add(DiagnosticsProperty('loading', loading))
+      ..add(DiagnosticsProperty('error', error));
+  }
 
   @override
   bool operator ==(Object other) {
@@ -67,7 +82,7 @@ mixin _$AudioPlayerState {
       error);
 
   @override
-  String toString() {
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
     return 'AudioPlayerState(audioLength: $audioLength, audioPosition: $audioPosition, previousSponsorCheck: $previousSponsorCheck, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls, loading: $loading, error: $error)';
   }
 }
@@ -397,7 +412,7 @@ extension AudioPlayerStatePatterns on AudioPlayerState {
 
 /// @nodoc
 
-class _AudioPlayerState extends AudioPlayerState {
+class _AudioPlayerState extends AudioPlayerState with DiagnosticableTreeMixin {
   const _AudioPlayerState(
       {this.audioLength = const Duration(milliseconds: 1),
       this.audioPosition = Duration.zero,
@@ -442,6 +457,21 @@ class _AudioPlayerState extends AudioPlayerState {
       __$AudioPlayerStateCopyWithImpl<_AudioPlayerState>(this, _$identity);
 
   @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    properties
+      ..add(DiagnosticsProperty('type', 'AudioPlayerState'))
+      ..add(DiagnosticsProperty('audioLength', audioLength))
+      ..add(DiagnosticsProperty('audioPosition', audioPosition))
+      ..add(DiagnosticsProperty('previousSponsorCheck', previousSponsorCheck))
+      ..add(DiagnosticsProperty('video', video))
+      ..add(DiagnosticsProperty('offlineVideo', offlineVideo))
+      ..add(DiagnosticsProperty('playNow', playNow))
+      ..add(DiagnosticsProperty('disableControls', disableControls))
+      ..add(DiagnosticsProperty('loading', loading))
+      ..add(DiagnosticsProperty('error', error));
+  }
+
+  @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
@@ -476,7 +506,7 @@ class _AudioPlayerState extends AudioPlayerState {
       error);
 
   @override
-  String toString() {
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
     return 'AudioPlayerState(audioLength: $audioLength, audioPosition: $audioPosition, previousSponsorCheck: $previousSponsorCheck, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls, loading: $loading, error: $error)';
   }
 }

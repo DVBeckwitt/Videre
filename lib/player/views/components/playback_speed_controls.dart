@@ -1,20 +1,87 @@
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
-/// The same speed picker for video, background audio, and TV playback.
+Future<void> showPlaybackSpeedSheet(
+  BuildContext context, {
+  required double initialSpeed,
+  required ValueChanged<double> onChanged,
+  int initialPitchSemitones = 0,
+  ValueChanged<int>? onPitchChanged,
+}) async {
+  await showSafeModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (context) => _PlaybackSpeedSheetBackHandler(
+      child: SingleChildScrollView(
+        child: PlaybackSpeedControls(
+          initialSpeed: initialSpeed,
+          onChanged: onChanged,
+          initialPitchSemitones: initialPitchSemitones,
+          onPitchChanged: onPitchChanged,
+        ),
+      ),
+    ),
+  );
+}
+
+class _PlaybackSpeedSheetBackHandler extends StatefulWidget {
+  final Widget child;
+
+  const _PlaybackSpeedSheetBackHandler({required this.child});
+
+  @override
+  State<_PlaybackSpeedSheetBackHandler> createState() =>
+      _PlaybackSpeedSheetBackHandlerState();
+}
+
+class _PlaybackSpeedSheetBackHandlerState
+    extends State<_PlaybackSpeedSheetBackHandler> {
+  @override
+  void initState() {
+    super.initState();
+    // The player's global Back handler has priority 2. Dismiss this sheet
+    // before that handler can collapse or leave fullscreen playback.
+    BackButtonInterceptor.add(_handleBack,
+        zIndex: 3, ifNotYetIntercepted: true);
+  }
+
+  bool _handleBack(bool stopDefaultButtonEvent, RouteInfo info) {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
+    Navigator.of(context).pop();
+    return true;
+  }
+
+  @override
+  void dispose() {
+    BackButtonInterceptor.remove(_handleBack);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// Speed and independent pitch controls for video, background audio, and TV.
 /// Keeps the selected value locally so fine adjustments do not depend on the
 /// timing of native player events. Playback and persistence stay with the caller.
 class PlaybackSpeedControls extends StatefulWidget {
   final double initialSpeed;
   final ValueChanged<double> onChanged;
+  final int initialPitchSemitones;
+  final ValueChanged<int>? onPitchChanged;
   final bool compact;
 
   const PlaybackSpeedControls({
     super.key,
     required this.initialSpeed,
     required this.onChanged,
+    this.initialPitchSemitones = 0,
+    this.onPitchChanged,
     this.compact = false,
   });
 
@@ -29,6 +96,7 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
   static const _steps = [0.01, 0.05, 0.1, 0.25];
 
   late int _hundredths = _normalize(widget.initialSpeed);
+  late int _pitchSemitones = widget.initialPitchSemitones.clamp(-12, 12);
   int _step = 5;
 
   // Integer hundredths avoid accumulating floating point error on repeated taps.
@@ -42,6 +110,9 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
     if (widget.initialSpeed != oldWidget.initialSpeed) {
       _hundredths = _normalize(widget.initialSpeed);
     }
+    if (widget.initialPitchSemitones != oldWidget.initialPitchSemitones) {
+      _pitchSemitones = widget.initialPitchSemitones.clamp(-12, 12);
+    }
   }
 
   void _select(int value) {
@@ -51,6 +122,13 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
     }
     setState(() => _hundredths = next);
     widget.onChanged(next / 100);
+  }
+
+  void _selectPitch(int value) {
+    final next = value.clamp(-12, 12);
+    if (next == _pitchSemitones || widget.onPitchChanged == null) return;
+    setState(() => _pitchSemitones = next);
+    widget.onPitchChanged!(next);
   }
 
   @override
@@ -64,6 +142,9 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
     final current =
         '${NumberFormat('0.00', locale).format(_hundredths / 100)}×';
     final stepLabel = speed(_step / 100);
+    String pitch(int value) =>
+        '${value > 0 ? '+' : ''}${NumberFormat('0', locale).format(value)}';
+    final currentPitch = pitch(_pitchSemitones);
 
     final controls = Shortcuts(
       shortcuts: const {
@@ -77,7 +158,10 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (!widget.compact) ...[
-                Text(locals.playbackSpeed,
+                Text(
+                    widget.onPitchChanged == null
+                        ? locals.playbackSpeed
+                        : locals.playbackSpeedAndPitch,
                     style: theme.textTheme.titleLarge,
                     textAlign: TextAlign.center),
                 const SizedBox(height: 20),
@@ -202,6 +286,102 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
                   label: Text(locals.resetPlaybackSpeed),
                 ),
               ),
+              if (widget.onPitchChanged != null) ...[
+                const Divider(height: 32),
+                Text(locals.playbackPitch,
+                    style: theme.textTheme.titleLarge,
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 8),
+                Text(locals.playbackPitchHelp,
+                    style: theme.textTheme.bodyMedium,
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: colors.secondaryContainer,
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Row(
+                    children: [
+                      IconButton.filledTonal(
+                        key: const ValueKey('playback-pitch-decrease'),
+                        tooltip: locals.decreasePlaybackPitch,
+                        onPressed: _pitchSemitones > -12
+                            ? () => _selectPitch(_pitchSemitones - 1)
+                            : null,
+                        icon: const Icon(Icons.remove),
+                      ),
+                      Expanded(
+                        child: Semantics(
+                          label: locals.playbackPitch,
+                          value: locals.playbackPitchValue(currentPitch),
+                          liveRegion: true,
+                          excludeSemantics: true,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  currentPitch,
+                                  key: const ValueKey('playback-pitch-value'),
+                                  style: theme.textTheme.headlineLarge
+                                      ?.copyWith(
+                                          color: colors.onSecondaryContainer,
+                                          fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              Text(locals.playbackPitchUnit,
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                      color: colors.onSecondaryContainer)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      IconButton.filledTonal(
+                        key: const ValueKey('playback-pitch-increase'),
+                        tooltip: locals.increasePlaybackPitch,
+                        onPressed: _pitchSemitones < 12
+                            ? () => _selectPitch(_pitchSemitones + 1)
+                            : null,
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                ),
+                Semantics(
+                  label: locals.playbackPitch,
+                  child: Slider(
+                    key: const ValueKey('playback-pitch-slider'),
+                    min: -12,
+                    max: 12,
+                    divisions: 24,
+                    value: _pitchSemitones.toDouble(),
+                    label: locals.playbackPitchValue(currentPitch),
+                    semanticFormatterCallback: (value) =>
+                        locals.playbackPitchValue(pitch(value.round())),
+                    onChanged: (value) => _selectPitch(value.round()),
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(pitch(-12), style: theme.textTheme.labelMedium),
+                    Text(pitch(12), style: theme.textTheme.labelMedium),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton.icon(
+                    key: const ValueKey('playback-pitch-reset'),
+                    onPressed:
+                        _pitchSemitones == 0 ? null : () => _selectPitch(0),
+                    icon: const Icon(Icons.restore),
+                    label: Text(locals.resetPlaybackPitch),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
