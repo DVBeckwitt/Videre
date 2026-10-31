@@ -363,9 +363,8 @@ class Service {
     }
     final processed =
         await _processVideo(video.copyWith(backendPlayback: playback));
-    if (serverOverride == null &&
-        playback != null &&
-        !playback.matches(await db.getCurrentlySelectedServer())) {
+    if (initialRequest != null &&
+        !initialRequest.matches(await db.getCurrentlySelectedServer())) {
       throw StateError(
           'The playback connection changed while loading this video.');
     }
@@ -442,10 +441,10 @@ class Service {
         final next = playback.next();
         if (next == null) return null;
         playback = next;
-        onRetry?.call(next);
         Video loaded;
         try {
-          loaded = await _getVideoMetadata(video.videoId, next.server);
+          loaded = await _getVideoMetadata(video.videoId, next.server,
+              backendRequest: next, onBackendRequest: onRetry);
         } catch (error) {
           if (!isBackendRetryable(error)) rethrow;
           continue;

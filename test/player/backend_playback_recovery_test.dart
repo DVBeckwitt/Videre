@@ -291,6 +291,51 @@ void main() {
     }
   });
 
+  test('early seeks wait for initialization and retain the latest position',
+      () async {
+    final held = heldSources['https://instance.example/video-a-1.mp4'] =
+        Completer<void>();
+    final video = cubit();
+    final loading = video.playVideo(false);
+    try {
+      await _flush();
+      await video.seek(const Duration(seconds: 10));
+      await video.seek(const Duration(seconds: 25));
+      video.pause();
+      expect(seeks, isEmpty);
+      held.complete();
+      await loading;
+      await _flush();
+      expect(seeks.last, 25000);
+      expect(nativePlaying, isFalse);
+    } finally {
+      if (!held.isCompleted) held.complete();
+      await loading;
+      await video.close();
+    }
+  });
+
+  test('new video discards a seek queued during backend recovery', () async {
+    final video = cubit();
+    final held = retryService.heldRetry = Completer<void>();
+    try {
+      await video.playVideo(false);
+      await error(retryable: true);
+      await _flush();
+      await video.seek(const Duration(seconds: 25));
+      video.switchVideo(_video('replacement', BackendPlayback(preferred)));
+      await _flush();
+      held.complete();
+      await _flush();
+      expect(
+          sources.last['uri'], 'https://instance.example/replacement-a-1.mp4');
+      expect(seeks, isNot(contains(25000)));
+    } finally {
+      if (!held.isCompleted) held.complete();
+      await video.close();
+    }
+  });
+
   test('native play failure stays terminal without an unhandled setup future',
       () async {
     rejectPlay = true;
@@ -323,6 +368,67 @@ void main() {
       expect((await db.getCurrentlySelectedServer()).customHeaders,
           preferred.customHeaders);
       expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('recovered metadata survives a decoder remount', () async {
+    failedUrls['https://instance.example/video-a-1.mp4'] = true;
+    final video = cubit();
+    _VideoWithoutAutostart? replacement;
+    try {
+      await video.playVideo(false);
+      await _flush();
+      expect(retryService.visited, ['Backend B']);
+      final recovered = video.state.video!;
+      expect(player.state.currentlyPlaying, same(recovered));
+      await video.close();
+      player.switchAudio(true);
+      player.switchAudio(false);
+      replacement = _VideoWithoutAutostart(
+          VideoPlayerState(
+              video: player.state.currentlyPlaying,
+              colors: ColorScheme.fromSeed(seedColor: Colors.blue),
+              overFlowTextColor: Colors.white,
+              key: GlobalKey()),
+          player,
+          settings);
+      await replacement.playVideo(false);
+      await _flush();
+      expect(sources.last['uri'], 'https://instance.example/video-b-1.mp4');
+      expect(retryService.visited, ['Backend B']);
+    } finally {
+      if (!video.isClosed) await video.close();
+      await replacement?.close();
+    }
+  });
+
+  test('empty native buffering ranges reset progress without throwing',
+      () async {
+    final video = cubit();
+    try {
+      await video.playVideo(false);
+      await _flush();
+      for (final ranges in <List<List<int>>>[
+        [
+          [0, 20000],
+          [0, 10000]
+        ],
+        [],
+      ]) {
+        EasyThrottle.cancel('video-buffering');
+        await messenger.handlePlatformMessage(
+            events.name,
+            const StandardMethodCodec().encodeSuccessEnvelope({
+              'event': 'bufferingUpdate',
+              'values': ranges,
+            }),
+            (_) {});
+        await _flush();
+        expect(video.state.bufferPosition,
+            ranges.isEmpty ? Duration.zero : const Duration(seconds: 20));
+      }
     } finally {
       await video.close();
     }

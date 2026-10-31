@@ -45,7 +45,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     final updated = latest.copyWith(
         backendSelector: selector.copyWith(
             automaticFallback:
-                latest.backendSelector?.automaticFallback ?? false));
+                latest.backendSelector?.automaticFallback ?? true));
     await _saveBackendServer(updated);
     return updated;
   }
@@ -107,13 +107,13 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> logInWithToken() async {
-    var s = state.server.copyWith();
-    await service.logIn(s.url);
-    Server server = db.getServer(s.url)!;
-    emit(state.copyWith(server: s));
-    // we only refresh the app if the app is currently on this server
-    if (app.state.server?.url == server.url) {
-      app.setServer(server.copyWith());
+    final serverUrl = state.server.url;
+    await service.logIn(serverUrl);
+    final server = db.getServer(serverUrl)!;
+    if (!isClosed) emit(state.copyWith(server: server));
+    // Only refresh the app if it is still on the authenticated server.
+    if (!app.isClosed && app.state.server?.url == server.url) {
+      app.setServer(server);
     }
   }
 

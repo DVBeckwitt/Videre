@@ -192,7 +192,7 @@ void main() {
           fixture.usesPreferences ? 'PREFS' : 'COMPANION_ID');
       expect(discovered.preferenceField,
           fixture.usesPreferences ? 'current_companion' : null);
-      expect(discovered.automaticFallback, isFalse);
+      expect(discovered.automaticFallback, isTrue);
       expect(requests, hasLength(1));
       expect(_normalizedHeaders(requests.single.headers), {
         'cookie': _expectedCookie(fixture, null),
@@ -201,7 +201,7 @@ void main() {
       });
       expect(requests.single.followRedirects, isFalse);
 
-      final selector = discovered.copyWith(automaticFallback: true);
+      final selector = discovered;
       await db.upsertServer(selector.withSelection(original, '2'));
       final saved = await db.getCurrentlySelectedServer();
       expect(saved.backendSelector, selector);

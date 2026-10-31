@@ -22,8 +22,8 @@ export class InputError extends Error {
 function object(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
-function boundedText(value, max, { empty = false } = {}) {
-  if (typeof value !== 'string' || (!empty && !value.trim()) || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) throw new InputError();
+function boundedText(value, max) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) throw new InputError();
   return value;
 }
 function crc32(bytes) {

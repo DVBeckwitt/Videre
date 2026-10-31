@@ -122,13 +122,14 @@ void main() {
     expect(find.text('Prôtos 1'), findsOneWidget);
     expect(find.text('Deúteros 3'), findsOneWidget);
     expect(browser, findsNothing);
+    expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
     expect(tester.widget<FilledButton>(save).onPressed, isNull);
     await tapVisible(tester, choice('5'));
     await tapVisible(tester, automatic);
     expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
     await tapVisible(tester, save);
     expect(selected, '5');
-    expect(fallback, isTrue);
+    expect(fallback, isFalse);
     expect(find.byType(BackendPicker), findsNothing);
   });
 
@@ -143,7 +144,7 @@ void main() {
 
     await tapVisible(tester, browser);
     expect(tester.widget<ListTile>(choice('5')).selected, isTrue);
-    expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
+    expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
     expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
     expect(retry, findsOneWidget);
     expect(tester.takeException(), isNull);

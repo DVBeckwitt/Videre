@@ -102,7 +102,7 @@ void main() {
         home: const Scaffold(
           body: Column(children: [
             Text('Player screen'),
-            MiniPlayerControls(videoId: 'test-video'),
+            MiniPlayerControls(),
           ]),
         ),
       ),
@@ -154,6 +154,35 @@ void main() {
     }
   }
 
+  for (final dismissal in ['Back', 'scrim', 'Cancel']) {
+    testWidgets(
+        'backend $dismissal dismissal preserves player and restores Back',
+        (tester) async {
+      await pumpPlayer(tester, withQueueAndBackend: true);
+      final interceptorsBefore = BackButtonInterceptor.describe();
+      await tester.tap(find.byKey(const ValueKey('player-backend-shortcut')));
+      await tester.pumpAndSettle();
+      final cancel = find.byKey(const ValueKey('player-backend-cancel'));
+      expect(cancel, findsOneWidget);
+
+      if (dismissal == 'Back') {
+        await pressAndroidBack(tester);
+      } else if (dismissal == 'scrim') {
+        await tester.tapAt(const Offset(10, 10));
+        await tester.pumpAndSettle();
+      } else {
+        await tester.tap(cancel);
+        await tester.pumpAndSettle();
+      }
+
+      expect(cancel, findsNothing);
+      expect(player.state.isMini, isFalse);
+      expect(BackButtonInterceptor.describe(), interceptorsBefore);
+      await pressAndroidBack(tester);
+      expect(player.state.isMini, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
   testWidgets('all controls fit a narrow player with transcript beside speed',
       (tester) async {
     tester.view.physicalSize = const Size(320, 800);

@@ -33,7 +33,7 @@ class BackendSelector {
   static final _controlCharacter = RegExp(r'[\x00-\x1F\x7F]');
 
   factory BackendSelector(String cookieName, List<BackendOption> options,
-      {bool automaticFallback = false, String? preferenceField}) {
+      {bool automaticFallback = true, String? preferenceField}) {
     final preferences = preferenceField != null;
     if (cookieName.length > 256 ||
         !_cookieName.hasMatch(cookieName) ||
@@ -139,7 +139,7 @@ class BackendSelector {
   factory BackendSelector.fromJson(Map<String, dynamic> json) {
     final cookieName = json['cookieName'];
     final entries = json['options'];
-    final automaticFallback = json['automaticFallback'] ?? false;
+    final automaticFallback = json['automaticFallback'] ?? true;
     final preferenceField = json['preferenceField'];
     if (cookieName is! String ||
         entries is! List ||

@@ -193,6 +193,47 @@ void main() {
     expect(find.textContaining('#123'), findsWidgets);
   });
 
+  for (final field in {
+    'title': feedbackTitleLimit,
+    'description': feedbackDescriptionLimit,
+  }.entries) {
+    testWidgets(
+        '${field.key} cannot preview stale text after a Unicode overflow',
+        (tester) async {
+      Map<String, dynamic>? submitted;
+      await pumpForm(tester, send: (request) async {
+        submitted = jsonDecode(request.body) as Map<String, dynamic>;
+        return _created();
+      });
+      await fill(tester);
+      // Flutter counts graphemes for maxLength, but the request and storage
+      // contract bounds UTF-16 code units, as does the JavaScript relay.
+      const grapheme = '👨‍👩‍👧‍👦';
+      final tooLong =
+          List.filled(field.value ~/ grapheme.length + 1, grapheme).join();
+      await reveal(tester, keyed(field.key), delta: -180);
+      await tester.enterText(keyed(field.key), tooLong);
+      FocusManager.instance.primaryFocus?.unfocus();
+      tester.testTextInput.hide();
+      await tester.pumpAndSettle();
+      final scroll = tester.widget<ListView>(keyed('form-scroll')).controller!;
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      await tap(tester, 'preview');
+      expect(keyed('send'), findsNothing);
+      expect(submitted, isNull);
+
+      await reveal(tester, keyed(field.key), delta: -180);
+      await tester.enterText(keyed(field.key), 'Corrected 😀 report');
+      FocusManager.instance.primaryFocus?.unfocus();
+      tester.testTextInput.hide();
+      await tester.pumpAndSettle();
+      await tap(tester, 'preview');
+      await tap(tester, 'send');
+      expect(submitted![field.key], 'Corrected 😀 report');
+    });
+  }
+
   testWidgets('suggestion selection is preserved in the submitted report',
       (tester) async {
     Map<String, dynamic>? submitted;

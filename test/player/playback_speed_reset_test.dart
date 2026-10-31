@@ -377,6 +377,70 @@ void main() {
     }
   });
 
+  for (final remember in [false, true]) {
+    test('speed follows video/audio mode changes with remember=$remember',
+        () async {
+      await settings.setRememberPlayBackSpeed(remember);
+      final video = videoCubit();
+      final native = _RetainedAudioPlayer();
+      AudioPlayerCubit? audio;
+      VideoPlayerCubit? replacement;
+      try {
+        await video.playVideo(false);
+        await video.videoController!.setSpeed(1.25);
+        await _flush();
+        await video.close();
+        player.setAudio(true);
+        audio = _AudioWithoutAutostart(
+            AudioPlayerState(video: _video('first')), player, settings, native);
+        await audio.playVideo(false);
+        expect(native.nativeSpeed, 1.25);
+        expect(player.state.speed, 1.25);
+
+        audio.setSpeed(1.75);
+        await _flush();
+        await audio.close();
+        player.setAudio(false);
+        replacement = videoCubit();
+        await replacement.playVideo(false);
+        await _flush();
+        expect(nativeVideoSpeed, 1.75);
+        expect(player.state.speed, 1.75);
+
+        replacement.switchVideo(_video('second'));
+        await _flush();
+        expect(nativeVideoSpeed, remember ? 1.75 : 1);
+        expect(player.state.speed, remember ? 1.75 : 1);
+      } finally {
+        if (!video.isClosed) await video.close();
+        if (audio != null && !audio.isClosed) await audio.close();
+        await replacement?.close();
+      }
+    });
+  }
+
+  test('speed chosen before native creation survives a mode change', () async {
+    final video = videoCubit();
+    final native = _RetainedAudioPlayer();
+    AudioPlayerCubit? audio;
+    try {
+      player.speedForVideo('first');
+      video.setSpeed(1.5);
+      expect(videoSpeedCalls, isEmpty);
+      expect(player.state.speed, 1.5);
+      await video.close();
+      player.setAudio(true);
+      audio = _AudioWithoutAutostart(
+          AudioPlayerState(video: _video('first')), player, settings, native);
+      await audio.playVideo(false);
+      expect(native.nativeSpeed, 1.5);
+      expect(player.state.speed, 1.5);
+    } finally {
+      if (!video.isClosed) await video.close();
+      await audio?.close();
+    }
+  });
+
   test('pitch follows video/audio mode changes for the same video', () async {
     final video = videoCubit();
     final native = _RetainedAudioPlayer();

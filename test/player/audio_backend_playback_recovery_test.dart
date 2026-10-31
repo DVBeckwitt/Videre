@@ -283,6 +283,26 @@ void main() {
         hasLength(1));
   });
 
+  test('recovered audio metadata survives a decoder remount', () async {
+    final native = _NativeAudio()..errors.add(_retryable());
+    final audio = create(native);
+    await audio.playVideo(false);
+    final recovered = audio.state.video!;
+    expect(player.state.currentlyPlaying, same(recovered));
+    await audio.close();
+    players.remove(audio);
+    player.switchAudio(false);
+    player.switchAudio(true);
+    final replacementNative = _NativeAudio();
+    final replacement =
+        create(replacementNative, video: player.state.currentlyPlaying);
+    await replacement.playVideo(false);
+    expect(
+        (replacementNative.sources.single as UriAudioSource).headers?['Cookie'],
+        contains('ROUTE=1'));
+    expect(retryService.retryCalls, 1);
+  });
+
   test('unknown decoder errors do not switch backends', () async {
     final native = _NativeAudio()
       ..errors.add(PlayerException(4001, 'Unsupported codec', 0));

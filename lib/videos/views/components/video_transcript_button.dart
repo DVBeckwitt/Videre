@@ -1,7 +1,7 @@
-import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/caption.dart';
@@ -43,9 +43,11 @@ class VideoTranscriptButton extends StatelessWidget {
           builder: (context) => FractionallySizedBox(
             widthFactor: 1,
             heightFactor: 0.85,
-            child: _VideoTranscriptSheet(
-              video: video,
-              initialCaptionIndex: initialIndex,
+            child: PlayerModalBackHandler(
+              child: _VideoTranscriptSheet(
+                video: video,
+                initialCaptionIndex: initialIndex,
+              ),
             ),
           ),
         );
@@ -82,22 +84,12 @@ class _VideoTranscriptSheetState extends State<_VideoTranscriptSheet> {
   @override
   void initState() {
     super.initState();
-    // Close this sheet before the player's priority-2 Back handler minimizes it.
-    BackButtonInterceptor.add(_handleBack,
-        zIndex: 3, ifNotYetIntercepted: true);
     _selectedCaptionIndex = widget.initialCaptionIndex;
     _loadTranscript();
   }
 
-  bool _handleBack(bool stopDefaultButtonEvent, RouteInfo info) {
-    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
-    Navigator.of(context).pop();
-    return true;
-  }
-
   @override
   void dispose() {
-    BackButtonInterceptor.remove(_handleBack);
     _searchController.dispose();
     super.dispose();
   }

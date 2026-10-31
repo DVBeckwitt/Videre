@@ -207,6 +207,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
 
   Timer? _timer;
   bool _isDisposed = false;
+  int _playPauseGeneration = 0;
   late Completer<void> _initializingCompleter;
   StreamSubscription<dynamic>? _eventSubscription;
 
@@ -464,6 +465,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   /// has been sent to the platform, not when playback itself is totally
   /// finished.
   Future<void> play() async {
+    _playPauseGeneration++;
     value = value.copyWith(isPlaying: true);
     await _applyPlayPause();
   }
@@ -477,6 +479,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
 
   /// Pauses the video.
   Future<void> pause() async {
+    _playPauseGeneration++;
     value = value.copyWith(isPlaying: false);
     await _applyPlayPause();
   }
@@ -559,17 +562,16 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   /// If [moment] is outside of the video's full range it will be automatically
   /// and silently clamped.
   Future<void> seekTo(Duration? position) async {
-    _timer?.cancel();
-    bool isPlaying = value.isPlaying;
-    final int positionInMs = value.position.inMilliseconds;
-    final int durationInMs = value.duration?.inMilliseconds ?? 0;
-
-    if (positionInMs >= durationInMs && position?.inMilliseconds == 0) {
-      isPlaying = true;
-    }
     if (_isDisposed) {
       return;
     }
+    _timer?.cancel();
+    final int positionInMs = value.position.inMilliseconds;
+    final int durationInMs = value.duration?.inMilliseconds ?? 0;
+
+    final shouldReplay =
+        positionInMs >= durationInMs && position?.inMilliseconds == 0;
+    final playPauseGeneration = _playPauseGeneration;
 
     Duration? positionToSeek = position;
     if (position! > value.duration!) {
@@ -580,13 +582,15 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     _seekPosition = positionToSeek;
 
     await _videoPlayerPlatform.seekTo(_textureId, positionToSeek);
+    if (_isDisposed) return;
     _updatePosition(position);
 
-    if (isPlaying) {
-      play();
-    } else {
-      pause();
+    // A pause or play requested while the native seek was pending wins over
+    // the state at the start of the seek, including an explicit pause at the end.
+    if (shouldReplay && playPauseGeneration == _playPauseGeneration) {
+      value = value.copyWith(isPlaying: true);
     }
+    await _applyPlayPause();
   }
 
   /// Sets the audio volume of [this].

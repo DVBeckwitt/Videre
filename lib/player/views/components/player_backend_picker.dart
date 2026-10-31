@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../settings/models/db/server.dart';
 import '../../states/player.dart';
+import 'player_modal_back_handler.dart';
 
 bool canChoosePlayerBackend(PlayerState state) =>
     !state.isClosing &&
@@ -23,7 +24,9 @@ Future<void> showPlayerBackendPicker(BuildContext context,
   final selection = await showDialog<PlayerBackendChoice>(
     context: context,
     useRootNavigator: false,
-    builder: (_) => PlayerBackendPicker(server: request.server),
+    builder: (_) => PlayerModalBackHandler(
+      child: PlayerBackendPicker(server: request.server),
+    ),
   );
   if (selection == null || !context.mounted || player.isClosed) return;
   try {

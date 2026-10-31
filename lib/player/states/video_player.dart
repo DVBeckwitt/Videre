@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
-import 'package:clipious/extensions.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:logging/logging.dart';
@@ -258,12 +257,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   Completer<void> _setupCancellation = Completer<void>();
   Function(BetterPlayerEvent)? _videoListener;
   Duration _playbackStartAt = Duration.zero;
+  Duration? _pendingSeek;
   bool _waitingForInitialSeek = false;
   bool _sourceBackendRetryable = false;
   bool _backendRecoveryPending = false;
   bool _playbackOffline = false;
   bool _requestedPlaying = true;
-  String? _speedVideoId;
   double _playbackSpeed = 1;
   int _playbackPitchSemitones = 0;
 
@@ -288,7 +287,6 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackSources = const [];
     _playbackServer = null;
     _playbackVideoId = null;
-    _speedVideoId = null;
     _backendRecoveryPending = false;
     _requestedPlaying = false;
     _cancelSetup();
@@ -509,9 +507,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         EasyThrottle.throttle('video-buffering', const Duration(seconds: 1),
             () {
           List<DurationRange> durations = event.parameters?['buffered'] ?? [];
-          emit(state.copyWith(
-              bufferPosition:
-                  durations.sortBy((e) => e.end).map((e) => e.end).last));
+          final buffered = durations.fold(Duration.zero,
+              (latest, range) => range.end > latest ? range.end : latest);
+          emit(state.copyWith(bufferPosition: buffered));
           player.setEvent(MediaEvent(
               state: MediaState.playing,
               type: MediaEventType.bufferChanged,
@@ -662,9 +660,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       );
       if (!active()) return true;
       if (replacement == null) return false;
+      player.reportBackendVideoLoaded(replacement);
       emit(state.copyWith(video: replacement));
       _backendRecoveryPending = false;
-      await playVideo(false, startAt: resumeAt, preservePlaybackIntent: true);
+      await playVideo(false,
+          startAt: _pendingSeek ?? resumeAt, preservePlaybackIntent: true);
       return true;
     } catch (_) {
       // API and decoder diagnostics can contain signed URLs. The existing
@@ -752,7 +752,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else {
-      if (seekAfterSetup) await seek(_playbackStartAt);
+      final pendingSeek = _pendingSeek;
+      if (seekAfterSetup || pendingSeek != null) {
+        await seek(pendingSeek ?? _playbackStartAt);
+      }
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
       try {
         if (_requestedPlaying) {
@@ -813,6 +816,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return;
     }
     _backendRecoveryPending = false;
+    _pendingSeek = null;
     _playbackOffline = offline;
     if (!preservePlaybackIntent) {
       _requestedPlaying =
@@ -839,11 +843,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (newState.video != null || newState.offlineVideo != null) {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
       _playbackPitchSemitones = player.pitchForVideo(idedVideo.videoId);
-      if (_speedVideoId != idedVideo.videoId) {
-        _speedVideoId = idedVideo.videoId;
-        _playbackSpeed =
-            settings.state.rememberPlayBackSpeed ? settings.state.lastSpeed : 1;
-      }
+      _playbackSpeed = player.speedForVideo(idedVideo.videoId);
       newState = newState.copyWith(bufferPosition: Duration.zero);
 
       if (startAt == null) {
@@ -988,6 +988,14 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   Future<void> seek(Duration position) async {
     final controller = videoController;
     final generation = _playbackGeneration;
+    if (_backendRecoveryPending ||
+        controller?.videoPlayerController?.value.duration == null) {
+      // TV remote input can arrive before native source initialization. Apply
+      // only the latest position once that source is ready.
+      _pendingSeek = position;
+      return;
+    }
+    _pendingSeek = null;
     await controller?.seekTo(position);
     if (isClosed ||
         generation != _playbackGeneration ||
@@ -1016,11 +1024,6 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   Duration position() {
     return videoController?.videoPlayerController?.value.position ??
         Duration.zero;
-  }
-
-  @override
-  double? speed() {
-    return videoController?.videoPlayerController?.value.speed ?? 1;
   }
 
   String _videoTrackToString(BetterPlayerAsmsTrack? track) {
@@ -1178,7 +1181,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void setSpeed(double d) {
-    videoController?.setSpeed(d);
+    super.setSpeed(d);
+    _playbackSpeed = d;
+    settings.setLastSpeed(d);
+    if (videoController?.videoPlayerController != null) {
+      videoController?.setSpeed(d);
+    }
   }
 
   @override

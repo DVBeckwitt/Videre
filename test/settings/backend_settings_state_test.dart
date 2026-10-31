@@ -16,6 +16,15 @@ import 'package:http/testing.dart';
 
 import '../test_app_cubit.dart';
 
+class _TokenLoginService extends Service {
+  @override
+  Future<String?> logIn(String serverUrl) async {
+    final server = db.getServer(serverUrl)!.copyWith(authToken: 'new-token');
+    await db.upsertServer(server);
+    return server.authToken;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final selector = BackendSelector('COMPANION_ID', const [
@@ -119,6 +128,20 @@ void main() {
           {'Cookie': 'PREFS=new-preferences; COMPANION_ID=3', 'X-New': 'kept'});
     });
 
+    test('token login updates the screen and survives a later header edit',
+        () async {
+      final previousService = service;
+      service = _TokenLoginService();
+      addTearDown(() => service = previousService);
+
+      await settings.logInWithToken();
+      expect(settings.state.server.authToken, 'new-token');
+      expect(app.state.server!.authToken, 'new-token');
+      await settings.addHeader('X-Instance', 'kept');
+      expect(db.getServer(instance.url)!.authToken, 'new-token');
+      expect(
+          (await fileDb.getCurrentlySelectedServer()).authToken, 'new-token');
+    });
     test('deleted server is not recreated by an open selector', () async {
       await db.deleteServerById(instance);
       await expectLater(settings.setBackend('5', true), throwsStateError);
@@ -163,7 +186,7 @@ void main() {
               'Cookie': 'COMPANION_ID=5; PREFS=unchanged',
               'X-New': 'kept',
             },
-            backendSelector: selector.copyWith(automaticFallback: true),
+            backendSelector: selector.copyWith(automaticFallback: false),
           );
       await db.upsertServer(latest);
       release.complete();
@@ -172,7 +195,7 @@ void main() {
       expect(discovered.customHeaders, latest.customHeaders);
       expect(discovered.authToken, latest.authToken);
       expect(discovered.sidCookie, latest.sidCookie);
-      expect(discovered.backendSelector!.automaticFallback, isTrue);
+      expect(discovered.backendSelector!.automaticFallback, isFalse);
       expect(discovered.backendSelector!.labelFor('5'), 'Fresh sixth');
       expect(discovered.backendSelector!.selectedValue(discovered), '5');
       expect(db.getServer(instance.url), discovered);
@@ -180,6 +203,44 @@ void main() {
       expect(app.state.server, discovered);
     });
 
+    for (final browser in [false, true]) {
+      for (final savedFallback in <bool?>[null, false, true]) {
+        test(
+            '${browser ? 'browser' : 'direct'} discovery ${savedFallback == null ? 'enables fallback by default' : 'preserves saved fallback $savedFallback'}',
+            () async {
+          final saved = instance.copyWith(
+            url: 'https://invidious.nerdvpn.de',
+            backendSelector: savedFallback == null
+                ? null
+                : selector.copyWith(automaticFallback: savedFallback),
+          );
+          await db.upsertServer(saved);
+          final discovering =
+              ServerSettingsCubit(ServerSettingsState(server: saved), app);
+          addTearDown(discovering.close);
+          const source = '<title>Invidious</title>'
+              '<a href="/switchbackend?backend_id=0">First</a>'
+              '<a href="/switchbackend?backend_id=5">Sixth</a>';
+          final client = MockClient((_) async => http.Response(source, 200,
+              headers: {'content-type': 'text/html'}));
+          final previousService = service;
+          service = Service(httpClient: client);
+          addTearDown(() {
+            service = previousService;
+            client.close();
+          });
+
+          final discovered = browser
+              ? await discovering.discoverBrowserBackends(
+                  pageUri: Uri.parse('${saved.url}/'), source: source)
+              : await discovering.discoverBackends();
+          expect(discovered.backendSelector!.automaticFallback,
+              savedFallback ?? true);
+          expect(db.getServer(saved.url), discovered);
+          expect(discovering.state.server, discovered);
+        });
+      }
+    }
     test('a server deleted during discovery is not recreated', () async {
       final started = Completer<void>();
       final release = Completer<void>();

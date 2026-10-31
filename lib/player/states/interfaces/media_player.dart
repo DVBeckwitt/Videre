@@ -68,10 +68,6 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
     switch (command.type) {
       case MediaCommandType.speed:
         setSpeed(command.value);
-        player.setEvent(MediaEvent(
-            state: MediaState.playing,
-            type: MediaEventType.speedChanged,
-            value: command.value));
         break;
       case MediaCommandType.pitch:
         setPitchSemitones(command.value);
@@ -134,8 +130,6 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
 
   Duration? bufferedPosition();
 
-  double? speed();
-
   List<String> getVideoTracks();
 
   List<String> getAudioTracks();
@@ -158,7 +152,11 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
 
   void toggleVolume(bool soundOn);
 
-  void setSpeed(double d);
+  @mustCallSuper
+  void setSpeed(double d) {
+    player.setEvent(MediaEvent<double>(
+        state: MediaState.ready, type: MediaEventType.speedChanged, value: d));
+  }
 
   double getSpeed();
 

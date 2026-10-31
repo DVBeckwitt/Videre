@@ -74,7 +74,7 @@ void main() {
         BackendOption('0', 'B1 (CL)'),
         BackendOption('5', 'B6 (US)'),
       ]);
-      expect(selector.automaticFallback, isFalse);
+      expect(selector.automaticFallback, isTrue);
       expect(requests, hasLength(1));
       expect(requests.single.url, Uri.parse('${_server.url}/'));
       expect(_header(requests.single, 'X-Instance'), 'configured');

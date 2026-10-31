@@ -1,9 +1,10 @@
-import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+
+import 'player_modal_back_handler.dart';
 
 Future<void> showPlaybackSpeedSheet(
   BuildContext context, {
@@ -16,7 +17,7 @@ Future<void> showPlaybackSpeedSheet(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (context) => _PlaybackSpeedSheetBackHandler(
+    builder: (context) => PlayerModalBackHandler(
       child: SingleChildScrollView(
         child: PlaybackSpeedControls(
           initialSpeed: initialSpeed,
@@ -27,43 +28,6 @@ Future<void> showPlaybackSpeedSheet(
       ),
     ),
   );
-}
-
-class _PlaybackSpeedSheetBackHandler extends StatefulWidget {
-  final Widget child;
-
-  const _PlaybackSpeedSheetBackHandler({required this.child});
-
-  @override
-  State<_PlaybackSpeedSheetBackHandler> createState() =>
-      _PlaybackSpeedSheetBackHandlerState();
-}
-
-class _PlaybackSpeedSheetBackHandlerState
-    extends State<_PlaybackSpeedSheetBackHandler> {
-  @override
-  void initState() {
-    super.initState();
-    // The player's global Back handler has priority 2. Dismiss this sheet
-    // before that handler can collapse or leave fullscreen playback.
-    BackButtonInterceptor.add(_handleBack,
-        zIndex: 3, ifNotYetIntercepted: true);
-  }
-
-  bool _handleBack(bool stopDefaultButtonEvent, RouteInfo info) {
-    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
-    Navigator.of(context).pop();
-    return true;
-  }
-
-  @override
-  void dispose() {
-    BackButtonInterceptor.remove(_handleBack);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }
 
 /// Speed and independent pitch controls for video, background audio, and TV.

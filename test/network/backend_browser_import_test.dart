@@ -53,7 +53,7 @@ void main() {
     expect(result.options.map((option) => option.value).toList(),
         ['0', '1', '2', '3', '4', '5', '6', '7']);
     expect(result.options.map((option) => option.label).toList(), _labels);
-    expect(result.automaticFallback, isFalse);
+    expect(result.automaticFallback, isTrue);
   });
 
   test('preserves automatic setting and never imports browser selection',

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -345,9 +346,17 @@ void main() {
         return response.future;
       });
       final service = Service(httpClient: client);
-      final first = service.getVideo('video-id');
-      final second = service.getVideo('video-id');
-      await Future<void>.delayed(Duration.zero);
+      final admitted = Completer<void>();
+      var admittedRequests = 0;
+      void onRequest(BackendPlayback _) {
+        if (++admittedRequests == 2) admitted.complete();
+      }
+
+      final first = service.getVideo('video-id', onBackendRequest: onRequest);
+      final second = service.getVideo('video-id', onBackendRequest: onRequest);
+      // Both database-backed requests must reach the HTTP boundary before the
+      // response is released; an event-loop delay does not establish overlap.
+      await admitted.future;
       response.complete(http.Response('{"videoId":"video-id"}', 200));
       final videos = await Future.wait([first, second]);
       expect(calls, 1);

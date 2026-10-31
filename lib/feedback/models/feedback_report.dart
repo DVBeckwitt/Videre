@@ -216,14 +216,6 @@ class FeedbackFailure implements Exception {
   final String code;
   final int? retryAfterSeconds;
   const FeedbackFailure(this.code, {this.retryAfterSeconds});
-  bool get uncertain => [
-        'pending',
-        'network',
-        'invalid_response',
-        'github_failed',
-        'unavailable',
-        'conflict'
-      ].contains(code);
   @override
   String toString() => 'FeedbackFailure($code)';
 }

@@ -161,6 +161,56 @@ void main() {
     expect(requests, 0);
   });
 
+  for (final changeProxy in [false, true]) {
+    test(
+        'recovery rechecks ${changeProxy ? 'proxy' : 'server'} before dispatch',
+        () async {
+      var requests = 0;
+      var built = 0;
+      final observed = <BackendPlayback>[];
+      final client = MockClient((request) async {
+        requests++;
+        return response(200);
+      });
+      addTearDown(client.close);
+      final api = _BeforeRequestService(client, () async {
+        if (++built != 2) return;
+        if (changeProxy) {
+          await NetworkProxy.instance.initialize(
+              saved: jsonEncode(NetworkProxy.instance.config.toJson()),
+              configureNative: false);
+        } else {
+          await db.useServer(const Server(url: 'https://changed.example'));
+        }
+      });
+      final video = await api.getVideo('test-video');
+      await expectLater(
+          api.retryVideoBackend(video,
+              isCurrent: () => true, onRetry: observed.add),
+          throwsStateError);
+      expect(requests, 1);
+      expect(observed, isEmpty);
+    });
+
+    test(
+        'ordinary instance discards metadata after ${changeProxy ? 'proxy' : 'server'} changes',
+        () async {
+      await db.useServer(const Server(url: 'https://plain.example'));
+      final client = MockClient((request) async {
+        if (changeProxy) {
+          await NetworkProxy.instance.initialize(
+              saved: jsonEncode(NetworkProxy.instance.config.toJson()),
+              configureNative: false);
+        } else {
+          await db.useServer(const Server(url: 'https://changed.example'));
+        }
+        return response(200);
+      });
+      addTearDown(client.close);
+      await expectLater(
+          Service(httpClient: client).getVideo('test-video'), throwsStateError);
+    });
+  }
   test('unsupported instance still publishes its initial request snapshot',
       () async {
     await db.useServer(const Server(url: 'https://plain.example'));

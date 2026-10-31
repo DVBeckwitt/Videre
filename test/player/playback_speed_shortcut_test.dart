@@ -67,7 +67,7 @@ void main() {
         home: const Scaffold(
           body: Column(children: [
             Text('Player screen'),
-            MiniPlayerControls(videoId: 'test-video'),
+            MiniPlayerControls(),
           ]),
         ),
       ),

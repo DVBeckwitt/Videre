@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800" role="img" aria-labelledby="title description">
-<title id="title">Videre star history — 31 stars</title>
-<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-10-28 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
+<title id="title">Videre star history — 34 stars</title>
+<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-10-30 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
 <defs>
 <linearGradient id="panel" x2="1" y2="1"><stop stop-color="#20274f"/><stop offset="1" stop-color="#171c3a"/></linearGradient>
 <linearGradient id="violet"><stop stop-color="#5a00a8"/><stop offset="1" stop-color="#9c1ef5"/></linearGradient>
@@ -28,21 +28,21 @@
 <text x="126" y="237.00" fill="#bfc0d8" font-size="23.00" text-anchor="end">40</text>
 <line x1="150.00" y1="230" x2="150.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
 <text x="150.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="start">Jul 05</text>
-<line x1="450.26" y1="230" x2="450.26" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="450.26" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Aug 01</text>
-<line x1="795.00" y1="230" x2="795.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="795.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Sep 01</text>
-<line x1="1128.62" y1="230" x2="1128.62" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="1128.62" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Oct 01</text>
+<line x1="445.17" y1="230" x2="445.17" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="445.17" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Aug 01</text>
+<line x1="784.07" y1="230" x2="784.07" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="784.07" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Sep 01</text>
+<line x1="1112.03" y1="230" x2="1112.03" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
+<text x="1112.03" y="674" fill="#bfc0d8" font-size="23" text-anchor="middle">Oct 01</text>
 <line x1="1440.00" y1="230" x2="1440.00" y2="625" stroke="#a7a8d0" stroke-opacity=".06"/>
-<text x="1440.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="end">Oct 28</text>
-<path d="M 150 625 H 272.33 V 605.25 H 572.59 V 595.38 H 583.71 V 585.50 H 672.67 V 575.62 H 828.36 V 565.75 H 850.60 V 555.88 H 895.09 V 546.00 H 1028.53 V 536.12 H 1039.66 V 526.25 H 1206.47 V 516.38 H 1273.19 V 506.50 H 1284.31 V 496.62 H 1306.55 V 476.88 H 1362.16 V 467.00 H 1373.28 V 417.62 H 1395.52 V 388.00 H 1406.64 V 368.25 H 1417.76 V 318.88 H 1440.00 V 318.88 L 1440 625 Z" fill="url(#area)"/>
-<path d="M 150 625 H 272.33 V 605.25 H 572.59 V 595.38 H 583.71 V 585.50 H 672.67 V 575.62 H 828.36 V 565.75 H 850.60 V 555.88 H 895.09 V 546.00 H 1028.53 V 536.12 H 1039.66 V 526.25 H 1206.47 V 516.38 H 1273.19 V 506.50 H 1284.31 V 496.62 H 1306.55 V 476.88 H 1362.16 V 467.00 H 1373.28 V 417.62 H 1395.52 V 388.00 H 1406.64 V 368.25 H 1417.76 V 318.88 H 1440.00 V 318.88" fill="none" stroke="#9c1ef5" stroke-width="9" opacity=".35" filter="url(#glow)"/>
-<path d="M 150 625 H 272.33 V 605.25 H 572.59 V 595.38 H 583.71 V 585.50 H 672.67 V 575.62 H 828.36 V 565.75 H 850.60 V 555.88 H 895.09 V 546.00 H 1028.53 V 536.12 H 1039.66 V 526.25 H 1206.47 V 516.38 H 1273.19 V 506.50 H 1284.31 V 496.62 H 1306.55 V 476.88 H 1362.16 V 467.00 H 1373.28 V 417.62 H 1395.52 V 388.00 H 1406.64 V 368.25 H 1417.76 V 318.88 H 1440.00 V 318.88" fill="none" stroke="#b347ff" stroke-width="4" stroke-linejoin="round"/>
-<circle cx="1440" cy="318.88" r="11" fill="#9c1ef5" opacity=".3"/>
-<circle cx="1440" cy="318.88" r="5" fill="#ead4ff"/>
-<text x="1440" y="291.88" fill="#eee5ff" font-size="34.00" font-weight="600" text-anchor="end">31 stars</text>
+<text x="1440.00" y="674" fill="#bfc0d8" font-size="23" text-anchor="end">Oct 30</text>
+<path d="M 150 625 H 270.25 V 605.25 H 565.42 V 595.38 H 576.36 V 585.50 H 663.81 V 575.62 H 816.86 V 565.75 H 838.73 V 555.88 H 882.46 V 546.00 H 1013.64 V 536.12 H 1024.58 V 526.25 H 1188.56 V 516.38 H 1254.15 V 506.50 H 1265.08 V 496.62 H 1286.95 V 476.88 H 1341.61 V 467.00 H 1352.54 V 417.62 H 1374.41 V 388.00 H 1385.34 V 368.25 H 1396.27 V 318.88 H 1418.14 V 299.12 H 1429.07 V 289.25 H 1440.00 V 289.25 L 1440 625 Z" fill="url(#area)"/>
+<path d="M 150 625 H 270.25 V 605.25 H 565.42 V 595.38 H 576.36 V 585.50 H 663.81 V 575.62 H 816.86 V 565.75 H 838.73 V 555.88 H 882.46 V 546.00 H 1013.64 V 536.12 H 1024.58 V 526.25 H 1188.56 V 516.38 H 1254.15 V 506.50 H 1265.08 V 496.62 H 1286.95 V 476.88 H 1341.61 V 467.00 H 1352.54 V 417.62 H 1374.41 V 388.00 H 1385.34 V 368.25 H 1396.27 V 318.88 H 1418.14 V 299.12 H 1429.07 V 289.25 H 1440.00 V 289.25" fill="none" stroke="#9c1ef5" stroke-width="9" opacity=".35" filter="url(#glow)"/>
+<path d="M 150 625 H 270.25 V 605.25 H 565.42 V 595.38 H 576.36 V 585.50 H 663.81 V 575.62 H 816.86 V 565.75 H 838.73 V 555.88 H 882.46 V 546.00 H 1013.64 V 536.12 H 1024.58 V 526.25 H 1188.56 V 516.38 H 1254.15 V 506.50 H 1265.08 V 496.62 H 1286.95 V 476.88 H 1341.61 V 467.00 H 1352.54 V 417.62 H 1374.41 V 388.00 H 1385.34 V 368.25 H 1396.27 V 318.88 H 1418.14 V 299.12 H 1429.07 V 289.25 H 1440.00 V 289.25" fill="none" stroke="#b347ff" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="1440" cy="289.25" r="11" fill="#9c1ef5" opacity=".3"/>
+<circle cx="1440" cy="289.25" r="5" fill="#ead4ff"/>
+<text x="1440" y="262.25" fill="#eee5ff" font-size="34.00" font-weight="600" text-anchor="end">34 stars</text>
 <text x="100" y="746" fill="#a3a5c4" font-size="21">GitHub star history · cumulative daily counts</text>
-<text x="1500" y="746" fill="#a3a5c4" font-size="21" text-anchor="end">Updated 2026-10-28 UTC</text>
+<text x="1500" y="746" fill="#a3a5c4" font-size="21" text-anchor="end">Updated 2026-10-30 UTC</text>
 </g>
 </svg>

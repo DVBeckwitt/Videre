@@ -181,8 +181,7 @@ class BackendDiscovery {
     final protocol = groups.keys.single;
     final advertised = groups.values.single.values.toList();
     final options = advertised.map((entry) => entry.option).toList();
-    final automaticFallback =
-        server.backendSelector?.automaticFallback ?? false;
+    final automaticFallback = server.backendSelector?.automaticFallback ?? true;
     if (browserPage && protocol != 'backend_id') {
       throw const BackendDiscoveryException();
     }

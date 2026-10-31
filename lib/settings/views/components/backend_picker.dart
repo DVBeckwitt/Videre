@@ -70,7 +70,7 @@ class _BackendPickerState extends State<BackendPicker> {
   late String? _initialValue = _server.backendSelector?.selectedValue(_server);
   late String? _value = _initialValue;
   late bool _initialAutomatic =
-      _server.backendSelector?.automaticFallback ?? false;
+      _server.backendSelector?.automaticFallback ?? true;
   late bool _automatic = _initialAutomatic;
   bool _saving = false;
   bool _discovering = false;

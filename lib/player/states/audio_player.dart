@@ -27,7 +27,6 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   int _parentPlaybackGeneration = 0;
   bool get _ownsParentPlayback =>
       _parentPlaybackGeneration == player.backendPlaybackGeneration;
-  String? _speedVideoId;
   double _playbackSpeed = 1;
   int _playbackPitchSemitones = 0;
   int? _loadingGeneration;
@@ -69,7 +68,6 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     _wantsToPlay = false;
     final current = audioPlayer;
     audioPlayer = null;
-    _speedVideoId = null;
     EasyThrottle.cancel('audio-progress');
     EasyThrottle.cancel('audio-buffering');
     final subscriptions = List.of(_playerSubscriptions);
@@ -119,7 +117,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           }
         }),
         current.speedStream.listen((value) {
-          if (active() && !_awaitingBackendMetadata) {
+          if (active() &&
+              !_awaitingBackendMetadata &&
+              _loadingGeneration == null) {
             player.setEvent(MediaEvent<double>(
                 state: MediaState.ready,
                 type: MediaEventType.speedChanged,
@@ -300,6 +300,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           if (!active()) return false;
           if (next == null) throw failure;
           video = next;
+          player.reportBackendVideoLoaded(next);
           emit(state.copyWith(
               video: next,
               audioLength: Duration(seconds: next.lengthSeconds ?? 0),
@@ -356,6 +357,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
                 .setPitch(pitchFactorForSemitones(_playbackPitchSemitones));
           }
           if (!active()) return false;
+          super.setSpeed(_playbackSpeed);
           _reportPitch(_playbackPitchSemitones);
           _loadingGeneration = null;
           if (_wantsToPlay) {
@@ -400,16 +402,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     final videoId =
         offline ? state.offlineVideo!.videoId : state.video!.videoId;
     _playbackPitchSemitones = player.pitchForVideo(videoId);
+    _playbackSpeed = player.speedForVideo(videoId);
     initPlayer();
     final current = audioPlayer;
     if (current == null) {
       _loadingGeneration = null;
       return;
-    }
-    if (_speedVideoId != videoId) {
-      _speedVideoId = videoId;
-      _playbackSpeed =
-          settings.state.rememberPlayBackSpeed ? settings.state.lastSpeed : 1;
     }
     final audioLength = Duration(
         seconds: offline
@@ -517,11 +515,6 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   @override
-  double? speed() {
-    return 1;
-  }
-
-  @override
   List<String> getVideoTracks() {
     return [];
   }
@@ -574,6 +567,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
 
   @override
   void setSpeed(double d) {
+    super.setSpeed(d);
     _playbackSpeed = d;
     audioPlayer?.setSpeed(d);
     settings.setLastSpeed(d);

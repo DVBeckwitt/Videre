@@ -131,6 +131,7 @@ void main() {
 
       await openSetting();
       expect(find.byType(BackendPicker), findsOneWidget);
+      expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
       await selectChoice(tester, '4');
       await toggleAutomatic(tester);
       expect(selector.selectedValue(db.getServer(server.url)!), '0');
@@ -139,7 +140,7 @@ void main() {
       expect(find.byType(BackendPicker), findsNothing);
       final saved = db.getServer(server.url)!;
       expect(selector.selectedValue(saved), '4');
-      expect(saved.backendSelector!.automaticFallback, isTrue);
+      expect(saved.backendSelector!.automaticFallback, isFalse);
       expect(saved.customHeaders['Cookie'], contains('session=keep'));
       expect(saved.customHeaders['Authorization'], 'Basic unchanged');
       expect((await tester.runAsync(db.getCurrentlySelectedServer))!.url,
@@ -147,14 +148,14 @@ void main() {
 
       await openSetting();
       expect(tester.widget<ListTile>(choice('4')).selected, isTrue);
-      expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
+      expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
       await selectChoice(tester, '1');
       await toggleAutomatic(tester);
       await tester.tap(cancel);
       await tester.pumpAndSettle();
       expect(selector.selectedValue(db.getServer(server.url)!), '4');
-      expect(
-          db.getServer(server.url)!.backendSelector!.automaticFallback, isTrue);
+      expect(db.getServer(server.url)!.backendSelector!.automaticFallback,
+          isFalse);
       expect(tester.takeException(), isNull);
     });
 
@@ -311,7 +312,7 @@ void main() {
     pending.complete(server);
     await tester.pumpAndSettle();
     expect(choice('0'), findsOneWidget);
-    expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
+    expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
     expect(tester.widget<FilledButton>(save).onPressed, isNull);
     expect(saves, 0);
     await tester.tap(cancel);
@@ -374,11 +375,11 @@ void main() {
     expect(calls, 1);
     expect(choice('8'), findsOneWidget);
     expect(tester.widget<ListTile>(choice('4')).selected, isTrue);
-    expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
+    expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
     expect(saved, isEmpty);
     await tester.tap(save);
     await tester.pumpAndSettle();
-    expect(saved, [('4', true)]);
+    expect(saved, [('4', false)]);
   });
 
   testWidgets('closing discovery ignores a late response', (tester) async {
@@ -412,11 +413,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(retry.hitTestable(), findsOneWidget);
     expect(tester.widget<ListTile>(choice('4')).selected, isTrue);
-    expect(tester.widget<SwitchListTile>(automatic).value, isTrue);
+    expect(tester.widget<SwitchListTile>(automatic).value, isFalse);
     expect(saved, isEmpty);
     await tester.tap(save);
     await tester.pumpAndSettle();
-    expect(saved, [('4', true)]);
+    expect(saved, [('4', false)]);
   });
 
   testWidgets('automatic fallback alone requires Save and can be cancelled',
@@ -435,6 +436,6 @@ void main() {
     await toggleAutomatic(tester);
     await tester.tap(save);
     await tester.pumpAndSettle();
-    expect(saved, [(null, true)]);
+    expect(saved, [(null, false)]);
   });
 }

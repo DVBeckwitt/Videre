@@ -116,7 +116,8 @@ void main() {
     });
   }
 
-  test('fallback is off by default and never changes an explicit preference',
+  test(
+      'explicit fallback opt-out prevents retries and preserves the preference',
       () async {
     await db.upsertServer(configured(enabled: false).copyWith(inUse: true));
     var calls = 0;

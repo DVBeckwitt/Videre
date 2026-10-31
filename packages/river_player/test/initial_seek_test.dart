@@ -128,4 +128,94 @@ void main() {
       }
     });
   }
+
+  for (final initiallyPlaying in [false, true]) {
+    test(
+        'pending seek preserves a newer playback command from $initiallyPlaying',
+        () async {
+      final controller = BetterPlayerController(BetterPlayerConfiguration(
+        autoPlay: initiallyPlaying,
+        handleLifecycle: false,
+        allowedScreenSleep: true,
+      ));
+      await controller.setupDataSource(BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/video.mp4',
+        videoFormat: BetterPlayerVideoFormat.other,
+      ));
+      final seek = controller.seekTo(const Duration(seconds: 40));
+      try {
+        await platform.seekStarted.future;
+        if (initiallyPlaying) {
+          await controller.pause();
+        } else {
+          await controller.play();
+        }
+        platform.seekReleased.complete();
+        await seek;
+        expect(platform.playing, !initiallyPlaying);
+        expect(controller.videoPlayerController!.value.isPlaying,
+            !initiallyPlaying);
+      } finally {
+        if (!platform.seekReleased.isCompleted)
+          platform.seekReleased.complete();
+        await seek;
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+  }
+
+  test('pending seek can finish after the player is disposed', () async {
+    final controller = BetterPlayerController(const BetterPlayerConfiguration(
+      autoPlay: false,
+      handleLifecycle: false,
+      allowedScreenSleep: true,
+    ));
+    await controller.setupDataSource(BetterPlayerDataSource(
+      BetterPlayerDataSourceType.network,
+      'https://example.com/video.mp4',
+      videoFormat: BetterPlayerVideoFormat.other,
+    ));
+    final seek = controller.seekTo(const Duration(seconds: 40));
+    await platform.seekStarted.future;
+    controller.dispose();
+    await Future<void>.delayed(Duration.zero);
+    platform.seekReleased.complete();
+    await seek;
+    expect(platform.commands.last, 'seek-completed');
+  });
+
+  for (final pauseDuringSeek in [false, true]) {
+    test('replay from the end respects pause during seek: $pauseDuringSeek',
+        () async {
+      final controller = BetterPlayerController(const BetterPlayerConfiguration(
+        autoPlay: false,
+        handleLifecycle: false,
+        allowedScreenSleep: true,
+      ));
+      await controller.setupDataSource(BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/video.mp4',
+        videoFormat: BetterPlayerVideoFormat.other,
+      ));
+      final native = controller.videoPlayerController!;
+      native.value = native.value.copyWith(position: native.value.duration);
+      final seek = controller.seekTo(Duration.zero);
+      try {
+        await platform.seekStarted.future;
+        if (pauseDuringSeek) await controller.pause();
+        platform.seekReleased.complete();
+        await seek;
+        expect(platform.playing, !pauseDuringSeek);
+        expect(native.value.isPlaying, !pauseDuringSeek);
+      } finally {
+        if (!platform.seekReleased.isCompleted)
+          platform.seekReleased.complete();
+        await seek;
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+  }
 }

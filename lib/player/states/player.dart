@@ -55,6 +55,7 @@ enum PlayerRepeat { noRepeat, repeatAll, repeatOne }
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static PlayerCubit? _sessionOwner;
   String? _pitchVideoId;
+  String? _speedVideoId;
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
   late final AudioSession _audioSession;
@@ -277,6 +278,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       identical(state.requestedBackend, request) &&
       identical(state.backendRecovery?.request, request) &&
       state.backendRecovery?.videoId == videoId;
+
+  /// Keep the active metadata with its decoder so switching video/audio modes
+  /// starts from the recovered backend instead of the source that failed.
+  void reportBackendVideoLoaded(Video video) {
+    if (!_isRecoveryAttempt(video.videoId, video.backendPlayback)) return;
+    emit(state.copyWith(currentlyPlaying: video));
+  }
 
   /// Called only after a native source has initialized. A paused source is ready,
   /// but it has not proved that playback resumed.
@@ -609,6 +617,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     // Background playback must stop before the closing animation can run.
     pause();
     _pitchVideoId = null;
+    _speedVideoId = null;
     final generation = ++_progressGeneration;
     _videoSwitchGeneration++;
     _requestedBackendVideoId = null;
@@ -1386,7 +1395,21 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void setSpeed(double d) {
     emit(state.copyWith(
+        speed: d,
         mediaCommand: MediaCommand(MediaCommandType.speed, value: d)));
+  }
+
+  /// Speed belongs to the video, not the decoder used to play it. Only a new
+  /// video applies the saved preference or returns to normal speed.
+  double speedForVideo(String videoId) {
+    if (_speedVideoId != videoId) {
+      _speedVideoId = videoId;
+      emit(state.copyWith(
+          speed: settings.state.rememberPlayBackSpeed
+              ? settings.state.lastSpeed
+              : 1));
+    }
+    return state.speed;
   }
 
   /// Retain pitch across decoders/retries for this video, never across videos.

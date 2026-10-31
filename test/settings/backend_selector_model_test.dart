@@ -129,18 +129,18 @@ void main() {
         () => preferences.withSelection(original, '-1'), throwsArgumentError);
   });
 
-  test('selector options are immutable and fallback is opt-in', () {
+  test('selector options are immutable and fallback defaults to enabled', () {
     final options = [const BackendOption('0', 'First')];
     final selector = BackendSelector('route', options);
     options.add(const BackendOption('1', 'Second'));
     expect(selector.options, [const BackendOption('0', 'First')]);
     expect(() => selector.options.clear(), throwsUnsupportedError);
-    expect(selector.automaticFallback, isFalse);
-    final enabled = selector.copyWith(automaticFallback: true);
-    expect(enabled.automaticFallback, isTrue);
-    expect(enabled.cookieName, selector.cookieName);
-    expect(enabled.options, selector.options);
-    expect(selector.automaticFallback, isFalse);
+    expect(selector.automaticFallback, isTrue);
+    final disabled = selector.copyWith(automaticFallback: false);
+    expect(disabled.automaticFallback, isFalse);
+    expect(disabled.cookieName, selector.cookieName);
+    expect(disabled.options, selector.options);
+    expect(selector.automaticFallback, isTrue);
   });
 
   test('invalid configuration cannot create or overwrite cookies', () {
@@ -186,6 +186,25 @@ void main() {
     expect(BackendSelector.fromJson(selector), configured.backendSelector);
   });
 
+  test(
+      'missing fallback preference defaults on while explicit opt-out survives',
+      () {
+    final withoutPreference = plain.toJson()..remove('automaticFallback');
+    expect(
+        BackendSelector.fromJson(withoutPreference).automaticFallback, isTrue);
+    final disabled = BackendSelector.fromJson({
+      ...withoutPreference,
+      'automaticFallback': false,
+    });
+    expect(disabled.automaticFallback, isFalse);
+    expect(
+        BackendSelector.fromJson(disabled.toJson()).automaticFallback, isFalse);
+    final restored = Server.fromJson({
+      'url': server.url,
+      'backendSelector': disabled.toJson(),
+    });
+    expect(restored.backendSelector!.automaticFallback, isFalse);
+  });
   test('old or malformed optional configuration leaves the server usable', () {
     expect(Server.fromJson({'url': server.url}).backendSelector, isNull);
     for (final invalid in [

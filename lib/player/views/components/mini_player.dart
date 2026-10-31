@@ -33,8 +33,6 @@ class MiniPlayer extends StatelessWidget {
                           String title = vid?.title ?? offlineVid?.title ?? '';
                           String author =
                               vid?.author ?? offlineVid?.author ?? '';
-                          String videoId =
-                              vid?.videoId ?? offlineVid?.videoId ?? '';
 
                           return Column(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -44,9 +42,7 @@ class MiniPlayer extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: textTheme.bodySmall,
                               ),
-                              MiniPlayerControls(
-                                videoId: videoId,
-                              ),
+                              const MiniPlayerControls(),
                               const MiniPlayerProgress(),
                             ],
                           );

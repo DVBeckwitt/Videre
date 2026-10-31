@@ -145,6 +145,28 @@ void main() {
     expect(player.state.backendRecovery!.alternativeIndex, 2);
   });
 
+  test('only active recovery metadata can replace the current video', () {
+    final first = retry();
+    final second = first.next()!;
+    player.setRequestedBackend('video', second);
+    final current = player.state.currentlyPlaying;
+    player.reportBackendVideoLoaded(
+        Video(videoId: 'video', backendPlayback: first));
+    player.reportBackendVideoLoaded(
+        Video(videoId: 'another', backendPlayback: second));
+    expect(player.state.currentlyPlaying, same(current));
+
+    final recovered = Video(videoId: 'video', backendPlayback: second);
+    final command = player.state.mediaCommand;
+    player.reportBackendVideoLoaded(recovered);
+    expect(player.state.currentlyPlaying, same(recovered));
+    expect(player.state.mediaCommand, same(command));
+
+    player.hide();
+    player.reportBackendVideoLoaded(recovered.copyWith(title: 'late update'));
+    expect(player.state.currentlyPlaying, same(recovered));
+  });
+
   test('terminal failure retains the actual attempt and stops success reports',
       () {
     final request = retry();

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -199,6 +200,13 @@ class BackendDiscoveryBrowser(private val activity: Activity) {
                 setSupportMultipleWindows(false)
             }
             web.webViewClient = object : WebViewClient() {
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    // Renderer loss must close this browser, not kill Videre
+                    // and its playback. A stale view was already torn down.
+                    if (browser === view && current === request) finish(error = "BROWSER_UNAVAILABLE")
+                    return true
+                }
+
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     if (!request.isForMainFrame) return false
                     return !allowedNavigation(origin, request.url)

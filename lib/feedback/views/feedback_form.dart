@@ -288,14 +288,16 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
         key: const ValueKey('feedback-title'),
         controller: _title,
         enabled: !disabled,
-        maxLength: 120,
+        maxLength: feedbackTitleLimit,
         textInputAction: TextInputAction.next,
         decoration: InputDecoration(
             labelText: locals.feedbackTitle,
             border: const OutlineInputBorder()),
         validator: (value) => value == null || value.trim().isEmpty
             ? locals.feedbackTitleRequired
-            : null,
+            : value.length > feedbackTitleLimit
+                ? locals.feedbackInvalidReport
+                : null,
         onChanged: (value) => _controller.update(title: value),
       ),
       const SizedBox(height: 12),
@@ -303,7 +305,7 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
         key: const ValueKey('feedback-description'),
         controller: _description,
         enabled: !disabled,
-        maxLength: 8000,
+        maxLength: feedbackDescriptionLimit,
         minLines: 5,
         maxLines: 12,
         decoration: InputDecoration(
@@ -315,7 +317,9 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
         ),
         validator: (value) => value == null || value.trim().isEmpty
             ? locals.feedbackDescriptionRequired
-            : null,
+            : value.length > feedbackDescriptionLimit
+                ? locals.feedbackInvalidReport
+                : null,
         onChanged: (value) => _controller.update(description: value),
       ),
       const SizedBox(height: 12),
