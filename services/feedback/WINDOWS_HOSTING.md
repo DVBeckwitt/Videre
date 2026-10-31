@@ -155,7 +155,7 @@ Coordinate one clearly labeled live test report with the repository owner; sendi
 
 Use the connected test APK to test both direct access and Orbot/SOCKS routing. Confirm failed delivery preserves the draft. Check separate client-address quotas through the actual tunnel before public rollout. Local automated tests establish header handling, but do not verify your domain, Cloudflare policies, GitHub permissions or phone connectivity.
 
-Existing test APKs without `VIDERE_FEEDBACK_URL` keep Send disabled. The maintainer must build with the actual HTTPS origin and leave development HTTP disabled. Setting up this host is not an app release.
+Older test APKs built without a feedback endpoint keep Send disabled. Standard builds starting with `1.22.31-beta.2` include Videre's public HTTPS endpoint; see [app endpoint configuration](README.md#app-endpoint) to use another host or disable submissions. Leave development HTTP disabled for public builds. Setting up this host does not update existing APKs.
 
 ## 7. Start after Windows reboots
 

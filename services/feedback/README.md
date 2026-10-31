@@ -6,6 +6,12 @@ Run it on your own computer with the [local hosting setup](LOCAL_HOSTING.md), or
 
 For a separate Windows computer serving public users, use the complete [Windows host handoff](WINDOWS_HOSTING.md).
 
+## App endpoint
+
+Starting with `1.22.31-beta.2`, standard Videre builds use `https://feedback.dvbeckwitt.duckdns.org`. The app contacts the service only when the user sends a report; diagnostics and screenshots remain optional. GitHub credentials stay on the host.
+
+For another deployment, pass `--dart-define=VIDERE_FEEDBACK_URL=https://your-service.example` to the Flutter build. Pass `--dart-define=VIDERE_FEEDBACK_URL=` to explicitly disable submissions while retaining local drafts. The client appends `/v1/reports`. Changing server configuration cannot activate older APKs built without an endpoint; those need an app update. Development HTTP remains disabled unless explicitly enabled for a supported loopback test address.
+
 ## Run and test
 
 Use Node 24.22.1 (also pinned in `.node-version`):

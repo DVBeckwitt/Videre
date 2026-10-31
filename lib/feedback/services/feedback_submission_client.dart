@@ -11,7 +11,10 @@ import '../models/feedback_report.dart';
 
 /// Separate from Invidious Service: feedback never inherits instance credentials.
 class FeedbackSubmissionClient {
-  static const configuredUrl = String.fromEnvironment('VIDERE_FEEDBACK_URL');
+  // Forks can replace the public service or explicitly set an empty value to
+  // disable submissions. The endpoint is public; credentials stay on the host.
+  static const configuredUrl = String.fromEnvironment('VIDERE_FEEDBACK_URL',
+      defaultValue: 'https://feedback.dvbeckwitt.duckdns.org');
   static const allowDevelopmentHttp =
       bool.fromEnvironment('VIDERE_FEEDBACK_ALLOW_HTTP');
   final Uri? endpoint;

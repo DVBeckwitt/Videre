@@ -1,6 +1,7 @@
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
+import 'package:clipious/videos/views/components/video_transcript_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -106,6 +107,8 @@ class MiniPlayerControls extends StatelessWidget {
                   var cubit = context.read<SettingsCubit>();
                   var isAudio = context
                       .select((PlayerCubit value) => value.state.isAudio);
+                  var video = context.select(
+                      (PlayerCubit value) => value.state.currentlyPlaying);
 
                   var hasAudio = context.select((PlayerCubit value) =>
                       !(value.state.currentlyPlaying?.liveNow ?? false));
@@ -155,6 +158,8 @@ class MiniPlayerControls extends StatelessWidget {
                               : null,
                         ),
                       ),
+                      if (video != null && video.captions.isNotEmpty)
+                        VideoTranscriptButton(video: video),
                       IconButton(
                           style: buttonStyle,
                           onPressed: cubit.setNextRepeatMode,

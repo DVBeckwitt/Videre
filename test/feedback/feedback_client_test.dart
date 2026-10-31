@@ -27,6 +27,23 @@ Matcher fails(String code) => throwsA(
     isA<FeedbackFailure>().having((failure) => failure.code, 'code', code));
 
 void main() {
+  test('default build uses the public relay only after explicit submission',
+      () async {
+    var requests = 0;
+    final client = FeedbackSubmissionClient(client: MockClient((request) async {
+      requests++;
+      expect(request.method, 'POST');
+      expect(request.url.toString(),
+          'https://feedback.dvbeckwitt.duckdns.org/v1/reports');
+      return created();
+    }));
+
+    expect(client.configured, isTrue);
+    expect(requests, 0);
+    expect((await client.submit(report())).issueNumber, 123);
+    expect(requests, 1);
+  }, skip: const bool.hasEnvironment('VIDERE_FEEDBACK_URL'));
+
   test(
       'minimal report omits all optional data and sends no instance credentials',
       () async {

@@ -56,7 +56,7 @@ For a direct Cloudflare Tunnel on the same computer, set `PROXY_MODE=cloudflare`
 
 ## Testing on your own Android device
 
-An existing APK without `VIDERE_FEEDBACK_URL` remains unconfigured. Changing this server's configuration cannot activate Send in that APK.
+Older APKs built without a feedback endpoint remain unconfigured. Starting with `1.22.31-beta.2`, standard builds include Videre's public HTTPS endpoint. Another host or an explicitly disabled build requires the [app endpoint override](README.md#app-endpoint); changing server configuration cannot change an installed APK's endpoint.
 
 For a temporary USB-connected test, `adb reverse tcp:8787 tcp:8787` lets a development APK reach `http://127.0.0.1:8787` with `VIDERE_FEEDBACK_ALLOW_HTTP=true`. Use the existing build workflow to supply those definitions. Remove that reverse mapping when finished. The emulator also supports `10.0.2.2`, but that address is not exempt from Videre's SOCKS routing; a successful loopback test does not verify public Orbot access.
 
