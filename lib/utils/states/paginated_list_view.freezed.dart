@@ -16,6 +16,7 @@ T _$identity<T>(T value) => value;
 mixin _$PaginatedListViewController<T> {
   PaginatedList<T> get paginatedList;
   List<T> get items;
+  bool get hasError;
   bool get loading;
 
   /// Create a copy of PaginatedListViewController
@@ -35,16 +36,18 @@ mixin _$PaginatedListViewController<T> {
             (identical(other.paginatedList, paginatedList) ||
                 other.paginatedList == paginatedList) &&
             const DeepCollectionEquality().equals(other.items, items) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError) &&
             (identical(other.loading, loading) || other.loading == loading));
   }
 
   @override
   int get hashCode => Object.hash(runtimeType, paginatedList,
-      const DeepCollectionEquality().hash(items), loading);
+      const DeepCollectionEquality().hash(items), hasError, loading);
 
   @override
   String toString() {
-    return 'PaginatedListViewController<$T>(paginatedList: $paginatedList, items: $items, loading: $loading)';
+    return 'PaginatedListViewController<$T>(paginatedList: $paginatedList, items: $items, hasError: $hasError, loading: $loading)';
   }
 }
 
@@ -55,7 +58,11 @@ abstract mixin class $PaginatedListViewControllerCopyWith<T, $Res> {
           $Res Function(PaginatedListViewController<T>) _then) =
       _$PaginatedListViewControllerCopyWithImpl;
   @useResult
-  $Res call({PaginatedList<T> paginatedList, List<T> items, bool loading});
+  $Res call(
+      {PaginatedList<T> paginatedList,
+      List<T> items,
+      bool hasError,
+      bool loading});
 }
 
 /// @nodoc
@@ -73,6 +80,7 @@ class _$PaginatedListViewControllerCopyWithImpl<T, $Res>
   $Res call({
     Object? paginatedList = null,
     Object? items = null,
+    Object? hasError = null,
     Object? loading = null,
   }) {
     return _then(_self.copyWith(
@@ -84,6 +92,10 @@ class _$PaginatedListViewControllerCopyWithImpl<T, $Res>
           ? _self.items
           : items // ignore: cast_nullable_to_non_nullable
               as List<T>,
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
+              as bool,
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
@@ -184,15 +196,16 @@ extension PaginatedListViewControllerPatterns<T>
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(
-            PaginatedList<T> paginatedList, List<T> items, bool loading)?
+    TResult Function(PaginatedList<T> paginatedList, List<T> items,
+            bool hasError, bool loading)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _PaginatedListViewController() when $default != null:
-        return $default(_that.paginatedList, _that.items, _that.loading);
+        return $default(
+            _that.paginatedList, _that.items, _that.hasError, _that.loading);
       case _:
         return orElse();
     }
@@ -213,14 +226,15 @@ extension PaginatedListViewControllerPatterns<T>
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(
-            PaginatedList<T> paginatedList, List<T> items, bool loading)
+    TResult Function(PaginatedList<T> paginatedList, List<T> items,
+            bool hasError, bool loading)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _PaginatedListViewController():
-        return $default(_that.paginatedList, _that.items, _that.loading);
+        return $default(
+            _that.paginatedList, _that.items, _that.hasError, _that.loading);
     }
   }
 
@@ -238,14 +252,15 @@ extension PaginatedListViewControllerPatterns<T>
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(
-            PaginatedList<T> paginatedList, List<T> items, bool loading)?
+    TResult? Function(PaginatedList<T> paginatedList, List<T> items,
+            bool hasError, bool loading)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _PaginatedListViewController() when $default != null:
-        return $default(_that.paginatedList, _that.items, _that.loading);
+        return $default(
+            _that.paginatedList, _that.items, _that.hasError, _that.loading);
       case _:
         return null;
     }
@@ -259,6 +274,7 @@ class _PaginatedListViewController<T>
   const _PaginatedListViewController(
       {required this.paginatedList,
       final List<T> items = const [],
+      this.hasError = false,
       this.loading = false})
       : _items = items;
 
@@ -273,6 +289,9 @@ class _PaginatedListViewController<T>
     return EqualUnmodifiableListView(_items);
   }
 
+  @override
+  @JsonKey()
+  final bool hasError;
   @override
   @JsonKey()
   final bool loading;
@@ -294,16 +313,18 @@ class _PaginatedListViewController<T>
             (identical(other.paginatedList, paginatedList) ||
                 other.paginatedList == paginatedList) &&
             const DeepCollectionEquality().equals(other._items, _items) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError) &&
             (identical(other.loading, loading) || other.loading == loading));
   }
 
   @override
   int get hashCode => Object.hash(runtimeType, paginatedList,
-      const DeepCollectionEquality().hash(_items), loading);
+      const DeepCollectionEquality().hash(_items), hasError, loading);
 
   @override
   String toString() {
-    return 'PaginatedListViewController<$T>(paginatedList: $paginatedList, items: $items, loading: $loading)';
+    return 'PaginatedListViewController<$T>(paginatedList: $paginatedList, items: $items, hasError: $hasError, loading: $loading)';
   }
 }
 
@@ -316,7 +337,11 @@ abstract mixin class _$PaginatedListViewControllerCopyWith<T, $Res>
       __$PaginatedListViewControllerCopyWithImpl;
   @override
   @useResult
-  $Res call({PaginatedList<T> paginatedList, List<T> items, bool loading});
+  $Res call(
+      {PaginatedList<T> paginatedList,
+      List<T> items,
+      bool hasError,
+      bool loading});
 }
 
 /// @nodoc
@@ -334,6 +359,7 @@ class __$PaginatedListViewControllerCopyWithImpl<T, $Res>
   $Res call({
     Object? paginatedList = null,
     Object? items = null,
+    Object? hasError = null,
     Object? loading = null,
   }) {
     return _then(_PaginatedListViewController<T>(
@@ -345,6 +371,10 @@ class __$PaginatedListViewControllerCopyWithImpl<T, $Res>
           ? _self._items
           : items // ignore: cast_nullable_to_non_nullable
               as List<T>,
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
+              as bool,
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable

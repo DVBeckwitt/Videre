@@ -10,7 +10,9 @@ import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
@@ -212,14 +214,21 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
     try {
       for (var attempt = 0; attempt < 3; attempt++) {
+        final artworkToken = CancelToken();
+        Future<void>? artwork;
         try {
           if (token.isCancelled) throw token.cancelError!;
           // Signed media URLs expire. Refresh them before every retry.
           final server = await db.getCurrentlySelectedServer();
           if (token.isCancelled) throw token.cancelError!;
-          final vid = await service
-              .getVideo(video.videoId, serverOverride: server)
-              .timeout(const Duration(seconds: 30));
+          final vid = await Future.any([
+            service
+                .getVideo(video.videoId, serverOverride: server)
+                .timeout(const Duration(seconds: 30)),
+            // Metadata requests do not accept a cancellation token. Release
+            // pause/delete/proxy changes promptly and ignore any late result.
+            token.whenCancel.then((error) => throw error),
+          ]);
           if (token.isCancelled) throw token.cancelError!;
           video = video.copyWith(
               title: vid.title ?? video.title,
@@ -271,17 +280,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
 
           final thumb = ImageObject.getBestThumbnail(vid.videoThumbnails)?.url;
-          if (thumb != null &&
-              !await File(await video.thumbnailPath).exists()) {
-            try {
-              await dio.download(thumb, await video.thumbnailPath,
-                  cancelToken: token,
-                  options: Options(headers: server.headersForUrl(thumb)));
-            } on DioException catch (error) {
-              if (CancelToken.isCancel(error)) rethrow;
-              log.fine(
-                  'Thumbnail unavailable; the media download can continue');
-            }
+          if (thumb != null && thumb.isNotEmpty) {
+            unawaited(token.whenCancel.then(artworkToken.cancel));
+            // Optional artwork must not delay the first media request. Keep it
+            // part of this job so pause, delete and proxy changes can join it.
+            artwork = _downloadArtwork(dio, video, thumb, server, artworkToken);
           }
           await transfer(audios.first, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
@@ -307,6 +310,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                   'Could not merge the downloaded audio and video');
             }
           }
+          await artwork;
           if (token.isCancelled) throw token.cancelError!;
           await File(output).rename(mediaPath);
           await db.upsertDownload(
@@ -331,6 +335,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             Future<void>.delayed(Duration(seconds: 1 << attempt)),
             token.whenCancel
           ]);
+        } finally {
+          artworkToken.cancel();
+          await artwork;
         }
       }
     } catch (error, stack) {
@@ -351,6 +358,38 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
   }
 
+  Future<void> _downloadArtwork(Dio dio, DownloadedVideo video, String thumb,
+      Server server, CancelToken token) async {
+    final deadline = Timer(const Duration(seconds: 5),
+        () => token.cancel('Artwork download deadline'));
+    File? partial;
+    try {
+      final target = File(await video.thumbnailPath);
+      partial = File('${target.path}.part');
+      if (token.isCancelled || await target.exists()) return;
+      final url = invidiousImageUrl(thumb, server);
+      await dio.download(url, partial.path,
+          cancelToken: token,
+          options: Options(
+              headers: server.headersForUrl(url),
+              // Covers are optional; do not try to decode an error response
+              // whose body may not match its advertised content type.
+              receiveDataWhenStatusError: false));
+      if (!token.isCancelled) await partial.rename(target.path);
+    } on DioException {
+      log.fine('Thumbnail unavailable; the media download can continue');
+    } on FileSystemException {
+      log.fine('Thumbnail could not be saved; the media download can continue');
+    } finally {
+      deadline.cancel();
+      try {
+        if (partial != null && await partial.exists()) await partial.delete();
+      } on FileSystemException {
+        log.fine('The artwork download has a leftover temporary file');
+      }
+    }
+  }
+
   Future<void> pauseDownload(DownloadedVideo video) async {
     final paused = {...state.pausedVideoIds, video.videoId};
     emit(state.copyWith(pausedVideoIds: paused));
@@ -360,11 +399,20 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<void> retryDownload(DownloadedVideo video) async {
+    await _ready;
+    if (_closing || _deleting.contains(video.videoId)) return;
     final paused = {...state.pausedVideoIds}..remove(video.videoId);
     emit(state.copyWith(pausedVideoIds: paused));
     await db.saveSetting(
         SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-    await db.upsertDownload(video.copyWith(downloadFailed: false));
+    if (_closing || _deleting.contains(video.videoId)) return;
+    // A sheet can remain open while the job completes or is removed. Only
+    // retry the current saved job; a captured UI snapshot must not restore it.
+    final current = db.getDownloadByVideoId(video.videoId);
+    if (current == null || current.downloadComplete) return;
+    if (current.downloadFailed) {
+      await db.upsertDownload(current.copyWith(downloadFailed: false));
+    }
     setVideos();
     unawaited(_drain());
   }
@@ -381,24 +429,32 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       final file = File('$path$suffix');
       if (await file.exists()) await file.delete();
     }
+    final artwork = File('${await video.thumbnailPath}.part');
+    if (await artwork.exists()) await artwork.delete();
   }
 
   Future<void> deleteVideo(DownloadedVideo video) async {
     _deleting.add(video.videoId);
-    state.downloadProgresses[video.videoId]?.cancelToken.cancel();
-    if (_activeId == video.videoId) await _activeJob;
-    await _deleteParts(video);
-    for (final path in [await video.effectivePath, await video.thumbnailPath]) {
-      final file = File(path);
-      if (await file.exists()) await file.delete();
+    try {
+      state.downloadProgresses[video.videoId]?.cancelToken.cancel();
+      if (_activeId == video.videoId) await _activeJob;
+      await _deleteParts(video);
+      for (final path in [
+        await video.effectivePath,
+        await video.thumbnailPath
+      ]) {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      }
+      await db.deleteDownload(video);
+      final paused = {...state.pausedVideoIds}..remove(video.videoId);
+      await db.saveSetting(
+          SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+      emit(state.copyWith(pausedVideoIds: paused));
+      setVideos();
+    } finally {
+      _deleting.remove(video.videoId);
     }
-    await db.deleteDownload(video);
-    final paused = {...state.pausedVideoIds}..remove(video.videoId);
-    await db.saveSetting(
-        SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-    emit(state.copyWith(pausedVideoIds: paused));
-    _deleting.remove(video.videoId);
-    setVideos();
   }
 
   bool canPlayAll() =>

@@ -1,5 +1,6 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
-import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
@@ -11,7 +12,10 @@ part 'playlist_list.freezed.dart';
 const couldNotGetPlaylits = 'could-not-get-playlists';
 
 class PlaylistListCubit extends Cubit<PlaylistListState> {
-  ScrollController scrollController = ScrollController();
+  final ScrollController scrollController = ScrollController();
+  Timer? _loadMoreTimer;
+  bool _loading = false;
+  Completer<void>? _loadComplete;
   PlaylistListCubit(super.initialState) {
     onReady();
   }
@@ -21,53 +25,65 @@ class PlaylistListCubit extends Cubit<PlaylistListState> {
     getPlaylists();
   }
 
-  onScrollEvent() {
-    if (state.paginatedList.getHasMore()) {
-      if (scrollController.hasClients) {
-        if (scrollController.position.maxScrollExtent * 0.9 ==
-            scrollController.offset) {
-          EasyDebounce.debounce('get-more-playlists',
-              const Duration(milliseconds: 500), getMorePlaylists);
-        }
-      }
+  void onScrollEvent() {
+    if (isClosed ||
+        _loading ||
+        !scrollController.hasClients ||
+        !state.paginatedList.getHasMore()) return;
+    if (scrollController.offset >=
+        scrollController.position.maxScrollExtent * 0.9) {
+      _loadMoreTimer?.cancel();
+      _loadMoreTimer =
+          Timer(const Duration(milliseconds: 500), getMorePlaylists);
     }
   }
 
-  getMorePlaylists() async {
-    if (!state.loading && state.paginatedList.getHasMore()) {
-      loadPlaylist(() async {
-        List<Playlist> playlists = await state.paginatedList.getMoreItems();
-        List<Playlist> currentPlaylists = state.playlists;
-        currentPlaylists.addAll(playlists);
-        return currentPlaylists;
+  Future<void> getMorePlaylists() async {
+    if (!isClosed && state.paginatedList.getHasMore()) {
+      await loadPlaylist(() async {
+        final playlists = await state.paginatedList.getMoreItems();
+        return [...state.playlists, ...playlists];
       });
     }
   }
 
-  refreshPlaylists() async {
-    loadPlaylist(state.paginatedList.refresh);
+  Future<void> refreshPlaylists() async {
+    await _loadComplete?.future;
+    await loadPlaylist(state.paginatedList.refresh);
   }
 
-  getPlaylists() async {
-    loadPlaylist(state.paginatedList.getItems);
+  Future<void> getPlaylists() async {
+    await loadPlaylist(state.paginatedList.getItems);
   }
 
-  loadPlaylist(Future<List<Playlist>> Function() refreshFunction) async {
+  Future<void> loadPlaylist(
+      Future<List<Playlist>> Function() refreshFunction) async {
+    if (_loading || isClosed) return;
+    _loading = true;
+    final completed = _loadComplete = Completer<void>();
+    _loadMoreTimer?.cancel();
     emit(state.copyWith(error: '', loading: true));
     try {
-      var playlists = await refreshFunction();
-      emit(state.copyWith(playlists: playlists, loading: false));
-    } catch (err) {
-      emit(state.copyWith(
-          error: couldNotGetPlaylits, playlists: [], loading: false));
-      rethrow;
+      final playlists = await refreshFunction();
+      if (!isClosed) {
+        emit(state.copyWith(playlists: playlists, loading: false));
+      }
+    } catch (_) {
+      if (!isClosed) {
+        emit(state.copyWith(error: couldNotGetPlaylits, loading: false));
+      }
+    } finally {
+      _loading = false;
+      _loadComplete = null;
+      completed.complete();
     }
   }
 
   @override
-  close() async {
+  Future<void> close() {
+    _loadMoreTimer?.cancel();
     scrollController.dispose();
-    super.close();
+    return super.close();
   }
 }
 

@@ -25,6 +25,19 @@ class _TokenLoginService extends Service {
   }
 }
 
+class _PendingCookieLoginService extends Service {
+  final started = Completer<void>();
+  final result = Completer<String>();
+
+  @override
+  Future<String> loginWithCookies(
+      String serverUrl, String username, String password,
+      {Map<String, String>? headers}) {
+    started.complete();
+    return result.future;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final selector = BackendSelector('COMPANION_ID', const [
@@ -66,6 +79,18 @@ void main() {
       await db.close();
       messenger.setMockMethodCallHandler(pathProvider, null);
       await documents.delete(recursive: true);
+    });
+
+    test('deleting the selected server synchronizes the background server',
+        () async {
+      final deleting = settings.deleteServer();
+      await settings.close();
+      await deleting;
+
+      expect(db.getServer(instance.url), isNull);
+      expect((await db.getCurrentlySelectedServer()).url, other.url);
+      expect((await fileDb.getCurrentlySelectedServer()).url, other.url);
+      expect(app.state.server?.url, other.url);
     });
 
     test(
@@ -141,6 +166,79 @@ void main() {
       expect(db.getServer(instance.url)!.authToken, 'new-token');
       expect(
           (await fileDb.getCurrentlySelectedServer()).authToken, 'new-token');
+    });
+
+    test('header edits preserve newer credentials and active server selection',
+        () async {
+      await db.upsertServer(db.getServer(instance.url)!.copyWith(
+          authToken: 'new-token', customHeaders: {'X-Existing': 'kept'}));
+      await db.useServer(other);
+      await fileDb.useServer(await db.getCurrentlySelectedServer());
+      app.setServer(await db.getCurrentlySelectedServer());
+
+      await settings.addHeader('X-Added', 'new');
+      expect(db.getServer(instance.url)!.authToken, 'new-token');
+      expect(db.getServer(instance.url)!.customHeaders,
+          {'X-Existing': 'kept', 'X-Added': 'new'});
+      expect((await db.getServers()).where((server) => server.inUse),
+          hasLength(1));
+      expect((await fileDb.getCurrentlySelectedServer()).url, other.url);
+
+      await settings.removeHeader('X-Added');
+      expect(db.getServer(instance.url)!.customHeaders, {'X-Existing': 'kept'});
+    });
+
+    test('pending cookie login preserves edits and a different active server',
+        () async {
+      final previousService = service;
+      final login = _PendingCookieLoginService();
+      service = login;
+      addTearDown(() => service = previousService);
+      final saving = settings.logInWithCookie('username', 'password');
+      await login.started.future;
+      await db.upsertServer(db
+          .getServer(instance.url)!
+          .copyWith(customHeaders: {'X-New': 'kept'}));
+      await db.useServer(other);
+      await fileDb.useServer(await db.getCurrentlySelectedServer());
+      app.setServer(await db.getCurrentlySelectedServer());
+      await settings.close();
+      login.result.complete('SID=new-cookie');
+      await saving;
+
+      expect(db.getServer(instance.url)!.sidCookie, 'SID=new-cookie');
+      expect(db.getServer(instance.url)!.customHeaders, {'X-New': 'kept'});
+      expect((await db.getServers()).where((server) => server.inUse),
+          hasLength(1));
+      expect((await db.getCurrentlySelectedServer()).url, other.url);
+      expect((await fileDb.getCurrentlySelectedServer()).url, other.url);
+    });
+
+    test('overlapping header edits retain both changes', () async {
+      await Future.wait([
+        settings.addHeader('X-First', 'first'),
+        settings.addHeader('X-Second', 'second'),
+      ]);
+
+      expect(db.getServer(instance.url)!.customHeaders,
+          {'X-First': 'first', 'X-Second': 'second'});
+      expect((await fileDb.getCurrentlySelectedServer()).customHeaders,
+          {'X-First': 'first', 'X-Second': 'second'});
+    });
+
+    test('pending cookie login cannot recreate a deleted server', () async {
+      final previousService = service;
+      final login = _PendingCookieLoginService();
+      service = login;
+      addTearDown(() => service = previousService);
+      final saving = settings.logInWithCookie('username', 'password');
+      await login.started.future;
+      await db.deleteServerById(instance);
+      final failed = expectLater(saving, throwsStateError);
+      login.result.complete('SID=new-cookie');
+      await failed;
+
+      expect(db.getServer(instance.url), isNull);
     });
     test('deleted server is not recreated by an open selector', () async {
       await db.deleteServerById(instance);

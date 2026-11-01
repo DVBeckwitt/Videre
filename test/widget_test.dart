@@ -23,6 +23,8 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -350,6 +352,7 @@ Future<void> _pumpVideoThumbnail(
   WidgetTester tester, {
   required List<String> thumbnails,
   required VoidCallback onPressed,
+  List<ImageObject>? images,
 }) async {
   await tester.pumpWidget(MaterialApp(
     home: Scaffold(
@@ -359,6 +362,7 @@ Future<void> _pumpVideoThumbnail(
           child: VideoThumbnailView(
             videoId: 'video-thumbnail-test',
             thumbnails: thumbnails,
+            images: images,
             child: TextButton(
               key: const ValueKey('video-thumbnail-control'),
               onPressed: onPressed,
@@ -1225,6 +1229,167 @@ void main() {
   }
 
   group('VideoThumbnailView controls', () {
+    testWidgets('shared image failures advance every mounted thumbnail',
+        (tester) async {
+      await _withThumbnailCacheManager(tester, (cacheManager) async {
+        await tester.pumpWidget(MaterialApp(
+            home: Scaffold(
+                body: Row(children: [
+          for (final host in ['yt3.googleusercontent.com', 'yt3.ggpht.com'])
+            Thumbnail(
+              width: 40,
+              height: 40,
+              thumbnails: [
+                'https://$host/avatar=s176',
+                'https://$host/avatar=s88'
+              ],
+              decoration: const BoxDecoration(),
+            ),
+        ]))));
+        await _pumpUntilRequestCount(tester, cacheManager, 1);
+        cacheManager.failRequest(0);
+        await _pumpUntilRequestCount(tester, cacheManager, 2);
+        cacheManager.succeedRequest(1);
+        await _pumpUntilThumbnailSettles(tester);
+
+        expect(
+            tester
+                .widgetList<CachedNetworkImage>(find.byType(CachedNetworkImage))
+                .map((image) => image.imageUrl),
+            [
+              'https://example.com/ggpht/avatar=s88',
+              'https://example.com/ggpht/avatar=s88'
+            ]);
+        expect(find.byIcon(Icons.error_outline), findsNothing);
+        expect(cacheManager.requests, hasLength(2));
+      });
+    });
+
+    testWidgets(
+        'selects a source for physical pixels and resizes the painted image',
+        (tester) async {
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _withThumbnailCacheManager(tester, (cacheManager) async {
+        await _pumpVideoThumbnail(tester,
+            thumbnails: const ['/maxres.jpg', '/medium.jpg'],
+            images: [
+              ImageObject('maxres', '/maxres.jpg', 1280, 720),
+              ImageObject('medium', '/medium.jpg', 800, 450),
+            ],
+            onPressed: () {});
+        await _pumpUntilRequestCount(tester, cacheManager, 1);
+        expect(
+            cacheManager.requests.single.url, 'https://example.com/medium.jpg');
+        final loader =
+            tester.widget<CachedNetworkImage>(find.byType(CachedNetworkImage));
+        expect(loader.memCacheWidth, 640);
+        expect(loader.memCacheHeight, isNull);
+        cacheManager.succeedRequest(0);
+        await _pumpUntilThumbnailSettles(tester);
+        final decoration = tester
+            .widgetList<AnimatedContainer>(find.byType(AnimatedContainer))
+            .map((container) => container.decoration)
+            .whereType<BoxDecoration>()
+            .singleWhere((decoration) => decoration.image != null);
+        final painted = decoration.image!.image as ResizeImage;
+        expect(painted.width, loader.memCacheWidth);
+        expect(painted.height, loader.memCacheHeight);
+        expect(cacheManager.requests, hasLength(1));
+      });
+    });
+
+    testWidgets(
+        'cover decode retains aspect ratio and advances sized fallbacks',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _withThumbnailCacheManager(tester, (cacheManager) async {
+        await tester.pumpWidget(MaterialApp(
+            home: Scaffold(
+                body: Thumbnail(
+          width: 100,
+          height: 100,
+          images: [
+            ImageObject('maxres', '/large.jpg', 800, 400),
+            ImageObject('medium', '/wide.jpg', 400, 200),
+          ],
+          decoration: const BoxDecoration(),
+        ))));
+        await _pumpUntilRequestCount(tester, cacheManager, 1);
+        expect(
+            cacheManager.requests.single.url, 'https://example.com/wide.jpg');
+        var loader =
+            tester.widget<CachedNetworkImage>(find.byType(CachedNetworkImage));
+        expect(loader.memCacheWidth, isNull);
+        expect(loader.memCacheHeight, 100);
+        cacheManager.failRequest(0);
+        await _pumpUntilRequestCount(tester, cacheManager, 2);
+        expect(cacheManager.requests.last.url, 'https://example.com/large.jpg');
+        loader =
+            tester.widget<CachedNetworkImage>(find.byType(CachedNetworkImage));
+        expect(loader.memCacheWidth, isNull);
+        expect(loader.memCacheHeight, 100);
+        cacheManager.succeedRequest(1);
+        await _pumpUntilThumbnailSettles(tester);
+        expect(find.byIcon(Icons.error_outline), findsNothing);
+      });
+    });
+
+    testWidgets('equivalent image URLs do not stall the next fallback',
+        (tester) async {
+      await _withThumbnailCacheManager(tester, (cacheManager) async {
+        await _pumpVideoThumbnail(
+          tester,
+          thumbnails: const [
+            'https://yt3.googleusercontent.com/avatar=s176',
+            'https://yt3.ggpht.com/avatar=s176',
+            '/ggpht/avatar=s176',
+            'https://yt3.ggpht.com/avatar=s88',
+          ],
+          onPressed: () {},
+        );
+        await _pumpUntilRequestCount(tester, cacheManager, 1);
+        cacheManager.failRequest(0);
+        await _pumpUntilRequestCount(tester, cacheManager, 2);
+        expect(cacheManager.requests.last.url,
+            'https://example.com/ggpht/avatar=s88');
+        cacheManager.succeedRequest(1);
+        await _pumpUntilThumbnailSettles(tester);
+        expect(find.byIcon(Icons.error_outline), findsNothing);
+        expect(cacheManager.requests, hasLength(2));
+      });
+    });
+
+    testWidgets('Google image fallbacks stay on the instance', (tester) async {
+      await _withThumbnailCacheManager(tester, (cacheManager) async {
+        await _pumpVideoThumbnail(
+          tester,
+          thumbnails: const [
+            'https://yt3.googleusercontent.com/avatar=s176',
+            '//yt3.ggpht.com/avatar=s88',
+            'https://i.ytimg.com/vi/video-id/default.jpg',
+          ],
+          onPressed: () {},
+        );
+
+        const expectedUrls = [
+          'https://example.com/ggpht/avatar=s176',
+          'https://example.com/ggpht/avatar=s88',
+          'https://example.com/vi/video-id/default.jpg',
+        ];
+        for (var index = 0; index < expectedUrls.length; index++) {
+          await _pumpUntilRequestCount(tester, cacheManager, index + 1);
+          expect(cacheManager.requests[index].url, expectedUrls[index]);
+          expect(cacheManager.requests[index].headers, _instanceHeaders);
+          cacheManager.failRequest(index);
+        }
+        await tester.pumpAndSettle();
+        expect(cacheManager.requests, hasLength(expectedUrls.length));
+        expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      });
+    });
+
     testWidgets('remain tappable when no thumbnail is available',
         (tester) async {
       var taps = 0;

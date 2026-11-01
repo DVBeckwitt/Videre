@@ -55,6 +55,9 @@ class VideoTabletInnerView extends StatelessWidget {
                 alignment: Alignment.center,
                 width: double.infinity,
                 child: VideoThumbnailView(
+                  images: video.deArrowThumbnailUrl == null
+                      ? video.videoThumbnails
+                      : null,
                   videoId: video.videoId,
                   thumbnails: video.deArrowThumbnailUrl != null
                       ? [video.deArrowThumbnailUrl!]

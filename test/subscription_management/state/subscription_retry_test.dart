@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:clipious/channels/models/channel.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/subscription_management/models/subscription.dart';
 import 'package:clipious/subscription_management/states/manage_subscriptions.dart';
 import 'package:clipious/subscription_management/states/subscribe_button.dart';
+import 'package:clipious/subscription_management/view/screens/manage_subscriptions.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RetryDetectingService extends Service {
@@ -19,6 +23,15 @@ class _RetryDetectingService extends Service {
   Completer<bool>? login;
   Completer<bool>? subscription;
   Completer<Channel>? channel;
+  bool failSubscriptions = false;
+
+  @override
+  Future<List<Subscription>> getSubscriptions() {
+    if (failSubscriptions) {
+      return Future.error(StateError('Instance unavailable'));
+    }
+    return Future.value([]);
+  }
 
   @override
   Future<bool> isLoggedIn() => login?.future ?? Future.value(loggedIn);
@@ -55,6 +68,13 @@ class _ManualSubscribeButton extends SubscribeButtonCubit {
   Future<void> onReady() async {}
 
   Future<void> load() => super.onReady();
+}
+
+class _ManualSubscriptionManager extends ManageSubscriptionCubit {
+  _ManualSubscriptionManager() : super(const ManageSubscriptionsState());
+
+  @override
+  void onReady() {}
 }
 
 void main() {
@@ -111,6 +131,105 @@ void main() {
     await cubit.close();
     fakeService.login!.complete(false);
     await expectLater(loading, completes);
+  });
+
+  for (final fails in [false, true]) {
+    test(
+        'manager refresh ${fails ? 'failure' : 'success'} after closing is safe',
+        () async {
+      fakeService.login = Completer<bool>();
+      final cubit = _ManualSubscriptionManager();
+      final loading = cubit.refreshSubs();
+      await Future<void>.delayed(Duration.zero);
+      await cubit.close();
+      if (fails) {
+        fakeService.login!.completeError(StateError('Login unavailable'));
+      } else {
+        fakeService.login!.complete(false);
+      }
+      await expectLater(loading, completes);
+    });
+  }
+
+  test('manager keeps local subscriptions when the account is unavailable',
+      () async {
+    fakeService.loggedIn = true;
+    fakeService.failSubscriptions = true;
+    await db.addOfflineSubscription(
+        const OfflineSubscription(channelId: 'UC123', channelName: 'Channel'));
+    final cubit = _ManualSubscriptionManager();
+    addTearDown(cubit.close);
+
+    await expectLater(cubit.refreshSubs(), completes);
+    expect(cubit.state.loading, isFalse);
+    expect(cubit.state.isLoggedIn, isTrue);
+    expect(cubit.state.offlineSubs.single.channelId, 'UC123');
+    expect(cubit.state.hasError, isTrue);
+
+    fakeService.failSubscriptions = false;
+    await cubit.refreshSubs();
+    expect(cubit.state.loading, isFalse);
+    expect(cubit.state.hasError, isFalse);
+  });
+
+  testWidgets(
+      'manager shows local subscriptions and retry after account failure',
+      (tester) async {
+    fakeService.loggedIn = true;
+    fakeService.failSubscriptions = true;
+    await tester.runAsync(() => db.addOfflineSubscription(
+        const OfflineSubscription(
+            channelId: 'UC123', channelName: 'Local channel')));
+    await tester.pumpWidget(const MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      locale: Locale('en'),
+      home: ManageSubscriptionsScreen(),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not fetch data'), findsOneWidget);
+    await tester.tap(find.text('On device'));
+    await tester.pumpAndSettle();
+    expect(find.text('Local channel'), findsOneWidget);
+
+    fakeService.failSubscriptions = false;
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not fetch data'), findsNothing);
+    expect(find.text('Local channel'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  test('offline unsubscribe waits for the visible subscription list to refresh',
+      () async {
+    await db.addOfflineSubscription(
+        const OfflineSubscription(channelId: 'UC123', channelName: 'Channel'));
+    final cubit = _ManualSubscriptionManager();
+    addTearDown(cubit.close);
+    await cubit.refreshSubs();
+    fakeService.login = Completer<bool>();
+
+    var completed = false;
+    final removing = cubit.unsubscribeOffline('UC123').then((_) {
+      completed = true;
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(completed, isFalse);
+    fakeService.login!.complete(false);
+    await removing;
+    expect(cubit.state.loading, isFalse);
+    expect(cubit.state.offlineSubs, isEmpty);
+  });
+
+  test('manager unsubscribe failure after closing preserves the original error',
+      () async {
+    fakeService.subscription = Completer<bool>();
+    final cubit = _ManualSubscriptionManager();
+    final removing = cubit.unsubscribe('UC123');
+    await cubit.close();
+    fakeService.subscription!.complete(true);
+
+    await expectLater(removing, throwsA(isA<InvidiousServiceError>()));
   });
 
   test('initial status failure keeps local subscriptions and permits retry',

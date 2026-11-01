@@ -21,11 +21,27 @@ class FeedbackDraft {
   final String description;
   final Map<String, Object>? diagnostics;
   final Uint8List? _screenshot;
-  Uint8List? get screenshot =>
-      _screenshot == null ? null : Uint8List.fromList(_screenshot!);
+  Uint8List? get screenshot => _screenshot;
   final bool attempted;
 
   FeedbackDraft(
+      {required String submissionId,
+      FeedbackKind kind = FeedbackKind.bug,
+      String title = '',
+      String description = '',
+      Map<String, Object>? diagnostics,
+      Uint8List? screenshot,
+      bool attempted = false})
+      : this._(
+            submissionId: submissionId,
+            kind: kind,
+            title: title,
+            description: description,
+            diagnostics: diagnostics,
+            screenshot: _freezeScreenshot(screenshot),
+            attempted: attempted);
+
+  FeedbackDraft._(
       {required this.submissionId,
       this.kind = FeedbackKind.bug,
       this.title = '',
@@ -35,9 +51,13 @@ class FeedbackDraft {
       this.attempted = false})
       : diagnostics = diagnostics == null
             ? null
-            : Map.unmodifiable(sanitizeFeedbackDiagnostics(diagnostics)),
-        _screenshot =
-            screenshot == null ? null : Uint8List.fromList(screenshot);
+            : sanitizeFeedbackDiagnostics(diagnostics),
+        _screenshot = screenshot;
+
+  // Copy external bytes once, then keep the read-only image identity stable
+  // while editing text so Flutter can reuse its decoded screenshot cache.
+  static Uint8List? _freezeScreenshot(Uint8List? bytes) =>
+      bytes == null ? null : Uint8List.fromList(bytes).asUnmodifiableView();
 
   factory FeedbackDraft.empty() =>
       FeedbackDraft(submissionId: const Uuid().v4());
@@ -51,7 +71,7 @@ class FeedbackDraft {
       title.length <= feedbackTitleLimit &&
       description.trim().isNotEmpty &&
       description.length <= feedbackDescriptionLimit &&
-      (_screenshot == null || validFeedbackScreenshot(_screenshot!));
+      (_screenshot == null || validFeedbackScreenshot(_screenshot));
 
   FeedbackDraft copyWith(
           {FeedbackKind? kind,
@@ -62,14 +82,16 @@ class FeedbackDraft {
           Uint8List? screenshot,
           bool clearScreenshot = false,
           bool? attempted}) =>
-      FeedbackDraft(
+      FeedbackDraft._(
           submissionId: submissionId,
           kind: kind ?? this.kind,
           title: title ?? this.title,
           description: description ?? this.description,
           diagnostics:
               clearDiagnostics ? null : diagnostics ?? this.diagnostics,
-          screenshot: clearScreenshot ? null : screenshot ?? _screenshot,
+          screenshot: clearScreenshot
+              ? null
+              : _freezeScreenshot(screenshot) ?? _screenshot,
           attempted: attempted ?? this.attempted);
 
   Map<String, Object> toRequest() => {
@@ -82,7 +104,7 @@ class FeedbackDraft {
         if (_screenshot != null)
           'screenshot': {
             'mimeType': 'image/png',
-            'base64': base64Encode(_screenshot!)
+            'base64': base64Encode(_screenshot)
           },
       };
   Map<String, Object> toJson() => {...toRequest(), 'attempted': attempted};

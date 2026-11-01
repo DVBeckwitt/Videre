@@ -217,6 +217,115 @@ void main() {
     expect(messages, isNot(contains(credential)));
   });
 
+  test('concurrent generic settings changes preserve unrelated fields',
+      () async {
+    const server = Server(url: 'https://inv.example');
+    await Future.wait([
+      FileDB().setLocale('fr'),
+      FileDB().setSubscriptionNotifications(true),
+      FileDB().useServer(server),
+    ]);
+
+    final settings = await FileDB().getGenericSettings();
+    expect(settings.locale, 'fr');
+    expect(settings.subscriptionNotifications, isTrue);
+    expect(settings.server, server);
+  });
+
+  test('concurrent channel notification edits preserve other entries',
+      () async {
+    final first = ChannelNotification('first', 'First', 'old', 1);
+    final second = ChannelNotification('second', 'Second', 'old', 1);
+    final third = ChannelNotification('third', 'Third', 'old', 1);
+    await Future.wait([
+      FileDB().upsertChannelNotification(first),
+      FileDB().upsertChannelNotification(second),
+    ]);
+    expect(
+        (await FileDB().getAllChannelNotifications()).map((n) => n.channelId),
+        unorderedEquals(['first', 'second']));
+
+    await Future.wait([
+      FileDB().deleteChannelNotification(first),
+      FileDB().setChannelNotificationLastViewedVideo('second', 'new'),
+      FileDB().upsertChannelNotification(third),
+    ]);
+    final notifications = await FileDB().getAllChannelNotifications();
+    expect(notifications.map((n) => n.channelId),
+        unorderedEquals(['second', 'third']));
+    expect(
+        notifications
+            .firstWhere((n) => n.channelId == 'second')
+            .lastSeenVideoId,
+        'new');
+
+    await Future.wait([
+      FileDB().deleteChannelNotification(second),
+      FileDB().setChannelNotificationLastViewedVideo('second', 'late'),
+    ]);
+    expect(await FileDB().getChannelNotification('second'), isNull);
+  });
+
+  test('concurrent playlist notification edits preserve other entries',
+      () async {
+    final first = PlaylistNotification('first', 1, 1, 'First');
+    final second = PlaylistNotification('second', 1, 1, 'Second');
+    final third = PlaylistNotification('third', 1, 1, 'Third');
+    await Future.wait([
+      FileDB().upsertPlaylistNotification(first),
+      FileDB().upsertPlaylistNotification(second),
+    ]);
+    expect(
+        (await FileDB().getAllPlaylistNotifications()).map((n) => n.playlistId),
+        unorderedEquals(['first', 'second']));
+
+    await Future.wait([
+      FileDB().deletePlaylistNotification(first),
+      FileDB().setPlaylistNotificationLastViewedVideo('second', 2),
+      FileDB().upsertPlaylistNotification(third),
+    ]);
+    final notifications = await FileDB().getAllPlaylistNotifications();
+    expect(notifications.map((n) => n.playlistId),
+        unorderedEquals(['second', 'third']));
+    expect(
+        notifications
+            .firstWhere((n) => n.playlistId == 'second')
+            .lastVideoCount,
+        2);
+
+    await Future.wait([
+      FileDB().deletePlaylistNotification(second),
+      FileDB().setPlaylistNotificationLastViewedVideo('second', 3),
+    ]);
+    expect(await FileDB().getPlaylistNotification('second'), isNull);
+  });
+
+  test('a failed file update does not prevent later updates', () async {
+    var requests = 0;
+    messenger.setMockMethodCallHandler(pathProvider, (_) async {
+      if (requests++ == 0) throw PlatformException(code: 'unavailable');
+      return documentsDirectory.path;
+    });
+
+    final failed = expectLater(
+        FileDB().setLocale('fr'), throwsA(isA<PlatformException>()));
+    final successful = FileDB().setSubscriptionNotifications(true);
+    await Future.wait([failed, successful]);
+
+    expect(await FileDB().getSubscriptionNotifications(), isTrue);
+  });
+
+  test('viewing items without notifications does not write notification files',
+      () async {
+    await FileDB().setChannelNotificationLastViewedVideo('unwatched', 'new');
+    await FileDB().setPlaylistNotificationLastViewedVideo('unwatched', 2);
+
+    final files = await Directory(p.join(documentsDirectory.path, 'fileDb'))
+        .list()
+        .toList();
+    expect(files, isEmpty);
+  });
+
   test('clearDb reports deletion failures', () async {
     final invalidFile = Directory(p.join(
       documentsDirectory.path,

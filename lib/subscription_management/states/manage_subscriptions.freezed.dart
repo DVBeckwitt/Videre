@@ -16,7 +16,8 @@ T _$identity<T>(T value) => value;
 mixin _$ManageSubscriptionsState {
   List<Subscription> get subs;
   List<OfflineSubscription> get offlineSubs;
-  dynamic get isLoggedIn;
+  bool get isLoggedIn;
+  bool get hasError;
   bool get loading;
 
   /// Create a copy of ManageSubscriptionsState
@@ -35,8 +36,10 @@ mixin _$ManageSubscriptionsState {
             const DeepCollectionEquality().equals(other.subs, subs) &&
             const DeepCollectionEquality()
                 .equals(other.offlineSubs, offlineSubs) &&
-            const DeepCollectionEquality()
-                .equals(other.isLoggedIn, isLoggedIn) &&
+            (identical(other.isLoggedIn, isLoggedIn) ||
+                other.isLoggedIn == isLoggedIn) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError) &&
             (identical(other.loading, loading) || other.loading == loading));
   }
 
@@ -45,12 +48,13 @@ mixin _$ManageSubscriptionsState {
       runtimeType,
       const DeepCollectionEquality().hash(subs),
       const DeepCollectionEquality().hash(offlineSubs),
-      const DeepCollectionEquality().hash(isLoggedIn),
+      isLoggedIn,
+      hasError,
       loading);
 
   @override
   String toString() {
-    return 'ManageSubscriptionsState(subs: $subs, offlineSubs: $offlineSubs, isLoggedIn: $isLoggedIn, loading: $loading)';
+    return 'ManageSubscriptionsState(subs: $subs, offlineSubs: $offlineSubs, isLoggedIn: $isLoggedIn, hasError: $hasError, loading: $loading)';
   }
 }
 
@@ -63,7 +67,8 @@ abstract mixin class $ManageSubscriptionsStateCopyWith<$Res> {
   $Res call(
       {List<Subscription> subs,
       List<OfflineSubscription> offlineSubs,
-      dynamic isLoggedIn,
+      bool isLoggedIn,
+      bool hasError,
       bool loading});
 }
 
@@ -82,7 +87,8 @@ class _$ManageSubscriptionsStateCopyWithImpl<$Res>
   $Res call({
     Object? subs = null,
     Object? offlineSubs = null,
-    Object? isLoggedIn = freezed,
+    Object? isLoggedIn = null,
+    Object? hasError = null,
     Object? loading = null,
   }) {
     return _then(_self.copyWith(
@@ -94,10 +100,14 @@ class _$ManageSubscriptionsStateCopyWithImpl<$Res>
           ? _self.offlineSubs
           : offlineSubs // ignore: cast_nullable_to_non_nullable
               as List<OfflineSubscription>,
-      isLoggedIn: freezed == isLoggedIn
+      isLoggedIn: null == isLoggedIn
           ? _self.isLoggedIn
           : isLoggedIn // ignore: cast_nullable_to_non_nullable
-              as dynamic,
+              as bool,
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
+              as bool,
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
@@ -200,7 +210,8 @@ extension ManageSubscriptionsStatePatterns on ManageSubscriptionsState {
     TResult Function(
             List<Subscription> subs,
             List<OfflineSubscription> offlineSubs,
-            dynamic isLoggedIn,
+            bool isLoggedIn,
+            bool hasError,
             bool loading)?
         $default, {
     required TResult orElse(),
@@ -208,8 +219,8 @@ extension ManageSubscriptionsStatePatterns on ManageSubscriptionsState {
     final _that = this;
     switch (_that) {
       case _ManageSubscriptionsState() when $default != null:
-        return $default(
-            _that.subs, _that.offlineSubs, _that.isLoggedIn, _that.loading);
+        return $default(_that.subs, _that.offlineSubs, _that.isLoggedIn,
+            _that.hasError, _that.loading);
       case _:
         return orElse();
     }
@@ -233,15 +244,16 @@ extension ManageSubscriptionsStatePatterns on ManageSubscriptionsState {
     TResult Function(
             List<Subscription> subs,
             List<OfflineSubscription> offlineSubs,
-            dynamic isLoggedIn,
+            bool isLoggedIn,
+            bool hasError,
             bool loading)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _ManageSubscriptionsState():
-        return $default(
-            _that.subs, _that.offlineSubs, _that.isLoggedIn, _that.loading);
+        return $default(_that.subs, _that.offlineSubs, _that.isLoggedIn,
+            _that.hasError, _that.loading);
     }
   }
 
@@ -262,15 +274,16 @@ extension ManageSubscriptionsStatePatterns on ManageSubscriptionsState {
     TResult? Function(
             List<Subscription> subs,
             List<OfflineSubscription> offlineSubs,
-            dynamic isLoggedIn,
+            bool isLoggedIn,
+            bool hasError,
             bool loading)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _ManageSubscriptionsState() when $default != null:
-        return $default(
-            _that.subs, _that.offlineSubs, _that.isLoggedIn, _that.loading);
+        return $default(_that.subs, _that.offlineSubs, _that.isLoggedIn,
+            _that.hasError, _that.loading);
       case _:
         return null;
     }
@@ -284,6 +297,7 @@ class _ManageSubscriptionsState implements ManageSubscriptionsState {
       {final List<Subscription> subs = const [],
       final List<OfflineSubscription> offlineSubs = const [],
       this.isLoggedIn = false,
+      this.hasError = false,
       this.loading = true})
       : _subs = subs,
         _offlineSubs = offlineSubs;
@@ -308,7 +322,10 @@ class _ManageSubscriptionsState implements ManageSubscriptionsState {
 
   @override
   @JsonKey()
-  final dynamic isLoggedIn;
+  final bool isLoggedIn;
+  @override
+  @JsonKey()
+  final bool hasError;
   @override
   @JsonKey()
   final bool loading;
@@ -330,8 +347,10 @@ class _ManageSubscriptionsState implements ManageSubscriptionsState {
             const DeepCollectionEquality().equals(other._subs, _subs) &&
             const DeepCollectionEquality()
                 .equals(other._offlineSubs, _offlineSubs) &&
-            const DeepCollectionEquality()
-                .equals(other.isLoggedIn, isLoggedIn) &&
+            (identical(other.isLoggedIn, isLoggedIn) ||
+                other.isLoggedIn == isLoggedIn) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError) &&
             (identical(other.loading, loading) || other.loading == loading));
   }
 
@@ -340,12 +359,13 @@ class _ManageSubscriptionsState implements ManageSubscriptionsState {
       runtimeType,
       const DeepCollectionEquality().hash(_subs),
       const DeepCollectionEquality().hash(_offlineSubs),
-      const DeepCollectionEquality().hash(isLoggedIn),
+      isLoggedIn,
+      hasError,
       loading);
 
   @override
   String toString() {
-    return 'ManageSubscriptionsState(subs: $subs, offlineSubs: $offlineSubs, isLoggedIn: $isLoggedIn, loading: $loading)';
+    return 'ManageSubscriptionsState(subs: $subs, offlineSubs: $offlineSubs, isLoggedIn: $isLoggedIn, hasError: $hasError, loading: $loading)';
   }
 }
 
@@ -360,7 +380,8 @@ abstract mixin class _$ManageSubscriptionsStateCopyWith<$Res>
   $Res call(
       {List<Subscription> subs,
       List<OfflineSubscription> offlineSubs,
-      dynamic isLoggedIn,
+      bool isLoggedIn,
+      bool hasError,
       bool loading});
 }
 
@@ -379,7 +400,8 @@ class __$ManageSubscriptionsStateCopyWithImpl<$Res>
   $Res call({
     Object? subs = null,
     Object? offlineSubs = null,
-    Object? isLoggedIn = freezed,
+    Object? isLoggedIn = null,
+    Object? hasError = null,
     Object? loading = null,
   }) {
     return _then(_ManageSubscriptionsState(
@@ -391,10 +413,14 @@ class __$ManageSubscriptionsStateCopyWithImpl<$Res>
           ? _self._offlineSubs
           : offlineSubs // ignore: cast_nullable_to_non_nullable
               as List<OfflineSubscription>,
-      isLoggedIn: freezed == isLoggedIn
+      isLoggedIn: null == isLoggedIn
           ? _self.isLoggedIn
           : isLoggedIn // ignore: cast_nullable_to_non_nullable
-              as dynamic,
+              as bool,
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
+              as bool,
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable

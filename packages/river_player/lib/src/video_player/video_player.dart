@@ -498,6 +498,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     _timer?.cancel();
     if (value.isPlaying) {
       await _videoPlayerPlatform.play(_textureId);
+      if (_isDisposed || !value.isPlaying) return;
+      // A pause/dispose or another play can finish while the platform command
+      // is pending. Keep only one poller for the current playback state.
+      _timer?.cancel();
       _timer = Timer.periodic(
         const Duration(milliseconds: 300),
         (Timer timer) async {

@@ -6,6 +6,7 @@ import 'package:clipious/feedback/feedback_controller.dart';
 import 'package:clipious/feedback/models/feedback_report.dart';
 import 'package:clipious/feedback/services/feedback_store.dart';
 import 'package:clipious/feedback/services/feedback_submission_client.dart';
+import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -46,6 +47,42 @@ Future<void> fill(FeedbackController controller) async {
 }
 
 void main() {
+  test('screenshot snapshots cannot be changed through caller or buffer views',
+      () {
+    final original = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII=');
+    final draft = FeedbackDraft(
+        submissionId: FeedbackDraft.empty().submissionId,
+        screenshot: original.asUnmodifiableView());
+    final snapshot = jsonEncode(draft.toRequest());
+    original[0] = 0;
+    final screenshot = draft.screenshot!;
+    expect(() => screenshot[0] = 0, throwsUnsupportedError);
+    expect(
+        () => screenshot.buffer.asUint8List()[0] = 0, throwsUnsupportedError);
+    expect(() => screenshot.buffer.asByteData().setUint8(0, 0),
+        throwsUnsupportedError);
+    expect(jsonEncode(draft.toRequest()), snapshot);
+  });
+
+  test('editing a draft preserves the unchanged screenshot image cache key',
+      () {
+    final original = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nWQAAAAASUVORK5CYII=');
+    final draft = FeedbackDraft.empty().copyWith(screenshot: original);
+    final image = MemoryImage(draft.screenshot!);
+    expect(MemoryImage(draft.screenshot!), image);
+    final edited = draft.copyWith(title: 'Updated title', attempted: true);
+    expect(MemoryImage(edited.screenshot!), image);
+    expect(edited.copyWith(clearScreenshot: true).screenshot, isNull);
+
+    final replaced = edited.copyWith(screenshot: original);
+    final replacement = replaced.screenshot!;
+    original[0] = 0;
+    expect(replacement[0], 137);
+    expect(draft.screenshot![0], 137);
+  });
+
   test(
       'draft preparation and optional diagnostics never make a network request',
       () async {
@@ -205,6 +242,30 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(store.saves, writes);
   });
+
+  test('late save from a disposed form cannot overwrite a successor draft',
+      () async {
+    final store = MemoryStore();
+    final first = makeController(store, (_) async => success());
+    await fill(first);
+    await first.save();
+    first.dispose();
+
+    final second = makeController(store, (_) async => success());
+    addTearDown(second.dispose);
+    await second.initialize();
+    second.update(title: 'Newer draft edits');
+    await second.save();
+    final writes = store.saves;
+
+    // A popped route may finish its exit transition after its controller's
+    // owner has saved, disposed, and allowed a new feedback route to open.
+    await first.save();
+
+    expect(store.saves, writes);
+    expect(store.state.draft?.title, 'Newer draft edits');
+  });
+
   test('uncertain network outcome retains ID until explicit discard', () async {
     final store = MemoryStore();
     final controller = makeController(

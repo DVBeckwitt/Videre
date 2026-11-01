@@ -1,9 +1,11 @@
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:flutter/material.dart';
 
 class VideoThumbnailView extends StatelessWidget {
   final String videoId;
   final List<String> thumbnails;
+  final List<ImageObject>? images;
   final Widget? child;
   final BoxDecoration? decoration;
 
@@ -11,6 +13,7 @@ class VideoThumbnailView extends StatelessWidget {
       {super.key,
       required this.videoId,
       required this.thumbnails,
+      this.images,
       this.child,
       this.decoration});
 
@@ -24,6 +27,7 @@ class VideoThumbnailView extends StatelessWidget {
         children: [
           Thumbnail(
             thumbnails: thumbnails,
+            images: images,
             decoration: decoration ??
                 BoxDecoration(
                   color: colors.secondaryContainer,

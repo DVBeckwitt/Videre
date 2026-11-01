@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:bloc/bloc.dart';
-import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
@@ -9,8 +8,6 @@ import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/search/models/search_sort_by.dart';
 import 'package:clipious/search/states/search_filter.dart';
 
-import '../../channels/models/channel.dart';
-import '../../playlists/models/playlist.dart';
 import '../../settings/states/settings.dart';
 
 part 'search.freezed.dart';
@@ -54,10 +51,6 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
       emit(state.copyWith(showResults: false));
       return false;
     }
-  }
-
-  void clearSearch() {
-    emit(state.copyWith(showResults: false));
   }
 
   void getSuggestions({bool hideResult = true}) {
@@ -128,16 +121,10 @@ sealed class SearchState with _$SearchState {
 
   static SearchState init(
       {TextEditingController? queryController,
-      int? selectedIndex,
-      List<Video>? videos,
-      List<Channel>? channels,
-      List<Playlist>? playlists,
-      bool? useHistory,
       bool? searchNow,
       List<String>? suggestions,
       SearchSortBy? sortBy,
       bool? showResults,
-      bool? loading,
       int? videoPage,
       channelPage,
       playlistPage,

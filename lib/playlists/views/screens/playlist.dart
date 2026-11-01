@@ -39,6 +39,7 @@ class PlaylistViewScreen extends StatelessWidget {
 
   openVideo(BuildContext context, String videoId) {
     AutoRouter.of(context).push(VideoRoute(videoId: videoId)).then((value) {
+      if (!context.mounted) return;
       context
           .read<PlaylistCubit>()
           .refreshPlaylist(userPlaylist: canDeleteVideos);

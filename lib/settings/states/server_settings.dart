@@ -11,6 +11,7 @@ part 'server_settings.freezed.dart';
 
 class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   final AppCubit app;
+  Future<void> _serverUpdates = Future.value();
 
   ServerSettingsCubit(super.initialState, this.app) {
     canDelete();
@@ -37,33 +38,47 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     return _saveDiscoveredBackends(selector);
   }
 
-  Future<Server> _saveDiscoveredBackends(BackendSelector selector) async {
+  Future<Server> _saveDiscoveredBackends(BackendSelector selector) {
     // Discovery may finish after another settings edit. Preserve all current
     // credentials, routing cookies and the user's automatic-fallback setting.
-    final latest = db.getServer(state.server.url);
-    if (latest == null) throw StateError('Server no longer exists');
-    final updated = latest.copyWith(
+    return _updateServer((latest) => latest.copyWith(
         backendSelector: selector.copyWith(
             automaticFallback:
-                latest.backendSelector?.automaticFallback ?? true));
-    await _saveBackendServer(updated);
-    return updated;
+                latest.backendSelector?.automaticFallback ?? true)));
   }
 
   Future<void> setBackend(String? value, bool automaticFallback) async {
     // Read the saved record so another settings change cannot lose its headers
     // or credentials when this screen was opened with an older snapshot.
-    final saved = db.getServer(state.server.url);
-    if (saved == null) throw StateError('Server no longer exists');
-    final selector = saved.backendSelector;
-    if (selector == null) throw StateError('Discover available backends first');
-    final updated = selector
-        .copyWith(automaticFallback: automaticFallback)
-        .withSelection(saved, value);
-    await _saveBackendServer(updated);
+    await _updateServer((saved) {
+      final selector = saved.backendSelector;
+      if (selector == null) {
+        throw StateError('Discover available backends first');
+      }
+      return selector
+          .copyWith(automaticFallback: automaticFallback)
+          .withSelection(saved, value);
+    });
   }
 
-  Future<void> _saveBackendServer(Server updated) async {
+  Server _savedServer() {
+    final saved = db.getServer(state.server.url);
+    if (saved == null) throw StateError('Server no longer exists');
+    return saved;
+  }
+
+  Future<Server> _updateServer(Server Function(Server) update) {
+    final result = _serverUpdates.then((_) async {
+      final updated = update(_savedServer());
+      await _saveServer(updated);
+      return updated;
+    });
+    // Keep later edits usable after a failed save; callers still receive errors.
+    _serverUpdates = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
+  }
+
+  Future<void> _saveServer(Server updated) async {
     await db.upsertServer(updated);
 
     // Editing an inactive server must not switch background jobs to it.
@@ -78,38 +93,27 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> addHeader(String key, String value) async {
-    final Map<String, String> headers = Map.from(state.server.customHeaders);
-    headers[key] = value;
-    emit(state.copyWith.server(customHeaders: headers));
-    await db.upsertServer(state.server);
-    await fileDb.upsertServer(state.server);
+    await _updateServer((saved) => saved.copyWith(customHeaders: {
+          ...saved.customHeaders,
+          key: value,
+        }));
   }
 
   Future<void> removeHeader(String key) async {
-    final Map<String, String> headers = Map.from(state.server.customHeaders);
-    headers.remove(key);
-    emit(state.copyWith.server(customHeaders: headers));
-    await db.upsertServer(state.server);
-    await fileDb.upsertServer(state.server);
+    await _updateServer((saved) => saved.copyWith(
+        customHeaders: Map<String, String>.from(saved.customHeaders)
+          ..remove(key)));
   }
 
   Future<void> logOut() async {
-    Server s = state.server.copyWith(sidCookie: null, authToken: null);
-    await db.upsertServer(s);
-    if (s.inUse) {
-      await fileDb.useServer(s);
-    }
-    emit(state.copyWith(server: s));
-    // we only refresh the app if the app is currently on this server
-    if (app.state.server?.url == s.url) {
-      app.setServer(s.copyWith());
-    }
+    await _updateServer(
+        (saved) => saved.copyWith(sidCookie: null, authToken: null));
   }
 
   Future<void> logInWithToken() async {
     final serverUrl = state.server.url;
     await service.logIn(serverUrl);
-    final server = db.getServer(serverUrl)!;
+    final server = _savedServer();
     if (!isClosed) emit(state.copyWith(server: server));
     // Only refresh the app if it is still on the authenticated server.
     if (!app.isClosed && app.state.server?.url == server.url) {
@@ -118,32 +122,24 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> logInWithCookie(String username, String password) async {
-    var s = state.server.copyWith();
-    String cookie = await service.loginWithCookies(s.url, username, password,
-        headers: s.customHeaders);
-    s = s.copyWith(sidCookie: cookie);
-    await db.upsertServer(s);
-    if (s.inUse) {
-      fileDb.useServer(s);
-    }
-    emit(state.copyWith(server: s));
-    // we only refresh the app if the app is currently on this server
-    if (app.state.server?.url == s.url) {
-      app.setServer(s);
-    }
+    final saved = _savedServer();
+    final cookie = await service.loginWithCookies(saved.url, username, password,
+        headers: saved.customHeaders);
+    // Authentication can outlive this screen or another server edit/switch.
+    await _updateServer((latest) => latest.copyWith(sidCookie: cookie));
   }
 
   Future<void> deleteServer() async {
     await db.deleteServer(state.server);
 
-    Server currentServer = await db.getCurrentlySelectedServer();
-    emit(state.copyWith());
-    app.setServer(currentServer);
+    final currentServer = await db.getCurrentlySelectedServer();
+    await fileDb.useServer(currentServer);
+    if (!app.isClosed) app.setServer(currentServer);
   }
 
   Future<void> canDelete() async {
     bool canDelete = (await db.getServers()).length > 1;
-    emit(state.copyWith(canDelete: canDelete));
+    if (!isClosed) emit(state.copyWith(canDelete: canDelete));
   }
 }
 

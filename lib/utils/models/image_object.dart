@@ -30,6 +30,26 @@ class ImageObject {
     return thumbnails.map((thumbnail) => thumbnail.url).toList();
   }
 
+  /// Promotes the smallest source that covers the physical display size, while
+  /// retaining the established fallback order and every supplied candidate.
+  static List<String> getThumbnailUrlsForSize(List<ImageObject>? images,
+      {required double width, required double height}) {
+    final urls = getThumbnailUrlsByPreferredOrder(images);
+    if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
+      return urls;
+    }
+    final candidates = (images ?? <ImageObject>[])
+        .where((image) => image.width >= width && image.height >= height)
+        .toList()
+      ..sort((a, b) => (a.width * a.height).compareTo(b.width * b.height));
+    if (candidates.isNotEmpty) {
+      final preferred = candidates.first.url;
+      urls.remove(preferred);
+      urls.insert(0, preferred);
+    }
+    return urls;
+  }
+
   static List<ImageObject> _getThumbnailsByPreferredORder(
       List<ImageObject>? images) {
     if (images != null && images.isNotEmpty) {

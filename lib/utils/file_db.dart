@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,6 +18,7 @@ import 'package:json_annotation/json_annotation.dart';
 import 'package:logging/logging.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 import '../notifications/models/db/channel_notifications.dart';
 import '../notifications/models/db/playlist_notifications.dart';
@@ -41,36 +43,44 @@ const _fileNotFoundErrorCode = 2;
 final _log = Logger('FileDb');
 
 class FileDB extends IDbClient {
+  // Share queues across foreground clients. Background readers see complete
+  // files through atomic replacement; this is not a cross-isolate write lock.
+  static final _pendingUpdates = <String, Future<void>>{};
+
   FileDB();
 
-  Future<void> setSubscriptionNotifications(bool b) async {
-    var settings = await getGenericSettings();
-    settings.subscriptionNotifications = b;
-    await updateGenericSettings(settings);
-  }
+  Future<void> setSubscriptionNotifications(bool b) => _updateGenericSettings(
+      (settings) => settings.subscriptionNotifications = b);
 
   Future<bool> getSubscriptionNotifications() async {
     return (await getGenericSettings()).subscriptionNotifications;
   }
 
-  Future<void> setLocale(String? l) async {
-    var settings = await getGenericSettings();
-    settings.locale = l;
-    await updateGenericSettings(settings);
-  }
+  Future<void> setLocale(String? l) =>
+      _updateGenericSettings((settings) => settings.locale = l);
 
   Future<String?> getLocale() async {
     return (await getGenericSettings()).locale;
   }
 
-  Future<void> updateGenericSettings(FileDbGenericSettings settings) async {
-    File f = await _openAppFile(_genericSettings);
-    await _writeMapToFile(f, settings.toJson());
-  }
+  Future<void> updateGenericSettings(FileDbGenericSettings settings) =>
+      _updateFile(
+          _genericSettings, (file) => _writeMapToFile(file, settings.toJson()));
+
+  Future<void> _updateGenericSettings(
+          FutureOr<void> Function(FileDbGenericSettings) update) =>
+      _updateFile(_genericSettings, (file) async {
+        final settings = await _readGenericSettings(file);
+        await update(settings);
+        await _writeMapToFile(file, settings.toJson());
+      });
 
   Future<FileDbGenericSettings> getGenericSettings() async {
-    File f = await _openAppFile(_genericSettings);
-    var content = await _readFileAsMap(f);
+    return _readGenericSettings(await _openAppFile(_genericSettings));
+  }
+
+  Future<FileDbGenericSettings> _readGenericSettings(File file) async {
+    var content = await _readFileAsMap(file);
     if (content.isNotEmpty) {
       return FileDbGenericSettings.fromJson(content);
     } else {
@@ -88,11 +98,9 @@ class FileDB extends IDbClient {
     }
   }
 
-  Future<void> setLastSubscriptionNotification(
-      SubscriptionNotification sub) async {
-    File f = await _openAppFile(_subNotifsFile);
-    await _writeMapToFile(f, sub.toJson());
-  }
+  Future<void> setLastSubscriptionNotification(SubscriptionNotification sub) =>
+      _updateFile(
+          _subNotifsFile, (file) => _writeMapToFile(file, sub.toJson()));
 
   Future<ChannelNotification?> getChannelNotification(String channelId) async {
     return (await getAllChannelNotifications())
@@ -105,28 +113,27 @@ class FileDB extends IDbClient {
     return contents.values.map((e) => ChannelNotification.fromJson(e)).toList();
   }
 
-  Future<void> deleteChannelNotification(ChannelNotification notif) async {
-    var notifs = await getAllChannelNotifications();
-    notifs.removeWhere((element) => element.channelId == notif.channelId);
-    await _updateChannelNotifications(notifs);
-  }
+  Future<void> deleteChannelNotification(ChannelNotification notif) =>
+      _updateFileMap(_channelNotifFile,
+          (contents) => contents.remove(notif.channelId) != null);
 
-  Future<void> upsertChannelNotification(ChannelNotification notif) async {
-    List<ChannelNotification> notifs = await getAllChannelNotifications();
-    notifs.removeWhere((element) => element.channelId == notif.channelId);
-    notifs.add(notif);
-    await _updateChannelNotifications(notifs);
-  }
+  Future<void> upsertChannelNotification(ChannelNotification notif) =>
+      _updateFileMap(_channelNotifFile, (contents) {
+        contents[notif.channelId] = notif.toJson();
+        return true;
+      });
 
   Future<void> setChannelNotificationLastViewedVideo(
-      String channelId, String videoId) async {
-    var notif = await getChannelNotification(channelId);
-    if (notif != null) {
-      notif.lastSeenVideoId = videoId;
-      notif.timestamp = DateTime.now().millisecondsSinceEpoch;
-      await upsertChannelNotification(notif);
-    }
-  }
+          String channelId, String videoId) =>
+      _updateFileMap(_channelNotifFile, (contents) {
+        final current = contents[channelId];
+        if (current == null) return false;
+        final notif = ChannelNotification.fromJson(current)
+          ..lastSeenVideoId = videoId
+          ..timestamp = DateTime.now().millisecondsSinceEpoch;
+        contents[channelId] = notif.toJson();
+        return true;
+      });
 
   Future<PlaylistNotification?> getPlaylistNotification(
       String playlistId) async {
@@ -142,49 +149,41 @@ class FileDB extends IDbClient {
         .toList();
   }
 
-  Future<void> deletePlaylistNotification(PlaylistNotification notif) async {
-    var notifs = await getAllPlaylistNotifications();
-    notifs.removeWhere((element) => element.playlistId == notif.playlistId);
-    await _updatePlayListNotifications(notifs);
-  }
+  Future<void> deletePlaylistNotification(PlaylistNotification notif) =>
+      _updateFileMap(_playlistNotifsFile,
+          (contents) => contents.remove(notif.playlistId) != null);
 
-  Future<void> upsertPlaylistNotification(PlaylistNotification notif) async {
-    List<PlaylistNotification> notifs = await getAllPlaylistNotifications();
-    notifs.removeWhere((element) => element.playlistId == notif.playlistId);
-    notifs.add(notif);
-    await _updatePlayListNotifications(notifs);
-  }
+  Future<void> upsertPlaylistNotification(PlaylistNotification notif) =>
+      _updateFileMap(_playlistNotifsFile, (contents) {
+        contents[notif.playlistId] = notif.toJson();
+        return true;
+      });
 
   Future<void> setPlaylistNotificationLastViewedVideo(
-      String playlistId, int videoCount) async {
-    var notif = await getPlaylistNotification(playlistId);
-    if (notif != null) {
-      notif.lastVideoCount = videoCount;
-      notif.timestamp = DateTime.now().millisecondsSinceEpoch;
-      await upsertPlaylistNotification(notif);
-    }
-  }
+          String playlistId, int videoCount) =>
+      _updateFileMap(_playlistNotifsFile, (contents) {
+        final current = contents[playlistId];
+        if (current == null) return false;
+        final notif = PlaylistNotification.fromJson(current)
+          ..lastVideoCount = videoCount
+          ..timestamp = DateTime.now().millisecondsSinceEpoch;
+        contents[playlistId] = notif.toJson();
+        return true;
+      });
 
-  Future<void> _updateChannelNotifications(
-      List<ChannelNotification> notifications) async {
-    Map<String, ChannelNotification> map = {};
-    for (var element in notifications) {
-      map[element.channelId] = element;
-    }
+  Future<void> _updateFileMap(
+          String path, bool Function(Map<String, dynamic>) update) =>
+      _updateFile(path, (file) async {
+        final contents = await _readFileAsMap(file);
+        if (update(contents)) await _writeMapToFile(file, contents);
+      });
 
-    File f = await _openAppFile(_channelNotifFile);
-    await _writeMapToFile(f, map);
-  }
-
-  Future<void> _updatePlayListNotifications(
-      List<PlaylistNotification> notifications) async {
-    Map<String, PlaylistNotification> map = {};
-    for (var element in notifications) {
-      map[element.playlistId] = element;
-    }
-
-    File f = await _openAppFile(_playlistNotifsFile);
-    await _writeMapToFile(f, map);
+  Future<void> _updateFile(String path, Future<void> Function(File) update) {
+    final previous = _pendingUpdates[path] ?? Future<void>.value();
+    final result = previous.then((_) async => update(await _openAppFile(path)));
+    // A failed update still reaches its caller without blocking later changes.
+    _pendingUpdates[path] = result.then<void>((_) {}, onError: (Object _) {});
+    return result;
   }
 
   Future<File> _openAppFile(String path) async {
@@ -203,7 +202,13 @@ class FileDB extends IDbClient {
   Future<void> _writeMapToFile(File f, Map<String, dynamic> map) async {
     var string = jsonEncode(map);
     _log.fine("Writing json to ${f.path}");
-    await f.writeAsString(string, mode: FileMode.write);
+    final temporary = File('${f.path}.${const Uuid().v4()}.tmp');
+    try {
+      await temporary.writeAsString(string, flush: true);
+      await temporary.rename(f.path);
+    } finally {
+      if (await temporary.exists()) await temporary.delete();
+    }
   }
 
   Future<Map<String, dynamic>> _readFileAsMap(File f) async {
@@ -223,13 +228,14 @@ class FileDB extends IDbClient {
       _subNotifsFile,
       _genericSettings,
     ]) {
-      final file = await _openAppFile(path);
-      try {
-        await file.delete();
-      } on FileSystemException catch (error) {
-        if (error.osError?.errorCode != _fileNotFoundErrorCode) rethrow;
-        log.fine('file doesn\'t exist');
-      }
+      await _updateFile(path, (file) async {
+        try {
+          await file.delete();
+        } on FileSystemException catch (error) {
+          if (error.osError?.errorCode != _fileNotFoundErrorCode) rethrow;
+          log.fine('file doesn\'t exist');
+        }
+      });
     }
   }
 
@@ -237,11 +243,8 @@ class FileDB extends IDbClient {
   * This is getting worst and worst. we will only implement the required things for the work manager.
    */
   @override
-  Future<void> useServer(Server server) async {
-    var settings = await getGenericSettings();
-    settings.server = server;
-    await updateGenericSettings(settings);
-  }
+  Future<void> useServer(Server server) =>
+      _updateGenericSettings((settings) => settings.server = server);
 
   @override
   Future<Server> getCurrentlySelectedServer() async {
@@ -260,14 +263,14 @@ class FileDB extends IDbClient {
 
   Future<void> syncWithDb() async {
     _log.fine('Syncing file settings with DB');
-    var fileSettings = await getGenericSettings();
-    fileSettings.locale = db.getSettings(localeSettingName)?.value;
-    try {
-      fileSettings.server = await db.getCurrentlySelectedServer();
-    } catch (err) {
-      _log.fine("No server selected in the DB settings, we proceed without");
-    }
-    await updateGenericSettings(fileSettings);
+    await _updateGenericSettings((fileSettings) async {
+      fileSettings.locale = db.getSettings(localeSettingName)?.value;
+      try {
+        fileSettings.server = await db.getCurrentlySelectedServer();
+      } catch (err) {
+        _log.fine("No server selected in the DB settings, we proceed without");
+      }
+    });
   }
 
   /*

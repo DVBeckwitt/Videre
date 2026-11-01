@@ -81,7 +81,7 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Moving from Clipious.** Videre (`com.github.dvbeckwitt.videre`) and Clipious (`com.github.lamarios.clipious`) install separately. Set up Videre before removing Clipious: Android does not transfer their data, and Videre cannot import Clipious app storage directly.
 
-**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. Playback may connect directly to YouTube/Google when media proxying is off. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
+**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, and video thumbnails use the selected Invidious instance's image proxy, including notification and download artwork. This is independent of the video-stream proxy and SOCKS5 settings; image failures do not retry the original Google URL. Third-party artwork such as DeArrow still uses its own service. Playback may connect directly to YouTube/Google when media proxying is off. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
 
 ## Contributing
 

@@ -280,9 +280,9 @@ function Get-VerifiedDownload {
     }
 }
 
-function Expand-ZipToCleanDirectory {
+function Expand-ToCleanDirectory {
     param(
-        [Parameter(Mandatory)][string]$ZipPath,
+        [Parameter(Mandatory)][string]$ArchivePath,
         [Parameter(Mandatory)][string]$Destination,
         [Parameter(Mandatory)][string]$ManagedRoot
     )
@@ -291,7 +291,12 @@ function Expand-ZipToCleanDirectory {
     $Temp = Join-Path $TempRoot ([System.Guid]::NewGuid().ToString())
     New-Directory $Temp
     try {
-        Expand-Archive -LiteralPath $ZipPath -DestinationPath $Temp -Force
+        if ($ArchivePath.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) {
+            Expand-Archive -LiteralPath $ArchivePath -DestinationPath $Temp -Force
+        }
+        else {
+            Invoke-External "tar" @("-xzf", $ArchivePath, "-C", $Temp) $TempRoot
+        }
         Remove-SafeChildDirectory $Destination $ManagedRoot
         New-Directory (Split-Path $Destination -Parent)
         $Children = @(Get-ChildItem -LiteralPath $Temp)
@@ -327,7 +332,7 @@ function Install-VerifiedZip {
 
     $ArchivePath = Join-Path $ToolDir "downloads\$($Download.FileName)"
     Get-VerifiedDownload $Download $ArchivePath
-    Expand-ZipToCleanDirectory $ArchivePath $Destination $ToolDir
+    Expand-ToCleanDirectory $ArchivePath $Destination $ToolDir
     if (-not (Test-Path -LiteralPath $ExpectedPath -PathType Leaf)) {
         throw "Verified archive did not contain expected tool: $ExpectedPath"
     }
@@ -350,17 +355,10 @@ function Set-LocalProperties {
 
 function Initialize-BuildWorkspace {
     $CheckoutDir = Join-Path $WorkDir "checkout"
-    Remove-SafeChildDirectory $CheckoutDir $WorkDir
 
     if ($SourceArchive) {
         $ArchivePath = (Resolve-Path $SourceArchive).Path
-        if ($ArchivePath.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) {
-            Expand-ZipToCleanDirectory $ArchivePath $CheckoutDir $WorkDir
-        }
-        else {
-            New-Directory $CheckoutDir
-            Invoke-External "tar" @("-xzf", $ArchivePath, "-C", $CheckoutDir, "--strip-components=1") $WorkDir
-        }
+        Expand-ToCleanDirectory $ArchivePath $CheckoutDir $WorkDir
 
         $FlutterReference = Join-Path $SourceRoot "submodules\flutter"
         if (-not (Test-Path -LiteralPath (Join-Path $FlutterReference "bin\flutter.bat"))) {
@@ -369,6 +367,7 @@ function Initialize-BuildWorkspace {
         $script:FlutterSdkRoot = $FlutterReference
     }
     else {
+        Remove-SafeChildDirectory $CheckoutDir $WorkDir
         Invoke-External "git" @("clone", "--no-checkout", $SourceRoot, $CheckoutDir) $WorkDir
         Invoke-External "git" @("checkout", "HEAD") $CheckoutDir
 

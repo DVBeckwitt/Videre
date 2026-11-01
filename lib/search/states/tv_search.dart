@@ -13,11 +13,11 @@ class TvSearchCubit extends Cubit<TvSearchState> {
   TvSearchCubit(super.initialState);
 
   @override
-  close() async {
+  Future<void> close() {
     resultFocus.dispose();
     searchFocus.dispose();
     scrollController.dispose();
-    super.close();
+    return super.close();
   }
 
   KeyEventResult handleResultScopeKeyEvent(FocusNode node, KeyEvent event) {
@@ -30,14 +30,17 @@ class TvSearchCubit extends Cubit<TvSearchState> {
   }
 
   setHasVideo(bool hasVideos) {
+    if (isClosed) return;
     emit(state.copyWith(hasVideos: hasVideos));
   }
 
   setHasChannels(bool hasChannels) {
+    if (isClosed) return;
     emit(state.copyWith(hasChannels: hasChannels));
   }
 
   setHasPlaylists(bool hasPlaylists) {
+    if (isClosed) return;
     emit(state.copyWith(hasPlaylists: hasPlaylists));
   }
 }

@@ -93,50 +93,14 @@ enum HomeDataSource {
 
   Widget getBottomBarNavigationWidget(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
-    return switch (this) {
-      (HomeDataSource.trending) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.popular) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.playlist) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.history) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.downloads) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.searchHistory) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.subscription) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.home) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals)),
-      (HomeDataSource.search) =>
-        NavigationDestination(icon: Icon(getIcon()), label: getLabel(locals))
-    };
+    return NavigationDestination(
+        icon: Icon(getIcon()), label: getLabel(locals));
   }
 
   NavigationRailDestination getNavigationRailWidget(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
-    return switch (this) {
-      (HomeDataSource.trending) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.popular) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.playlist) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.history) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.downloads) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.searchHistory) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.subscription) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.home) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals))),
-      (HomeDataSource.search) => NavigationRailDestination(
-          icon: Icon(getIcon()), label: Text(getLabel(locals)))
-    };
+    return NavigationRailDestination(
+        icon: Icon(getIcon()), label: Text(getLabel(locals)));
   }
 
   Widget build(BuildContext context, bool small) {

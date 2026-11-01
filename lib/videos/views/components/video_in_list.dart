@@ -144,6 +144,9 @@ class VideoListItem extends StatelessWidget {
                     : video != null
                         ? VideoThumbnailView(
                             videoId: video!.videoId,
+                            images: video!.deArrowThumbnailUrl == null
+                                ? video!.videoThumbnails
+                                : null,
                             thumbnails: video!.deArrowThumbnailUrl != null
                                 ? [video!.deArrowThumbnailUrl!]
                                 : ImageObject.getThumbnailUrlsByPreferredOrder(

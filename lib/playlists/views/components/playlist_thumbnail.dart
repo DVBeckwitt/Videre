@@ -46,6 +46,9 @@ class PlaylistThumbnails extends StatelessWidget {
                         )
                       : videosToUse.length > i
                           ? VideoThumbnailView(
+                              images: videosToUse[i].deArrowThumbnailUrl == null
+                                  ? videosToUse[i].videoThumbnails
+                                  : null,
                               videoId: videosToUse[i].videoId,
                               thumbnails: videosToUse[i].thumbnails,
                             )

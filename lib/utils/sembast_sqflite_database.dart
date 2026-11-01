@@ -87,13 +87,12 @@ class SembastSqfDb extends IDbClient {
 
   @override
   Future<void> cleanOldLogs() async {
-    // TODO: implement cleanOldLogs
-    var all = getAppLogs();
-    List<String> ids = all.reversed.skip(maxLogs).map((e) => e.uuid).toList();
+    final count = appLogsStore.countSync(db);
+    final excess = count - maxLogs;
+    if (excess <= 0) return;
     await appLogsStore.delete(db,
-        finder: Finder(
-            sortOrders: [SortOrder("time")], offset: 0, limit: ids.length));
-    log.fine("clearing ${ids.length} logs out of ${all.length}");
+        finder: Finder(sortOrders: [SortOrder("time")], limit: excess));
+    log.fine("clearing $excess logs out of $count");
   }
 
   @override
@@ -416,17 +415,13 @@ class SembastSqfDb extends IDbClient {
   }
 
   @override
-  Future<void> useServer(Server server) async {
-    List<Server> servers = List.from(await getServers());
-    for (int i = 0; i < servers.length; i++) {
-      Server s = servers[i].copyWith(inUse: false);
-      await serversStore.record(s.url).put(db, s.toJson());
-    }
-
-    await serversStore
-        .record(server.url)
-        .put(db, server.copyWith(inUse: true).toJson());
-  }
+  Future<void> useServer(Server server) => db.transaction((txn) async {
+        await serversStore.update(txn, {'inUse': false},
+            finder: Finder(filter: Filter.equals('inUse', true)));
+        await serversStore
+            .record(server.url)
+            .put(txn, server.copyWith(inUse: true).toJson());
+      });
 
   @override
   Future<void> addOfflineSubscription(OfflineSubscription sub) async {

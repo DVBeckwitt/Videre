@@ -1,3 +1,4 @@
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -49,6 +50,16 @@ class TvHorizontalPaginatedListView<T> extends StatelessWidget {
                       ? getPlaceHolder()
                       : itemBuilder(items[index]),
             ),
+            if (state.hasError)
+              Align(
+                alignment:
+                    items.isEmpty ? Alignment.center : Alignment.bottomCenter,
+                child: FilledButton.icon(
+                  onPressed: cubit.retry,
+                  icon: const Icon(Icons.refresh),
+                  label: Text(AppLocalizations.of(context)!.retry),
+                ),
+              ),
           ],
         );
       }),

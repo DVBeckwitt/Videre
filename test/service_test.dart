@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
@@ -7,14 +8,62 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
+import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:logging/logging.dart';
 
 void main() {
+  group('history synchronization', () {
+    late Level previousLogLevel;
+
+    setUp(() {
+      previousLogLevel = Logger.root.level;
+      Logger.root.level = Level.FINE;
+    });
+
+    tearDown(() => Logger.root.level = previousLogLevel);
+
+    Future<void> waitForHistoryLog(String message) async {
+      await Logger('Service')
+          .onRecord
+          .firstWhere((record) => record.message == message)
+          .timeout(const Duration(seconds: 2));
+    }
+
+    test('awaits every write and preserves existing partial progress',
+        () async {
+      final database = _HistoryDb();
+      db = database;
+      final completed = waitForHistoryLog('updated watch status of second');
+
+      _HistoryService().syncHistory();
+      await completed;
+
+      expect(database.progress, {'first': 1.0, 'partial': 0.4, 'second': 1.0});
+      expect(database.maxActiveWrites, 1);
+    });
+
+    test('asynchronous storage failures stay inside the sync error handler',
+        () async {
+      final database = _HistoryDb(failWrites: true);
+      db = database;
+      final handled =
+          waitForHistoryLog('failed to sync history, probably not logged in');
+
+      _HistoryService().syncHistory();
+      await handled;
+
+      expect(database.progress, {'partial': 0.4});
+      expect(database.activeWrites, 0);
+    });
+  });
+
   test('a stalled dislike request times out', () async {
     db = await SembastSqfDb.createInMemory();
     final client = MockClient((_) => Completer<http.Response>().future);
@@ -35,6 +84,98 @@ void main() {
       expect(urlGetSubscriptions, '/api/v1/auth/subscriptions');
       expect(urlGetTranscript, '/api/v1/transcripts/:id');
       expect(urlGetCaptions, '/api/v1/captions/:id');
+    });
+  });
+
+  group('Service request encoding', () {
+    setUp(() async {
+      db = await SembastSqfDb.createInMemory();
+      await db.upsertServer(const Server(url: 'https://inv.example'));
+    });
+
+    tearDown(() => db.close());
+
+    test('continuations survive every paginated endpoint unchanged', () async {
+      const continuation = 'next+page/==&cursor=%2B#fragment';
+      final paths = <String>[];
+      final client = MockClient((request) async {
+        paths.add(request.url.path);
+        expect(request.url.queryParameters['continuation'], continuation);
+        expect(request.url.queryParameters, isNot(contains('cursor')));
+        expect(request.url.hasFragment, isFalse);
+        return http.Response('{"videos":[],"playlists":[],"comments":[]}', 200);
+      });
+      addTearDown(client.close);
+      final api = Service(httpClient: client);
+
+      await api.getComments('video-id', continuation: continuation);
+      await api.getChannelVideos('channel-id', continuation);
+      await api.getChannelStreams('channel-id', continuation);
+      await api.getChannelShorts('channel-id', continuation);
+      await api.getChannelPlaylists('channel-id', continuation: continuation);
+
+      expect(paths, hasLength(5));
+    });
+
+    test('search and suggestions encode query text exactly once', () async {
+      const query = 'C++ & 50% #music / caf\u00e9';
+      final client = MockClient((request) async {
+        expect(request.url.queryParameters['q'], query);
+        return http.Response(
+            request.url.path == urlSearch
+                ? '[]'
+                : jsonEncode({'query': query, 'suggestions': <String>[]}),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'});
+      });
+      addTearDown(client.close);
+      final api = Service(httpClient: client);
+
+      await api.search(query);
+      await api.getSearchSuggestion(query);
+    });
+
+    test('proxy parameter leaves caller queries untouched', () async {
+      await db.saveSetting(SettingsValue(useProxySettingName, 'true'));
+      const query = {'continuation': 'next+page', 'omitted': null};
+      final request = await Service().buildRequest(
+          '/api/v1/comments/video-id?source=youtube',
+          query: query);
+
+      expect(request.uri.queryParameters, {
+        'source': 'youtube',
+        'continuation': 'next+page',
+        'local': 'true',
+      });
+      expect(query, {'continuation': 'next+page', 'omitted': null});
+    });
+
+    test('suggestions decode entities without treating text as markup',
+        () async {
+      final client = MockClient((_) async => http.Response(
+          jsonEncode({
+            'query': 'test',
+            'suggestions': [
+              'it&#x27;s &#39;quoted&#39; &amp; named',
+              'music &#x1F3B5;',
+              '<b>literal</b> &lt;tag&gt;',
+              'plain  text; &#oops; &#;',
+              'bad codepoint: &#1114112;',
+            ]
+          }),
+          200));
+      addTearDown(client.close);
+
+      final result =
+          await Service(httpClient: client).getSearchSuggestion('test');
+
+      expect(result.suggestions, [
+        "it's 'quoted' & named",
+        'music \u{1F3B5}',
+        '<b>literal</b> <tag>',
+        'plain  text; &#oops; &#;',
+        'bad codepoint: \uFFFD',
+      ]);
     });
   });
 
@@ -726,4 +867,41 @@ void main() {
       }
     });
   });
+}
+
+class _HistoryService extends Service {
+  @override
+  Future<List<String>> getUserHistory(int page, int maxResults) async =>
+      ['first', 'partial', 'second'];
+}
+
+class _HistoryDb implements IDbClient {
+  final bool failWrites;
+  final progress = <String, double>{'partial': 0.4};
+  int activeWrites = 0;
+  int maxActiveWrites = 0;
+
+  _HistoryDb({this.failWrites = false});
+
+  @override
+  Future<bool> isLoggedInToCurrentServer() async => true;
+
+  @override
+  double getVideoProgress(String videoId) => progress[videoId] ?? 0;
+
+  @override
+  Future<void> saveProgress(Progress value) async {
+    activeWrites++;
+    if (activeWrites > maxActiveWrites) maxActiveWrites = activeWrites;
+    try {
+      await Future<void>.delayed(Duration.zero);
+      if (failWrites) throw StateError('Storage unavailable');
+      progress[value.videoId] = value.progress;
+    } finally {
+      activeWrites--;
+    }
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }

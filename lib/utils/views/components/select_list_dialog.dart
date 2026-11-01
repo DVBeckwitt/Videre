@@ -31,7 +31,6 @@ class SelectList<T> extends StatelessWidget {
       required Widget Function(T value, bool selected) itemBuilder,
       required Function(T value) onSelect,
       required String title,
-      bool search = false,
       bool Function(String filter, T value)? searchFilter}) {
     showDialog(
       useRootNavigator: false,
@@ -66,16 +65,23 @@ class SelectList<T> extends StatelessWidget {
           child: BlocBuilder<SelectListCubit<T>, SelectListState<T>>(
               builder: (context, state) {
             var cubit = context.read<SelectListCubit<T>>();
+            void searchItems(String query) {
+              cubit.filterItems(asyncSearch, searchFilter, values, query);
+            }
+
             return Column(
               children: [
                 if (searchFilter != null || asyncSearch != null)
                   TextField(
                     decoration: InputDecoration(hintText: locals.search),
-                    onChanged: (searchQuery) async {
-                      cubit.filterItems(
-                          asyncSearch, searchFilter, values, searchQuery);
-                    },
+                    onChanged: searchItems,
+                    onSubmitted: searchItems,
                   ),
+                if (state.loading) const LinearProgressIndicator(),
+                if (state.hasError)
+                  Text(locals.error,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)),
                 Expanded(
                   child: ListView.builder(
                     itemCount: state.filteredItems.length,

@@ -32,6 +32,8 @@ Future<void> setupTasks(SettingsCubit settings) async {
     log.fine('task not registered');
     // fail silently in case no tasks have been already defined
   }
+  // Disabling notifications can finish while cancellation is awaiting Android.
+  if (settings.isClosed || !settings.state.backgroundNotifications) return;
   await Workmanager().registerPeriodicTask(taskName, taskName,
       frequency: kDebugMode
           ? const Duration(seconds: 15)
@@ -69,13 +71,18 @@ _backgroundCheck() async {
     // The native transport reads the live, atomic proxy policy. A worker must
     // not retain a direct-connection snapshot while foreground settings change.
     service = Service(httpClient: NativeProxyHttpClient());
-    await _handleSubscriptionsNotifications();
-    await _handleChannelNotifications();
-    await _handlePlaylistNotifications();
+    await checkForNewVideos();
   } catch (e) {
     log.severe("Error while running workmanager", e);
     rethrow;
   }
+}
+
+@visibleForTesting
+Future<void> checkForNewVideos() async {
+  await _handleSubscriptionsNotifications();
+  await _handleChannelNotifications();
+  await _handlePlaylistNotifications();
 }
 
 Future<AppLocalizations> getLocalization() async {
@@ -90,38 +97,24 @@ Future<AppLocalizations> getLocalization() async {
   return await AppLocalizations.delegate.load(locale);
 }
 
-_handlePlaylistNotifications() async {
+Future<void> _handlePlaylistNotifications() async {
   var notifs = await fileDb.getAllPlaylistNotifications();
   for (var n in notifs) {
-    // we get the latest video,
     var videos =
         await service.getPublicPlaylists(n.playlistId, saveLastSeen: false);
+    final videosToNotifyAbout = videos.videoCount - n.lastVideoCount;
+    if (videos.videos.isEmpty || videosToNotifyAbout <= 0) continue;
 
-    if (videos.videos.isNotEmpty) {
-      if (n.lastVideoCount > 0) {
-        // if in list, we calculate
-        int videosToNotifyAbout = n.lastVideoCount - videos.videoCount;
-
-        // if not we tell that list.size+ new videos are available
-        var locals = await getLocalization();
-
-        if (kDebugMode || videosToNotifyAbout > 0) {
-          sendNotification(
-              locals.playlistNotificationTitle(n.playlistName),
-              locals.playlistNotificationContent(
-                  n.playlistName, videosToNotifyAbout),
-              type: NotificationTypes.playlist,
-              payload: {
-                playlistId: n.playlistId,
-              },
-              id: n.playlistId.hashCode);
-        }
-      }
-    }
+    var locals = await getLocalization();
+    await sendNotification(locals.playlistNotificationTitle(n.playlistName),
+        locals.playlistNotificationContent(n.playlistName, videosToNotifyAbout),
+        type: NotificationTypes.playlist,
+        payload: {playlistId: n.playlistId},
+        id: n.playlistId.hashCode);
   }
 }
 
-_handleChannelNotifications() async {
+Future<void> _handleChannelNotifications() async {
   var notifs = await fileDb.getAllChannelNotifications();
 
   for (var n in notifs) {
@@ -146,8 +139,8 @@ _handleChannelNotifications() async {
         // if not we tell that list.size+ new videos are available
         var locals = await getLocalization();
 
-        if (kDebugMode || videosToNotifyAbout > 0) {
-          sendNotification(
+        if (videosToNotifyAbout > 0) {
+          await sendNotification(
               locals.channelNotificationTitle(n.channelName),
               locals.channelNotificationContent(
                   n.channelName, videosToNotifyAbout),
@@ -163,7 +156,7 @@ _handleChannelNotifications() async {
   }
 }
 
-_handleSubscriptionsNotifications() async {
+Future<void> _handleSubscriptionsNotifications() async {
   bool isEnabled = await fileDb.getSubscriptionNotifications();
   if (isEnabled && await db.isLoggedInToCurrentServer()) {
     // we need to get the last notification before we call the feed endpoint as it is going to save the last seen video
@@ -178,7 +171,7 @@ _handleSubscriptionsNotifications() async {
       // we don't send notification for the first run ever to avoid weird behavior
       if (lastNotification == null) {
         var toSave = SubscriptionNotification(
-            videos.last.videoId, DateTime.now().millisecondsSinceEpoch);
+            videos.first.videoId, DateTime.now().millisecondsSinceEpoch);
         await fileDb.setLastSubscriptionNotification(toSave);
       } else {
         late int videosToNotifyAbout;
@@ -193,8 +186,8 @@ _handleSubscriptionsNotifications() async {
 
         var locals = await getLocalization();
 
-        if (kDebugMode || videosToNotifyAbout > 0) {
-          sendNotification(locals.subscriptionNotificationTitle,
+        if (videosToNotifyAbout > 0) {
+          await sendNotification(locals.subscriptionNotificationTitle,
               locals.subscriptionNotificationContent(videosToNotifyAbout),
               type: NotificationTypes.subscription,
               payload: {lastSeenVideo: videos.first.videoId});

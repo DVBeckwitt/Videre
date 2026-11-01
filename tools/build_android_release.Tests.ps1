@@ -197,6 +197,46 @@ try {
         Assert-Matches ($Output | Out-String) "WorkDir" "Signing path error did not identify WorkDir."
     }
 
+    foreach ($ArchiveFormat in @("zip", "tar.gz")) {
+        foreach ($Prefixed in @($false, $true)) {
+            Invoke-Test "preserves source layout for $ArchiveFormat (prefix: $Prefixed)" {
+                $FixtureRoot = Join-Path $TestRoot "archive-$ArchiveFormat-$Prefixed"
+                $ArchiveInput = Join-Path $FixtureRoot "input"
+                $SourceFiles = if ($Prefixed) { Join-Path $ArchiveInput "Videre-release" } else { $ArchiveInput }
+                New-Item -ItemType Directory -Path (Join-Path $SourceFiles "lib") -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $SourceFiles "pubspec.yaml") -Value "name: archive-fixture"
+                Set-Content -LiteralPath (Join-Path $SourceFiles "lib\main.dart") -Value "void main() {}"
+                $Archive = Join-Path $FixtureRoot "source-code.$ArchiveFormat"
+                if ($ArchiveFormat -eq "zip") {
+                    Compress-Archive -Path (Join-Path $ArchiveInput "*") -DestinationPath $Archive
+                }
+                else {
+                    $Entries = @(if ($Prefixed) { "Videre-release" } else { "pubspec.yaml"; "lib" })
+                    & tar -czf $Archive -C $ArchiveInput @Entries
+                    Assert-True ($LASTEXITCODE -eq 0) "Could not create source archive fixture."
+                }
+
+                $FixtureWork = Join-Path $FixtureRoot "work"
+                . $ScriptPath -ValidateOnly -SourceArchive $Archive `
+                    -WorkDir $FixtureWork `
+                    -OutputDir (Join-Path $FixtureRoot "output") `
+                    -ToolDir (Join-Path $FixtureRoot "tools") | Out-Null
+                New-Item -ItemType Directory -Path $FixtureWork -Force | Out-Null
+                # Workspace extraction only checks that its external SDK exists;
+                # these offline tests never execute Flutter or require a checkout.
+                $SourceRoot = Join-Path $FixtureRoot "reference"
+                $FlutterBin = Join-Path $SourceRoot "submodules\flutter\bin"
+                New-Item -ItemType Directory -Path $FlutterBin -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $FlutterBin "flutter.bat") -Value "@exit /b 1"
+                Initialize-BuildWorkspace
+
+                $Checkout = Join-Path $FixtureWork "checkout"
+                Assert-True (Test-Path -LiteralPath (Join-Path $Checkout "pubspec.yaml")) "Source archive lost its root pubspec.yaml."
+                Assert-True (Test-Path -LiteralPath (Join-Path $Checkout "lib\main.dart")) "Source archive changed its lib directory layout."
+            }
+        }
+    }
+
     $Source = Get-Content -LiteralPath $ScriptPath -Raw
 
     Invoke-Test "contains no embedded or inline signing passwords" {

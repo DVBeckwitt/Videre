@@ -78,7 +78,7 @@ void main() {
     final original = base64Encode(bytes);
     final draft = report().copyWith(screenshot: bytes);
     bytes[0] = 0;
-    draft.screenshot![1] = 0;
+    expect(() => draft.screenshot![1] = 0, throwsUnsupportedError);
     expect(base64Encode(draft.screenshot!), original);
     expect((draft.toRequest()['screenshot'] as Map)['base64'], original);
     expect(draft.isValid, isTrue);

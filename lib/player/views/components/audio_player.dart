@@ -46,6 +46,9 @@ class AudioPlayer extends StatelessWidget {
               children: [
                 playerState.video != null
                     ? VideoThumbnailView(
+                        images: playerState.video!.deArrowThumbnailUrl == null
+                            ? playerState.video!.videoThumbnails
+                            : null,
                         decoration: const BoxDecoration(),
                         videoId: playerState.video!.videoId,
                         thumbnails: playerState.video?.thumbnails ?? [],

@@ -123,6 +123,10 @@ class TvVideoScreen extends StatelessWidget {
                       videoState.video == null
                           ? Container(color: colors.surface)
                           : VideoThumbnailView(
+                              images:
+                                  videoState.video!.deArrowThumbnailUrl == null
+                                      ? videoState.video!.videoThumbnails
+                                      : null,
                               videoId: videoState.video!.videoId,
                               decoration: const BoxDecoration(),
                               thumbnails: videoState.video!.thumbnails),
@@ -139,240 +143,225 @@ class TvVideoScreen extends StatelessWidget {
                                 end: tvState.showImage ? 0 : overlayBlur),
                             duration: animationDuration,
                             curve: Curves.easeInOutQuad,
+                            child: TvOverscan(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(20),
+                                    color: colors.surface.withValues(
+                                        alpha: overlayBackgroundOpacity)),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: SingleChildScrollView(
+                                    controller: tvCubit.scrollController,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        VideoBackendStatus(state: videoState),
+                                        Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.end,
+                                                children: [
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            right: 16.0),
+                                                    child: TvButton(
+                                                      autofocus: true,
+                                                      onFocusChanged: (focus) {
+                                                        if (focus) {
+                                                          tvCubit.scrollUp();
+                                                        } else {
+                                                          tvCubit.scrollDown();
+                                                        }
+                                                      },
+                                                      onPressed: (context) =>
+                                                          playVideo(
+                                                              context,
+                                                              videoState
+                                                                  .video!),
+                                                      child: const Padding(
+                                                        padding: EdgeInsets.all(
+                                                            15.0),
+                                                        child: Icon(
+                                                          Icons.play_arrow,
+                                                          size: 50,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ]),
+                                            Expanded(
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        vertical: 4),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      videoState.video!.title ??
+                                                          '',
+                                                      maxLines: 1,
+                                                      style: textTheme
+                                                          .headlineMedium!
+                                                          .copyWith(
+                                                              color: colors
+                                                                  .primary),
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                    VideoMetrics(
+                                                      video: videoState.video!,
+                                                      dislikes: settings.state
+                                                              .useReturnYoutubeDislike
+                                                          ? videoState.dislikes
+                                                          : null,
+                                                    )
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              bottom: 10.0),
+                                          child: ListView(
+                                              physics:
+                                                  const NeverScrollableScrollPhysics(),
+                                              shrinkWrap: true,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    TvButton(
+                                                      onPressed: (context) =>
+                                                          showChannel(
+                                                              context,
+                                                              videoState.video
+                                                                      ?.authorId ??
+                                                                  ''),
+                                                      unfocusedColor: colors
+                                                          .surface
+                                                          .withValues(alpha: 0),
+                                                      child: Row(
+                                                        mainAxisSize:
+                                                            MainAxisSize.min,
+                                                        children: [
+                                                          Thumbnail(
+                                                            images: videoState
+                                                                .video
+                                                                ?.authorThumbnails,
+                                                            thumbnails: ImageObject
+                                                                .getThumbnailUrlsByPreferredOrder(
+                                                                    videoState
+                                                                        .video
+                                                                        ?.authorThumbnails),
+                                                            width: 40,
+                                                            height: 40,
+                                                            decoration: BoxDecoration(
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            20)),
+                                                          ),
+                                                          Padding(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .only(
+                                                                    left: 8.0,
+                                                                    right: 20),
+                                                            child: Text(videoState
+                                                                    .video
+                                                                    ?.author ??
+                                                                ''),
+                                                          )
+                                                        ],
+                                                      ),
+                                                    ),
+                                                    Padding(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 16.0),
+                                                      child: TvSubscribeButton(
+                                                          channelId: videoState
+                                                                  .video
+                                                                  ?.authorId ??
+                                                              '',
+                                                          subCount: videoState
+                                                                  .video
+                                                                  ?.subCountText ??
+                                                              ''),
+                                                    ),
+                                                    Expanded(
+                                                      child: Container(),
+                                                    ),
+                                                    AnimatedOpacity(
+                                                      opacity: tvState.showImage
+                                                          ? 1
+                                                          : 0,
+                                                      duration:
+                                                          animationDuration,
+                                                      child: Icon(
+                                                        Icons.expand_more,
+                                                        size: 50,
+                                                        color: colors.primary
+                                                            .withValues(
+                                                                alpha: 0.2),
+                                                      ),
+                                                    )
+                                                  ],
+                                                ),
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          right: 40.0),
+                                                  child: TvExpandableText(
+                                                    text: videoState.video
+                                                            ?.description ??
+                                                        '',
+                                                    maxLines: 3,
+                                                  ),
+                                                ),
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          top: 10.0),
+                                                  child: Text(
+                                                    locals.recommended,
+                                                    style:
+                                                        textTheme.titleLarge!,
+                                                  ),
+                                                ),
+                                                TvHorizontalVideoList(
+                                                    paginatedVideoList:
+                                                        FixedItemList<
+                                                            Video>(videoState
+                                                                .video
+                                                                ?.recommendedVideos ??
+                                                            []))
+                                              ]),
+                                        )
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
                             builder: (context, value, child) {
                               return BackdropFilter(
                                 filter: ImageFilter.blur(
                                   sigmaX: value,
                                   sigmaY: value,
                                 ),
-                                child: TvOverscan(
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(20),
-                                        color: colors.surface.withValues(
-                                            alpha: overlayBackgroundOpacity)),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(16.0),
-                                      child: SingleChildScrollView(
-                                        controller: tvCubit.scrollController,
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            VideoBackendStatus(
-                                                state: videoState),
-                                            Row(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                Column(
-                                                    crossAxisAlignment:
-                                                        CrossAxisAlignment
-                                                            .start,
-                                                    mainAxisAlignment:
-                                                        MainAxisAlignment.end,
-                                                    children: [
-                                                      Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .only(
-                                                                right: 16.0),
-                                                        child: TvButton(
-                                                          autofocus: true,
-                                                          onFocusChanged:
-                                                              (focus) {
-                                                            if (focus) {
-                                                              tvCubit
-                                                                  .scrollUp();
-                                                            } else {
-                                                              tvCubit
-                                                                  .scrollDown();
-                                                            }
-                                                          },
-                                                          onPressed: (context) =>
-                                                              playVideo(
-                                                                  context,
-                                                                  videoState
-                                                                      .video!),
-                                                          child: const Padding(
-                                                            padding:
-                                                                EdgeInsets.all(
-                                                                    15.0),
-                                                            child: Icon(
-                                                              Icons.play_arrow,
-                                                              size: 50,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ]),
-                                                Expanded(
-                                                  child: Padding(
-                                                    padding: const EdgeInsets
-                                                        .symmetric(vertical: 4),
-                                                    child: Column(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .start,
-                                                      children: [
-                                                        Text(
-                                                          videoState.video!
-                                                                  .title ??
-                                                              '',
-                                                          maxLines: 1,
-                                                          style: textTheme
-                                                              .headlineMedium!
-                                                              .copyWith(
-                                                                  color: colors
-                                                                      .primary),
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                        ),
-                                                        VideoMetrics(
-                                                          video:
-                                                              videoState.video!,
-                                                          dislikes: settings
-                                                                  .state
-                                                                  .useReturnYoutubeDislike
-                                                              ? videoState
-                                                                  .dislikes
-                                                              : null,
-                                                        )
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            Padding(
-                                              padding: const EdgeInsets.only(
-                                                  bottom: 10.0),
-                                              child: ListView(
-                                                  physics:
-                                                      const NeverScrollableScrollPhysics(),
-                                                  shrinkWrap: true,
-                                                  children: [
-                                                    Row(
-                                                      children: [
-                                                        TvButton(
-                                                          onPressed: (context) =>
-                                                              showChannel(
-                                                                  context,
-                                                                  videoState
-                                                                          .video
-                                                                          ?.authorId ??
-                                                                      ''),
-                                                          unfocusedColor: colors
-                                                              .surface
-                                                              .withValues(
-                                                                  alpha: 0),
-                                                          child: Row(
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .min,
-                                                            children: [
-                                                              Thumbnail(
-                                                                thumbnails: ImageObject
-                                                                    .getThumbnailUrlsByPreferredOrder(
-                                                                        videoState
-                                                                            .video
-                                                                            ?.authorThumbnails),
-                                                                width: 40,
-                                                                height: 40,
-                                                                decoration: BoxDecoration(
-                                                                    borderRadius:
-                                                                        BorderRadius.circular(
-                                                                            20)),
-                                                              ),
-                                                              Padding(
-                                                                padding:
-                                                                    const EdgeInsets
-                                                                        .only(
-                                                                        left:
-                                                                            8.0,
-                                                                        right:
-                                                                            20),
-                                                                child: Text(videoState
-                                                                        .video
-                                                                        ?.author ??
-                                                                    ''),
-                                                              )
-                                                            ],
-                                                          ),
-                                                        ),
-                                                        Padding(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .symmetric(
-                                                                  horizontal:
-                                                                      16.0),
-                                                          child: TvSubscribeButton(
-                                                              channelId: videoState
-                                                                      .video
-                                                                      ?.authorId ??
-                                                                  '',
-                                                              subCount: videoState
-                                                                      .video
-                                                                      ?.subCountText ??
-                                                                  ''),
-                                                        ),
-                                                        Expanded(
-                                                          child: Container(),
-                                                        ),
-                                                        AnimatedOpacity(
-                                                          opacity:
-                                                              tvState.showImage
-                                                                  ? 1
-                                                                  : 0,
-                                                          duration:
-                                                              animationDuration,
-                                                          child: Icon(
-                                                            Icons.expand_more,
-                                                            size: 50,
-                                                            color: colors
-                                                                .primary
-                                                                .withValues(
-                                                                    alpha: 0.2),
-                                                          ),
-                                                        )
-                                                      ],
-                                                    ),
-                                                    Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                              right: 40.0),
-                                                      child: TvExpandableText(
-                                                        text: videoState.video
-                                                                ?.description ??
-                                                            '',
-                                                        maxLines: 3,
-                                                      ),
-                                                    ),
-                                                    Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                              top: 10.0),
-                                                      child: Text(
-                                                        locals.recommended,
-                                                        style: textTheme
-                                                            .titleLarge!,
-                                                      ),
-                                                    ),
-                                                    TvHorizontalVideoList(
-                                                        paginatedVideoList:
-                                                            FixedItemList<
-                                                                Video>(videoState
-                                                                    .video
-                                                                    ?.recommendedVideos ??
-                                                                []))
-                                                  ]),
-                                            )
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
+                                child: child,
                               );
                             }),
                       ),

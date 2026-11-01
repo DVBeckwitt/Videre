@@ -22,7 +22,8 @@ class ManageSubscriptionCubit extends Cubit<ManageSubscriptionsState> {
   }
 
   Future<void> unsubscribe(String authorId) async {
-    emit(state.copyWith(loading: true));
+    if (isClosed) return;
+    emit(state.copyWith(loading: true, hasError: false));
     try {
       await service.unSubscribe(authorId);
       final isSubscribed = await service.isSubscribedToChannel(authorId);
@@ -36,30 +37,49 @@ class ManageSubscriptionCubit extends Cubit<ManageSubscriptionsState> {
       await refreshSubs();
     } catch (error) {
       logger.warning('Unable to unsubscribe from $authorId', error);
-      emit(state.copyWith(loading: false));
+      if (!isClosed) emit(state.copyWith(loading: false, hasError: true));
       rethrow;
     }
   }
 
   Future<void> refreshSubs() async {
-    final isLoggedIn = await service.isLoggedIn();
-    emit(state.copyWith(loading: true));
-    List<Subscription> subs = [];
-    if (isLoggedIn) {
-      subs =
-          (await service.getSubscriptions()).sortBy((e) => e.author).toList();
+    if (isClosed) return;
+    emit(state.copyWith(loading: true, hasError: false));
+    var isLoggedIn = state.isLoggedIn;
+    try {
+      // Local subscriptions remain available while the instance is loading or
+      // unavailable. Preserve the previous account list if its refresh fails.
+      final offlineSubs = await db.getOfflineSubscriptions();
+      if (isClosed) return;
+      emit(state.copyWith(offlineSubs: offlineSubs));
+      isLoggedIn = await service.isLoggedIn();
+      final subs = isLoggedIn
+          ? (await service.getSubscriptions()).sortBy((e) => e.author).toList()
+          : <Subscription>[];
+      if (!isClosed) {
+        emit(
+            state.copyWith(subs: subs, loading: false, isLoggedIn: isLoggedIn));
+      }
+    } catch (error, stackTrace) {
+      logger.warning('Unable to refresh subscriptions', error, stackTrace);
+      if (!isClosed) {
+        emit(state.copyWith(
+            loading: false, isLoggedIn: isLoggedIn, hasError: true));
+      }
     }
-    final offlineSubs = await db.getOfflineSubscriptions();
-    emit(state.copyWith(
-        subs: subs,
-        loading: false,
-        isLoggedIn: isLoggedIn,
-        offlineSubs: offlineSubs));
   }
 
   Future<void> unsubscribeOffline(String channelId) async {
-    await db.deleteOfflineSubscription(channelId);
-    refreshSubs();
+    if (isClosed) return;
+    emit(state.copyWith(loading: true, hasError: false));
+    try {
+      await db.deleteOfflineSubscription(channelId);
+      await refreshSubs();
+    } catch (error, stackTrace) {
+      logger.warning('Unable to remove local subscription', error, stackTrace);
+      if (!isClosed) emit(state.copyWith(loading: false, hasError: true));
+      rethrow;
+    }
   }
 }
 
@@ -68,6 +88,7 @@ sealed class ManageSubscriptionsState with _$ManageSubscriptionsState {
   const factory ManageSubscriptionsState(
       {@Default([]) List<Subscription> subs,
       @Default([]) List<OfflineSubscription> offlineSubs,
-      @Default(false) isLoggedIn,
+      @Default(false) bool isLoggedIn,
+      @Default(false) bool hasError,
       @Default(true) bool loading}) = _ManageSubscriptionsState;
 }

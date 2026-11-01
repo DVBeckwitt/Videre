@@ -34,7 +34,7 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   Future<String> get downloadPath async {
     Directory dir = await _getDownloadFolder();
 
-    return "${dir.path}/$videoId.${audioOnly ? 'webm' : 'webm'}";
+    return "${dir.path}/$videoId.webm";
   }
 
   /// Effective path for legacy reasons, old  versions videos would be mp4, now it's all webm

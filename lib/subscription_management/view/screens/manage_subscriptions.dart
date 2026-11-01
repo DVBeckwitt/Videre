@@ -15,6 +15,14 @@ import '../../states/manage_subscriptions.dart';
 class ManageSubscriptionsScreen extends StatelessWidget {
   const ManageSubscriptionsScreen({super.key});
 
+  Future<void> _changeSubscription(Future<void> change) async {
+    try {
+      await change;
+    } catch (_) {
+      // The cubit exposes failures in the screen's error and retry controls.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
@@ -47,6 +55,21 @@ class ManageSubscriptionsScreen extends StatelessWidget {
                             ),
                           Tab(text: locals.onDeviceSubscriptions),
                         ]),
+                        if (state.hasError)
+                          Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                    child: Text(locals.itemlistErrorGeneric)),
+                                TextButton.icon(
+                                  onPressed: cubit.refreshSubs,
+                                  icon: const Icon(Icons.refresh),
+                                  label: Text(locals.retry),
+                                ),
+                              ],
+                            ),
+                          ),
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(8.0),
@@ -54,7 +77,10 @@ class ManageSubscriptionsScreen extends StatelessWidget {
                               children: [
                                 if (state.isLoggedIn)
                                   !state.loading && state.subs.isEmpty
-                                      ? Center(child: Text(locals.noChannels))
+                                      ? Center(
+                                          child: state.hasError
+                                              ? null
+                                              : Text(locals.noChannels))
                                       : Stack(
                                           children: [
                                             RefreshIndicator(
@@ -96,9 +122,9 @@ class ManageSubscriptionsScreen extends StatelessWidget {
                                                                       .unSubscribeQuestion,
                                                                   locals
                                                                       .youCanSubscribeAgainLater,
-                                                                  () => cubit
-                                                                      .unsubscribe(
-                                                                          sub.authorId));
+                                                                  () => _changeSubscription(
+                                                                      cubit.unsubscribe(
+                                                                          sub.authorId)));
                                                             },
                                                             icon: const Icon(
                                                               Icons.clear,
@@ -159,9 +185,9 @@ class ManageSubscriptionsScreen extends StatelessWidget {
                                                                     .unSubscribeQuestion,
                                                                 locals
                                                                     .youCanSubscribeAgainLater,
-                                                                () => cubit
-                                                                    .unsubscribeOffline(
-                                                                        sub.channelId));
+                                                                () => _changeSubscription(
+                                                                    cubit.unsubscribeOffline(
+                                                                        sub.channelId)));
                                                           },
                                                           icon: const Icon(
                                                             Icons.clear,

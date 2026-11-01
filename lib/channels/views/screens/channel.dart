@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_fadein/flutter_fadein.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/channels/states/channel.dart';
+import 'package:clipious/channels/views/components/channel_load_error.dart';
 import 'package:clipious/router.dart';
 
 import '../../../utils.dart';
@@ -25,6 +26,13 @@ class ChannelScreen extends StatelessWidget {
             ChannelCubit(ChannelController(channelId: channelId)),
         child: BlocBuilder<ChannelCubit, ChannelController>(
           builder: (context, channelState) {
+            if (channelState.hasError) {
+              return Scaffold(
+                appBar: AppBar(),
+                body: ChannelLoadError(
+                    onRetry: context.read<ChannelCubit>().onReady),
+              );
+            }
             var deviceType = getDeviceType();
             return AutoTabsRouter.tabBar(
                 key: ValueKey(channelState.channel),

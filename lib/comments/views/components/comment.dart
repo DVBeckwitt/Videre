@@ -46,6 +46,7 @@ class SingleCommentView extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.all(8.0),
                     child: Thumbnail(
+                      images: state.comment.authorThumbnails,
                       width: 20,
                       height: 20,
                       thumbnails: ImageObject.getThumbnailUrlsByPreferredOrder(
@@ -91,12 +92,13 @@ class SingleCommentView extends StatelessWidget {
                                       Padding(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 8.0),
-                                        child: Image(
-                                          image: NetworkImage(
+                                        child: Thumbnail(
+                                          thumbnails: [
                                             state.comment.creatorHeart
                                                     ?.creatorThumbnail ??
                                                 '',
-                                          ),
+                                          ],
+                                          decoration: const BoxDecoration(),
                                           width: 15,
                                           height: 15,
                                         ),

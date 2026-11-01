@@ -28,6 +28,7 @@ class ChannelInfo extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Thumbnail(
+              images: channel.authorThumbnails,
               width: 50,
               height: 50,
               thumbnails: ImageObject.getThumbnailUrlsByPreferredOrder(
@@ -102,6 +103,7 @@ class ChannelInfo extends StatelessWidget {
               child: SizedBox(
                 height: deviceType == DeviceType.phone ? 100 : 230,
                 child: Thumbnail(
+                    images: channel.authorBanners,
                     width: double.infinity,
                     thumbnails: [bannerUrl],
                     decoration: BoxDecoration(

@@ -145,7 +145,7 @@ class FeedbackController extends ChangeNotifier {
   }
 
   Future<void> save() async {
-    if (loading || _loadFailed) return;
+    if (_disposed || loading || _loadFailed) return;
     try {
       await _persist();
     } catch (_) {

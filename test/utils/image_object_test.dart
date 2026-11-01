@@ -3,6 +3,55 @@ import 'package:clipious/utils/states/thumbnail.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('ImageObject.getThumbnailUrlsForSize', () {
+    final small = ImageObject('medium', '/small.jpg', 320, 180);
+    final large = ImageObject('maxres', '/large.jpg', 1280, 720);
+    final medium = ImageObject('sddefault', '/medium.jpg', 640, 480);
+
+    test('uses the smallest source covering both physical dimensions', () {
+      final images = [large, medium, small];
+      expect(
+          ImageObject.getThumbnailUrlsForSize(images, width: 320, height: 180),
+          ['/small.jpg', '/large.jpg', '/medium.jpg']);
+      expect(
+          ImageObject.getThumbnailUrlsForSize(images, width: 640, height: 360),
+          ['/medium.jpg', '/large.jpg', '/small.jpg']);
+      expect(images, [large, medium, small]);
+    });
+
+    test('cover selection accounts for the short axis and retains fallbacks',
+        () {
+      final wide = ImageObject('medium', '/wide.jpg', 1000, 100);
+      final square = ImageObject('default', '/square.jpg', 200, 200);
+      final unknown = ImageObject(null, '/unknown.jpg', 0, 0);
+      expect(
+          ImageObject.getThumbnailUrlsForSize([wide, square, unknown],
+              width: 150, height: 150),
+          ['/square.jpg', '/wide.jpg', '/unknown.jpg']);
+    });
+
+    test('uses the largest available source when every candidate is too small',
+        () {
+      expect(
+          ImageObject.getThumbnailUrlsForSize([small, medium, large],
+              width: 2560, height: 1440),
+          ['/large.jpg', '/medium.jpg', '/small.jpg']);
+    });
+
+    test('invalid constraints retain legacy selection', () {
+      final images = [small, medium, large];
+      final legacy = ImageObject.getThumbnailUrlsByPreferredOrder(images);
+      for (final width in [0.0, -1.0, double.infinity, double.nan]) {
+        expect(
+            ImageObject.getThumbnailUrlsForSize(images,
+                width: width, height: 180),
+            legacy);
+      }
+      expect(ImageObject.getThumbnailUrlsForSize(null, width: 100, height: 100),
+          isEmpty);
+    });
+  });
+
   group('ImageObject.getThumbnailUrlsByPreferredOrder', () {
     test('promotes exact maxres and preserves legacy fallback order', () {
       final images = [

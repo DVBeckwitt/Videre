@@ -114,13 +114,6 @@ class AppRouter extends RootStackRouter {
   AppRouter({required this.hasServer});
 
   @override
-  void pop<T extends Object?>([T? result]) {
-    print('YOOOO');
-    // TODO: implement pop
-    super.pop(result);
-  }
-
-  @override
   List<AutoRoute> get routes {
     return isTv
         ? [

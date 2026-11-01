@@ -59,7 +59,7 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
             alignment: Alignment.topCenter,
             children: [
               if (!small && state.loading) const TopListLoading(),
-              state.error != ItemListErrors.none
+              state.error != ItemListErrors.none && items.isEmpty
                   ? Container(
                       alignment: Alignment.center,
                       color: colorScheme.surface,

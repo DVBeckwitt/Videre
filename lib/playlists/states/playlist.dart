@@ -39,14 +39,19 @@ class PlaylistCubit extends Cubit<PlaylistState> {
   }
 
   Future<bool> removeVideoFromPlayList(Video v) async {
+    if (isClosed) return false;
     emit(state.copyWith(loading: true));
-    await service.deleteUserPlaylistVideo(state.playlist.playlistId,
-        state.playlist.isLocal ? v.videoId : v.indexId ?? '');
-    var videos = List<Video>.from(state.playlist.videos);
-    videos.remove(v);
-    var playlist =
-        state.playlist.copyWith(videos: videos, videoCount: videos.length);
-    emit(state.copyWith(playlist: playlist, loading: false));
+    try {
+      await service.deleteUserPlaylistVideo(state.playlist.playlistId,
+          state.playlist.isLocal ? v.videoId : v.indexId ?? '');
+      if (isClosed) return false;
+      final videos = List<Video>.from(state.playlist.videos)..remove(v);
+      emit(state.copyWith(
+          playlist: state.playlist
+              .copyWith(videos: videos, videoCount: videos.length)));
+    } finally {
+      if (!isClosed) emit(state.copyWith(loading: false));
+    }
     return false;
   }
 
@@ -107,9 +112,9 @@ class PlaylistCubit extends Cubit<PlaylistState> {
   }
 
   @override
-  close() async {
+  Future<void> close() {
     scrollController.dispose();
-    super.close();
+    return super.close();
   }
 
   void setShowImage(bool bool) {

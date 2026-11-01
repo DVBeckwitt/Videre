@@ -126,6 +126,10 @@ class TvVideoItem extends StatelessWidget {
                                       )
                                     : VideoThumbnailView(
                                         videoId: video.videoId,
+                                        images:
+                                            video.deArrowThumbnailUrl == null
+                                                ? video.videoThumbnails
+                                                : null,
                                         thumbnails: video.thumbnails,
                                         child: Padding(
                                           padding: const EdgeInsets.all(8.0),

@@ -1,7 +1,4 @@
 import 'package:clipious/channels/models/channel_videos.dart';
-import 'package:clipious/search/models/search_results.dart';
-import 'package:clipious/search/models/search_sort_by.dart';
-import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/utils/extensions/list_unique.dart';
 import 'package:clipious/utils/models/item_with_continuation.dart';
 import 'package:clipious/videos/models/user_feed.dart';
@@ -54,9 +51,15 @@ class ContinuationList<T> extends PaginatedList<T> {
   }
 
   @override
-  Future<List<T>> refresh() {
+  Future<List<T>> refresh() async {
+    final previous = continuation;
     continuation = null;
-    return getItems();
+    try {
+      return await getItems();
+    } catch (_) {
+      continuation = previous;
+      rethrow;
+    }
   }
 }
 
@@ -135,15 +138,16 @@ class SubscriptionVideoList extends PaginatedList<Video> {
   @override
   Future<List<Video>> getItems() async {
     final isLoggedIn = await service.isLoggedIn();
+    var nextHasMoreOnline = isLoggedIn && hasMoreOnline;
 
     List<Video> videos = [];
 
-    if (isLoggedIn) {
+    if (nextHasMoreOnline) {
       UserFeed feed =
           await service.getUserFeed(page: page, maxResults: maxResults);
       videos.addAll(feed.notifications ?? []);
       videos.addAll(feed.videos ?? []);
-      hasMoreOnline = videos.length >= maxResults;
+      nextHasMoreOnline = videos.length >= maxResults;
     }
 
     final offlineSubs = await db.getOfflineSubscriptions();
@@ -166,11 +170,13 @@ class SubscriptionVideoList extends PaginatedList<Video> {
       futures.add(loadVideos());
     }
 
+    final nextContinuations = Map<String, String>.from(continuations);
     if (futures.isNotEmpty) {
       final offlineSubVideos = await Future.wait(futures);
       for (final result in offlineSubVideos) {
         videos.addAll(result.response.videos);
-        continuations[result.channelId] = result.response.continuation ?? _done;
+        nextContinuations[result.channelId] =
+            result.response.continuation ?? _done;
       }
     }
 
@@ -179,22 +185,43 @@ class SubscriptionVideoList extends PaginatedList<Video> {
     );
     videos.sort((a, b) => (b.published ?? 0).compareTo(a.published ?? 0));
 
+    // Commit cursors only once all sources succeed so retry cannot skip a page.
+    hasMoreOnline = nextHasMoreOnline;
+    continuations = nextContinuations;
     return videos;
   }
 
   @override
   Future<List<Video>> getMoreItems() async {
+    if (!getHasMore()) return [];
+    final previousPage = page;
     if (hasMoreOnline) {
       page = page + 1;
     }
-    return getItems();
+    try {
+      return await getItems();
+    } catch (_) {
+      page = previousPage;
+      rethrow;
+    }
   }
 
   @override
   Future<List<Video>> refresh() async {
+    final previousPage = page;
+    final previousHasMoreOnline = hasMoreOnline;
+    final previousContinuations = continuations;
     page = 1;
+    hasMoreOnline = true;
     continuations = {};
-    return getItems();
+    try {
+      return await getItems();
+    } catch (_) {
+      page = previousPage;
+      hasMoreOnline = previousHasMoreOnline;
+      continuations = previousContinuations;
+      rethrow;
+    }
   }
 
   @override
@@ -205,51 +232,6 @@ class SubscriptionVideoList extends PaginatedList<Video> {
   @override
   bool hasRefresh() {
     return true;
-  }
-}
-
-class SearchPaginatedList<T> extends PaginatedList<T> {
-  final SearchType type;
-  final String query;
-  final SearchSortBy sortBy;
-  List<T> items;
-  int page = 1;
-
-  List<T> Function(SearchResults res) getFromResults;
-
-  SearchPaginatedList(
-      {required this.query,
-      required this.items,
-      required this.type,
-      required this.getFromResults,
-      required this.sortBy});
-
-  @override
-  bool getHasMore() {
-    return true;
-  }
-
-  @override
-  Future<List<T>> getItems() async {
-    SearchResults results =
-        await service.search(query, type: type, page: page, sortBy: sortBy);
-    return getFromResults(results);
-  }
-
-  @override
-  Future<List<T>> getMoreItems() async {
-    page++;
-    return getItems();
-  }
-
-  @override
-  bool hasRefresh() {
-    return false;
-  }
-
-  @override
-  Future<List<T>> refresh() async {
-    return [];
   }
 }
 
@@ -292,6 +274,21 @@ class PageBasedPaginatedList<T> extends PaginatedList<T> {
 
   @override
   Future<List<T>> refresh() async {
-    return await getItemsFunc(1, maxResults * page);
+    final items = <T>[];
+    var refreshedPage = 1;
+    var refreshedHasMore = true;
+    // Some endpoints (including search) have a fixed page size. Reload each
+    // visible page rather than assuming they honor a larger result limit.
+    while (true) {
+      final next = await getItemsFunc(refreshedPage, maxResults);
+      items.addAll(next);
+      refreshedHasMore = next.length == maxResults;
+      if (!refreshedHasMore || refreshedPage >= page) break;
+      refreshedPage++;
+    }
+    // Preserve the old cursor if any of the requests fail.
+    page = refreshedPage;
+    hasMore = refreshedHasMore;
+    return items;
   }
 }

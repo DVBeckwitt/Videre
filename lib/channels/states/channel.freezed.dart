@@ -15,12 +15,9 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ChannelController {
   String get channelId;
-  bool get isSubscribed;
   Channel? get channel;
   bool get loading;
-  bool get smallHeader;
-  double get barHeight;
-  double get barOpacity;
+  bool get hasError;
   ChannelSortBy get sortBy;
 
   /// Create a copy of ChannelController
@@ -38,26 +35,20 @@ mixin _$ChannelController {
             other is ChannelController &&
             (identical(other.channelId, channelId) ||
                 other.channelId == channelId) &&
-            (identical(other.isSubscribed, isSubscribed) ||
-                other.isSubscribed == isSubscribed) &&
             (identical(other.channel, channel) || other.channel == channel) &&
             (identical(other.loading, loading) || other.loading == loading) &&
-            (identical(other.smallHeader, smallHeader) ||
-                other.smallHeader == smallHeader) &&
-            (identical(other.barHeight, barHeight) ||
-                other.barHeight == barHeight) &&
-            (identical(other.barOpacity, barOpacity) ||
-                other.barOpacity == barOpacity) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError) &&
             (identical(other.sortBy, sortBy) || other.sortBy == sortBy));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, channelId, isSubscribed, channel,
-      loading, smallHeader, barHeight, barOpacity, sortBy);
+  int get hashCode =>
+      Object.hash(runtimeType, channelId, channel, loading, hasError, sortBy);
 
   @override
   String toString() {
-    return 'ChannelController(channelId: $channelId, isSubscribed: $isSubscribed, channel: $channel, loading: $loading, smallHeader: $smallHeader, barHeight: $barHeight, barOpacity: $barOpacity, sortBy: $sortBy)';
+    return 'ChannelController(channelId: $channelId, channel: $channel, loading: $loading, hasError: $hasError, sortBy: $sortBy)';
   }
 }
 
@@ -69,12 +60,9 @@ abstract mixin class $ChannelControllerCopyWith<$Res> {
   @useResult
   $Res call(
       {String channelId,
-      bool isSubscribed,
       Channel? channel,
       bool loading,
-      bool smallHeader,
-      double barHeight,
-      double barOpacity,
+      bool hasError,
       ChannelSortBy sortBy});
 }
 
@@ -92,12 +80,9 @@ class _$ChannelControllerCopyWithImpl<$Res>
   @override
   $Res call({
     Object? channelId = null,
-    Object? isSubscribed = null,
     Object? channel = freezed,
     Object? loading = null,
-    Object? smallHeader = null,
-    Object? barHeight = null,
-    Object? barOpacity = null,
+    Object? hasError = null,
     Object? sortBy = null,
   }) {
     return _then(_self.copyWith(
@@ -105,10 +90,6 @@ class _$ChannelControllerCopyWithImpl<$Res>
           ? _self.channelId
           : channelId // ignore: cast_nullable_to_non_nullable
               as String,
-      isSubscribed: null == isSubscribed
-          ? _self.isSubscribed
-          : isSubscribed // ignore: cast_nullable_to_non_nullable
-              as bool,
       channel: freezed == channel
           ? _self.channel
           : channel // ignore: cast_nullable_to_non_nullable
@@ -117,18 +98,10 @@ class _$ChannelControllerCopyWithImpl<$Res>
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
               as bool,
-      smallHeader: null == smallHeader
-          ? _self.smallHeader
-          : smallHeader // ignore: cast_nullable_to_non_nullable
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
               as bool,
-      barHeight: null == barHeight
-          ? _self.barHeight
-          : barHeight // ignore: cast_nullable_to_non_nullable
-              as double,
-      barOpacity: null == barOpacity
-          ? _self.barOpacity
-          : barOpacity // ignore: cast_nullable_to_non_nullable
-              as double,
       sortBy: null == sortBy
           ? _self.sortBy
           : sortBy // ignore: cast_nullable_to_non_nullable
@@ -228,30 +201,16 @@ extension ChannelControllerPatterns on ChannelController {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(
-            String channelId,
-            bool isSubscribed,
-            Channel? channel,
-            bool loading,
-            bool smallHeader,
-            double barHeight,
-            double barOpacity,
-            ChannelSortBy sortBy)?
+    TResult Function(String channelId, Channel? channel, bool loading,
+            bool hasError, ChannelSortBy sortBy)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _ChannelController() when $default != null:
-        return $default(
-            _that.channelId,
-            _that.isSubscribed,
-            _that.channel,
-            _that.loading,
-            _that.smallHeader,
-            _that.barHeight,
-            _that.barOpacity,
-            _that.sortBy);
+        return $default(_that.channelId, _that.channel, _that.loading,
+            _that.hasError, _that.sortBy);
       case _:
         return orElse();
     }
@@ -272,29 +231,15 @@ extension ChannelControllerPatterns on ChannelController {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(
-            String channelId,
-            bool isSubscribed,
-            Channel? channel,
-            bool loading,
-            bool smallHeader,
-            double barHeight,
-            double barOpacity,
-            ChannelSortBy sortBy)
+    TResult Function(String channelId, Channel? channel, bool loading,
+            bool hasError, ChannelSortBy sortBy)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _ChannelController():
-        return $default(
-            _that.channelId,
-            _that.isSubscribed,
-            _that.channel,
-            _that.loading,
-            _that.smallHeader,
-            _that.barHeight,
-            _that.barOpacity,
-            _that.sortBy);
+        return $default(_that.channelId, _that.channel, _that.loading,
+            _that.hasError, _that.sortBy);
     }
   }
 
@@ -312,29 +257,15 @@ extension ChannelControllerPatterns on ChannelController {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(
-            String channelId,
-            bool isSubscribed,
-            Channel? channel,
-            bool loading,
-            bool smallHeader,
-            double barHeight,
-            double barOpacity,
-            ChannelSortBy sortBy)?
+    TResult? Function(String channelId, Channel? channel, bool loading,
+            bool hasError, ChannelSortBy sortBy)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _ChannelController() when $default != null:
-        return $default(
-            _that.channelId,
-            _that.isSubscribed,
-            _that.channel,
-            _that.loading,
-            _that.smallHeader,
-            _that.barHeight,
-            _that.barOpacity,
-            _that.sortBy);
+        return $default(_that.channelId, _that.channel, _that.loading,
+            _that.hasError, _that.sortBy);
       case _:
         return null;
     }
@@ -346,19 +277,13 @@ extension ChannelControllerPatterns on ChannelController {
 class _ChannelController implements ChannelController {
   const _ChannelController(
       {required this.channelId,
-      this.isSubscribed = false,
       this.channel,
       this.loading = true,
-      this.smallHeader = false,
-      this.barHeight = 200,
-      this.barOpacity = 1,
+      this.hasError = false,
       this.sortBy = ChannelSortBy.newest});
 
   @override
   final String channelId;
-  @override
-  @JsonKey()
-  final bool isSubscribed;
   @override
   final Channel? channel;
   @override
@@ -366,13 +291,7 @@ class _ChannelController implements ChannelController {
   final bool loading;
   @override
   @JsonKey()
-  final bool smallHeader;
-  @override
-  @JsonKey()
-  final double barHeight;
-  @override
-  @JsonKey()
-  final double barOpacity;
+  final bool hasError;
   @override
   @JsonKey()
   final ChannelSortBy sortBy;
@@ -392,26 +311,20 @@ class _ChannelController implements ChannelController {
             other is _ChannelController &&
             (identical(other.channelId, channelId) ||
                 other.channelId == channelId) &&
-            (identical(other.isSubscribed, isSubscribed) ||
-                other.isSubscribed == isSubscribed) &&
             (identical(other.channel, channel) || other.channel == channel) &&
             (identical(other.loading, loading) || other.loading == loading) &&
-            (identical(other.smallHeader, smallHeader) ||
-                other.smallHeader == smallHeader) &&
-            (identical(other.barHeight, barHeight) ||
-                other.barHeight == barHeight) &&
-            (identical(other.barOpacity, barOpacity) ||
-                other.barOpacity == barOpacity) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError) &&
             (identical(other.sortBy, sortBy) || other.sortBy == sortBy));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, channelId, isSubscribed, channel,
-      loading, smallHeader, barHeight, barOpacity, sortBy);
+  int get hashCode =>
+      Object.hash(runtimeType, channelId, channel, loading, hasError, sortBy);
 
   @override
   String toString() {
-    return 'ChannelController(channelId: $channelId, isSubscribed: $isSubscribed, channel: $channel, loading: $loading, smallHeader: $smallHeader, barHeight: $barHeight, barOpacity: $barOpacity, sortBy: $sortBy)';
+    return 'ChannelController(channelId: $channelId, channel: $channel, loading: $loading, hasError: $hasError, sortBy: $sortBy)';
   }
 }
 
@@ -425,12 +338,9 @@ abstract mixin class _$ChannelControllerCopyWith<$Res>
   @useResult
   $Res call(
       {String channelId,
-      bool isSubscribed,
       Channel? channel,
       bool loading,
-      bool smallHeader,
-      double barHeight,
-      double barOpacity,
+      bool hasError,
       ChannelSortBy sortBy});
 }
 
@@ -448,12 +358,9 @@ class __$ChannelControllerCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   $Res call({
     Object? channelId = null,
-    Object? isSubscribed = null,
     Object? channel = freezed,
     Object? loading = null,
-    Object? smallHeader = null,
-    Object? barHeight = null,
-    Object? barOpacity = null,
+    Object? hasError = null,
     Object? sortBy = null,
   }) {
     return _then(_ChannelController(
@@ -461,10 +368,6 @@ class __$ChannelControllerCopyWithImpl<$Res>
           ? _self.channelId
           : channelId // ignore: cast_nullable_to_non_nullable
               as String,
-      isSubscribed: null == isSubscribed
-          ? _self.isSubscribed
-          : isSubscribed // ignore: cast_nullable_to_non_nullable
-              as bool,
       channel: freezed == channel
           ? _self.channel
           : channel // ignore: cast_nullable_to_non_nullable
@@ -473,18 +376,10 @@ class __$ChannelControllerCopyWithImpl<$Res>
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
               as bool,
-      smallHeader: null == smallHeader
-          ? _self.smallHeader
-          : smallHeader // ignore: cast_nullable_to_non_nullable
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
               as bool,
-      barHeight: null == barHeight
-          ? _self.barHeight
-          : barHeight // ignore: cast_nullable_to_non_nullable
-              as double,
-      barOpacity: null == barOpacity
-          ? _self.barOpacity
-          : barOpacity // ignore: cast_nullable_to_non_nullable
-              as double,
       sortBy: null == sortBy
           ? _self.sortBy
           : sortBy // ignore: cast_nullable_to_non_nullable

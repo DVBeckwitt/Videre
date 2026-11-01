@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 import 'package:http/http.dart';
 import 'package:clipious/player/dash_manifest_resolver.dart';
@@ -21,7 +22,6 @@ import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/models/errors/missing_software_key.dart';
-import 'package:clipious/utils/models/imgur_error.dart';
 import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/utils/video_post_processing.dart';
@@ -41,6 +41,8 @@ import 'channels/models/channel_playlists.dart';
 import 'channels/models/channel_videos.dart';
 import 'comments/models/video_comments.dart';
 import 'notifications/models/db/subscription_notifications.dart';
+import 'network/native_proxy_http_client.dart';
+import 'network/origin_scoped_http_client.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
 import 'subscription_management/models/subscription.dart';
@@ -76,9 +78,6 @@ const urlGetPublicPlaylist = '/api/v1/playlists/:id';
 const urlGetDislikes = 'https://returnyoutubedislikeapi.com/votes?videoId=';
 const urlGetClearHistory = '/api/v1/auth/history';
 const urlAddDeleteHistory = '/api/v1/auth/history/:id';
-const urlImgurScreenshotUpload = 'https://api.imgur.com/3/image';
-
-const imgurClientId = 'Client-ID 2cfbc27ce77879d';
 
 class Service {
   final log = Logger('Service');
@@ -94,7 +93,11 @@ class Service {
       {Client? httpClient,
       DateTime Function()? now,
       Future<void> Function(Duration)? wait})
-      : httpClient = httpClient ?? http.Client(),
+      // Android's worker transport already scopes redirects natively, with a
+      // single timeout for the entire chain rather than one timeout per hop.
+      : httpClient = httpClient is NativeProxyHttpClient
+            ? httpClient
+            : OriginScopedHttpClient(httpClient ?? http.Client()),
         _now = now ?? DateTime.now,
         _wait = wait ?? Future<void>.delayed;
 
@@ -292,23 +295,16 @@ class Service {
         url = url.replaceAll(key, value);
       });
 
-      if (useProxy()) {
-        query ??= {};
-        query['local'] = 'true';
-      }
-
-      List<String> queryStr = [];
-      query?.forEach((key, value) {
-        if (value != null) {
-          queryStr.add('$key=$value');
-        }
-      });
-
-      if (queryStr.isNotEmpty) {
-        url += '?${queryStr.join('&')}';
-      }
-
       var uri = Uri.parse(url);
+      final queryParameters = <String, dynamic>{
+        ...uri.queryParametersAll,
+        for (final entry in query?.entries ?? <MapEntry<String, String?>>[])
+          if (entry.value != null) entry.key: entry.value,
+        if (useProxy()) 'local': 'true',
+      };
+      if (queryParameters.isNotEmpty) {
+        uri = uri.replace(queryParameters: queryParameters);
+      }
       log.info('calling ${urlFormatForLog(uri)}');
 
       var headers = Map<String, String>.from(server.customHeaders);
@@ -479,7 +475,7 @@ class Service {
     String videoId,
     Caption caption,
   ) async {
-    final query = {'label': Uri.encodeQueryComponent(caption.label)};
+    final query = {'label': caption.label};
 
     try {
       final request = await buildRequest(
@@ -645,7 +641,7 @@ class Service {
       SearchDuration duration = SearchDuration.any}) async {
     String countryCode = db.getSettings(browsingCountry)?.value ?? 'US';
     final req = await buildRequest(urlSearch, query: {
-      'q': Uri.encodeQueryComponent(query),
+      'q': query,
       'type': type?.name,
       'page': page?.toString() ?? '1',
       'sort': sortBy?.name,
@@ -759,19 +755,17 @@ class Service {
 
   Future<SearchSuggestion> getSearchSuggestion(String query) async {
     if (query.isEmpty) return SearchSuggestion(query, []);
-    var request = await buildRequest(urlSearchSuggestions,
-        query: {"q": Uri.encodeQueryComponent(query)});
+    var request = await buildRequest(urlSearchSuggestions, query: {"q": query});
     final response = await _get(request);
     SearchSuggestion search =
         SearchSuggestion.fromJson(handleResponse(response));
-    if (search.suggestions.any((element) => element.contains(";"))) {
-      search.suggestions = search.suggestions
-          .map((s) => s.replaceAll(" ", "&#32;").replaceAllMapped(
-              RegExp(r"&#\w*;"),
-              (m) => String.fromCharCode(
-                  int.parse(m[0]!.replaceAll(RegExp(r"&#|;"), "")))))
-          .toList();
-    }
+    // Suggestions are text. Escape literal markup before decoding entities.
+    search.suggestions = search.suggestions
+        .map((suggestion) => suggestion.contains('&')
+            ? html.parseFragment(suggestion.replaceAll('<', '&lt;')).text ??
+                suggestion
+            : suggestion)
+        .toList();
 
     return search;
   }
@@ -1193,12 +1187,11 @@ class Service {
   void syncHistory() async {
     try {
       if (await db.isLoggedInToCurrentServer()) {
-        (await getUserHistory(1, 200))
-            .where((element) => db.getVideoProgress(element) == 0)
-            .forEach((element) async {
-          await db.saveProgress(Progress.named(progress: 1, videoId: element));
-          log.fine('updated watch status of $element');
-        });
+        for (final videoId in await getUserHistory(1, 200)) {
+          if (db.getVideoProgress(videoId) != 0) continue;
+          await db.saveProgress(Progress.named(progress: 1, videoId: videoId));
+          log.fine('updated watch status of $videoId');
+        }
       }
     } catch (err) {
       log.fine('failed to sync history, probably not logged in');
@@ -1295,33 +1288,6 @@ class Service {
     final response =
         await httpClient.get(uri).timeout(const Duration(seconds: 3));
     return Dislike.fromJson(handleResponse(response));
-  }
-
-  Future<String> uploadImageToImgur(String base64Image) async {
-    Uri uri = Uri.parse(urlImgurScreenshotUpload);
-    final headers = {'Authorization': imgurClientId};
-
-    final data = <String, String>{'image': base64Image};
-
-    final response = await httpClient.post(uri, headers: headers, body: data);
-    if (response.statusCode != 200) {
-      throw ImgurError("Non 200 response from Imgur (${response.statusCode})");
-    } else {
-      var body = utf8.decode(response.bodyBytes);
-      final Map<String, dynamic> decoded = jsonDecode(body);
-
-      if (decoded.containsKey('data')) {
-        final Map<String, dynamic> data = decoded['data'];
-
-        if (data.containsKey('link')) {
-          return data['link'].toString();
-        } else {
-          throw ImgurError("Response does not containt 'link' key");
-        }
-      } else {
-        throw ImgurError("Response does not containt 'data' key");
-      }
-    }
   }
 }
 

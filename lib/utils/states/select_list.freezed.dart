@@ -16,6 +16,7 @@ T _$identity<T>(T value) => value;
 mixin _$SelectListState<T> {
   List<T> get filteredItems;
   bool get loading;
+  bool get hasError;
 
   /// Create a copy of SelectListState
   /// with the given fields replaced by the non-null parameter values.
@@ -32,16 +33,18 @@ mixin _$SelectListState<T> {
             other is SelectListState<T> &&
             const DeepCollectionEquality()
                 .equals(other.filteredItems, filteredItems) &&
-            (identical(other.loading, loading) || other.loading == loading));
+            (identical(other.loading, loading) || other.loading == loading) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError));
   }
 
   @override
-  int get hashCode => Object.hash(
-      runtimeType, const DeepCollectionEquality().hash(filteredItems), loading);
+  int get hashCode => Object.hash(runtimeType,
+      const DeepCollectionEquality().hash(filteredItems), loading, hasError);
 
   @override
   String toString() {
-    return 'SelectListState<$T>(filteredItems: $filteredItems, loading: $loading)';
+    return 'SelectListState<$T>(filteredItems: $filteredItems, loading: $loading, hasError: $hasError)';
   }
 }
 
@@ -51,7 +54,7 @@ abstract mixin class $SelectListStateCopyWith<T, $Res> {
           SelectListState<T> value, $Res Function(SelectListState<T>) _then) =
       _$SelectListStateCopyWithImpl;
   @useResult
-  $Res call({List<T> filteredItems, bool loading});
+  $Res call({List<T> filteredItems, bool loading, bool hasError});
 }
 
 /// @nodoc
@@ -69,6 +72,7 @@ class _$SelectListStateCopyWithImpl<T, $Res>
   $Res call({
     Object? filteredItems = null,
     Object? loading = null,
+    Object? hasError = null,
   }) {
     return _then(_self.copyWith(
       filteredItems: null == filteredItems
@@ -78,6 +82,10 @@ class _$SelectListStateCopyWithImpl<T, $Res>
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
+              as bool,
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
               as bool,
     ));
   }
@@ -174,13 +182,14 @@ extension SelectListStatePatterns<T> on SelectListState<T> {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(List<T> filteredItems, bool loading)? $default, {
+    TResult Function(List<T> filteredItems, bool loading, bool hasError)?
+        $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _SelectListState() when $default != null:
-        return $default(_that.filteredItems, _that.loading);
+        return $default(_that.filteredItems, _that.loading, _that.hasError);
       case _:
         return orElse();
     }
@@ -201,12 +210,13 @@ extension SelectListStatePatterns<T> on SelectListState<T> {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(List<T> filteredItems, bool loading) $default,
+    TResult Function(List<T> filteredItems, bool loading, bool hasError)
+        $default,
   ) {
     final _that = this;
     switch (_that) {
       case _SelectListState():
-        return $default(_that.filteredItems, _that.loading);
+        return $default(_that.filteredItems, _that.loading, _that.hasError);
     }
   }
 
@@ -224,12 +234,13 @@ extension SelectListStatePatterns<T> on SelectListState<T> {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(List<T> filteredItems, bool loading)? $default,
+    TResult? Function(List<T> filteredItems, bool loading, bool hasError)?
+        $default,
   ) {
     final _that = this;
     switch (_that) {
       case _SelectListState() when $default != null:
-        return $default(_that.filteredItems, _that.loading);
+        return $default(_that.filteredItems, _that.loading, _that.hasError);
       case _:
         return null;
     }
@@ -240,7 +251,9 @@ extension SelectListStatePatterns<T> on SelectListState<T> {
 
 class _SelectListState<T> implements SelectListState<T> {
   const _SelectListState(
-      {final List<T> filteredItems = const [], this.loading = false})
+      {final List<T> filteredItems = const [],
+      this.loading = false,
+      this.hasError = false})
       : _filteredItems = filteredItems;
 
   final List<T> _filteredItems;
@@ -255,6 +268,9 @@ class _SelectListState<T> implements SelectListState<T> {
   @override
   @JsonKey()
   final bool loading;
+  @override
+  @JsonKey()
+  final bool hasError;
 
   /// Create a copy of SelectListState
   /// with the given fields replaced by the non-null parameter values.
@@ -271,16 +287,18 @@ class _SelectListState<T> implements SelectListState<T> {
             other is _SelectListState<T> &&
             const DeepCollectionEquality()
                 .equals(other._filteredItems, _filteredItems) &&
-            (identical(other.loading, loading) || other.loading == loading));
+            (identical(other.loading, loading) || other.loading == loading) &&
+            (identical(other.hasError, hasError) ||
+                other.hasError == hasError));
   }
 
   @override
   int get hashCode => Object.hash(runtimeType,
-      const DeepCollectionEquality().hash(_filteredItems), loading);
+      const DeepCollectionEquality().hash(_filteredItems), loading, hasError);
 
   @override
   String toString() {
-    return 'SelectListState<$T>(filteredItems: $filteredItems, loading: $loading)';
+    return 'SelectListState<$T>(filteredItems: $filteredItems, loading: $loading, hasError: $hasError)';
   }
 }
 
@@ -292,7 +310,7 @@ abstract mixin class _$SelectListStateCopyWith<T, $Res>
       __$SelectListStateCopyWithImpl;
   @override
   @useResult
-  $Res call({List<T> filteredItems, bool loading});
+  $Res call({List<T> filteredItems, bool loading, bool hasError});
 }
 
 /// @nodoc
@@ -310,6 +328,7 @@ class __$SelectListStateCopyWithImpl<T, $Res>
   $Res call({
     Object? filteredItems = null,
     Object? loading = null,
+    Object? hasError = null,
   }) {
     return _then(_SelectListState<T>(
       filteredItems: null == filteredItems
@@ -319,6 +338,10 @@ class __$SelectListStateCopyWithImpl<T, $Res>
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
+              as bool,
+      hasError: null == hasError
+          ? _self.hasError
+          : hasError // ignore: cast_nullable_to_non_nullable
               as bool,
     ));
   }

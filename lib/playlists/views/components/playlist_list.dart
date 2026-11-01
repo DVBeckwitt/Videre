@@ -38,7 +38,7 @@ class PlaylistList extends StatelessWidget {
           var deviceType = getDeviceType();
           return Stack(
             children: [
-              state.error.isNotEmpty
+              state.error.isNotEmpty && state.playlists.isEmpty
                   ? Container(
                       alignment: Alignment.center,
                       color: colorScheme.surface,
@@ -56,10 +56,11 @@ class PlaylistList extends StatelessWidget {
                         duration: animationDuration,
                         curve: Curves.easeInOutQuad,
                         child: RefreshIndicator(
-                          onRefresh: () =>
-                              !small && state.paginatedList.hasRefresh()
-                                  ? cubit.refreshPlaylists()
-                                  : null,
+                          onRefresh: () async {
+                            if (!small && state.paginatedList.hasRefresh()) {
+                              await cubit.refreshPlaylists();
+                            }
+                          },
                           child: DeviceWidget(
                             forcedTyped: small ? DeviceType.phone : null,
                             phone: ListView.builder(
@@ -79,6 +80,7 @@ class PlaylistList extends StatelessWidget {
                                 itemCount: state.playlists.length +
                                     (state.loading ? 7 : 0)),
                             tablet: GridView.builder(
+                                controller: cubit.scrollController,
                                 itemCount: state.playlists.length,
                                 gridDelegate:
                                     SliverGridDelegateWithFixedCrossAxisCount(

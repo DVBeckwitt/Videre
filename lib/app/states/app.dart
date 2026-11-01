@@ -32,6 +32,7 @@ class AppCubit extends Cubit<AppState> {
     } catch (e) {
       server = null;
     }
+    if (isClosed) return;
     HomeLayout homeLayout = db.getHomeLayout();
     var firstIndex = int.parse(db.getSettings(onOpenSettingName)?.value ?? '0');
     if (firstIndex < 0) {
@@ -71,9 +72,10 @@ class AppCubit extends Cubit<AppState> {
   }
 
   @override
-  close() async {
-    intentDataStreamSubscription.cancel();
-    super.close();
+  Future<void> close() async {
+    final closed = super.close();
+    await intentDataStreamSubscription.cancel();
+    await closed;
   }
 
   Future<void> openAppLink(String url, bool fullStack) async {

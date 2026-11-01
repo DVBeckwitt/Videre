@@ -28,6 +28,7 @@ const String subtitleDefaultSize = '14';
 const String searchHistoryDefaultLength = '12';
 const skipSteps = [5, 10, 15, 20, 30, 60];
 const defaultStep = 10;
+const _backgroundRestartDebounce = 'restarting-background-service';
 
 enum EnableBackGroundNotificationResponse {
   ok,
@@ -162,13 +163,12 @@ class SettingsCubit extends Cubit<SettingsState> {
   }
 
   setHistoryLimit(int value) async {
-    if (value < 1) {
-      await setSearchHistoryLimit(1);
-    } else if (value <= 30) {
-      await setSearchHistoryLimit(value);
-    }
+    if (value > 30) return;
+    final limit = value < 1 ? 1 : value;
+    final previousLimit = state.searchHistoryLimit;
+    await setSearchHistoryLimit(limit);
 
-    if (value < state.searchHistoryLimit) {
+    if (limit < previousLimit) {
       await db.clearExcessSearchHistory();
     }
   }
@@ -191,11 +191,10 @@ class SettingsCubit extends Cubit<SettingsState> {
     updateApp();
   }
 
-  setLocale(
+  Future<void> setLocale(
       List<Locale> locals, List<String> localStrings, String? locale) async {
     if (locale == null) {
-      await db.deleteSetting(localeSettingName);
-      _setLocale(null);
+      await _setLocale(null);
     } else {
       var selectedIndex = localStrings.indexOf(locale);
 
@@ -206,7 +205,7 @@ class SettingsCubit extends Cubit<SettingsState> {
         toSave += '_${selectedLocale.scriptCode}';
       }
 
-      _setLocale(toSave);
+      await _setLocale(toSave);
     }
     updateApp();
   }
@@ -259,8 +258,9 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<EnableBackGroundNotificationResponse> setBackgroundNotifications(
       bool b) async {
     if (!b) {
-      await stopTasks();
+      EasyDebounce.cancel(_backgroundRestartDebounce);
       await _setBackgroundNotifications(b);
+      await stopTasks();
     } else {
       var isAllowed = await AwesomeNotifications().isNotificationAllowed();
       if (!isAllowed) {
@@ -283,9 +283,10 @@ class SettingsCubit extends Cubit<SettingsState> {
   setBackgroundCheckFrequency(int i) async {
     if (i > 0 && i <= 24) {
       await setBackgroundNotificationFrequency(i);
+      if (isClosed || !state.backgroundNotifications) return;
       EasyDebounce.debounce(
-          'restarting-background-service', const Duration(seconds: 2), () {
-        setupTasks(this);
+          _backgroundRestartDebounce, const Duration(seconds: 2), () {
+        if (!isClosed && state.backgroundNotifications) setupTasks(this);
       });
     }
   }
@@ -373,8 +374,9 @@ class SettingsCubit extends Cubit<SettingsState> {
     }
   }
 
-  saveSetting(SettingsValue settings) async {
+  Future<void> saveSetting(SettingsValue settings) async {
     await db.saveSetting(settings);
+    if (isClosed) return;
     var newSettings = Map<String, SettingsValue>.from(state.settings);
     newSettings[settings.name] = settings;
     emit(state.copyWith(settings: newSettings));
@@ -414,12 +416,12 @@ class SettingsCubit extends Cubit<SettingsState> {
   setPlayRecommendedNext(bool b) async =>
       await _set(playRecommendedNextSettingName, b);
 
-  setCountry(Country c) {
+  Future<void> setCountry(Country c) async {
     String code = countryCodes
         .firstWhere((element) => element.name == c.name,
             orElse: () => state.country)
         .code;
-    _set(browsingCountry, code);
+    await _set(browsingCountry, code);
   }
 
   setUseDynamicTheme(bool b) async => await _set(dynamicTheme, b);
@@ -483,17 +485,15 @@ class SettingsCubit extends Cubit<SettingsState> {
       await _set(returnYoutubeDislikeUrlSettingName, url);
 
   Future<void> _set<T>(String name, T value) async {
-    var settings = Map<String, SettingsValue>.from(state.settings);
     if (value == null) {
       await db.deleteSetting(name);
-      settings.remove(name);
+      if (isClosed) return;
+      final settings = Map<String, SettingsValue>.from(state.settings)
+        ..remove(name);
+      emit(state.copyWith(settings: settings));
     } else {
-      var settingsValue = SettingsValue(name, value.toString());
-      settings[name] = settingsValue;
-      await db.saveSetting(settingsValue);
+      await saveSetting(SettingsValue(name, value.toString()));
     }
-
-    emit(state.copyWith(settings: settings));
   }
 
   setSubscriptionsNotifications(bool value) async {
@@ -502,9 +502,8 @@ class SettingsCubit extends Cubit<SettingsState> {
   }
 
   _getSubscriptionNotification() async {
-    emit(state.copyWith(
-        subscriptionNotifications:
-            await fileDb.getSubscriptionNotifications()));
+    final enabled = await fileDb.getSubscriptionNotifications();
+    if (!isClosed) emit(state.copyWith(subscriptionNotifications: enabled));
   }
 }
 
@@ -599,7 +598,6 @@ sealed class SettingsState with _$SettingsState {
 
   List<HomeDataSource> get appLayout {
     var savedLayout = _get(appLayoutSettingName)?.value;
-    // String? savedLayout;
     var defaultLayout = HomeDataSource.defaultSettings();
     return (savedLayout ?? defaultLayout.map((e) => e.name).join(","))
         .split(',')
@@ -634,13 +632,7 @@ sealed class SettingsState with _$SettingsState {
   bool get fullscreenOnRotate =>
       (_get(fullScreenOnLandscapeSettingName)?.value ?? "true") == "true";
 
-  SettingsValue? _get(String settingName) {
-    if (settings.containsKey(settingName)) {
-      return settings[settingName];
-    } else {
-      return null;
-    }
-  }
+  SettingsValue? _get(String settingName) => settings[settingName];
 
   const SettingsState._();
 }
