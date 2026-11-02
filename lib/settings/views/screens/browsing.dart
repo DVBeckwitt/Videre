@@ -11,7 +11,6 @@ import 'package:settings_ui/settings_ui.dart';
 
 import '../../../utils/views/components/select_list_dialog.dart';
 import '../../../utils.dart';
-import '../../../home/models/db/home_layout.dart';
 import '../components/app_customizer.dart';
 
 @RoutePage()
@@ -19,6 +18,18 @@ class BrowsingSettingsScreen extends StatelessWidget {
   const BrowsingSettingsScreen({super.key});
 
   customizeApp(BuildContext context) {
+    if (getDeviceType() == DeviceType.phone) {
+      showDialog(
+          context: context,
+          useRootNavigator: false,
+          builder: (context) => Dialog.fullscreen(
+              child: Scaffold(
+                  appBar: AppBar(
+                      title: Text(
+                          AppLocalizations.of(context)!.phoneNavigationTitle)),
+                  body: const AppCustomizer())));
+      return;
+    }
     showDialog(
         barrierDismissible: true,
         useRootNavigator: false,
@@ -211,15 +222,13 @@ class BrowsingSettingsScreen extends StatelessWidget {
                   SettingsTile(
                     leading: const Icon(Icons.app_settings_alt),
                     title: Text(locals.customizeAppLayout),
-                    value: Text([
-                      ...state.appLayout
-                          .where((e) =>
-                              e.route != null &&
-                              (getDeviceType() != DeviceType.phone ||
-                                  e != HomeDataSource.playlist))
-                          .map((e) => e.getLabel(locals)),
-                      if (getDeviceType() == DeviceType.phone) locals.search,
-                    ].join(", ")),
+                    value: Text((getDeviceType() == DeviceType.phone
+                            ? state.phoneNavigation.bottom
+                                .map((item) => item.label(locals))
+                            : state.appLayout
+                                .where((e) => e.route != null)
+                                .map((e) => e.getLabel(locals)))
+                        .join(', ')),
                     onPressed: (ctx) => customizeApp(ctx),
                   ),
                   SettingsTile.switchTile(

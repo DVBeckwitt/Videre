@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../home/models/phone_navigation.dart';
 
 import '../offline_subscriptions/models/offline_subscription.dart';
 import '../playlists/models/playlist.dart';
@@ -247,6 +248,7 @@ class UserBackup {
           number <= (name == lastSpeedSettingName ? 10 : 200);
     }
     return switch (name) {
+      phoneNavigationSettingName => PhoneNavigation.decode(value) != null,
       browsingCountry => RegExp(r'^[A-Z]{2}$').hasMatch(value),
       localeSettingName =>
         RegExp(r'^[a-z]{2,3}(?:[_-][A-Za-z0-9]{2,8})*$').hasMatch(value),

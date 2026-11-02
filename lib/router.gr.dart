@@ -590,6 +590,44 @@ class ManageSubscriptionsRoute extends PageRouteInfo<void> {
 }
 
 /// generated route for
+/// [NavigationSectionScreen]
+class NavigationSectionRoute extends PageRouteInfo<NavigationSectionRouteArgs> {
+  NavigationSectionRoute({
+    Key? key,
+    required HomeDataSource source,
+    List<PageRouteInfo>? children,
+  }) : super(
+          NavigationSectionRoute.name,
+          args: NavigationSectionRouteArgs(key: key, source: source),
+          initialChildren: children,
+          argsEquality: false,
+        );
+
+  static const String name = 'NavigationSectionRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      final args = data.argsAs<NavigationSectionRouteArgs>();
+      return NavigationSectionScreen(key: args.key, source: args.source);
+    },
+  );
+}
+
+class NavigationSectionRouteArgs {
+  const NavigationSectionRouteArgs({this.key, required this.source});
+
+  final Key? key;
+
+  final HomeDataSource source;
+
+  @override
+  String toString() {
+    return 'NavigationSectionRouteArgs{key: $key, source: $source}';
+  }
+}
+
+/// generated route for
 /// [NotificationSettingsScreen]
 class NotificationSettingsRoute extends PageRouteInfo<void> {
   const NotificationSettingsRoute({List<PageRouteInfo>? children})

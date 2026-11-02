@@ -10,6 +10,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/states/interfaces/media_player.dart';
@@ -25,6 +26,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/app_customizer.dart';
+import 'package:clipious/settings/views/components/phone_navigation_editor.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
@@ -173,6 +175,17 @@ class _TestService extends Service {
       VideosWithContinuation([], null);
 }
 
+class _PendingNavigationSettings extends TestSettingsCubit {
+  _PendingNavigationSettings(super.initialState, super.appCubit);
+  Completer<void>? pending;
+
+  @override
+  Future<void> setPhoneNavigation(PhoneNavigation layout) async {
+    await pending?.future;
+    await super.setPhoneNavigation(layout);
+  }
+}
+
 class _QueueSelectionPlayer extends TestPlayerCubit {
   _QueueSelectionPlayer(super.initialState, super.settings);
 
@@ -190,6 +203,7 @@ Future<void> _pumpHomepage(
   PlayerState? playerState,
   SettingsState? settingsState,
   PlayerCubit Function(SettingsCubit)? createPlayer,
+  SettingsCubit Function(SettingsState, AppCubit)? createSettings,
   int firstIndex = 0,
   bool settle = true,
 }) async {
@@ -201,8 +215,9 @@ Future<void> _pumpHomepage(
   await tester.runAsync(() => globals.db
       .saveSetting(SettingsValue(onOpenSettingName, firstIndex.toString())));
   final appCubit = TestAppCubit(AppState(firstIndex, null, HomeLayout()));
-  final settingsCubit =
-      TestSettingsCubit(settingsState ?? SettingsState.init(), appCubit);
+  final initialSettings = settingsState ?? SettingsState.init();
+  final settingsCubit = createSettings?.call(initialSettings, appCubit) ??
+      TestSettingsCubit(initialSettings, appCubit);
 
   await tester.pumpWidget(MultiBlocProvider(
     providers: [
@@ -557,17 +572,18 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('phone layout editor preserves saved indexes for visible tabs',
+  testWidgets('tablet layout editor preserves saved indexes for visible tabs',
       (tester) async {
-    await _pumpHomepage(tester, const Size(390, 844));
+    await _pumpHomepage(tester, const Size(1024, 768));
     await tester.tap(find.byIcon(Icons.settings));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Browsing'));
     await tester.pumpAndSettle();
-    expect(find.text('Home, Subscriptions, History, Search'), findsOneWidget);
+    expect(
+        find.text('Home, Subscriptions, Playlists, History'), findsOneWidget);
     await tester.tap(find.text('Customize app sections'));
     await tester.pumpAndSettle();
-    expect(find.text('Playlists'), findsNothing);
+    expect(find.text('Playlists'), findsOneWidget);
     expect(find.text('Search'), findsNothing);
 
     final context = tester.element(find.byType(AppCustomizer));
@@ -583,13 +599,13 @@ void main() {
         .widget<ReorderableListView>(find.byType(ReorderableListView))
         .onReorder;
     final originalLayout = settings.state.appLayout;
-    reorder(2, 2);
-    reorder(2, 3);
+    reorder(3, 3);
+    reorder(3, 4);
     await tester.pumpAndSettle();
     expect(settings.state.appLayout, originalLayout);
     expect(settings.state.onOpen, 3);
 
-    reorder(2, 0);
+    reorder(3, 0);
     await tester.pumpAndSettle();
     expect(settings.state.appLayout.first, HomeDataSource.history);
     expect(settings.state.appLayout, contains(HomeDataSource.playlist));
@@ -613,6 +629,390 @@ void main() {
     final destination = navigation.destinations[navigation.selectedIndex]
         as NavigationDestination;
     expect(destination.label, 'History');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'home editor drags navigation between areas, reorders and restores defaults',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    final settings = tester
+        .element(find.byKey(const ValueKey('navigation-item-home')))
+        .read<SettingsCubit>();
+
+    Future<void> drag(String item, Offset target) async {
+      final gesture = await tester.startGesture(
+          tester.getCenter(find.byKey(ValueKey('navigation-item-$item'))));
+      await tester.pump(const Duration(milliseconds: 600));
+      await gesture.moveTo(target);
+      await tester.pump(const Duration(milliseconds: 200));
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    await drag('playlist',
+        tester.getCenter(find.byKey(const ValueKey('navigation-item-search'))));
+    expect(settings.state.phoneNavigation.bottom, [
+      PhoneNavigationItem.home,
+      PhoneNavigationItem.subscription,
+      PhoneNavigationItem.history,
+      PhoneNavigationItem.playlist,
+      PhoneNavigationItem.search
+    ]);
+    final top =
+        tester.getRect(find.byKey(const ValueKey('navigation-area-top')));
+    await drag('history', Offset(top.center.dx, top.bottom - 20));
+    expect(
+        settings.state.phoneNavigation.top.last, PhoneNavigationItem.history);
+    await drag('search',
+        tester.getCenter(find.byKey(const ValueKey('navigation-item-home'))));
+    expect(settings.state.phoneNavigation.bottom.first,
+        PhoneNavigationItem.search);
+    expect(SettingsState.init().phoneNavigation.encode(),
+        settings.state.phoneNavigation.encode());
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    var navigation = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(
+        navigation.destinations
+            .cast<NavigationDestination>()
+            .map((item) => item.label),
+        ['Search', 'Home', 'Subscriptions', 'Playlists']);
+    expect(navigation.selectedIndex, 1);
+    await tester.tap(find.byTooltip('History'));
+    await tester.pumpAndSettle();
+    expect(find.text('History'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.text('Restore default navigation'), 240,
+        scrollable: find
+            .descendant(
+                of: find.byType(PhoneNavigationEditor),
+                matching: find.byType(Scrollable))
+            .first);
+    await tester.tap(find.text('Restore default navigation'));
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.encode(),
+        PhoneNavigation.defaults().encode());
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'navigation drag back onto the same item does not reorder or save',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    final item = find.byKey(const ValueKey('navigation-item-home'));
+    final settings = tester.element(item).read<SettingsCubit>();
+    final original = settings.state.phoneNavigation.encode();
+    final point = tester.getCenter(item);
+    final gesture = await tester.startGesture(point);
+    await tester.pump(const Duration(milliseconds: 600));
+    await gesture.moveBy(const Offset(5, 0));
+    await gesture.moveTo(point);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.encode(), original);
+    expect(settings.state.savedPhoneNavigation, isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('navigation drag keeps scrolling while held at the edge',
+      (tester) async {
+    globals.service = _TestService(videos: []);
+    await _pumpHomepage(tester, const Size(320, 640));
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    final scrollable = find
+        .descendant(
+            of: find.byType(PhoneNavigationEditor),
+            matching: find.byType(Scrollable))
+        .first;
+    final position = tester.state<ScrollableState>(scrollable).position;
+    final gesture = await tester.startGesture(tester
+        .getCenter(find.byKey(const ValueKey('navigation-item-downloads'))));
+    await tester.pump(const Duration(milliseconds: 600));
+    await gesture.moveTo(const Offset(280, 630));
+    for (var frame = 0; frame < 25; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(position.pixels, greaterThan(200));
+    await gesture.cancel();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'navigation drag released after scrolling uses the visible drop area',
+      (tester) async {
+    globals.service = _TestService(videos: []);
+    await _pumpHomepage(tester, const Size(320, 640));
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    final settings = tester
+        .element(find.byType(PhoneNavigationEditor))
+        .read<SettingsCubit>();
+    final point = const Offset(280, 620);
+    final gesture = await tester.startGesture(tester
+        .getCenter(find.byKey(const ValueKey('navigation-item-downloads'))));
+    await tester.pump(const Duration(milliseconds: 600));
+    await gesture.moveTo(point);
+    final hidden = find.byKey(const ValueKey('navigation-area-hidden'));
+    for (var frame = 0; frame < 40; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      if (hidden.evaluate().isNotEmpty &&
+          tester.getRect(hidden).contains(point)) {
+        break;
+      }
+    }
+    expect(tester.getRect(hidden).contains(point), isTrue);
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.hidden,
+        contains(PhoneNavigationItem.downloads));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('home layout editor fits a landscape phone', (tester) async {
+    globals.service = _TestService(videos: []);
+    await _pumpHomepage(tester, const Size(640, 320));
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'navigation save failure preserves layout and retry survives closing the editor',
+      (tester) async {
+    late _PendingNavigationSettings settings;
+    await _pumpHomepage(tester, const Size(390, 844),
+        createSettings: (initial, app) =>
+            settings = _PendingNavigationSettings(initial, app));
+    await tester.tap(find.byIcon(Icons.edit));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Navigation'));
+    await tester.pumpAndSettle();
+    final original = settings.state.phoneNavigation.encode();
+    Future<void> hideQueue() async {
+      await tester.tap(find.byKey(const ValueKey('navigation-item-queue')));
+      await tester.pumpAndSettle();
+      settings.pending = Completer<void>();
+      await tester.tap(find.text('Hidden').last);
+      await tester.pump();
+    }
+
+    await hideQueue();
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    settings.pending!.completeError(StateError('storage unavailable'));
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.encode(), original);
+    expect(find.text('Could not save the navigation layout. Please try again.'),
+        findsOneWidget);
+    await hideQueue();
+    await tester.pageBack();
+    await tester.pump(const Duration(seconds: 1));
+    settings.pending!.complete();
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.hidden,
+        contains(PhoneNavigationItem.queue));
+    expect(SettingsState.init().phoneNavigation.encode(),
+        settings.state.phoneNavigation.encode());
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'removing the selected navigation tab and disabling search history keeps navigation usable',
+      (tester) async {
+    globals.service = _TestService(videos: []);
+    await _pumpHomepage(tester, const Size(390, 844), firstIndex: 3);
+    final settings =
+        tester.element(find.byType(NavigationBar)).read<SettingsCubit>();
+    var layout = settings.state.phoneNavigation
+        .move(PhoneNavigationItem.history, NavigationArea.top)!;
+    await tester.runAsync(() => settings.setPhoneNavigation(layout));
+    await tester.pumpAndSettle();
+    var navigation = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(
+        navigation.destinations[navigation.selectedIndex],
+        isA<NavigationDestination>().having(
+            (destination) => destination.label, 'selected label', 'Home'));
+    layout = PhoneNavigation(
+        [PhoneNavigationItem.searchHistory, PhoneNavigationItem.search],
+        [PhoneNavigationItem.home]);
+    await tester.runAsync(() => settings.setPhoneNavigation(layout));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() => settings.setUseSearchHistory(false));
+    await tester.pumpAndSettle();
+    navigation = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(
+        navigation.destinations
+            .cast<NavigationDestination>()
+            .map((item) => item.label),
+        ['Home', 'Search']);
+    expect(navigation.selectedIndex, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'custom phone actions and overflow preserve selected tab and search focus',
+      (tester) async {
+    final layout = PhoneNavigation([
+      PhoneNavigationItem.playlist,
+      PhoneNavigationItem.home,
+      PhoneNavigationItem.downloads,
+      PhoneNavigationItem.queue,
+      PhoneNavigationItem.subscription,
+    ], [
+      PhoneNavigationItem.search,
+      PhoneNavigationItem.history,
+      PhoneNavigationItem.popular,
+      PhoneNavigationItem.trending
+    ]);
+    final initial = SettingsState.init();
+    await _pumpHomepage(tester, const Size(320, 640),
+        settingsState: initial.copyWith(settings: {
+          ...initial.settings,
+          phoneNavigationSettingName:
+              SettingsValue(phoneNavigationSettingName, layout.encode()),
+        }));
+    final navigation = find.byType(NavigationBar);
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(tester.widget<NavigationBar>(navigation).destinations.length, 5);
+    for (final icon in [Icons.queue_music, Icons.download]) {
+      await tester
+          .tap(find.descendant(of: navigation, matching: find.byIcon(icon)));
+      await tester.pumpAndSettle();
+      expect(navigation, findsNothing);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    }
+    await tester.tap(find.byTooltip('Search'));
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Trending'));
+    await tester.pumpAndSettle();
+    expect(find.text('Trending'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'phone shortcut overflow fits large text and opens a long-label item',
+      (tester) async {
+    globals.service = _TestService(videos: []);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final layout = PhoneNavigation([
+      PhoneNavigationItem.home,
+      PhoneNavigationItem.search,
+    ], [
+      PhoneNavigationItem.downloads,
+      PhoneNavigationItem.queue,
+      PhoneNavigationItem.searchHistory,
+      PhoneNavigationItem.history,
+    ]);
+    final initial = SettingsState.init();
+    await _pumpHomepage(tester, const Size(320, 640),
+        settingsState: initial.copyWith(settings: {
+          ...initial.settings,
+          phoneNavigationSettingName:
+              SettingsValue(phoneNavigationSettingName, layout.encode()),
+        }));
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Search history'));
+    await tester.pumpAndSettle();
+    expect(find.text('Search history'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'navigation editor supports small screens, hidden items and startup changes',
+      (tester) async {
+    globals.service = _TestService(videos: []);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await _pumpHomepage(tester, const Size(320, 640));
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Browsing'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Customize app sections'));
+    await tester.pumpAndSettle();
+    final scrollable = find
+        .descendant(
+            of: find.byType(PhoneNavigationEditor),
+            matching: find.byType(Scrollable))
+        .first;
+    final settings = tester
+        .element(find.byType(PhoneNavigationEditor))
+        .read<SettingsCubit>();
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('navigation-item-history')), 200,
+        scrollable: scrollable);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('navigation-item-history')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open this tab at startup'));
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.startup, PhoneNavigationItem.history);
+    await tester.tap(find.byKey(const ValueKey('navigation-item-history')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hidden').last);
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.hidden,
+        contains(PhoneNavigationItem.history));
+    expect(settings.state.phoneNavigation.startup, PhoneNavigationItem.home);
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('navigation-item-popular')), 200,
+        scrollable: scrollable);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('navigation-item-popular')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bottom tabs').last);
+    await tester.pumpAndSettle();
+    expect(settings.state.phoneNavigation.bottom.last,
+        PhoneNavigationItem.popular);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

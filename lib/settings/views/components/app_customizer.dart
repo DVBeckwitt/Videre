@@ -6,18 +6,20 @@ import 'package:clipious/utils.dart';
 
 import '../../states/app_customizer.dart';
 import '../../states/settings.dart';
+import 'phone_navigation_editor.dart';
 
 class AppCustomizer extends StatelessWidget {
   const AppCustomizer({super.key});
 
   @override
   Widget build(BuildContext context) {
+    if (getDeviceType() == DeviceType.phone) {
+      return const PhoneNavigationEditor();
+    }
     var locals = AppLocalizations.of(context)!;
     var colors = Theme.of(context).colorScheme;
     var textTheme = Theme.of(context).textTheme;
-    final phone = getDeviceType() == DeviceType.phone;
-    bool canCustomize(HomeDataSource source) =>
-        source.route != null && (!phone || source != HomeDataSource.playlist);
+    bool canCustomize(HomeDataSource source) => source.route != null;
     return BlocProvider(
       create: (context) => AppCustomizerCubit(
           context.read<SettingsCubit>().state.appLayout,

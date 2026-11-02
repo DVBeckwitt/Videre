@@ -72,6 +72,8 @@ import 'home/views/screens/downloads_tab.dart';
 import 'home/views/screens/edit_layout.dart';
 import 'home/views/screens/history_tab.dart';
 import 'home/views/screens/home.dart';
+import 'home/views/screens/navigation_section.dart';
+import 'home/models/db/home_layout.dart';
 import 'home/views/screens/home_tab.dart';
 import 'home/views/screens/playlists_tab.dart';
 import 'home/views/screens/popular_tab.dart';
@@ -188,6 +190,7 @@ class AppRouter extends RootStackRouter {
                     ]),
                 AutoRoute(page: DownloadManagerRoute.page),
                 AutoRoute(page: VideoQueueRoute.page),
+                AutoRoute(page: NavigationSectionRoute.page),
                 AutoRoute(page: PlaylistLibraryRoute.page),
                 AutoRoute(page: SearchRoute.page, path: searchPath, children: [
                   AutoRoute(page: SearchVideoRoute.page, path: videosPath),

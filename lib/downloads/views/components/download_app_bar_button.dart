@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../states/download_manager.dart';
 
@@ -20,6 +21,7 @@ class AppBarDownloadButton extends StatelessWidget {
           alignment: Alignment.center,
           children: [
             IconButton(
+              tooltip: AppLocalizations.of(context)!.downloads,
               onPressed: () => openDownloadManager(context),
               icon: Icon(
                 Icons.download,

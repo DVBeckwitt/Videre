@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:clipious/home/models/phone_navigation.dart';
 
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
@@ -91,6 +92,19 @@ void main() {
         UserBackup.validSetting(
             SettingsValue(lastVideoQualitySettingName, '99999')),
         isFalse);
+  });
+
+  test('phone navigation placement and startup survive backup restore',
+      () async {
+    final layout = PhoneNavigation.defaults()
+        .move(PhoneNavigationItem.playlist, NavigationArea.bottom)!
+        .startAt(PhoneNavigationItem.playlist);
+    await source.saveSetting(
+        SettingsValue(phoneNavigationSettingName, layout.encode()));
+    await target.restoreBackup(
+        UserBackup.parse((await source.exportBackup()).encode()));
+    expect(
+        target.getSettings(phoneNavigationSettingName)?.value, layout.encode());
   });
 
   test('watched subscription visibility survives backup restore', () async {

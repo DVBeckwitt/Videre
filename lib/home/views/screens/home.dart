@@ -15,6 +15,7 @@ import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:logging/logging.dart';
 
 import '../../../notifications/notifications.dart';
+import '../../models/phone_navigation.dart';
 
 var log = Logger('Home Screen');
 
@@ -28,6 +29,54 @@ class MainContentScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainContentScreen> {
   TabsRouter? _initializedTabsRouter;
+  HomeDataSource? _activePage;
+  String? _serverUrl;
+
+  void _openItem(BuildContext context, PhoneNavigationItem item) {
+    final router = AutoRouter.of(context);
+    switch (item) {
+      case PhoneNavigationItem.search:
+        router.push(SearchRoute());
+      case PhoneNavigationItem.downloads:
+        router.push(const DownloadManagerRoute());
+      case PhoneNavigationItem.queue:
+        router.push(const VideoQueueRoute());
+      case PhoneNavigationItem.playlist:
+        router.push(const PlaylistLibraryRoute());
+      default:
+        router.push(NavigationSectionRoute(source: item.source!));
+    }
+  }
+
+  List<Widget> _topActions(BuildContext context, PhoneNavigation navigation) {
+    final locals = AppLocalizations.of(context)!;
+    final visible =
+        navigation.top.length > 3 ? navigation.top.take(2) : navigation.top;
+    return [
+      for (final item in visible)
+        item == PhoneNavigationItem.downloads
+            ? const AppBarDownloadButton()
+            : IconButton(
+                tooltip: item.label(locals),
+                icon: Icon(item.icon),
+                onPressed: () => _openItem(context, item)),
+      if (navigation.top.length > 3)
+        PopupMenuButton<PhoneNavigationItem>(
+          tooltip: locals.phoneNavigationMore,
+          onSelected: (item) => _openItem(context, item),
+          itemBuilder: (_) => [
+            for (final item in navigation.top.skip(2))
+              PopupMenuItem(
+                  value: item,
+                  child: Row(children: [
+                    Icon(item.icon),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(item.label(locals)))
+                  ]))
+          ],
+        ),
+    ];
+  }
 
   void _initializeStartupTab(TabsRouter router, int index) {
     if (identical(_initializedTabsRouter, router)) return;
@@ -109,27 +158,31 @@ class _MainScreenState extends State<MainContentScreen> {
       var settings = context.watch<SettingsCubit>().state;
 
       final deviceType = getDeviceType();
+      if (_serverUrl != appState.server?.url) {
+        _serverUrl = appState.server?.url;
+        _activePage = null;
+      }
+      final phoneNavigation = (settings.savedPhoneNavigation ??
+              PhoneNavigation.fromLegacy(
+                  settings.appLayout, appState.firstIndex))
+          .available(searchHistory: settings.useSearchHistory);
       final configuredPages = settings.appLayout
           .where((element) =>
               element.isPermitted(context, app.isLoggedIn) &&
               element.route != null)
           .toList();
-      final initialPage =
-          settings.appLayout.elementAtOrNull(appState.firstIndex);
-      final allowedPages = configuredPages
-          .where((page) =>
-              deviceType != DeviceType.phone || page != HomeDataSource.playlist)
-          .toList();
-      if (allowedPages.isEmpty &&
-          configuredPages.contains(HomeDataSource.playlist)) {
-        allowedPages.add(HomeDataSource.home);
-      }
-      var navigationWidgets = allowedPages
-          .map((e) => e.getBottomBarNavigationWidget(context))
-          .toList();
+      final initialPage = deviceType == DeviceType.phone
+          ? phoneNavigation.startup.source
+          : settings.appLayout.elementAtOrNull(appState.firstIndex);
+      final allowedPages = deviceType == DeviceType.phone
+          ? phoneNavigation.bottom
+              .where((item) => item.isTab)
+              .map((item) => item.source!)
+              .toList()
+          : configuredPages;
 
-      var selectedIndex =
-          allowedPages.indexOf(initialPage ?? HomeDataSource.home);
+      var selectedIndex = allowedPages
+          .indexOf(_activePage ?? initialPage ?? HomeDataSource.home);
       if (selectedIndex < 0) {
         selectedIndex = 0;
       }
@@ -153,7 +206,11 @@ class _MainScreenState extends State<MainContentScreen> {
               ),
             )
           : AutoTabsRouter.tabBar(
-              key: ValueKey(appState.server?.url),
+              key: ValueKey((
+                appState.server?.url,
+                deviceType,
+                allowedPages.map((page) => page.name).join(',')
+              )),
               homeIndex: selectedIndex,
               routes: allowedPages.map((e) => e.route!).toList(),
               physics: deviceType == DeviceType.phone
@@ -164,25 +221,28 @@ class _MainScreenState extends State<MainContentScreen> {
                 final tabsRouter = AutoTabsRouter.of(context);
                 _initializeStartupTab(tabsRouter, selectedIndex);
                 final selectedPage = allowedPages[tabsRouter.activeIndex];
+                _activePage = selectedPage;
                 return Scaffold(
                     // so we rebuild the view if the server changes
                     backgroundColor: colorScheme.surface,
                     bottomNavigationBar: deviceType == DeviceType.phone
                         ? NavigationBar(
                             onDestinationSelected: (index) {
-                              if (index == allowedPages.length) {
-                                AutoRouter.of(context).push(SearchRoute());
+                              final item = phoneNavigation.bottom[index];
+                              if (item.isTab) {
+                                tabsRouter.setActiveIndex(
+                                    allowedPages.indexOf(item.source!));
                               } else {
-                                tabsRouter.setActiveIndex(index);
+                                _openItem(context, item);
                               }
                             },
-                            selectedIndex: tabsRouter.activeIndex,
+                            selectedIndex: phoneNavigation.bottom.indexWhere(
+                                (item) => item.source == selectedPage),
                             destinations: [
-                              ...navigationWidgets,
-                              NavigationDestination(
-                                icon: const Icon(Icons.search),
-                                label: locals.search,
-                              ),
+                              for (final item in phoneNavigation.bottom)
+                                NavigationDestination(
+                                    icon: Icon(item.icon),
+                                    label: item.label(locals)),
                             ],
                           )
                         : null,
@@ -212,28 +272,17 @@ class _MainScreenState extends State<MainContentScreen> {
                                     openSubscriptionManagement(context),
                                 icon: const Icon(Icons.checklist))
                             : const SizedBox.shrink(),
-                        const AppBarDownloadButton(),
                         if (deviceType == DeviceType.phone)
-                          IconButton(
-                            tooltip: locals.videoQueue,
-                            onPressed: () => AutoRouter.of(context)
-                                .push(const VideoQueueRoute()),
-                            icon: const Icon(Icons.queue_music),
-                          ),
-                        if (deviceType == DeviceType.phone)
-                          IconButton(
-                            tooltip: locals.playlists,
-                            onPressed: () => AutoRouter.of(context)
-                                .push(const PlaylistLibraryRoute()),
-                            icon: const Icon(Icons.playlist_play),
-                          )
-                        else
+                          ..._topActions(context, phoneNavigation)
+                        else ...[
+                          const AppBarDownloadButton(),
                           IconButton(
                             onPressed: () {
                               AutoRouter.of(context).push(SearchRoute());
                             },
                             icon: const Icon(Icons.search),
                           ),
+                        ],
                         IconButton(
                           onPressed: () => openSettings(context),
                           icon: const Icon(Icons.settings),

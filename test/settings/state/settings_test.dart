@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -84,6 +85,93 @@ Future<void> main() async {
 
     expect(settingsCubit.state.country.code, 'FR');
     expect(SettingsState.init().country.code, 'FR');
+  });
+
+  test(
+      'phone navigation preserves defaults and legacy startup without changing tablet sections',
+      () async {
+    expect(settingsCubit.state.phoneNavigation.encode(),
+        PhoneNavigation.defaults().encode());
+    await settingsCubit.setAppLayout(
+        [HomeDataSource.history, HomeDataSource.home, HomeDataSource.playlist]);
+    final original = settingsCubit.state.appLayout;
+    var layout = settingsCubit.state.phoneNavigation;
+    expect(layout.bottom, [
+      PhoneNavigationItem.history,
+      PhoneNavigationItem.home,
+      PhoneNavigationItem.search
+    ]);
+    expect(layout.startup, PhoneNavigationItem.history);
+    layout = layout.move(PhoneNavigationItem.playlist, NavigationArea.bottom,
+        before: PhoneNavigationItem.search)!;
+    layout = layout.move(PhoneNavigationItem.history, NavigationArea.top)!;
+    await settingsCubit.setPhoneNavigation(layout);
+    expect(SettingsState.init().phoneNavigation.encode(), layout.encode());
+    expect(SettingsState.init().appLayout, original);
+    expect(layout.startup, PhoneNavigationItem.home);
+  });
+
+  test(
+      'navigation moves preserve startup identity and reject unusable bottom bars',
+      () {
+    var layout =
+        PhoneNavigation.defaults().startAt(PhoneNavigationItem.history);
+    layout = layout.move(PhoneNavigationItem.history, NavigationArea.bottom,
+        before: PhoneNavigationItem.home)!;
+    expect(layout.startup, PhoneNavigationItem.history);
+    expect(layout.bottom.first, PhoneNavigationItem.history);
+    layout = layout.move(PhoneNavigationItem.playlist, NavigationArea.bottom)!;
+    expect(
+        layout.move(PhoneNavigationItem.queue, NavigationArea.bottom), isNull);
+    layout = layout.move(PhoneNavigationItem.home, NavigationArea.hidden)!;
+    layout = layout.move(PhoneNavigationItem.subscription, NavigationArea.top)!;
+    layout = layout.move(PhoneNavigationItem.playlist, NavigationArea.top)!;
+    expect(layout.bottom,
+        [PhoneNavigationItem.history, PhoneNavigationItem.search]);
+    expect(layout.move(PhoneNavigationItem.history, NavigationArea.hidden),
+        isNull);
+    expect(
+        layout
+            .move(PhoneNavigationItem.queue, NavigationArea.bottom)!
+            .move(PhoneNavigationItem.history, NavigationArea.top),
+        isNull);
+    expect(
+        layout
+            .move(PhoneNavigationItem.search, NavigationArea.bottom,
+                before: PhoneNavigationItem.search)!
+            .encode(),
+        layout.encode());
+  });
+
+  test(
+      'disabled search history has a usable fallback without changing the saved layout',
+      () {
+    final layout = PhoneNavigation(
+        [PhoneNavigationItem.searchHistory, PhoneNavigationItem.search],
+        [PhoneNavigationItem.home]);
+    final available = layout.available(searchHistory: false);
+    expect(available.bottom,
+        [PhoneNavigationItem.home, PhoneNavigationItem.search]);
+    expect(available.top, isEmpty);
+    expect(layout.bottom.first, PhoneNavigationItem.searchHistory);
+  });
+
+  test('malformed navigation preferences fall back safely', () async {
+    for (final value in [
+      'null',
+      '{',
+      '{}',
+      '{"bottom":["unknown"],"top":[],"startup":"unknown"}',
+      '{"bottom":["home","home"],"top":[],"startup":"home"}',
+      '{"bottom":["home","search"],"top":["home"],"startup":"home"}',
+      '{"bottom":["search","queue"],"top":[],"startup":"search"}'
+    ]) {
+      expect(PhoneNavigation.decode(value), isNull);
+      await settingsCubit
+          .saveSetting(SettingsValue(phoneNavigationSettingName, value));
+      expect(settingsCubit.state.phoneNavigation.encode(),
+          PhoneNavigation.defaults().encode());
+    }
   });
 
   test('locale changes finish saving to both foreground and background storage',

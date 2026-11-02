@@ -75,6 +75,8 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Subscriptions.** Enable **Settings → Browsing → Hide watched subscription videos** to hide videos marked watched (90% played) from subscription feeds, including home sections and TV. Partly watched videos stay visible. Turn the setting off to show everything again. When a page is entirely hidden, use **Load more** to reach older videos. This uses the watch progress stored on this device, including history already synced from your account.
 
+**Phone navigation.** Open the home pencil button → **Navigation**, or **Settings → Browsing → Customize app sections**. Hold and drag items to reorder them or move them between **Bottom tabs**, **Top icons**, and **Hidden**. Tap an item for move options or to choose a startup tab. Changes save automatically and are included in library backups. Keep 2–5 bottom items, including at least one main screen tab; Settings stays available. **Restore default navigation** returns to Home, Subscriptions, History, Search below and Downloads, Queue, Playlists above. Tablet and TV layouts have their own settings.
+
 **Backups.** In Settings, use **Export backup** to save your local library, filters, and preferences. Use **Restore or import subscriptions** for Videre backups or NewPipe subscriptions JSON. Preview, then merge or replace local data. Logins and downloads are excluded. Reopen Videre after restoring.
 
 **Downloads.** Phones and tablets only. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos; playlists download at 720p. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.

@@ -8,6 +8,7 @@ import 'package:clipious/home/states/edit_layout.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 
 import '../../../utils.dart';
+import '../../../settings/views/components/phone_navigation_editor.dart';
 
 @RoutePage()
 class EditHomeLayoutScreen extends StatelessWidget {
@@ -35,104 +36,113 @@ class EditHomeLayoutScreen extends StatelessWidget {
     var colors = Theme.of(context).colorScheme;
     var textStyle = Theme.of(context).textTheme;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(locals.homeLayoutEditor),
-      ),
-      body: SafeArea(
-        bottom: false,
-        child: Padding(
-          padding:
-              const EdgeInsets.symmetric(horizontal: innerHorizontalPadding),
-          child: Column(
-            children: [
-              Text(
-                locals.layoutEditorExplanation,
-                style: textStyle.bodySmall,
-                textAlign: TextAlign.justify,
+    final content = SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: innerHorizontalPadding),
+        child: ListView(
+          children: [
+            Text(
+              locals.layoutEditorExplanation,
+              style: textStyle.bodySmall,
+              textAlign: TextAlign.justify,
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              margin: const EdgeInsets.symmetric(vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: colors.secondaryContainer, width: 2),
               ),
-              Expanded(
-                  child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                margin: const EdgeInsets.symmetric(vertical: 16),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border:
-                      Border.all(color: colors.secondaryContainer, width: 2),
-                ),
-                child: BlocProvider(
-                  create: (context) => EditLayoutCubit(db.getHomeLayout()),
-                  child: BlocBuilder<EditLayoutCubit, HomeLayout>(
-                      builder: (context, layout) {
-                    var editLayout = context.read<EditLayoutCubit>();
+              child: BlocProvider(
+                create: (context) => EditLayoutCubit(db.getHomeLayout()),
+                child: BlocBuilder<EditLayoutCubit, HomeLayout>(
+                    builder: (context, layout) {
+                  var editLayout = context.read<EditLayoutCubit>();
 
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.start,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ...buildSmallSources(context, layout, editLayout),
-                        if (layout.smallSources.length < maxSmallSources)
-                          SizedBox(
-                              height: 20,
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  FilledButton.tonal(
-                                      onPressed: editLayout.addSmallSource,
-                                      child: Text(
-                                        locals.layoutEditorAddVideoSource,
-                                        style: textStyle.bodySmall,
-                                      )),
-                                ],
-                              )),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            SourceSwitcher(
-                              onChange: editLayout.editBigSource,
-                              source: layout.bigSource,
-                              textStyle: textStyle.bodyLarge,
-                            ),
-                            IconButton(
-                                onPressed: editLayout.toggleShowBigSource,
-                                icon: Icon(
-                                  layout.showBigSource
-                                      ? Icons.visibility
-                                      : Icons.visibility_off,
-                                ))
-                          ],
-                        ),
-                        Expanded(
-                            child: AnimatedOpacity(
-                          opacity: layout.showBigSource ? 1 : 0.1,
-                          duration: animationDuration,
-                          child: GridView.count(
-                            crossAxisCount: getGridCount(context),
-                            crossAxisSpacing: 5,
-                            mainAxisSpacing: 5,
-                            childAspectRatio: getGridAspectRatio(context),
-                            children: repeatWidget(
-                                () => const Padding(
-                                      padding:
-                                          EdgeInsets.symmetric(vertical: 8.0),
-                                      child: VideoListItemPlaceHolder(
-                                        animate: false,
-                                      ),
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ...buildSmallSources(context, layout, editLayout),
+                      if (layout.smallSources.length < maxSmallSources)
+                        SizedBox(
+                            height: 20,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                FilledButton.tonal(
+                                    onPressed: editLayout.addSmallSource,
+                                    child: Text(
+                                      locals.layoutEditorAddVideoSource,
+                                      style: textStyle.bodySmall,
+                                    )),
+                              ],
+                            )),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                              child: SourceSwitcher(
+                            onChange: editLayout.editBigSource,
+                            source: layout.bigSource,
+                            textStyle: textStyle.bodyLarge,
+                          )),
+                          IconButton(
+                              onPressed: editLayout.toggleShowBigSource,
+                              icon: Icon(
+                                layout.showBigSource
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                              ))
+                        ],
+                      ),
+                      AnimatedOpacity(
+                        opacity: layout.showBigSource ? 1 : 0.1,
+                        duration: animationDuration,
+                        child: GridView.count(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          crossAxisCount: getGridCount(context),
+                          crossAxisSpacing: 5,
+                          mainAxisSpacing: 5,
+                          childAspectRatio: getGridAspectRatio(context),
+                          children: repeatWidget(
+                              () => const Padding(
+                                    padding:
+                                        EdgeInsets.symmetric(vertical: 8.0),
+                                    child: VideoListItemPlaceHolder(
+                                      animate: false,
                                     ),
-                                count: 10),
-                          ),
-                        ))
-                      ],
-                    );
-                  }),
-                ),
-              ))
-            ],
-          ),
+                                  ),
+                              count: 10),
+                        ),
+                      )
+                    ],
+                  );
+                }),
+              ),
+            )
+          ],
         ),
       ),
     );
+    final phone = getDeviceType() == DeviceType.phone;
+    final screen = Scaffold(
+      appBar: AppBar(
+          title: Text(locals.homeLayoutEditor),
+          bottom: phone
+              ? TabBar(tabs: [
+                  Tab(text: locals.phoneNavigationContent),
+                  Tab(text: locals.phoneNavigationTitle),
+                ])
+              : null),
+      body: phone
+          ? TabBarView(children: [content, const PhoneNavigationEditor()])
+          : content,
+    );
+    return phone ? DefaultTabController(length: 2, child: screen) : screen;
   }
 }
 
@@ -157,11 +167,12 @@ class SmallSource extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.center,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            SourceSwitcher(
+            Expanded(
+                child: SourceSwitcher(
               onChange: onSourceChange,
               source: source,
               big: false,
-            ),
+            )),
             IconButton(
                 onPressed: onDelete,
                 padding: EdgeInsets.zero,
@@ -215,6 +226,7 @@ class SourceSwitcher extends StatelessWidget {
     var colors = Theme.of(context).colorScheme;
 
     return DropdownButton<HomeDataSource>(
+      isExpanded: true,
       style: textStyle ?? textTheme.labelSmall,
       value: source,
       items: HomeDataSource.values
@@ -228,6 +240,7 @@ class SourceSwitcher extends StatelessWidget {
             value: e,
             child: Text(
               e.getLabel(locals),
+              overflow: TextOverflow.ellipsis,
               style: !enabled
                   ? TextStyle(color: colors.secondary.withValues(alpha: 0.5))
                   : null,

@@ -16,6 +16,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../globals.dart';
 import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
+import '../../home/models/phone_navigation.dart';
 import '../../player/states/player.dart';
 import '../../utils.dart';
 import '../../utils/backup.dart';
@@ -459,6 +460,9 @@ class SettingsCubit extends Cubit<SettingsState> {
     await _set(appLayoutSettingName, layoutToString);
   }
 
+  Future<void> setPhoneNavigation(PhoneNavigation layout) =>
+      _set(phoneNavigationSettingName, layout.encode());
+
   setNavigationBarLabelBehavior(
           NavigationDestinationLabelBehavior behavior) async =>
       await _set(navigationBarLabelBehaviorSettingName, behavior.name);
@@ -628,6 +632,12 @@ sealed class SettingsState with _$SettingsState {
             HomeDataSource.values.firstWhere((element) => element.name == e))
         .toList();
   }
+
+  PhoneNavigation? get savedPhoneNavigation =>
+      PhoneNavigation.decode(_get(phoneNavigationSettingName)?.value);
+
+  PhoneNavigation get phoneNavigation =>
+      savedPhoneNavigation ?? PhoneNavigation.fromLegacy(appLayout, onOpen);
 
   NavigationDestinationLabelBehavior get navigationBarLabelBehavior =>
       NavigationDestinationLabelBehavior.values.firstWhere((e) =>

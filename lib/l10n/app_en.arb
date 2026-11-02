@@ -1557,5 +1557,20 @@
   "feedbackDiagnosticManual": "Manual backend choice",
   "feedbackReceiptSaveFailed": "Your report was sent, but its receipt could not be saved on this device. Keep the issue number above.",
   "feedbackPreparingDiagnostics": "Preparing diagnostics…",
-  "feedbackLoadFailed": "Could not read the saved draft. It has been left unchanged. You can return later or start a new report."
+  "feedbackLoadFailed": "Could not read the saved draft. It has been left unchanged. You can return later or start a new report.",
+  "phoneNavigationTitle": "Navigation",
+  "phoneNavigationContent": "Home content",
+  "phoneNavigationBottom": "Bottom tabs",
+  "phoneNavigationTop": "Top icons",
+  "phoneNavigationHidden": "Hidden",
+  "phoneNavigationHelp": "Touch and hold an item to drag it. Drop it before another item to reorder, or in another area to move it. Tap an item for more options. Changes save automatically.",
+  "phoneNavigationDrop": "Drop here to add at the end",
+  "phoneNavigationMove": "Move or customize",
+  "phoneNavigationEarlier": "Move earlier",
+  "phoneNavigationLater": "Move later",
+  "phoneNavigationStartup": "Open this tab at startup",
+  "phoneNavigationLimit": "Keep 2–5 bottom items, including at least one main screen tab. Settings always stays available. The star marks your startup tab.",
+  "phoneNavigationReset": "Restore default navigation",
+  "phoneNavigationSaveError": "Could not save the navigation layout. Please try again.",
+  "phoneNavigationMore": "More shortcuts"
 }
