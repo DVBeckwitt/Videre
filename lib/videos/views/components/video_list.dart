@@ -48,6 +48,8 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
       child: BlocBuilder<ItemListCubit<T>, ItemListState<T>>(
         builder: (context, state) {
           var cubit = context.read<ItemListCubit<T>>();
+          final subscriptionFeed = state.itemList is SubscriptionVideoList;
+          final canLoadMore = subscriptionFeed && state.itemList.getHasMore();
 
           List<IdedVideo> items = state.items;
           if (items.isNotEmpty && items[0] is Video) {
@@ -64,7 +66,9 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                       alignment: Alignment.center,
                       color: colorScheme.surface,
                       child: InkWell(
-                          onTap: () => cubit.getItems(),
+                          onTap: subscriptionFeed
+                              ? cubit.retryItems
+                              : cubit.getItems,
                           child: Text(
                             locals.couldntFetchVideos,
                             style: small
@@ -74,8 +78,11 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                     )
                   : items.isEmpty && !state.loading
                       ? FilledButton.tonal(
-                          onPressed: cubit.refreshItems,
-                          child: Text(locals.refresh))
+                          onPressed: canLoadMore
+                              ? cubit.getMoreItems
+                              : cubit.refreshItems,
+                          child: Text(
+                              canLoadMore ? locals.loadMore : locals.refresh))
                       : Padding(
                           padding: EdgeInsets.only(top: small ? 0.0 : 4.0),
                           child: RefreshIndicator(
@@ -118,6 +125,19 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                                     openVideoOverride: openVideoOverride,
                                   );
                                 }),
+                                if (canLoadMore && !state.loading)
+                                  Center(
+                                    child: TextButton.icon(
+                                        onPressed:
+                                            state.error == ItemListErrors.none
+                                                ? cubit.getMoreItems
+                                                : cubit.retryItems,
+                                        icon: const Icon(Icons.expand_more),
+                                        label: Text(
+                                            state.error == ItemListErrors.none
+                                                ? locals.loadMore
+                                                : locals.retry)),
+                                  ),
                                 if (state.loading)
                                   ...repeatWidget(
                                       () => VideoListItemPlaceHolder(

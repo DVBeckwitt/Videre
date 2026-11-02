@@ -19,6 +19,7 @@ import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
 import '../models/backend_playback.dart';
 import '../models/playback_pitch.dart';
+import '../models/video_quality.dart';
 import '../views/components/player_controls.dart';
 import '../views/tv/components/player_controls.dart';
 import 'interfaces/media_player.dart';
@@ -145,6 +146,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   Server server, {
   required bool preferDash,
   required bool useProxy,
+  int? preferredQuality,
   String? lastSubtitle,
 }) {
   final sources = <BetterPlayerDataSource>[];
@@ -225,6 +227,13 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     for (final stream in accepted) {
       resolutions.putIfAbsent(stream.resolution, () => stream.url);
     }
+    // Change playback priority without reordering the quality menu.
+    final preferred = preferredVideoQualityIndex(
+        accepted.map((s) => videoQualityHeight(s.resolution)).toList(),
+        preferredQuality);
+    if (preferred != null) {
+      accepted.insert(0, accepted.removeAt(preferred));
+    }
     for (final stream in accepted) {
       final sourceResolutions = resolutions[stream.resolution] == stream.url
           ? resolutions
@@ -265,6 +274,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   bool _requestedPlaying = true;
   double _playbackSpeed = 1;
   int _playbackPitchSemitones = 0;
+  String? _qualityVideoId;
+  int? _videoQuality;
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
@@ -752,6 +763,16 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else {
+      if (!_playbackOffline &&
+          (source.videoFormat == BetterPlayerVideoFormat.dash ||
+              source.videoFormat == BetterPlayerVideoFormat.hls) &&
+          (_videoQuality ?? 0) > 0) {
+        // Manifest track discovery runs independently of native setup. Apply a
+        // resolution cap here so slow discovery cannot lose the saved choice.
+        // Do not carry a previous video's width or bitrate into the new video.
+        videoController?.setTrack(BetterPlayerAsmsTrack(
+            null, 2147483647, _videoQuality, 2147483647, null, null, null));
+      }
       final pendingSeek = _pendingSeek;
       if (seekAfterSetup || pendingSeek != null) {
         await seek(pendingSeek ?? _playbackStartAt);
@@ -842,6 +863,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackVideoId = null;
     if (newState.video != null || newState.offlineVideo != null) {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
+      if (_qualityVideoId != idedVideo.videoId) {
+        _qualityVideoId = idedVideo.videoId;
+        _videoQuality = settings.state.rememberVideoQuality
+            ? settings.state.lastVideoQuality
+            : null;
+      }
       _playbackPitchSemitones = player.pitchForVideo(idedVideo.videoId);
       _playbackSpeed = player.speedForVideo(idedVideo.videoId);
       newState = newState.copyWith(bufferPosition: Duration.zero);
@@ -864,7 +891,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
         _playbackSources = [
           BetterPlayerDataSource(
-            BetterPlayerDataSourceType.file,
+            Uri.tryParse(videoPath)?.scheme == 'content'
+                ? BetterPlayerDataSourceType.network
+                : BetterPlayerDataSourceType.file,
             videoPath,
             videoFormat: BetterPlayerVideoFormat.other,
             liveStream: false,
@@ -892,6 +921,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           server,
           preferDash: isUsingDash(),
           useProxy: service.useProxy(),
+          preferredQuality: _videoQuality,
           lastSubtitle: settings.state.rememberSubtitles
               ? settings.state.lastSubtitles
               : null,
@@ -1062,7 +1092,14 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
       final track = _videoTrackToString(videoController?.betterPlayerAsmsTrack);
       log.fine("Current track: $track");
-      return tracks.indexOf(track);
+      final exact = tracks.indexOf(track);
+      if (exact >= 0) return exact;
+      return preferredVideoQualityIndex(
+              videoController!.betterPlayerAsmsTracks
+                  .map((t) => t.height)
+                  .toList(),
+              videoController?.betterPlayerAsmsTrack?.height) ??
+          -1;
     }
     return tracks.indexOf(state.selectedNonDashTrack);
   }
@@ -1133,7 +1170,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   @override
-  selectVideoTrack(int index) {
+  Future<void> selectVideoTrack(int index) async {
     final tracks = getVideoTracks();
     if (index < 0 || index >= tracks.length) return;
     if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
@@ -1141,6 +1178,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           videoController?.betterPlayerAsmsTracks[index];
       if (betterPlayerAsmsTrack != null) {
         videoController?.setTrack(betterPlayerAsmsTrack);
+        await _rememberVideoQuality(betterPlayerAsmsTrack.height);
       }
       return;
     }
@@ -1149,6 +1187,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (url != null) {
       videoController?.setResolution(url);
       emit(state.copyWith(selectedNonDashTrack: track));
+      await _rememberVideoQuality(videoQualityHeight(track));
       return;
     }
     final sourceIndex = _playbackSources
@@ -1167,6 +1206,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         videoController?.pause();
       }
     });
+    await _rememberVideoQuality(videoQualityHeight(track));
+  }
+
+  Future<void> _rememberVideoQuality(int? height) async {
+    if (height == null || height < 0 || height > 16384) return;
+    _videoQuality = height;
+    if (settings.state.rememberVideoQuality) {
+      await settings.setLastVideoQuality(height);
+    }
   }
 
   @override

@@ -392,6 +392,14 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setRememberPlayBackSpeed(bool b) async => await _set(remeberPlaybackSpeed, b);
 
+  Future<void> setRememberVideoQuality(bool value) =>
+      _set(rememberVideoQualitySettingName, value);
+
+  Future<void> setLastVideoQuality(int height) async {
+    if (height < 0 || height > 16384) return;
+    await _set(lastVideoQualitySettingName, height);
+  }
+
   setFillFullscreen(bool b) async => await _set(fillFullScreen, b);
 
   setForceTvUi(bool b) async => await _set(forceTvUiSettingName, b);
@@ -457,6 +465,11 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setDistractionFreeMode(bool b) async =>
       await _set(distractionFreeModeSettingName, b);
+
+  Future<void> setHideWatchedSubscriptions(bool value) async {
+    await _set(hideWatchedSubscriptionsSettingName, value);
+    playbackHistoryRevision.value++;
+  }
 
   _setBackgroundNotifications(bool b) async =>
       await _set(backgroundNotificationsSettingName, b);
@@ -532,6 +545,15 @@ sealed class SettingsState with _$SettingsState {
   bool get rememberSubtitles => _get(rememberLastSubtitle)?.value == 'true';
 
   bool get rememberPlayBackSpeed => _get(remeberPlaybackSpeed)?.value == 'true';
+
+  bool get rememberVideoQuality =>
+      _get(rememberVideoQualitySettingName)?.value != 'false';
+
+  // Zero represents automatic adaptive quality; null means no saved choice.
+  int? get lastVideoQuality {
+    final height = int.tryParse(_get(lastVideoQualitySettingName)?.value ?? '');
+    return height != null && height >= 0 && height <= 16384 ? height : null;
+  }
 
   bool get fillFullscreen => _get(fillFullScreen)?.value == 'true';
 
@@ -615,6 +637,9 @@ sealed class SettingsState with _$SettingsState {
 
   bool get distractionFreeMode =>
       _get(distractionFreeModeSettingName)?.value == "true";
+
+  bool get hideWatchedSubscriptions =>
+      _get(hideWatchedSubscriptionsSettingName)?.value == 'true';
 
   bool get backgroundNotifications =>
       _get(backgroundNotificationsSettingName)?.value == 'true';

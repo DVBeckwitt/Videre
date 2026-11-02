@@ -20,6 +20,9 @@ mixin _$DownloadedVideo {
   String? get authorUrl;
   bool get downloadComplete;
   bool get downloadFailed;
+  bool get storageFailed;
+  String? get folderUri;
+  String? get storageUri;
   bool get audioOnly;
   int get lengthSeconds;
   String get quality;
@@ -49,6 +52,12 @@ mixin _$DownloadedVideo {
                 other.downloadComplete == downloadComplete) &&
             (identical(other.downloadFailed, downloadFailed) ||
                 other.downloadFailed == downloadFailed) &&
+            (identical(other.storageFailed, storageFailed) ||
+                other.storageFailed == storageFailed) &&
+            (identical(other.folderUri, folderUri) ||
+                other.folderUri == folderUri) &&
+            (identical(other.storageUri, storageUri) ||
+                other.storageUri == storageUri) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
             (identical(other.lengthSeconds, lengthSeconds) ||
@@ -66,13 +75,16 @@ mixin _$DownloadedVideo {
       authorUrl,
       downloadComplete,
       downloadFailed,
+      storageFailed,
+      folderUri,
+      storageUri,
       audioOnly,
       lengthSeconds,
       quality);
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -89,6 +101,9 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       String? authorUrl,
       bool downloadComplete,
       bool downloadFailed,
+      bool storageFailed,
+      String? folderUri,
+      String? storageUri,
       bool audioOnly,
       int lengthSeconds,
       String quality});
@@ -113,6 +128,9 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? authorUrl = freezed,
     Object? downloadComplete = null,
     Object? downloadFailed = null,
+    Object? storageFailed = null,
+    Object? folderUri = freezed,
+    Object? storageUri = freezed,
     Object? audioOnly = null,
     Object? lengthSeconds = null,
     Object? quality = null,
@@ -142,6 +160,18 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.downloadFailed
           : downloadFailed // ignore: cast_nullable_to_non_nullable
               as bool,
+      storageFailed: null == storageFailed
+          ? _self.storageFailed
+          : storageFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
+      folderUri: freezed == folderUri
+          ? _self.folderUri
+          : folderUri // ignore: cast_nullable_to_non_nullable
+              as String?,
+      storageUri: freezed == storageUri
+          ? _self.storageUri
+          : storageUri // ignore: cast_nullable_to_non_nullable
+              as String?,
       audioOnly: null == audioOnly
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable
@@ -256,6 +286,9 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? authorUrl,
             bool downloadComplete,
             bool downloadFailed,
+            bool storageFailed,
+            String? folderUri,
+            String? storageUri,
             bool audioOnly,
             int lengthSeconds,
             String quality)?
@@ -272,6 +305,9 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.authorUrl,
             _that.downloadComplete,
             _that.downloadFailed,
+            _that.storageFailed,
+            _that.folderUri,
+            _that.storageUri,
             _that.audioOnly,
             _that.lengthSeconds,
             _that.quality);
@@ -302,6 +338,9 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? authorUrl,
             bool downloadComplete,
             bool downloadFailed,
+            bool storageFailed,
+            String? folderUri,
+            String? storageUri,
             bool audioOnly,
             int lengthSeconds,
             String quality)
@@ -317,6 +356,9 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.authorUrl,
             _that.downloadComplete,
             _that.downloadFailed,
+            _that.storageFailed,
+            _that.folderUri,
+            _that.storageUri,
             _that.audioOnly,
             _that.lengthSeconds,
             _that.quality);
@@ -344,6 +386,9 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? authorUrl,
             bool downloadComplete,
             bool downloadFailed,
+            bool storageFailed,
+            String? folderUri,
+            String? storageUri,
             bool audioOnly,
             int lengthSeconds,
             String quality)?
@@ -359,6 +404,9 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.authorUrl,
             _that.downloadComplete,
             _that.downloadFailed,
+            _that.storageFailed,
+            _that.folderUri,
+            _that.storageUri,
             _that.audioOnly,
             _that.lengthSeconds,
             _that.quality);
@@ -378,6 +426,9 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.authorUrl,
       this.downloadComplete = false,
       this.downloadFailed = false,
+      this.storageFailed = false,
+      this.folderUri,
+      this.storageUri,
       this.audioOnly = false,
       required this.lengthSeconds,
       required this.quality})
@@ -399,6 +450,13 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   @JsonKey()
   final bool downloadFailed;
+  @override
+  @JsonKey()
+  final bool storageFailed;
+  @override
+  final String? folderUri;
+  @override
+  final String? storageUri;
   @override
   @JsonKey()
   final bool audioOnly;
@@ -436,6 +494,12 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.downloadComplete == downloadComplete) &&
             (identical(other.downloadFailed, downloadFailed) ||
                 other.downloadFailed == downloadFailed) &&
+            (identical(other.storageFailed, storageFailed) ||
+                other.storageFailed == storageFailed) &&
+            (identical(other.folderUri, folderUri) ||
+                other.folderUri == folderUri) &&
+            (identical(other.storageUri, storageUri) ||
+                other.storageUri == storageUri) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
             (identical(other.lengthSeconds, lengthSeconds) ||
@@ -453,13 +517,16 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       authorUrl,
       downloadComplete,
       downloadFailed,
+      storageFailed,
+      folderUri,
+      storageUri,
       audioOnly,
       lengthSeconds,
       quality);
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -478,6 +545,9 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       String? authorUrl,
       bool downloadComplete,
       bool downloadFailed,
+      bool storageFailed,
+      String? folderUri,
+      String? storageUri,
       bool audioOnly,
       int lengthSeconds,
       String quality});
@@ -502,6 +572,9 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? authorUrl = freezed,
     Object? downloadComplete = null,
     Object? downloadFailed = null,
+    Object? storageFailed = null,
+    Object? folderUri = freezed,
+    Object? storageUri = freezed,
     Object? audioOnly = null,
     Object? lengthSeconds = null,
     Object? quality = null,
@@ -531,6 +604,18 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.downloadFailed
           : downloadFailed // ignore: cast_nullable_to_non_nullable
               as bool,
+      storageFailed: null == storageFailed
+          ? _self.storageFailed
+          : storageFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
+      folderUri: freezed == folderUri
+          ? _self.folderUri
+          : folderUri // ignore: cast_nullable_to_non_nullable
+              as String?,
+      storageUri: freezed == storageUri
+          ? _self.storageUri
+          : storageUri // ignore: cast_nullable_to_non_nullable
+              as String?,
       audioOnly: null == audioOnly
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable

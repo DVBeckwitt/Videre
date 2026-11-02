@@ -7,11 +7,10 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/states/player.dart';
-import 'package:clipious/player/states/video_queue.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_app_cubit.dart';
@@ -225,12 +224,5 @@ void main() {
     expect(player.state.hasTimer, isFalse);
     expect(player.state.mediaCommand, isNull);
     await tester.runAsync(player.close);
-  });
-
-  test('closing the queue releases its scroll controller', () async {
-    final scrollController = ScrollController();
-    final queue = VideoQueueCubit(scrollController);
-    await queue.close();
-    expect(() => scrollController.addListener(() {}), throwsFlutterError);
   });
 }

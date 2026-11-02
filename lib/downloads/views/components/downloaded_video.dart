@@ -46,7 +46,7 @@ class DownloadedVideoView extends StatelessWidget {
                 cubit.retryDownload(video);
               },
             ),
-          if (video.downloadComplete)
+          if (video.downloadComplete && video.storageUri == null)
             ListTile(
               leading: const Icon(Icons.copy),
               title: Text(locals.copyToDownloadFolder),
@@ -64,7 +64,15 @@ class DownloadedVideoView extends StatelessWidget {
             title: Text(locals.delete),
             onTap: () async {
               Navigator.of(ctx).pop();
-              await cubit.deleteVideo(video);
+              try {
+                await cubit.deleteVideo(video);
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(locals.downloadFolderError)));
+                }
+                return;
+              }
               if (context.mounted) {
                 ScaffoldMessenger.of(context)
                     .showSnackBar(SnackBar(content: Text(locals.videoDeleted)));
@@ -83,15 +91,17 @@ class DownloadedVideoView extends StatelessWidget {
     final progress = state.downloadProgresses[video.videoId];
     final paused = state.pausedVideoIds.contains(video.videoId);
     final pending = !video.downloadComplete && !video.downloadFailed;
-    final status = video.downloadFailed
-        ? locals.videoFailedDownloadRetry
-        : paused
-            ? locals.downloadPaused
-            : state.waitingForWifi
-                ? locals.downloadsWaitingForWifi
-                : progress == null
-                    ? locals.downloadQueued
-                    : null;
+    final status = video.storageFailed
+        ? locals.downloadFolderError
+        : video.downloadFailed
+            ? locals.videoFailedDownloadRetry
+            : paused
+                ? locals.downloadPaused
+                : state.waitingForWifi
+                    ? locals.downloadsWaitingForWifi
+                    : progress == null
+                        ? locals.downloadQueued
+                        : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

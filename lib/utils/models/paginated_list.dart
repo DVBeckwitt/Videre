@@ -3,12 +3,20 @@ import 'package:clipious/utils/extensions/list_unique.dart';
 import 'package:clipious/utils/models/item_with_continuation.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/foundation.dart';
+import '../../settings/models/db/settings.dart';
+import '../../videos/models/db/progress.dart';
 
 import '../../globals.dart';
 
 const _done = "NO_MORE_VIDEOS";
 
 abstract class PaginatedList<T> {
+  /// Reapply local visibility rules without refetching pages or losing cursors.
+  Listenable? get changes => null;
+
+  List<T> visibleItems(List<T> items) => items;
+
   Future<List<T>> getItems();
 
   Future<List<T>> getMoreItems();
@@ -134,6 +142,18 @@ class SubscriptionVideoList extends PaginatedList<Video> {
   int page = 1;
   bool hasMoreOnline = true;
   Map<String, String> continuations = {};
+
+  @override
+  Listenable get changes => playbackHistoryRevision;
+
+  @override
+  List<Video> visibleItems(List<Video> items) =>
+      db.getSettings(hideWatchedSubscriptionsSettingName)?.value == 'true'
+          ? items
+              .where((video) =>
+                  db.getVideoProgress(video.videoId) < watchedProgressThreshold)
+              .toList()
+          : items;
 
   @override
   Future<List<Video>> getItems() async {

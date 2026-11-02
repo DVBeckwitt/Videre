@@ -215,6 +215,13 @@ class _MainScreenState extends State<MainContentScreen> {
                         const AppBarDownloadButton(),
                         if (deviceType == DeviceType.phone)
                           IconButton(
+                            tooltip: locals.videoQueue,
+                            onPressed: () => AutoRouter.of(context)
+                                .push(const VideoQueueRoute()),
+                            icon: const Icon(Icons.queue_music),
+                          ),
+                        if (deviceType == DeviceType.phone)
+                          IconButton(
                             tooltip: locals.playlists,
                             onPressed: () => AutoRouter.of(context)
                                 .push(const PlaylistLibraryRoute()),

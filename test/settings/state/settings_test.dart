@@ -127,6 +127,33 @@ Future<void> main() async {
     expect(SettingsState.init().skipStep, 30);
   });
 
+  test('video quality defaults on and survives settings reload', () async {
+    expect(settingsCubit.state.rememberVideoQuality, isTrue);
+    expect(settingsCubit.state.lastVideoQuality, isNull);
+    await settingsCubit.setLastVideoQuality(720);
+    expect(SettingsState.init().lastVideoQuality, 720);
+    await settingsCubit.setRememberVideoQuality(false);
+    expect(SettingsState.init().rememberVideoQuality, isFalse);
+    expect(SettingsState.init().lastVideoQuality, 720);
+    await settingsCubit.setLastVideoQuality(0);
+    expect(SettingsState.init().lastVideoQuality, 0);
+    await settingsCubit.setLastVideoQuality(-1);
+    await settingsCubit.setLastVideoQuality(20000);
+    expect(SettingsState.init().lastVideoQuality, 0);
+    await settingsCubit
+        .saveSetting(SettingsValue(lastVideoQualitySettingName, 'invalid'));
+    expect(SettingsState.init().lastVideoQuality, isNull);
+  });
+
+  test('hiding watched subscriptions defaults off and persists', () async {
+    expect(settingsCubit.state.hideWatchedSubscriptions, isFalse);
+    await settingsCubit.setHideWatchedSubscriptions(true);
+    expect(settingsCubit.state.hideWatchedSubscriptions, isTrue);
+    expect(SettingsState.init().hideWatchedSubscriptions, isTrue);
+    await settingsCubit.setHideWatchedSubscriptions(false);
+    expect(SettingsState.init().hideWatchedSubscriptions, isFalse);
+  });
+
   test('reducing the history limit immediately trims existing history',
       () async {
     for (var index = 0; index < 5; index++) {

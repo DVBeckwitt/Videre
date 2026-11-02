@@ -186,6 +186,8 @@
       }
     }
   },
+  "hideWatchedSubscriptions": "Hide watched subscription videos",
+  "hideWatchedSubscriptionsDescription": "Hide videos marked watched in your subscriptions feed (90% played). Turn this off to show them again.",
   "loadMore": "Load more",
   "@loadMore": {
     "description": "CTA to load more"
@@ -370,6 +372,10 @@
   "error": "Error",
   "@error": {},
   "videoQueue": "Video queue",
+  "videoQueueEmpty": "Your queue is empty",
+  "videoQueueEmptyDescription": "Start a video, then use Add to queue to line up more videos.",
+  "rememberVideoQuality": "Remember video quality",
+  "rememberVideoQualityDescription": "Use your last selected quality for new videos, or the closest lower quality available. If none is lower, use the lowest available quality.",
   "@videoQueue": {
     "description": "Label for button to display the video queue"
   },
@@ -1282,6 +1288,14 @@
   "openWikiLink": "Open wiki for help",
   "serverUnreachable": "Server is unreachable, or is not a valid invidious server",
   "copyToDownloadFolder": "Copy to download folder",
+  "downloadFolder": "Download folder",
+  "downloadFolderSummary": "Choose where new downloads are saved",
+  "downloadFolderPrivate": "App storage (private)",
+  "downloadFolderChoose": "Choose folder",
+  "downloadFolderUsePrivate": "Use app storage",
+  "downloadFolderDescription": "New downloads will be saved here. Existing downloads stay in their current location. Videre needs temporary space in app storage while downloading. Files in a chosen folder can be accessed by other apps and remain after uninstalling Videre.",
+  "downloadFolderError": "Cannot access the download folder. Reconnect the storage or choose the same folder again, then retry.",
+  "downloadFolderPickerUnavailable": "No folder picker is available. Downloads can still use app storage on this device.",
   "fileCopiedToDownloadFolder": "File copied to download folder",
   "videoDeleted": "Video deleted",
   "sleepTimer": "Sleep timer",

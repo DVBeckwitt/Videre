@@ -5,6 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   const server = Server(url: 'https://instance.example');
 
+  test('storyboards use the instance proxy and preserve signatures', () {
+    for (final host in ['i.ytimg.com', 'i1.ytimg.com']) {
+      final url = invidiousImageUrl(
+          'https://$host/sb/video/L2/M1.jpg?sigh=a%2Fb&x=1', server);
+      expect(url,
+          'https://instance.example/sb/${host.split('.').first}/video/L2/M1.jpg?sigh=a%2Fb&x=1');
+      expect(invidiousImageUrl(url, server), url);
+    }
+  });
+
   test('Google avatar hosts use the instance image proxy', () {
     for (final url in [
       'https://yt3.googleusercontent.com/a%2Fb=s176-c-k-c0x00ffffff-no-rj',

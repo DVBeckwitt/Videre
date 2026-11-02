@@ -6,6 +6,7 @@ import 'package:clipious/app/views/tv/screens/tv_home.dart';
 import 'package:clipious/channels/views/screens/info_tab.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/player/views/tv/screens/tv_player_view.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/views/screens/playlist.dart';
@@ -186,6 +187,7 @@ class AppRouter extends RootStackRouter {
                           page: ChannelPlaylistsRoute.page, path: playlistsPath)
                     ]),
                 AutoRoute(page: DownloadManagerRoute.page),
+                AutoRoute(page: VideoQueueRoute.page),
                 AutoRoute(page: PlaylistLibraryRoute.page),
                 AutoRoute(page: SearchRoute.page, path: searchPath, children: [
                   AutoRoute(page: SearchVideoRoute.page, path: videosPath),

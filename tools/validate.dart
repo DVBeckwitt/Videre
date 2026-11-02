@@ -40,6 +40,7 @@ const offlineTestTargets = [
 
 // Keep formatting and strict analysis coverage aligned.
 const strictValidationTargets = [
+  './test/widget_test.dart',
   './test/service_test.dart',
   './test/videos/state/video_test.dart',
   './test/utils/file_db_test.dart',
@@ -51,6 +52,11 @@ const strictValidationTargets = [
   './test/player/media_item_artwork_test.dart',
   './test/player/player_queue_lifecycle_test.dart',
   './test/player/queue_navigation_test.dart',
+  './test/player/video_quality_test.dart',
+  './test/player/seek_preview_test.dart',
+  './test/player/player_controls_test.dart',
+  './test/videos/models/storyboard_test.dart',
+  './test/utils/backup_test.dart',
   './test/utils/item_list_test.dart',
   './test/utils/select_list_test.dart',
   './test/playlists/state/playlist_test.dart',

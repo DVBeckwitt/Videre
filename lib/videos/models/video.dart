@@ -11,6 +11,7 @@ import '../../utils/models/image_object.dart';
 import 'adaptive_format.dart';
 import 'caption.dart';
 import 'format_stream.dart';
+import 'storyboard.dart';
 
 part 'video.freezed.dart';
 part 'video.g.dart';
@@ -99,6 +100,9 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       List<AdaptiveFormat>? adaptiveFormats,
       @JsonKey(fromJson: _parseFormatStreams) List<FormatStream>? formatStreams,
       @Default([]) List<Caption> captions,
+      @JsonKey(fromJson: Storyboard.parseList)
+      @Default([])
+      List<Storyboard> storyboards,
       @Default([]) List<Video> recommendedVideos,
       String? title,
       int? lengthSeconds,

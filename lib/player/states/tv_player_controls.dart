@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_debounce.dart';
@@ -20,19 +22,41 @@ final log = Logger('TvPlayerController');
 
 class TvPlayerControlsCubit extends Cubit<TvPlayerControlsState> {
   final PlayerCubit player;
+  Timer? _previewTimer;
 
   TvPlayerControlsCubit(super.initialState, this.player);
 
   fastForward() {
     player.fastForward();
+    _showSeekPreview();
   }
 
   fastRewind() {
     player.rewind();
+    _showSeekPreview();
+  }
+
+  void _showSeekPreview() {
+    showUi();
+    _previewTimer?.cancel();
+    emit(state.copyWith(
+        seekPreviewPosition: player.state.position,
+        seekPreviewVideoId: player.state.currentlyPlaying?.videoId ??
+            player.state.offlineCurrentlyPlaying?.videoId));
+    _previewTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (!isClosed) emit(state.copyWith(seekPreviewPosition: null));
+    });
+  }
+
+  @override
+  Future<void> close() {
+    _previewTimer?.cancel();
+    return super.close();
   }
 
   displaySettings() {
-    emit(state.copyWith(showSettings: true, displayControls: false));
+    emit(state.copyWith(
+        showSettings: true, displayControls: false, seekPreviewPosition: null));
   }
 
   showUi() {
@@ -94,7 +118,7 @@ class TvPlayerControlsCubit extends Cubit<TvPlayerControlsState> {
         } else if (isOk(event.logicalKey)) {
           emit(state.copyWith(displayControls: true));
         }
-      } else {}
+      }
     }
     if (event is KeyRepeatEvent) {
       if (timeLineControl) {
@@ -133,7 +157,8 @@ class TvPlayerControlsCubit extends Cubit<TvPlayerControlsState> {
   }
 
   displayQueue() {
-    emit(state.copyWith(showQueue: true, displayControls: false));
+    emit(state.copyWith(
+        showQueue: true, displayControls: false, seekPreviewPosition: null));
   }
 
   Future<void> playFromQueue(Video video) async {
@@ -145,9 +170,6 @@ class TvPlayerControlsCubit extends Cubit<TvPlayerControlsState> {
   onStreamEvent(MediaEvent event) {
     log.fine('Event: ${event.state}, ${event.type}');
     switch (event.state) {
-      case MediaState.buffering:
-        // showControls();
-        break;
       case MediaState.loading:
       case MediaState.ready:
         showUi();
@@ -166,6 +188,8 @@ sealed class TvPlayerControlsState with _$TvPlayerControlsState {
     @Default(false) bool showQueue,
     @Default(false) bool loading,
     @Default(false) bool displayControls,
+    Duration? seekPreviewPosition,
+    String? seekPreviewVideoId,
   }) = _TvPlayerControlsState;
 
   const TvPlayerControlsState._();

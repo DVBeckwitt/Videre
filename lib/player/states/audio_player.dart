@@ -313,7 +313,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           if (offline) {
             final path = await offlineVideo!.effectivePath;
             if (!active()) return false;
-            source = AudioSource.file(path);
+            source = Uri.tryParse(path)?.scheme == 'content'
+                ? AudioSource.uri(Uri.parse(path))
+                : AudioSource.file(path);
           } else {
             final selectedServer = await db.getCurrentlySelectedServer();
             if (!active()) return false;

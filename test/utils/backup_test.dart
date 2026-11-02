@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
+import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -67,6 +68,64 @@ void main() {
     expect(target.getSettings(useDashSettingName)?.value, 'false');
     expect(target.getVideoProgress(id), 0.4);
     expect((await target.getServers()).single.authToken, 'keep');
+  });
+
+  test('quality preference and opt-out survive backup restore', () async {
+    await source
+        .saveSetting(SettingsValue(rememberVideoQualitySettingName, 'false'));
+    await source
+        .saveSetting(SettingsValue(lastVideoQualitySettingName, '1080'));
+    await target.restoreBackup(
+        UserBackup.parse((await source.exportBackup()).encode()));
+    expect(target.getSettings(rememberVideoQualitySettingName)?.value, 'false');
+    expect(target.getSettings(lastVideoQualitySettingName)?.value, '1080');
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(lastVideoQualitySettingName, '0')),
+        isTrue);
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(lastVideoQualitySettingName, '-1')),
+        isFalse);
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(lastVideoQualitySettingName, '99999')),
+        isFalse);
+  });
+
+  test('watched subscription visibility survives backup restore', () async {
+    for (final value in ['true', 'false']) {
+      await source.saveSetting(
+          SettingsValue(hideWatchedSubscriptionsSettingName, value));
+      await target.restoreBackup(await source.exportBackup(), replace: true);
+      expect(target.getSettings(hideWatchedSubscriptionsSettingName)?.value,
+          value);
+    }
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(hideWatchedSubscriptionsSettingName, 'invalid')),
+        isFalse);
+  });
+
+  test('download folder grants stay on their device during backup and restore',
+      () async {
+    await source.saveSetting(SettingsValue(
+        downloadFolderSetting,
+        jsonEncode(
+            const DownloadFolder('content://source/tree/folder', 'Source')
+                .toJson())));
+    await target.saveSetting(SettingsValue(
+        downloadFolderSetting,
+        jsonEncode(
+            const DownloadFolder('content://target/tree/folder', 'Target')
+                .toJson())));
+    final backup = await source.exportBackup();
+    expect(backup.encode(), isNot(contains('content://source')));
+    for (final replace in [false, true]) {
+      await target.restoreBackup(backup, replace: replace);
+      expect(target.getSettings(downloadFolderSetting)!.value,
+          contains('content://target'));
+    }
   });
 
   test('backup preserves destination notification permission and scheduling',

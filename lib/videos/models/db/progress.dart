@@ -1,6 +1,10 @@
 import 'package:json_annotation/json_annotation.dart';
+import 'package:flutter/foundation.dart';
 
 part 'progress.g.dart';
+
+final playbackHistoryRevision = ValueNotifier(0);
+const watchedProgressThreshold = 0.9;
 
 @JsonSerializable()
 class Progress {

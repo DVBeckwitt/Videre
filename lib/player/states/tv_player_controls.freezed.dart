@@ -19,6 +19,8 @@ mixin _$TvPlayerControlsState {
   bool get showQueue;
   bool get loading;
   bool get displayControls;
+  Duration? get seekPreviewPosition;
+  String? get seekPreviewVideoId;
 
   /// Create a copy of TvPlayerControlsState
   /// with the given fields replaced by the non-null parameter values.
@@ -41,16 +43,27 @@ mixin _$TvPlayerControlsState {
                 other.showQueue == showQueue) &&
             (identical(other.loading, loading) || other.loading == loading) &&
             (identical(other.displayControls, displayControls) ||
-                other.displayControls == displayControls));
+                other.displayControls == displayControls) &&
+            (identical(other.seekPreviewPosition, seekPreviewPosition) ||
+                other.seekPreviewPosition == seekPreviewPosition) &&
+            (identical(other.seekPreviewVideoId, seekPreviewVideoId) ||
+                other.seekPreviewVideoId == seekPreviewVideoId));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, controlsOpacity, showSettings,
-      showQueue, loading, displayControls);
+  int get hashCode => Object.hash(
+      runtimeType,
+      controlsOpacity,
+      showSettings,
+      showQueue,
+      loading,
+      displayControls,
+      seekPreviewPosition,
+      seekPreviewVideoId);
 
   @override
   String toString() {
-    return 'TvPlayerControlsState(controlsOpacity: $controlsOpacity, showSettings: $showSettings, showQueue: $showQueue, loading: $loading, displayControls: $displayControls)';
+    return 'TvPlayerControlsState(controlsOpacity: $controlsOpacity, showSettings: $showSettings, showQueue: $showQueue, loading: $loading, displayControls: $displayControls, seekPreviewPosition: $seekPreviewPosition, seekPreviewVideoId: $seekPreviewVideoId)';
   }
 }
 
@@ -65,7 +78,9 @@ abstract mixin class $TvPlayerControlsStateCopyWith<$Res> {
       bool showSettings,
       bool showQueue,
       bool loading,
-      bool displayControls});
+      bool displayControls,
+      Duration? seekPreviewPosition,
+      String? seekPreviewVideoId});
 }
 
 /// @nodoc
@@ -86,6 +101,8 @@ class _$TvPlayerControlsStateCopyWithImpl<$Res>
     Object? showQueue = null,
     Object? loading = null,
     Object? displayControls = null,
+    Object? seekPreviewPosition = freezed,
+    Object? seekPreviewVideoId = freezed,
   }) {
     return _then(_self.copyWith(
       controlsOpacity: null == controlsOpacity
@@ -108,6 +125,14 @@ class _$TvPlayerControlsStateCopyWithImpl<$Res>
           ? _self.displayControls
           : displayControls // ignore: cast_nullable_to_non_nullable
               as bool,
+      seekPreviewPosition: freezed == seekPreviewPosition
+          ? _self.seekPreviewPosition
+          : seekPreviewPosition // ignore: cast_nullable_to_non_nullable
+              as Duration?,
+      seekPreviewVideoId: freezed == seekPreviewVideoId
+          ? _self.seekPreviewVideoId
+          : seekPreviewVideoId // ignore: cast_nullable_to_non_nullable
+              as String?,
     ));
   }
 }
@@ -203,16 +228,28 @@ extension TvPlayerControlsStatePatterns on TvPlayerControlsState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(double controlsOpacity, bool showSettings, bool showQueue,
-            bool loading, bool displayControls)?
+    TResult Function(
+            double controlsOpacity,
+            bool showSettings,
+            bool showQueue,
+            bool loading,
+            bool displayControls,
+            Duration? seekPreviewPosition,
+            String? seekPreviewVideoId)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _TvPlayerControlsState() when $default != null:
-        return $default(_that.controlsOpacity, _that.showSettings,
-            _that.showQueue, _that.loading, _that.displayControls);
+        return $default(
+            _that.controlsOpacity,
+            _that.showSettings,
+            _that.showQueue,
+            _that.loading,
+            _that.displayControls,
+            _that.seekPreviewPosition,
+            _that.seekPreviewVideoId);
       case _:
         return orElse();
     }
@@ -233,15 +270,27 @@ extension TvPlayerControlsStatePatterns on TvPlayerControlsState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(double controlsOpacity, bool showSettings, bool showQueue,
-            bool loading, bool displayControls)
+    TResult Function(
+            double controlsOpacity,
+            bool showSettings,
+            bool showQueue,
+            bool loading,
+            bool displayControls,
+            Duration? seekPreviewPosition,
+            String? seekPreviewVideoId)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _TvPlayerControlsState():
-        return $default(_that.controlsOpacity, _that.showSettings,
-            _that.showQueue, _that.loading, _that.displayControls);
+        return $default(
+            _that.controlsOpacity,
+            _that.showSettings,
+            _that.showQueue,
+            _that.loading,
+            _that.displayControls,
+            _that.seekPreviewPosition,
+            _that.seekPreviewVideoId);
     }
   }
 
@@ -259,15 +308,27 @@ extension TvPlayerControlsStatePatterns on TvPlayerControlsState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(double controlsOpacity, bool showSettings, bool showQueue,
-            bool loading, bool displayControls)?
+    TResult? Function(
+            double controlsOpacity,
+            bool showSettings,
+            bool showQueue,
+            bool loading,
+            bool displayControls,
+            Duration? seekPreviewPosition,
+            String? seekPreviewVideoId)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _TvPlayerControlsState() when $default != null:
-        return $default(_that.controlsOpacity, _that.showSettings,
-            _that.showQueue, _that.loading, _that.displayControls);
+        return $default(
+            _that.controlsOpacity,
+            _that.showSettings,
+            _that.showQueue,
+            _that.loading,
+            _that.displayControls,
+            _that.seekPreviewPosition,
+            _that.seekPreviewVideoId);
       case _:
         return null;
     }
@@ -282,7 +343,9 @@ class _TvPlayerControlsState extends TvPlayerControlsState {
       this.showSettings = false,
       this.showQueue = false,
       this.loading = false,
-      this.displayControls = false})
+      this.displayControls = false,
+      this.seekPreviewPosition,
+      this.seekPreviewVideoId})
       : super._();
 
   @override
@@ -300,6 +363,10 @@ class _TvPlayerControlsState extends TvPlayerControlsState {
   @override
   @JsonKey()
   final bool displayControls;
+  @override
+  final Duration? seekPreviewPosition;
+  @override
+  final String? seekPreviewVideoId;
 
   /// Create a copy of TvPlayerControlsState
   /// with the given fields replaced by the non-null parameter values.
@@ -323,16 +390,27 @@ class _TvPlayerControlsState extends TvPlayerControlsState {
                 other.showQueue == showQueue) &&
             (identical(other.loading, loading) || other.loading == loading) &&
             (identical(other.displayControls, displayControls) ||
-                other.displayControls == displayControls));
+                other.displayControls == displayControls) &&
+            (identical(other.seekPreviewPosition, seekPreviewPosition) ||
+                other.seekPreviewPosition == seekPreviewPosition) &&
+            (identical(other.seekPreviewVideoId, seekPreviewVideoId) ||
+                other.seekPreviewVideoId == seekPreviewVideoId));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, controlsOpacity, showSettings,
-      showQueue, loading, displayControls);
+  int get hashCode => Object.hash(
+      runtimeType,
+      controlsOpacity,
+      showSettings,
+      showQueue,
+      loading,
+      displayControls,
+      seekPreviewPosition,
+      seekPreviewVideoId);
 
   @override
   String toString() {
-    return 'TvPlayerControlsState(controlsOpacity: $controlsOpacity, showSettings: $showSettings, showQueue: $showQueue, loading: $loading, displayControls: $displayControls)';
+    return 'TvPlayerControlsState(controlsOpacity: $controlsOpacity, showSettings: $showSettings, showQueue: $showQueue, loading: $loading, displayControls: $displayControls, seekPreviewPosition: $seekPreviewPosition, seekPreviewVideoId: $seekPreviewVideoId)';
   }
 }
 
@@ -349,7 +427,9 @@ abstract mixin class _$TvPlayerControlsStateCopyWith<$Res>
       bool showSettings,
       bool showQueue,
       bool loading,
-      bool displayControls});
+      bool displayControls,
+      Duration? seekPreviewPosition,
+      String? seekPreviewVideoId});
 }
 
 /// @nodoc
@@ -370,6 +450,8 @@ class __$TvPlayerControlsStateCopyWithImpl<$Res>
     Object? showQueue = null,
     Object? loading = null,
     Object? displayControls = null,
+    Object? seekPreviewPosition = freezed,
+    Object? seekPreviewVideoId = freezed,
   }) {
     return _then(_TvPlayerControlsState(
       controlsOpacity: null == controlsOpacity
@@ -392,6 +474,14 @@ class __$TvPlayerControlsStateCopyWithImpl<$Res>
           ? _self.displayControls
           : displayControls // ignore: cast_nullable_to_non_nullable
               as bool,
+      seekPreviewPosition: freezed == seekPreviewPosition
+          ? _self.seekPreviewPosition
+          : seekPreviewPosition // ignore: cast_nullable_to_non_nullable
+              as Duration?,
+      seekPreviewVideoId: freezed == seekPreviewVideoId
+          ? _self.seekPreviewVideoId
+          : seekPreviewVideoId // ignore: cast_nullable_to_non_nullable
+              as String?,
     ));
   }
 }

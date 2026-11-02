@@ -8,6 +8,7 @@ import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../../feedback/views/open_feedback.dart';
+import '../../../downloads/views/components/download_folder.dart';
 import '../../states/settings.dart';
 import 'network_proxy.dart';
 
@@ -135,6 +136,12 @@ class SettingsScreen extends StatelessWidget {
                             state.backgroundNotificationFrequency.toString())
                         : locals.notificationsDescription),
                     onPressed: openNotificationSettings,
+                  ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.folder_open),
+                    title: Text(locals.downloadFolder),
+                    description: Text(locals.downloadFolderSummary),
+                    onPressed: showDownloadFolder,
                   ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.palette_outlined),

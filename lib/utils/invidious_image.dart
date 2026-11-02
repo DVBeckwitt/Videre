@@ -23,7 +23,9 @@ String invidiousImageUrl(String url, Server server) {
   } else if (RegExp(r'^i[0-9]?\.ytimg\.com$').hasMatch(image.host)) {
     // Only routes supported by Invidious's image controller. In particular,
     // /vi_webp is not a proxy endpoint; request its JPEG equivalent instead.
-    if (RegExp(r'^/vi/[^/]+/[^/]+$').hasMatch(image.path) ||
+    if (image.path.startsWith('/sb/')) {
+      path = '/sb/${image.host.split('.').first}/${image.path.substring(4)}';
+    } else if (RegExp(r'^/vi/[^/]+/[^/]+$').hasMatch(image.path) ||
         RegExp(r'^/(s_p|pl_c|tvfilm_banner)/[^/]+/[^/]+$')
             .hasMatch(image.path)) {
       path = image.path;

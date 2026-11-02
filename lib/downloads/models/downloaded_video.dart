@@ -21,6 +21,9 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       String? authorUrl,
       @Default(false) bool downloadComplete,
       @Default(false) bool downloadFailed,
+      @Default(false) bool storageFailed,
+      String? folderUri,
+      String? storageUri,
       @Default(false) bool audioOnly,
       required int lengthSeconds,
       required String quality}) = _DownloadedVideo;
@@ -40,6 +43,7 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   /// Effective path for legacy reasons, old  versions videos would be mp4, now it's all webm
   @JsonKey(includeFromJson: false, includeToJson: false)
   Future<String> get effectivePath async {
+    if (storageUri != null) return storageUri!;
     Directory dir = await _getDownloadFolder();
 
     if (audioOnly) {
@@ -52,6 +56,12 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
 
       return path;
     }
+  }
+
+  String get fileName {
+    final name = title.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
+    final shortened = String.fromCharCodes(name.runes.take(50));
+    return '${shortened.isEmpty ? videoId : shortened}_$videoId.webm';
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)

@@ -35,7 +35,40 @@ Future<ItemListCubit<int>> _loaded(_Pages pages) async {
   return cubit;
 }
 
+class _VisibilityNotifier extends ValueNotifier<bool> {
+  _VisibilityNotifier() : super(false);
+
+  bool get isObserved => hasListeners;
+}
+
+class _FilteredPages extends _Pages {
+  @override
+  final _VisibilityNotifier changes = _VisibilityNotifier();
+
+  @override
+  List<int> visibleItems(List<int> items) =>
+      changes.value ? items.where((item) => item.isEven).toList() : items;
+}
+
 void main() {
+  test('visibility changes during pagination preserve the unfiltered pages',
+      () async {
+    final next = Completer<List<int>>();
+    final pages = _FilteredPages()..more = () => next.future;
+    final cubit = await _loaded(pages);
+    final loading = cubit.getMoreItems();
+    pages.changes.value = true;
+    expect(cubit.state.items, isEmpty);
+    next.complete([2, 3]);
+    await loading;
+    expect(cubit.state.items, [2]);
+    pages.changes.value = false;
+    expect(cubit.state.items, [1, 2, 3]);
+    await cubit.close();
+    expect(pages.changes.isObserved, isFalse);
+    pages.changes.dispose();
+  });
+
   test('load-more future waits and overlapping requests load one page',
       () async {
     final next = Completer<List<int>>();
@@ -64,9 +97,36 @@ void main() {
     expect(cubit.state.error, ItemListErrors.couldNotFetchItems);
     expect(cubit.state.loading, isFalse);
     pages.more = () async => [2];
-    await cubit.getMoreItems();
+    await cubit.retryItems();
     expect(cubit.state.items, [1, 2]);
     expect(cubit.state.error, ItemListErrors.none);
+  });
+
+  test('initial-load retry does not advance to the next page', () async {
+    final pages = _Pages()..initial = () async => throw StateError('offline');
+    final cubit = await _loaded(pages);
+    addTearDown(cubit.close);
+    pages.initial = () async => [3];
+    await cubit.retryItems();
+    expect(cubit.state.items, [3]);
+    expect(cubit.state.error, ItemListErrors.none);
+    expect(pages.moreCalls, 0);
+  });
+
+  test('failed refresh retries replacement without appending old pages',
+      () async {
+    final pages = _Pages();
+    final cubit = await _loaded(pages);
+    addTearDown(cubit.close);
+    await cubit.getMoreItems();
+    pages.initial = () async => throw StateError('offline');
+    await cubit.refreshItems();
+    expect(cubit.state.items, [1, 2]);
+    pages.initial = () async => [4];
+    await cubit.retryItems();
+    expect(cubit.state.items, [4]);
+    expect(cubit.state.error, ItemListErrors.none);
+    expect(pages.moreCalls, 1);
   });
 
   test('closing a pending initial load ignores a late failure', () async {

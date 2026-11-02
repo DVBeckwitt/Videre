@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/player/states/audio_player.dart';
@@ -237,6 +238,33 @@ void main() {
       }
     });
   }
+
+  test('offline audio uses the persisted document URI', () async {
+    const uri = 'content://documents/tree/folder/document/audio.webm';
+    await player.close();
+    player = TestPlayerCubit(
+        PlayerState.init(null).copyWith(isAudio: true), settings);
+    final native = _RetainedAudioPlayer();
+    final audio = _AudioWithoutAutostart(
+        const AudioPlayerState(
+            offlineVideo: DownloadedVideo(
+                videoId: 'offline',
+                title: 'Offline',
+                audioOnly: true,
+                lengthSeconds: 60,
+                quality: '720p',
+                downloadComplete: true,
+                storageUri: uri)),
+        player,
+        settings,
+        native);
+    try {
+      await audio.playVideo(true);
+      expect((native.sources.single as UriAudioSource).uri.toString(), uri);
+    } finally {
+      await audio.close();
+    }
+  });
 
   test(
       'video pause/resume and same-video source changes retain the chosen rate',

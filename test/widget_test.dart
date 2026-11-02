@@ -7,6 +7,7 @@ import 'package:clipious/channels/models/channel_videos.dart';
 import 'package:clipious/comments/models/comment.dart';
 import 'package:clipious/comments/models/video_comments.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -15,6 +16,7 @@ import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/expanded_player.dart';
 import 'package:clipious/player/views/components/player.dart';
+import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -24,6 +26,8 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/app_customizer.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/models/paginated_list.dart';
+import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/caption.dart';
@@ -34,6 +38,7 @@ import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:clipious/videos/views/screens/video.dart';
+import 'package:clipious/videos/views/tv/screens/video_grid_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -61,6 +66,9 @@ class _TestService extends Service {
   final List<String> transcriptRequests = [];
   bool loggedIn = true;
   List<Comment> comments = [];
+  List<Video> feedVideos = [];
+  final feedRequests = <int>[];
+  bool failNextFeed = false;
 
   @override
   Future<VideoTranscript> getTranscript(
@@ -136,8 +144,19 @@ class _TestService extends Service {
 
   @override
   Future<UserFeed> getUserFeed(
-          {int? maxResults, int? page, bool saveLastSeen = true}) async =>
-      UserFeed([], []);
+      {int? maxResults, int? page, bool saveLastSeen = true}) async {
+    feedRequests.add(page ?? 1);
+    if (failNextFeed) {
+      failNextFeed = false;
+      throw StateError('temporary feed failure');
+    }
+    return UserFeed(
+        [],
+        feedVideos
+            .skip(((page ?? 1) - 1) * (maxResults ?? 50))
+            .take(maxResults ?? 50)
+            .toList());
+  }
 
   @override
   Future<List<Playlist>> getUserPlaylists({bool postProcessing = true}) async =>
@@ -154,11 +173,23 @@ class _TestService extends Service {
       VideosWithContinuation([], null);
 }
 
+class _QueueSelectionPlayer extends TestPlayerCubit {
+  _QueueSelectionPlayer(super.initialState, super.settings);
+
+  @override
+  Future<void> skipToVideo(int index) async {
+    emit(state.videos.isNotEmpty
+        ? state.copyWith(currentlyPlaying: state.videos[index])
+        : state.copyWith(offlineCurrentlyPlaying: state.offlineVideos[index]));
+  }
+}
+
 Future<void> _pumpHomepage(
   WidgetTester tester,
   Size size, {
   PlayerState? playerState,
   SettingsState? settingsState,
+  PlayerCubit Function(SettingsCubit)? createPlayer,
   int firstIndex = 0,
   bool settle = true,
 }) async {
@@ -178,8 +209,10 @@ Future<void> _pumpHomepage(
       BlocProvider<AppCubit>.value(value: appCubit),
       BlocProvider<SettingsCubit>.value(value: settingsCubit),
       BlocProvider<PlayerCubit>(
-        create: (context) => TestPlayerCubit(
-            playerState ?? PlayerState.init(null), settingsCubit),
+        create: (context) =>
+            createPlayer?.call(settingsCubit) ??
+            TestPlayerCubit(
+                playerState ?? PlayerState.init(null), settingsCubit),
       ),
       BlocProvider<DownloadManagerCubit>(
         create: (context) => DownloadManagerCubit(
@@ -636,6 +669,291 @@ void main() {
     expect(find.byType(NavigationBar), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('phone queue shortcut fits between downloads and playlists',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(320, 640));
+    final navigation = find.byType(NavigationBar);
+    await tester.tap(find.descendant(
+        of: navigation, matching: find.byIcon(Icons.subscriptions)));
+    await tester.pumpAndSettle();
+    final selectedIndex =
+        tester.widget<NavigationBar>(navigation).selectedIndex;
+    final queue = find.byTooltip('Video queue');
+    expect(tester.getCenter(find.byIcon(Icons.download)).dx,
+        lessThan(tester.getCenter(queue).dx));
+    expect(tester.getCenter(queue).dx,
+        lessThan(tester.getCenter(find.byTooltip('Playlists')).dx));
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(queue);
+    await tester.pumpAndSettle();
+    expect(find.byType(VideoQueueScreen), findsOneWidget);
+    expect(find.text('Your queue is empty'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(
+        tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'download folder can be selected, cancelled and reset from an empty library',
+      (tester) async {
+    const channel = MethodChannel('videre/download_storage');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    messenger.setMockMethodCallHandler(
+        channel,
+        (_) async => {
+              'uri': 'content://documents/tree/primary%3AVidere',
+              'name': 'Videre files'
+            });
+    await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byIcon(Icons.download));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Download folder'));
+    await tester.pumpAndSettle();
+    expect(find.text('App storage (private)'), findsOneWidget);
+    await tester.tap(find.text('Choose folder'));
+    await tester.pumpAndSettle();
+    expect(find.text('Videre files'), findsOneWidget);
+    messenger.setMockMethodCallHandler(channel, (_) async => null);
+    await tester.tap(find.text('Choose folder'));
+    await tester.pumpAndSettle();
+    expect(find.text('Videre files'), findsOneWidget);
+    messenger.setMockMethodCallHandler(channel,
+        (_) async => throw PlatformException(code: 'PICKER_UNAVAILABLE'));
+    await tester.tap(find.text('Choose folder'));
+    await tester.pumpAndSettle();
+    expect(
+        find.textContaining('No folder picker is available.'), findsOneWidget);
+    await tester.tap(find.text('Use app storage'));
+    await tester.pumpAndSettle();
+    expect(find.text('App storage (private)'), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'subscription setting hides watched videos and restores them on opt-out',
+      (tester) async {
+    final service = globals.service as _TestService;
+    service.feedVideos = service.videos;
+    await tester.runAsync(() async {
+      await globals.db.saveProgress(Progress(1, 'video-0'));
+      await globals.db.saveProgress(Progress(0.89, 'video-1'));
+    });
+    await _pumpHomepage(tester, const Size(390, 844), firstIndex: 1);
+    expect(find.text('Video 0'), findsOneWidget);
+    expect(find.text('Video 1'), findsOneWidget);
+    final settings = tester.element(find.byType(Player)).read<SettingsCubit>();
+    unawaited(appRouter.push(const BrowsingSettingsRoute()));
+    await tester.pumpAndSettle();
+    final toggle = find.text('Hide watched subscription videos');
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(settings.state.hideWatchedSubscriptions, isTrue);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Video 0'), findsNothing);
+    expect(find.text('Video 1'), findsOneWidget);
+    await tester
+        .runAsync(() => globals.db.saveProgress(Progress(0.9, 'video-1')));
+    await tester.pumpAndSettle();
+    expect(find.text('Video 1'), findsNothing);
+    await tester.runAsync(() => settings.setHideWatchedSubscriptions(false));
+    await tester.pumpAndSettle();
+    expect(find.text('Video 0'), findsOneWidget);
+    expect(find.text('Video 1'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final surface in ['phone', 'TV row', 'TV grid']) {
+    testWidgets(
+        'fully hidden subscription pages retry and load older videos ($surface)',
+        (tester) async {
+      final tv = surface != 'phone';
+      final service = globals.service as _TestService;
+      service.feedVideos = List.generate(
+          51,
+          (i) => Video(
+              videoId: 'feed-$i',
+              title: 'Feed $i',
+              author: 'Creator',
+              lengthSeconds: 60));
+      await tester.runAsync(() async {
+        await globals.db.saveSetting(
+            SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
+        for (var i = 0; i < 50; i++) {
+          await globals.db.saveProgress(Progress(1, 'feed-$i'));
+        }
+      });
+      if (tv) {
+        app_main.isTv = true;
+        await tester.pumpWidget(MaterialApp(
+          locale: const Locale('en', 'US'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: surface == 'TV grid'
+              ? TvGridScreen(
+                  title: 'Subscriptions',
+                  paginatedVideoList: SubscriptionVideoList())
+              : Scaffold(
+                  body: TvHorizontalVideoList(
+                      paginatedVideoList: SubscriptionVideoList())),
+        ));
+        await tester.pumpAndSettle();
+      } else {
+        await _pumpHomepage(tester, const Size(390, 844), firstIndex: 1);
+      }
+      expect(find.text('Feed 0'), findsNothing);
+      expect(find.text('Load more'), findsOneWidget);
+      service.failNextFeed = true;
+      if (tv) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(find.text('Load more'));
+      }
+      await tester.pumpAndSettle();
+      expect(find.text('Feed 50'), findsNothing);
+      expect(service.feedRequests, [1, 2]);
+      if (tv) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(find.text(
+            AppLocalizations.of(tester.element(find.byType(Player)))!
+                .couldntFetchVideos));
+      }
+      await tester.pumpAndSettle();
+      expect(service.feedRequests, [1, 2, 2]);
+      expect(find.text('Feed 50'), findsOneWidget);
+      expect(find.text('Feed 0'), findsNothing);
+      expect(find.text('Load more'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets('open queue updates when videos are added and cleared',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byTooltip('Video queue'));
+    await tester.pumpAndSettle();
+    final player =
+        tester.element(find.byType(VideoQueueScreen)).read<PlayerCubit>();
+    final videos = (globals.service as _TestService).videos.take(2).toList();
+    player.queueVideos(videos);
+    await tester.pumpAndSettle();
+    expect(find.text('Your queue is empty'), findsNothing);
+    expect(find.text('Video 0'), findsOneWidget);
+    expect(find.text('Video 1'), findsOneWidget);
+
+    tester
+        .widget<ReorderableListView>(find.byType(ReorderableListView))
+        .onReorder(0, 2);
+    await tester.pumpAndSettle();
+    expect(player.state.videos.map((video) => video.videoId),
+        ['video-1', 'video-0']);
+    expect(tester.getTopLeft(find.text('Video 1')).dy,
+        lessThan(tester.getTopLeft(find.text('Video 0')).dy));
+
+    player.removeVideoFromQueue('video-0');
+    await tester.pumpAndSettle();
+    expect(find.text('Video 0'), findsNothing);
+    player.hide();
+    await tester.pumpAndSettle();
+    expect(find.text('Your queue is empty'), findsOneWidget);
+    expect(find.byType(ReorderableListView), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final offline in [false, true]) {
+    testWidgets('opening queue preserves playback (offline=$offline)',
+        (tester) async {
+      final videos = (globals.service as _TestService).videos.take(2).toList();
+      final downloads = videos
+          .map((video) => DownloadedVideo(
+              videoId: video.videoId,
+              title: video.title!,
+              lengthSeconds: 60,
+              quality: '720p'))
+          .toList();
+      await _pumpHomepage(tester, const Size(390, 844),
+          playerState: PlayerState.init(offline ? null : videos).copyWith(
+            offlineVideos: offline ? downloads : [],
+            currentlyPlaying: offline ? null : videos.first,
+            offlineCurrentlyPlaying: offline ? downloads.first : null,
+            isHidden: false,
+            isPlaying: true,
+            position: const Duration(seconds: 23),
+          ));
+      final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+      final before = player.state;
+      await tester.tap(find.byTooltip('Video queue'));
+      await tester.pumpAndSettle();
+      expect(find.byType(VideoQueueScreen), findsOneWidget);
+      expect(
+          find.descendant(
+              of: find.byType(VideoQueueScreen),
+              matching: find.text('Video 1')),
+          findsOneWidget);
+      expect(player.state, same(before));
+      final scrollController = tester
+          .widget<ReorderableListView>(find.byType(ReorderableListView))
+          .scrollController!;
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(player.state, same(before));
+      expect(() => scrollController.addListener(() {}), throwsFlutterError);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final offline in [false, true]) {
+    testWidgets(
+        'selecting a restored queue item reveals the mini player (offline=$offline)',
+        (tester) async {
+      final videos = (globals.service as _TestService).videos.take(2).toList();
+      final initialState = offline
+          ? PlayerState.init(null).copyWith(
+              offlineVideos: videos
+                  .map((video) => DownloadedVideo(
+                      videoId: video.videoId,
+                      title: video.title!,
+                      lengthSeconds: 60,
+                      quality: '720p',
+                      audioOnly: true))
+                  .toList())
+          : PlayerState.init(videos);
+      await _pumpHomepage(tester, const Size(390, 844),
+          createPlayer: (settings) =>
+              _QueueSelectionPlayer(initialState, settings));
+      await tester.tap(find.byTooltip('Video queue'));
+      await tester.pumpAndSettle();
+      final player =
+          tester.element(find.byType(VideoQueueScreen)).read<PlayerCubit>();
+      expect(player.state.isHidden, isTrue);
+      await tester.tap(find.text('Video 1'));
+      await tester.pumpAndSettle();
+      expect(
+          player.state.currentlyPlaying?.videoId ??
+              player.state.offlineCurrentlyPlaying?.videoId,
+          'video-1');
+      expect(player.state.isHidden, isFalse);
+      expect(player.state.isMini, isTrue);
+      expect(find.byType(VideoQueueScreen), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   group('Server.headersForUrl', () {
     const server = Server(
@@ -1161,6 +1479,36 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('mini player opens on tap without intercepting its controls',
+      (tester) async {
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+    final playerView = find.byType(Player);
+    await tester.tap(find.descendant(
+        of: playerView, matching: find.byIcon(Icons.fast_forward)));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isTrue);
+
+    final video = player.state.currentlyPlaying!;
+    await tester.tap(find.descendant(
+        of: playerView,
+        matching: find.text('${video.title} - ${video.author}')));
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    expect(player.state.isHidden, isFalse);
+
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+    await tester.tap(
+        find.descendant(of: playerView, matching: find.byIcon(Icons.clear)));
+    await tester.pumpAndSettle();
+    expect(player.state.isHidden, isTrue);
+    expect(tester.takeException(), isNull);
   });
 
   for (final loggedIn in [false, true]) {

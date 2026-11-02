@@ -14,6 +14,8 @@ T _$identity<T>(T value) => value;
 
 /// @nodoc
 mixin _$DownloadManagerState {
+  String? get folderUri;
+  String? get folderName;
   List<DownloadedVideo> get videos;
   Map<String, DownloadProgress> get downloadProgresses;
   Set<String> get pausedVideoIds;
@@ -33,6 +35,10 @@ mixin _$DownloadManagerState {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is DownloadManagerState &&
+            (identical(other.folderUri, folderUri) ||
+                other.folderUri == folderUri) &&
+            (identical(other.folderName, folderName) ||
+                other.folderName == folderName) &&
             const DeepCollectionEquality().equals(other.videos, videos) &&
             const DeepCollectionEquality()
                 .equals(other.downloadProgresses, downloadProgresses) &&
@@ -47,6 +53,8 @@ mixin _$DownloadManagerState {
   @override
   int get hashCode => Object.hash(
       runtimeType,
+      folderUri,
+      folderName,
       const DeepCollectionEquality().hash(videos),
       const DeepCollectionEquality().hash(downloadProgresses),
       const DeepCollectionEquality().hash(pausedVideoIds),
@@ -55,7 +63,7 @@ mixin _$DownloadManagerState {
 
   @override
   String toString() {
-    return 'DownloadManagerState(videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
   }
 }
 
@@ -66,7 +74,9 @@ abstract mixin class $DownloadManagerStateCopyWith<$Res> {
       _$DownloadManagerStateCopyWithImpl;
   @useResult
   $Res call(
-      {List<DownloadedVideo> videos,
+      {String? folderUri,
+      String? folderName,
+      List<DownloadedVideo> videos,
       Map<String, DownloadProgress> downloadProgresses,
       Set<String> pausedVideoIds,
       bool wifiOnly,
@@ -86,6 +96,8 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   @override
   $Res call({
+    Object? folderUri = freezed,
+    Object? folderName = freezed,
     Object? videos = null,
     Object? downloadProgresses = null,
     Object? pausedVideoIds = null,
@@ -93,6 +105,14 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
     Object? waitingForWifi = null,
   }) {
     return _then(_self.copyWith(
+      folderUri: freezed == folderUri
+          ? _self.folderUri
+          : folderUri // ignore: cast_nullable_to_non_nullable
+              as String?,
+      folderName: freezed == folderName
+          ? _self.folderName
+          : folderName // ignore: cast_nullable_to_non_nullable
+              as String?,
       videos: null == videos
           ? _self.videos
           : videos // ignore: cast_nullable_to_non_nullable
@@ -209,6 +229,8 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
     TResult Function(
+            String? folderUri,
+            String? folderName,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -220,8 +242,14 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
     final _that = this;
     switch (_that) {
       case _DownloadManagerState() when $default != null:
-        return $default(_that.videos, _that.downloadProgresses,
-            _that.pausedVideoIds, _that.wifiOnly, _that.waitingForWifi);
+        return $default(
+            _that.folderUri,
+            _that.folderName,
+            _that.videos,
+            _that.downloadProgresses,
+            _that.pausedVideoIds,
+            _that.wifiOnly,
+            _that.waitingForWifi);
       case _:
         return orElse();
     }
@@ -243,6 +271,8 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
     TResult Function(
+            String? folderUri,
+            String? folderName,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -253,8 +283,14 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
     final _that = this;
     switch (_that) {
       case _DownloadManagerState():
-        return $default(_that.videos, _that.downloadProgresses,
-            _that.pausedVideoIds, _that.wifiOnly, _that.waitingForWifi);
+        return $default(
+            _that.folderUri,
+            _that.folderName,
+            _that.videos,
+            _that.downloadProgresses,
+            _that.pausedVideoIds,
+            _that.wifiOnly,
+            _that.waitingForWifi);
     }
   }
 
@@ -273,6 +309,8 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
     TResult? Function(
+            String? folderUri,
+            String? folderName,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -283,8 +321,14 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
     final _that = this;
     switch (_that) {
       case _DownloadManagerState() when $default != null:
-        return $default(_that.videos, _that.downloadProgresses,
-            _that.pausedVideoIds, _that.wifiOnly, _that.waitingForWifi);
+        return $default(
+            _that.folderUri,
+            _that.folderName,
+            _that.videos,
+            _that.downloadProgresses,
+            _that.pausedVideoIds,
+            _that.wifiOnly,
+            _that.waitingForWifi);
       case _:
         return null;
     }
@@ -295,7 +339,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
 
 class _DownloadManagerState extends DownloadManagerState {
   const _DownloadManagerState(
-      {final List<DownloadedVideo> videos = const [],
+      {this.folderUri,
+      this.folderName,
+      final List<DownloadedVideo> videos = const [],
       final Map<String, DownloadProgress> downloadProgresses = const {},
       final Set<String> pausedVideoIds = const {},
       this.wifiOnly = false,
@@ -305,6 +351,10 @@ class _DownloadManagerState extends DownloadManagerState {
         _pausedVideoIds = pausedVideoIds,
         super._();
 
+  @override
+  final String? folderUri;
+  @override
+  final String? folderName;
   final List<DownloadedVideo> _videos;
   @override
   @JsonKey()
@@ -354,6 +404,10 @@ class _DownloadManagerState extends DownloadManagerState {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
             other is _DownloadManagerState &&
+            (identical(other.folderUri, folderUri) ||
+                other.folderUri == folderUri) &&
+            (identical(other.folderName, folderName) ||
+                other.folderName == folderName) &&
             const DeepCollectionEquality().equals(other._videos, _videos) &&
             const DeepCollectionEquality()
                 .equals(other._downloadProgresses, _downloadProgresses) &&
@@ -368,6 +422,8 @@ class _DownloadManagerState extends DownloadManagerState {
   @override
   int get hashCode => Object.hash(
       runtimeType,
+      folderUri,
+      folderName,
       const DeepCollectionEquality().hash(_videos),
       const DeepCollectionEquality().hash(_downloadProgresses),
       const DeepCollectionEquality().hash(_pausedVideoIds),
@@ -376,7 +432,7 @@ class _DownloadManagerState extends DownloadManagerState {
 
   @override
   String toString() {
-    return 'DownloadManagerState(videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
   }
 }
 
@@ -389,7 +445,9 @@ abstract mixin class _$DownloadManagerStateCopyWith<$Res>
   @override
   @useResult
   $Res call(
-      {List<DownloadedVideo> videos,
+      {String? folderUri,
+      String? folderName,
+      List<DownloadedVideo> videos,
       Map<String, DownloadProgress> downloadProgresses,
       Set<String> pausedVideoIds,
       bool wifiOnly,
@@ -409,6 +467,8 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
   @override
   @pragma('vm:prefer-inline')
   $Res call({
+    Object? folderUri = freezed,
+    Object? folderName = freezed,
     Object? videos = null,
     Object? downloadProgresses = null,
     Object? pausedVideoIds = null,
@@ -416,6 +476,14 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
     Object? waitingForWifi = null,
   }) {
     return _then(_DownloadManagerState(
+      folderUri: freezed == folderUri
+          ? _self.folderUri
+          : folderUri // ignore: cast_nullable_to_non_nullable
+              as String?,
+      folderName: freezed == folderName
+          ? _self.folderName
+          : folderName // ignore: cast_nullable_to_non_nullable
+              as String?,
       videos: null == videos
           ? _self._videos
           : videos // ignore: cast_nullable_to_non_nullable

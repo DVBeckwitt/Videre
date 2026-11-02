@@ -4,6 +4,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/utils/states/item_list.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/videos/views/tv/components/video_item.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'tv_button.dart';
 
 import '../../../../utils.dart';
 import '../../../models/paginated_list.dart';
@@ -29,6 +31,10 @@ class TvHorizontalItemList<T> extends StatelessWidget {
       child: BlocBuilder<ItemListCubit<T>, ItemListState<T>>(
         builder: (context, state) {
           var cubit = context.read<ItemListCubit<T>>();
+          final canLoadMore = state.itemList is SubscriptionVideoList &&
+              (state.itemList.getHasMore() ||
+                  state.error != ItemListErrors.none);
+          final locals = AppLocalizations.of(context)!;
           // filter items if possible
           List<T> items = state.items;
           if (items.isNotEmpty && items[0] is Video) {
@@ -41,15 +47,37 @@ class TvHorizontalItemList<T> extends StatelessWidget {
                 const LinearProgressIndicator(
                   minHeight: 3,
                 ),
-              !state.loading && items.isEmpty
+              !state.loading && items.isEmpty && !canLoadMore
                   ? const SizedBox.shrink()
                   : SizedBox(
                       height: 250,
                       child: ListView.builder(
                         scrollDirection: Axis.horizontal,
                         controller: cubit.scrollController,
-                        itemCount: items.length + (state.loading ? 10 : 0),
+                        itemCount: items.length +
+                            (state.loading
+                                ? 10
+                                : canLoadMore
+                                    ? 1
+                                    : 0),
                         itemBuilder: (context, index) {
+                          if (!state.loading && index == items.length) {
+                            return SizedBox(
+                                width: 200,
+                                child: Center(
+                                    child: TvButton(
+                                        autofocus: items.isEmpty,
+                                        onPressed: (_) =>
+                                            state.error == ItemListErrors.none
+                                                ? cubit.getMoreItems()
+                                                : cubit.retryItems(),
+                                        child: Padding(
+                                            padding: const EdgeInsets.all(16),
+                                            child: Text(state.error ==
+                                                    ItemListErrors.none
+                                                ? locals.loadMore
+                                                : locals.retry)))));
+                          }
                           if (index >= items.length) {
                             return getPlaceholder();
                           }

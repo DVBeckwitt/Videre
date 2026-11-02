@@ -6,6 +6,7 @@ import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 
 import '../../states/download_manager.dart';
+import '../components/download_folder.dart';
 
 @RoutePage()
 class DownloadManagerScreen extends StatelessWidget {
@@ -18,6 +19,10 @@ class DownloadManagerScreen extends StatelessWidget {
       appBar: AppBar(
         title: Text(locals.downloads),
         actions: [
+          IconButton(
+              tooltip: locals.downloadFolder,
+              icon: const Icon(Icons.folder_open),
+              onPressed: () => showDownloadFolder(context)),
           BlocBuilder<DownloadManagerCubit, DownloadManagerState>(
             builder: (context, state) => IconButton(
               tooltip: locals.downloadsWifiOnly,

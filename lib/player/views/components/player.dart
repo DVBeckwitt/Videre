@@ -131,6 +131,7 @@ class Player extends StatelessWidget {
                 elevation: 0,
                 child: showPlayer
                     ? GestureDetector(
+                        onTap: isMini ? cubit.showBigPlayer : null,
                         child: SafeArea(
                           bottom: !isDragging,
                           top: false,

@@ -21,6 +21,7 @@ import 'package:clipious/network/network_proxy.dart';
 import '../../player/states/player.dart';
 import '../../videos/models/adaptive_format.dart';
 import 'resumable_download.dart';
+import '../services/download_storage.dart';
 
 part 'download_manager.freezed.dart';
 
@@ -37,6 +38,7 @@ class DownloadProgress {
 
 class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final PlayerCubit player;
+  final DownloadStorage storage;
   late final Future<void> _ready;
   StreamSubscription<dynamic>? _networkSubscription;
   final Set<String> _deleting = {};
@@ -45,7 +47,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   String? _activeId;
   Future<void>? _activeJob;
 
-  DownloadManagerCubit(super.initialState, this.player) {
+  DownloadManagerCubit(super.initialState, this.player,
+      {DownloadStorage? storage})
+      : storage = storage ?? DownloadStorage() {
     _ready = onReady();
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
   }
@@ -74,6 +78,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   Future<void> onReady() async {
     Set<String> paused = {};
+    DownloadFolder? folder;
+    try {
+      folder = DownloadFolder.fromJson(
+          jsonDecode(db.getSettings(downloadFolderSetting)?.value ?? 'null'));
+    } on FormatException {
+      // Invalid local preferences fall back to private storage.
+    }
     try {
       final saved = jsonDecode(db.getSettings(_pausedSetting)?.value ?? '[]');
       if (saved is List) paused = saved.whereType<String>().toSet();
@@ -81,6 +92,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       // An interrupted settings import should not block the download library.
     }
     emit(state.copyWith(
+        folderUri: folder?.uri,
+        folderName: folder?.name,
         wifiOnly: db.getSettings(_wifiSetting)?.value == 'true',
         pausedVideoIds: paused,
         videos: db.getAllDownloads()));
@@ -124,6 +137,23 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     _networkChanged(_wifiConnected);
   }
 
+  Future<void> chooseFolder() async {
+    await _ready;
+    final folder = await storage.pickFolder(state.folderUri);
+    if (folder == null || _closing) return;
+    await db.saveSetting(
+        SettingsValue(downloadFolderSetting, jsonEncode(folder.toJson())));
+    if (!_closing) {
+      emit(state.copyWith(folderUri: folder.uri, folderName: folder.name));
+    }
+  }
+
+  Future<void> usePrivateFolder() async {
+    await _ready;
+    await db.deleteSetting(downloadFolderSetting);
+    if (!_closing) emit(state.copyWith(folderUri: null, folderName: null));
+  }
+
   void setVideos() {
     if (!_closing) emit(state.copyWith(videos: db.getAllDownloads()));
   }
@@ -142,6 +172,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           title: videoId,
           lengthSeconds: 0,
           quality: quality,
+          folderUri: state.folderUri,
           audioOnly: audioOnly));
     } finally {
       _enqueuing.remove(videoId);
@@ -213,6 +244,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
 
     try {
+      if (video.folderUri != null) await storage.checkFolder(video.folderUri!);
       for (var attempt = 0; attempt < 3; attempt++) {
         final artworkToken = CancelToken();
         Future<void>? artwork;
@@ -312,9 +344,22 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
           await artwork;
           if (token.isCancelled) throw token.cancelError!;
-          await File(output).rename(mediaPath);
-          await db.upsertDownload(
-              video.copyWith(downloadComplete: true, downloadFailed: false));
+          if (video.folderUri == null) {
+            await File(output).rename(mediaPath);
+          } else {
+            final uri = await storage.prepareDocument(video.folderUri!,
+                video.storageUri, video.fileName, video.audioOnly);
+            // Record ownership before writing so retries reuse this document
+            // and deletion can clean up an interrupted save after a restart.
+            video = video.copyWith(storageUri: uri);
+            await db.upsertDownload(video);
+            if (token.isCancelled) throw token.cancelError!;
+            await storage.writeDocument(output, uri, token);
+          }
+          await db.upsertDownload(video.copyWith(
+              downloadComplete: true,
+              downloadFailed: false,
+              storageFailed: false));
           setVideos();
           update(1, 1, steps - 1, steps);
           try {
@@ -327,6 +372,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         } catch (error) {
           if (token.isCancelled || _closing) return;
           if (attempt == 2 ||
+              (error is PlatformException &&
+                  error.code == 'DOWNLOAD_STORAGE') ||
               error is StateError ||
               error is FileSystemException) {
             rethrow;
@@ -346,8 +393,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             'Download failed for ${video.videoId}; partial files are kept',
             error,
             stack);
-        await db.upsertDownload(
-            video.copyWith(downloadFailed: true, downloadComplete: false));
+        await db.upsertDownload(video.copyWith(
+            downloadFailed: true,
+            downloadComplete: false,
+            storageFailed: error is PlatformException &&
+                error.code == 'DOWNLOAD_STORAGE'));
       }
     } finally {
       dio.close(force: true);
@@ -411,7 +461,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     final current = db.getDownloadByVideoId(video.videoId);
     if (current == null || current.downloadComplete) return;
     if (current.downloadFailed) {
-      await db.upsertDownload(current.copyWith(downloadFailed: false));
+      await db.upsertDownload(
+          current.copyWith(downloadFailed: false, storageFailed: false));
     }
     setVideos();
     unawaited(_drain());
@@ -438,9 +489,15 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     try {
       state.downloadProgresses[video.videoId]?.cancelToken.cancel();
       if (_activeId == video.videoId) await _activeJob;
+      // The active job may have created a document since this UI snapshot.
+      video = db.getDownloadByVideoId(video.videoId) ?? video;
+      if (video.storageUri != null) {
+        await storage.deleteDocument(video.storageUri!);
+      }
       await _deleteParts(video);
       for (final path in [
-        await video.effectivePath,
+        if (video.storageUri == null) await video.effectivePath,
+        await video.downloadPath,
         await video.thumbnailPath
       ]) {
         final file = File(path);
@@ -488,6 +545,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 @freezed
 sealed class DownloadManagerState with _$DownloadManagerState {
   const factory DownloadManagerState({
+    String? folderUri,
+    String? folderName,
     @Default([]) List<DownloadedVideo> videos,
     @Default({}) Map<String, DownloadProgress> downloadProgresses,
     @Default({}) Set<String> pausedVideoIds,

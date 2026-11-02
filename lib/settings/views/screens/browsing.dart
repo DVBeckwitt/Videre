@@ -251,6 +251,14 @@ class BrowsingSettingsScreen extends StatelessWidget {
                         '${locals.videoFiltersSettingTileDescriptions}${filterCount > 0 ? '\n${locals.nFilters(filterCount)}' : ''}'),
                     onPressed: openVideoFilterSettings,
                   ),
+                  SettingsTile.switchTile(
+                    leading: const Icon(Icons.visibility_off_outlined),
+                    title: Text(locals.hideWatchedSubscriptions),
+                    description:
+                        Text(locals.hideWatchedSubscriptionsDescription),
+                    initialValue: state.hideWatchedSubscriptions,
+                    onToggle: cubit.setHideWatchedSubscriptions,
+                  ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.adjust),
                     title: const Text('DeArrow'),

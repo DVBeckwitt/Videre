@@ -30,6 +30,7 @@ import '../../settings/models/db/settings.dart';
 import '../../settings/states/settings.dart';
 import '../../utils/models/pair.dart';
 import '../../videos/models/db/progress.dart' as db_progress;
+import '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 import '../../videos/models/db/history_video_cache.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
@@ -38,6 +39,8 @@ import '../models/playback_session.dart';
 import '../models/playback_pitch.dart';
 import '../models/backend_playback.dart';
 import '../models/backend_recovery.dart';
+
+export '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 
 part 'player.freezed.dart';
 
@@ -48,7 +51,6 @@ const stepMultiplier = 1.15;
 const maxInt = -1 >>> 1;
 
 var log = Logger('MiniPlayerController');
-final playbackHistoryRevision = ValueNotifier(0);
 
 enum PlayerRepeat { noRepeat, repeatAll, repeatOne }
 
@@ -667,7 +669,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       int currentPosition = timeInSeconds;
       // saving progress
       var currentProgress = (currentPosition / length).clamp(0.0, 1.0);
-      if (currentProgress >= 0.9) {
+      if (currentProgress >= db_progress.watchedProgressThreshold) {
         currentProgress =
             1; // we consider a video with 90%+ progress as watched
       }

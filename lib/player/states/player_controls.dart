@@ -58,6 +58,7 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
 
     switch (event.type) {
       case MediaEventType.miniDisplayChanged:
+        emit(state.copyWith(draggingPositionSlider: false));
         hideControls();
         break;
       case MediaEventType.progress:

@@ -1997,6 +1997,26 @@ class VideoPlayerSettingsRoute extends PageRouteInfo<void> {
 }
 
 /// generated route for
+/// [VideoQueueScreen]
+class VideoQueueRoute extends PageRouteInfo<void> {
+  const VideoQueueRoute({List<PageRouteInfo>? children})
+      : super(
+          VideoQueueRoute.name,
+          initialChildren: children,
+          argsEquality: false,
+        );
+
+  static const String name = 'VideoQueueRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const VideoQueueScreen();
+    },
+  );
+}
+
+/// generated route for
 /// [VideoScreen]
 class VideoRoute extends PageRouteInfo<VideoRouteArgs> {
   VideoRoute({

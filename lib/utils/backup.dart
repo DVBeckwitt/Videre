@@ -210,11 +210,13 @@ class UserBackup {
       blackBackgroundSettingName,
       rememberLastSubtitle,
       remeberPlaybackSpeed,
+      rememberVideoQualitySettingName,
       lockOrientationFullScreen,
       fillFullScreen,
       useSearchHistorySettingName,
       skipExponentialSettingName,
       distractionFreeModeSettingName,
+      hideWatchedSubscriptionsSettingName,
       subtitleBackground,
       dearrowSettingName,
       dearrowThumbnailsSettingName,
@@ -231,6 +233,7 @@ class UserBackup {
       playerRepeat: (0, 2),
       searchHistoryLimitSettingName: (1, 100000),
       skipStepSettingName: (1, 600),
+      lastVideoQualitySettingName: (0, 16384),
     };
     if (ranges.containsKey(name)) {
       final number = int.tryParse(value), range = ranges[name]!;

@@ -8,6 +8,9 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/utils/states/item_list.dart';
 
 class _OfflineSubscriptionService extends Service {
   final continuations = <String?>[];
@@ -72,6 +75,78 @@ void main() {
     await db.close();
   });
 
+  test(
+      'local subscriptions hide only watched videos and update without refetch',
+      () async {
+    final cubit =
+        ItemListCubit<Video>(ItemListState(itemList: SubscriptionVideoList()));
+    addTearDown(cubit.close);
+    await cubit.stream.firstWhere((state) => !state.loading);
+    await db.saveProgress(Progress(1, 'video-1'));
+    expect(cubit.state.items.map((v) => v.videoId), ['video-1']);
+
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
+    playbackHistoryRevision.value++;
+    expect(cubit.state.items, isEmpty);
+    expect(cubit.state.itemList.getHasMore(), isTrue);
+    await cubit.getMoreItems();
+    expect(cubit.state.items.map((v) => v.videoId), ['video-2']);
+    await db.saveProgress(Progress(0.89, 'video-2'));
+    expect(cubit.state.items, hasLength(1));
+    await db.saveProgress(Progress(0.9, 'video-2'));
+    expect(cubit.state.items, isEmpty);
+    expect(cubit.state.itemList.getHasMore(), isFalse);
+
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'false'));
+    playbackHistoryRevision.value++;
+    expect(cubit.state.items.map((v) => v.videoId), ['video-1', 'video-2']);
+    expect(fakeService.continuations, [null, 'next-page']);
+  });
+
+  test('a hidden account page retains its cursor and earlier items on opt-out',
+      () async {
+    fakeService.loggedIn = true;
+    fakeService.onlineCounts.addAll({1: 50, 2: 1});
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
+    for (var i = 0; i < 50; i++) {
+      await db.saveProgress(Progress(1, 'online-1-$i'));
+    }
+    await db.saveProgress(Progress(1, 'video-1'));
+    final cubit =
+        ItemListCubit<Video>(ItemListState(itemList: SubscriptionVideoList()));
+    addTearDown(cubit.close);
+    await cubit.stream.firstWhere((state) => !state.loading);
+    expect(cubit.state.items, isEmpty);
+    await cubit.getMoreItems();
+    expect(cubit.state.items.map((v) => v.videoId), ['online-2-0', 'video-2']);
+    expect(fakeService.feedPages, [1, 2]);
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'false'));
+    playbackHistoryRevision.value++;
+    expect(cubit.state.items, hasLength(53));
+    expect(fakeService.feedPages, [1, 2]);
+  });
+
+  test('history removal restores visibility and disposed feeds stop listening',
+      () async {
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
+    await db.saveProgress(Progress(1, 'video-1'));
+    final cubit =
+        ItemListCubit<Video>(ItemListState(itemList: SubscriptionVideoList()));
+    await cubit.stream.firstWhere((state) => !state.loading);
+    expect(cubit.state.items, isEmpty);
+    await db.clearLocalHistory();
+    playbackHistoryRevision.value++;
+    expect(cubit.state.items, hasLength(1));
+    await cubit.close();
+    await db.saveProgress(Progress(1, 'video-1'));
+    expect(cubit.state.items, hasLength(1));
+  });
+
   test('stores offline continuation by the requested channel id', () async {
     final list = SubscriptionVideoList();
 
@@ -79,6 +154,27 @@ void main() {
     await list.getItems();
 
     expect(fakeService.continuations, [null, 'next-page']);
+  });
+
+  test('overlapping progress writes leave visibility at the saved progress',
+      () async {
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
+    final cubit =
+        ItemListCubit<Video>(ItemListState(itemList: SubscriptionVideoList()));
+    addTearDown(cubit.close);
+    await cubit.stream.firstWhere((state) => !state.loading);
+    var revisions = 0;
+    void onChanged() => revisions++;
+    playbackHistoryRevision.addListener(onChanged);
+    addTearDown(() => playbackHistoryRevision.removeListener(onChanged));
+    final watched = db.saveProgress(Progress(1, 'video-1'));
+    final partial = db.saveProgress(Progress(0.5, 'video-1'));
+    await watched;
+    await partial;
+    expect(db.getVideoProgress('video-1'), 0.5);
+    expect(cubit.state.items.map((video) => video.videoId), ['video-1']);
+    expect(revisions, 2);
   });
 
   test('logged-out feeds stop once offline continuations are exhausted',

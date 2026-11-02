@@ -14,6 +14,7 @@ import 'package:logging/logging.dart';
 
 import '../../../../globals.dart';
 import '../../../../feedback/views/open_feedback.dart';
+import '../../../../downloads/views/components/download_folder.dart';
 import '../../../states/settings.dart';
 import '../../screens/network_proxy.dart';
 
@@ -250,6 +251,15 @@ class TVSettingsScreen extends StatelessWidget {
                   onSelected: (context) => AutoRouter.of(context)
                       .push(const TvFilterListSettingsRoute()),
                 ),
+                SettingsTile(
+                  title: locals.hideWatchedSubscriptions,
+                  description: locals.hideWatchedSubscriptionsDescription,
+                  onSelected: (context) => cubit.setHideWatchedSubscriptions(
+                      !state.hideWatchedSubscriptions),
+                  trailing: Switch(
+                      onChanged: (value) {},
+                      value: state.hideWatchedSubscriptions),
+                ),
                 SettingsTitle(title: locals.servers),
                 BlocBuilder<AppCubit, AppState>(
                     buildWhen: (previous, current) =>
@@ -334,6 +344,19 @@ class TVSettingsScreen extends StatelessWidget {
                   title: 'SponsorBlock',
                   description: locals.sponsorBlockDescription,
                   onSelected: openSponsorBlockSettings,
+                ),
+                SettingsTile(
+                  title: locals.rememberVideoQuality,
+                  description: locals.rememberVideoQualityDescription,
+                  onSelected: (context) => cubit
+                      .setRememberVideoQuality(!state.rememberVideoQuality),
+                  trailing: Switch(
+                      onChanged: (value) {}, value: state.rememberVideoQuality),
+                ),
+                SettingsTile(
+                  title: locals.downloadFolder,
+                  description: locals.downloadFolderSummary,
+                  onSelected: showDownloadFolder,
                 ),
                 SettingsTitle(title: locals.appearance),
                 SettingsTile(

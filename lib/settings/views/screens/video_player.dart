@@ -64,6 +64,13 @@ class VideoPlayerSettingsScreen extends StatelessWidget {
                   title: Text(locals.rememberPlaybackSpeed),
                   description: Text(locals.rememberPlaybackSpeedDescription),
                 ),
+                SettingsTile.switchTile(
+                  leading: const Icon(Icons.hd),
+                  initialValue: state.rememberVideoQuality,
+                  onToggle: cubit.setRememberVideoQuality,
+                  title: Text(locals.rememberVideoQuality),
+                  description: Text(locals.rememberVideoQualityDescription),
+                ),
                 SettingsTile.navigation(
                   leading: const Icon(Icons.dangerous),
                   title: const Text('SponsorBlock'),

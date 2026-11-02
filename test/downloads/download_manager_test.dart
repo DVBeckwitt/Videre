@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
@@ -62,6 +63,9 @@ class _VideoCubit extends VideoCubit {
 void main() {
   _DownloadTestBinding();
   const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+  const storageChannel = MethodChannel('videre/download_storage');
+  const folder = 'content://documents/tree/primary%3AVidere';
+  const document = '$folder/document/primary%3AVidere%2Fvideo.webm';
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late Service originalService;
@@ -184,6 +188,7 @@ void main() {
     await mediaServer?.close(force: true);
     await db.close();
     messenger.setMockMethodCallHandler(pathProvider, null);
+    messenger.setMockMethodCallHandler(storageChannel, null);
     await documentsDirectory.delete(recursive: true);
     service = originalService;
   });
@@ -196,6 +201,199 @@ void main() {
     expect(manager.state.waitingForWifi, true);
     expect(manager.state.downloadProgresses, isEmpty);
     expect(manager.state.totalProgress, 0);
+  });
+
+  test('folder selection persists, cancellation and reset preserve old jobs',
+      () async {
+    messenger.setMockMethodCallHandler(
+        storageChannel, (_) async => {'uri': folder, 'name': 'Videre'});
+    await manager.chooseFolder();
+    await manager.addDownload('12345678901');
+    expect(db.getDownloadByVideoId(video.videoId)!.folderUri, isNull);
+    expect(db.getDownloadByVideoId('12345678901')!.folderUri, folder);
+    await manager.close();
+    await openManager();
+    expect(manager.state.folderName, 'Videre');
+    expect(manager.state.folderUri, folder);
+    messenger.setMockMethodCallHandler(storageChannel, (_) async => null);
+    await manager.chooseFolder();
+    expect(manager.state.folderUri, folder);
+    await manager.usePrivateFolder();
+    expect(manager.state.folderUri, isNull);
+    expect(db.getSettings(downloadFolderSetting), isNull);
+    expect(db.getDownloadByVideoId('12345678901')!.folderUri, folder);
+  });
+
+  test('completed external media keeps its URI and frees private staging files',
+      () async {
+    final audio = video.copyWith(audioOnly: true, folderUri: folder);
+    await db.upsertDownload(audio);
+    service = _DownloadService((_) => audioVideo(audio.videoId));
+    List<int>? savedBytes;
+    String? deleted;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      if (call.method == 'prepareDocument') {
+        expect(call.arguments['folder'], folder);
+        expect(call.arguments['mime'], 'audio/webm');
+        expect(call.arguments['existing'], isNull);
+        return document;
+      }
+      if (call.method == 'writeDocument') {
+        expect(db.getDownloadByVideoId(video.videoId)!.storageUri, document);
+        expect(
+            db.getDownloadByVideoId(video.videoId)!.downloadComplete, isFalse);
+        savedBytes =
+            await File(call.arguments['source'] as String).readAsBytes();
+      }
+      if (call.method == 'deleteDocument') {
+        deleted = call.arguments['uri'] as String;
+      }
+      return null;
+    });
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete &&
+        state.downloadProgresses.isEmpty);
+    final completed = db.getDownloadByVideoId(video.videoId)!;
+    expect(savedBytes, [0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(await completed.effectivePath, document);
+    expect(await File(await audio.downloadPath).exists(), isFalse);
+    expect(
+        await File('${await audio.downloadPath}.mux.webm').exists(), isFalse);
+    await manager.close();
+    await openManager();
+    expect(await manager.state.videos.single.effectivePath, document);
+    await manager.deleteVideo(manager.state.videos.single);
+    expect(deleted, document);
+    expect(manager.state.videos, isEmpty);
+  });
+
+  test('failed folder writes retry the same document instead of duplicating it',
+      () async {
+    final audio = video.copyWith(audioOnly: true, folderUri: folder);
+    await db.upsertDownload(audio);
+    final remote = await audioVideo(audio.videoId);
+    service = _DownloadService((_) async => remote);
+    var writes = 0;
+    final previousUris = <String?>[];
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      if (call.method == 'prepareDocument') {
+        previousUris.add(call.arguments['existing'] as String?);
+        return document;
+      }
+      if (call.method == 'writeDocument' && ++writes == 1) {
+        throw PlatformException(code: 'DOWNLOAD_STORAGE');
+      }
+      return null;
+    });
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadFailed && state.downloadProgresses.isEmpty);
+    expect(manager.state.videos.single.storageFailed, isTrue);
+    expect(manager.state.videos.single.storageUri, document);
+    await manager.retryDownload(manager.state.videos.single);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    expect(previousUris, [null, document]);
+    expect(manager.state.videos.single.storageFailed, isFalse);
+  });
+
+  test(
+      'failed external deletion preserves the record and local files for retry',
+      () async {
+    final completed = video.copyWith(
+        folderUri: folder, storageUri: document, downloadComplete: true);
+    await db.upsertDownload(completed);
+    manager.setVideos();
+    final artwork = File(await completed.thumbnailPath);
+    final staging = File('${await completed.downloadPath}.mux.webm');
+    await artwork.writeAsBytes([1, 2]);
+    await staging.writeAsBytes([3, 4]);
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      expect(call.method, 'deleteDocument');
+      expect(call.arguments['uri'], document);
+      throw PlatformException(code: 'DOWNLOAD_STORAGE');
+    });
+
+    await expectLater(
+        manager.deleteVideo(completed), throwsA(isA<PlatformException>()));
+    expect(db.getDownloadByVideoId(video.videoId), completed);
+    expect(manager.state.videos.single, completed);
+    expect(await artwork.readAsBytes(), [1, 2]);
+    expect(await staging.readAsBytes(), [3, 4]);
+
+    messenger.setMockMethodCallHandler(storageChannel, (_) async => null);
+    await manager.deleteVideo(completed);
+    expect(db.getDownloadByVideoId(video.videoId), isNull);
+    expect(manager.state.videos, isEmpty);
+    expect(await artwork.exists(), isFalse);
+    expect(await staging.exists(), isFalse);
+  });
+
+  test('lost folder access fails before fetching media and preserves the job',
+      () async {
+    await db.upsertDownload(video.copyWith(folderUri: folder));
+    var fetched = false;
+    service = _DownloadService((_) async {
+      fetched = true;
+      return Video(videoId: video.videoId);
+    });
+    messenger.setMockMethodCallHandler(storageChannel,
+        (_) async => throw PlatformException(code: 'DOWNLOAD_STORAGE'));
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.storageFailed);
+    expect(fetched, isFalse);
+    expect(manager.state.videos.single.downloadComplete, isFalse);
+    expect(manager.state.videos.single.folderUri, folder);
+  });
+
+  test(
+      'delete cancels an external write and removes its newly recorded document',
+      () async {
+    final audio = video.copyWith(audioOnly: true, folderUri: folder);
+    await db.upsertDownload(audio);
+    service = _DownloadService((_) => audioVideo(audio.videoId));
+    final started = Completer<void>(), cancelled = Completer<void>();
+    String? deleted;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      if (call.method == 'prepareDocument') return document;
+      if (call.method == 'writeDocument') {
+        started.complete();
+        await cancelled.future;
+        throw PlatformException(code: 'DOWNLOAD_STORAGE');
+      }
+      if (call.method == 'cancelWrite') cancelled.complete();
+      if (call.method == 'deleteDocument') {
+        deleted = call.arguments['uri'] as String;
+      }
+      return null;
+    });
+    await manager.setWifiOnly(false);
+    await started.future.timeout(const Duration(seconds: 5));
+    await manager.deleteVideo(audio).timeout(const Duration(seconds: 5));
+    expect(deleted, document);
+    expect(manager.state.videos, isEmpty);
+    expect(
+        await File('${await audio.downloadPath}.mux.webm').exists(), isFalse);
+  });
+
+  test('legacy downloads keep their private path and filenames stay portable',
+      () async {
+    final legacy = DownloadedVideo.fromJson({
+      'videoId': video.videoId,
+      'title': video.title,
+      'lengthSeconds': 12,
+      'quality': '720p',
+      'downloadComplete': true,
+    });
+    expect(legacy.storageUri, isNull);
+    expect(legacy.folderUri, isNull);
+    expect(await legacy.effectivePath, endsWith('${video.videoId}.mp4'));
+    await File(await legacy.downloadPath).writeAsBytes([1]);
+    expect(await legacy.effectivePath, await legacy.downloadPath);
+    expect(video.copyWith(title: '../Title: a/b').fileName,
+        '.._Title_ a_b_${video.videoId}.webm');
+    expect(video.copyWith(title: List.filled(200, '🙂').join()).fileName.length,
+        lessThan(150));
   });
 
   test('pause survives restart and resume keeps the queued job', () async {

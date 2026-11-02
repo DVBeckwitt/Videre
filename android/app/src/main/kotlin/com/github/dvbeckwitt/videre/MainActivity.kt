@@ -73,6 +73,9 @@ class MainActivity : AudioServiceActivity() {
         if (!flutterEngine.plugins.has(VidereNetworkPlugin::class.java)) {
             flutterEngine.plugins.add(VidereNetworkPlugin())
         }
+        if (!flutterEngine.plugins.has(DownloadStoragePlugin::class.java)) {
+            flutterEngine.plugins.add(DownloadStoragePlugin())
+        }
     }
 
     private fun pickFile(call: MethodCall, result: MethodChannel.Result) {

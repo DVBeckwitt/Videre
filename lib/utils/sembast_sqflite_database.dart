@@ -380,7 +380,19 @@ class SembastSqfDb extends IDbClient {
 
   @override
   saveProgress(Progress progress) async {
-    await progressStore.record(progress.videoId).put(db, progress.toJson());
+    // Compare and write together: overlapping playback/seek updates must not
+    // miss a watched-status transition by reading the same previous value.
+    final watchedChanged = await db.transaction((txn) async {
+      final record = progressStore.record(progress.videoId);
+      final previous = await record.get(txn);
+      final wasWatched = previous != null &&
+          Progress.fromJson(previous).progress >= watchedProgressThreshold;
+      await record.put(txn, progress.toJson());
+      return wasWatched != (progress.progress >= watchedProgressThreshold);
+    });
+    if (watchedChanged) {
+      playbackHistoryRevision.value++;
+    }
   }
 
   @override

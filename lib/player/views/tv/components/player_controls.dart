@@ -1,5 +1,6 @@
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
+import 'package:clipious/player/views/components/seek_preview.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
@@ -397,6 +398,23 @@ class TvPlayerControls extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (playerState.seekPreviewPosition != null &&
+                      !(currentlyPlaying?.liveNow ?? false) &&
+                      playerState.seekPreviewVideoId ==
+                          (currentlyPlaying?.videoId ??
+                              player.state.offlineCurrentlyPlaying?.videoId))
+                    Positioned(
+                      bottom: 96,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                          child: SeekPreview(
+                        video: currentlyPlaying,
+                        position: playerState.seekPreviewPosition!,
+                        duration: player.duration,
+                        width: 240,
+                      )),
+                    ),
                   Positioned(
                       left: 0,
                       bottom: 50,

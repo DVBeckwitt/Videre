@@ -13,6 +13,7 @@ import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/playback_speed_quick_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
+import 'package:clipious/player/views/components/seek_preview.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:flutter/material.dart';
@@ -207,6 +208,9 @@ class PlayerControls extends StatelessWidget {
     var locals = AppLocalizations.of(context)!;
     var textTheme = Theme.of(context).textTheme;
     var player = context.read<PlayerCubit>();
+    final videoId = context.select((PlayerCubit cubit) =>
+        cubit.state.currentlyPlaying?.videoId ??
+        cubit.state.offlineCurrentlyPlaying?.videoId);
     return Theme(
       data: ThemeData(
           useMaterial3: true,
@@ -217,6 +221,8 @@ class PlayerControls extends StatelessWidget {
               circularTrackColor:
                   darkColorScheme.secondaryContainer.withValues(alpha: 0.8))),
       child: BlocProvider(
+        // Drop an in-progress drag when the queue advances to another video.
+        key: ValueKey(videoId),
         create: (context) =>
             PlayerControlsCubit(const PlayerControlsState(), player),
         child: LayoutBuilder(
@@ -596,6 +602,8 @@ class PlayerControls extends StatelessWidget {
                                                     playerState
                                                         .duration.inMilliseconds
                                                         .toDouble()),
+                                                onChangeStart:
+                                                    cubit.onScrubDrag,
                                                 onChangeEnd: cubit.onScrubbed,
                                                 onChanged: cubit.onScrubDrag,
                                               )),
@@ -611,7 +619,26 @@ class PlayerControls extends StatelessWidget {
                             ],
                           ),
                         ),
-                      if (!isMini && !isPip && playerState.displayControls)
+                      if (!isMini &&
+                          !isPip &&
+                          playerState.draggingPositionSlider &&
+                          !(currentlyPlaying?.liveNow ?? false))
+                        Positioned(
+                          bottom: 48,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                              child: SeekPreview(
+                            video: currentlyPlaying,
+                            position: playerState.position,
+                            duration: playerState.duration,
+                            width: min(160, constraints.maxWidth * 0.4),
+                          )),
+                        ),
+                      if (!isMini &&
+                          !isPip &&
+                          playerState.displayControls &&
+                          !playerState.draggingPositionSlider)
                         Positioned(
                           top: 0,
                           left: 0,

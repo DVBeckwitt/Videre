@@ -25,16 +25,11 @@ class TvPlayerSettingsCubit extends Cubit<TvPlayerSettingsState> {
 
   TvPlayerSettingsCubit(super.initialState, this.player, this.settings);
 
-  List<String> get videoTrackNames =>
-      settings.state.useDash || (player.state.video?.liveNow ?? false)
-          ? player.videoController?.betterPlayerAsmsTracks
-                  .map((e) => '${e.height}p')
-                  .toSet()
-                  .toList() ??
-              []
-          : player.videoController?.betterPlayerDataSource?.resolutions?.keys
-                  .toList() ??
-              [];
+  List<String> get videoTrackNames => player
+      .getVideoTracks()
+      .map((label) => label.split(' - ').first)
+      .toSet()
+      .toList();
 
   List<String> get audioTrackNames => settings.state.useDash
       ? player.videoController?.betterPlayerAsmsAudioTracks
@@ -81,25 +76,10 @@ class TvPlayerSettingsCubit extends Cubit<TvPlayerSettingsState> {
     }
   }
 
-  changeVideoTrack(String selected) {
-    log.fine('Video quality selected $selected');
-
-    if (settings.state.useDash) {
-      BetterPlayerAsmsTrack? track = videoController?.betterPlayerAsmsTracks
-          .firstWhere((element) => '${element.height}p' == selected);
-
-      if (track != null) {
-        log.fine('Changing video track to $selected');
-        videoController?.setTrack(track);
-      }
-    } else {
-      String? url =
-          videoController?.betterPlayerDataSource?.resolutions?[selected];
-      if (url != null) {
-        videoController?.setResolution(url);
-      }
-    }
-  }
+  Future<void> changeVideoTrack(String selected) =>
+      player.selectVideoTrack(player
+          .getVideoTracks()
+          .indexWhere((label) => label.split(' - ').first == selected));
 
   changeChangeAudioTrack(String selected) {
     log.fine('Audio quality selected $selected');
