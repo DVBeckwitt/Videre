@@ -78,6 +78,39 @@ void main() {
       lengthSeconds: 12,
       quality: '720p');
 
+  test('malformed download IDs cannot delete files outside the download folder',
+      () async {
+    await manager.addDownloads([]);
+    final sentinel = File('${documentsDirectory.path}/outside.webm');
+    await sentinel.writeAsString('preserve');
+    final malicious = video.copyWith(videoId: '../outside', audioOnly: true);
+    await expectLater(
+        manager.deleteVideo(malicious), throwsA(isA<FormatException>()));
+    expect(await sentinel.readAsString(), 'preserve');
+  });
+
+  test('untrusted download IDs are rejected before queueing or building paths',
+      () async {
+    for (final id in [
+      '../escape',
+      r'..\escape',
+      '/absolute',
+      'a/b',
+      'a:b',
+      '',
+      'a' * 129,
+      'line\nbreak',
+      'trailing\n'
+    ]) {
+      expect(await manager.addDownload(id), isFalse);
+      expect(db.getDownloadByVideoId(id), isNull);
+      final invalid = video.copyWith(videoId: id);
+      expect(() => invalid.fileName, throwsA(isA<FormatException>()));
+      await expectLater(invalid.downloadPath, throwsA(isA<FormatException>()));
+      await expectLater(invalid.thumbnailPath, throwsA(isA<FormatException>()));
+    }
+  });
+
   Future<void> openManager() async {
     manager = DownloadManagerCubit(const DownloadManagerState(), _Player());
     await manager.addDownloads([]); // Wait for saved preferences to load.

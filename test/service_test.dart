@@ -19,6 +19,37 @@ import 'package:http/testing.dart';
 import 'package:logging/logging.dart';
 
 void main() {
+  test('cookie login still accepts a valid session response', () async {
+    final client = MockClient((request) async {
+      expect(request.method, 'POST');
+      expect(request.bodyFields['email'], 'user');
+      return http.Response('', 302,
+          headers: {'set-cookie': 'SID=test-session; Secure; HttpOnly'});
+    });
+    addTearDown(client.close);
+    expect(
+        await Service(httpClient: client)
+            .loginWithCookies('https://instance.example', 'user', 'password'),
+        'SID=test-session');
+  });
+
+  test('failed cookie login does not disclose response cookies in logs',
+      () async {
+    final records = <LogRecord>[];
+    final subscription = Logger('Service').onRecord.listen(records.add);
+    addTearDown(subscription.cancel);
+    final client = MockClient((_) async => http.Response('', 401,
+        headers: {'set-cookie': 'SID=private-session-value; HttpOnly'}));
+    addTearDown(client.close);
+    final api = Service(httpClient: client);
+
+    await expectLater(
+        api.loginWithCookies('https://instance.example', 'user', 'password'),
+        throwsA(isA<InvidiousServiceError>()));
+    expect(records.map((record) => '${record.message} ${record.error}').join(),
+        isNot(contains('private-session-value')));
+  });
+
   group('history synchronization', () {
     late Level previousLogLevel;
 

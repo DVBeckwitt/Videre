@@ -60,6 +60,22 @@ void main() {
     await second.close();
   });
 
+  testWidgets('paused decoder readiness clears the loading overlay',
+      (tester) async {
+    final controls = PlayerControlsCubit(const PlayerControlsState(), player);
+    controls.onStreamEvent(const MediaEvent(state: MediaState.loading));
+    expect(controls.state.buffering, isTrue);
+    // Metadata can arrive while the decoder is still loading.
+    controls.onStreamEvent(const MediaEvent<double>(
+        state: MediaState.ready, type: MediaEventType.speedChanged, value: 1));
+    expect(controls.state.buffering, isTrue);
+    // A paused decoder may never send a progress event after becoming ready.
+    controls.onStreamEvent(const MediaEvent(state: MediaState.ready));
+    expect(controls.state.buffering, isFalse);
+    expect(player.state.isPlaying, isFalse);
+    await controls.close();
+  });
+
   testWidgets('TV settings stay open until Back, then controls auto-hide',
       (tester) async {
     final controls =

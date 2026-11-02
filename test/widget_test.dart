@@ -1090,6 +1090,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(VideoQueueScreen), findsOneWidget);
     expect(find.text('Your queue is empty'), findsOneWidget);
+    final settings =
+        tester.element(find.byType(VideoQueueScreen)).read<SettingsCubit>();
+    expect(settings.state.autoplayQueue, isTrue);
+    await tester.tap(find.text('Autoplay next in queue'));
+    await tester.pumpAndSettle();
+    expect(settings.state.autoplayQueue, isFalse);
+    expect(SettingsState.init().autoplayQueue, isFalse);
     await tester.pageBack();
     await tester.pumpAndSettle();
     expect(

@@ -81,7 +81,6 @@ class AppCubit extends Cubit<AppState> {
   Future<void> openAppLink(String url, bool fullStack) async {
     if (isClosed) return;
     try {
-      log.fine('opening $url, full stack: $fullStack');
       Uri uri = Uri.parse(url);
       String? videoId;
       if (const {'http', 'https'}.contains(uri.scheme) &&
@@ -95,7 +94,10 @@ class AppCubit extends Cubit<AppState> {
           videoId = uri.pathSegments[0];
         }
 
-        if (videoId != null && videoId.isNotEmpty) {
+        if (videoId != null &&
+            videoId.length == 11 &&
+            RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
+          log.fine('Opening video $videoId, full stack: $fullStack');
           if (isTv) {
             if (fullStack) {
               await appRouter.replaceAll([
@@ -119,7 +121,8 @@ class AppCubit extends Cubit<AppState> {
       }
     } catch (err, stacktrace) {
       // not a url;
-      log.severe('Couldn\'t open external url: $url', err, stacktrace);
+      log.severe('Couldn\'t open external video link (${err.runtimeType})',
+          null, stacktrace);
     }
   }
 

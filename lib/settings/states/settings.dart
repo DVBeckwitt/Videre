@@ -439,6 +439,8 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setAutoplayVideoOnLoad(bool b) async => await _set(playerAutoplayOnLoad, b);
 
+  Future<void> setAutoplayQueue(bool value) => _set(playerAutoplayQueue, value);
+
   setUseReturnYoutubeDislike(bool b) async =>
       await _set(useReturnYoutubeDislikeSettingName, b);
 
@@ -587,6 +589,8 @@ sealed class SettingsState with _$SettingsState {
   bool get useDash => (_get(useDashSettingName)?.value ?? 'true') == 'true';
 
   bool get autoplayVideoOnLoad => _get(playerAutoplayOnLoad)?.value == 'true';
+
+  bool get autoplayQueue => _get(playerAutoplayQueue)?.value != 'false';
 
   bool get useReturnYoutubeDislike =>
       (_get(useReturnYoutubeDislikeSettingName)?.value ?? 'true') == 'true';

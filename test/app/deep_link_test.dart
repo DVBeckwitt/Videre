@@ -10,6 +10,7 @@ import 'package:clipious/router.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:logging/logging.dart';
 
 class _LinkApp extends AppCubit {
   _LinkApp() : super(AppState(0, null, HomeLayout())) {
@@ -164,6 +165,8 @@ void main() {
     await appRouter.replaceAll([const TvHomeRoute()]);
     for (final link in [
       'https://www.youtube.com/watch?v=',
+      'https://www.youtube.com/watch?v=..%2Flogin%3Ftoken%3Dprivate',
+      'https://youtu.be/too-short',
       'https://example.com/watch?v=dQw4w9WgXcQ',
       'ftp://youtube.com/watch?v=dQw4w9WgXcQ',
       'videre-auth://callback?code=private',
@@ -172,6 +175,25 @@ void main() {
       await app.openAppLink(link, true);
       expect(appRouter.stack.map((page) => page.name), [TvHomeRoute.name]);
     }
+  });
+
+  test('shared link query data and malformed input stay out of logs', () async {
+    appRouter.dispose();
+    final router = _RecordingRouter();
+    appRouter = router;
+    final previous = Logger.root.level;
+    Logger.root.level = Level.FINE;
+    addTearDown(() => Logger.root.level = previous);
+    final records = <LogRecord>[];
+    final subscription = Logger.root.onRecord.listen(records.add);
+    addTearDown(subscription.cancel);
+    await app.openAppLink(
+        'https://youtu.be/dQw4w9WgXcQ?token=private-query-value', false);
+    expect(router.pushed?.routeName, TvVideoRoute.name);
+    await app.openAppLink('https://[private-invalid-value', false);
+    final messages = records.map((e) => '${e.message} ${e.error}').join();
+    expect(messages, isNot(contains('private-query-value')));
+    expect(messages, isNot(contains('private-invalid-value')));
   });
 
   test('Android delegates links to the sharing plugin and keeps auth isolated',

@@ -46,7 +46,9 @@ class PlayerControlsCubit extends Cubit<PlayerControlsState> {
         emit(state.copyWith(buffering: true));
         break;
       case MediaState.ready:
-        // showControls();
+        // A paused decoder need not emit progress after loading completes.
+        // Metadata events also use ready, before the decoder itself is ready.
+        if (event.type == null) emit(state.copyWith(buffering: false));
         break;
       case MediaState.error:
         hideControls();

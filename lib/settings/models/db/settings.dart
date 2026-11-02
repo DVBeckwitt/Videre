@@ -9,6 +9,7 @@ const useDashSettingName = 'use-dash';
 const playerRepeat = 'player-repeat';
 const playerShuffle = 'player-shuffle';
 const playerAutoplayOnLoad = 'player-autoplay-on-load';
+const playerAutoplayQueue = 'player-autoplay-queue';
 const playRecommendedNextSettingName = 'play-recommended-next';
 const useProxySettingName = 'use-proxy';
 const networkSocksProxySettingName = 'network-socks-proxy';

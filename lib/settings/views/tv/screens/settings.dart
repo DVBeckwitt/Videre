@@ -341,6 +341,14 @@ class TVSettingsScreen extends StatelessWidget {
                       value: state.rememberPlayBackSpeed),
                 ),
                 SettingsTile(
+                  title: locals.autoplayQueue,
+                  description: locals.autoplayQueueDescription,
+                  onSelected: (context) =>
+                      cubit.setAutoplayQueue(!state.autoplayQueue),
+                  trailing:
+                      Switch(onChanged: (value) {}, value: state.autoplayQueue),
+                ),
+                SettingsTile(
                   title: 'SponsorBlock',
                   description: locals.sponsorBlockDescription,
                   onSelected: openSponsorBlockSettings,

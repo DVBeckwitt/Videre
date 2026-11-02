@@ -33,42 +33,48 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   factory DownloadedVideo.fromJson(Map<String, Object?> json) =>
       _$DownloadedVideoFromJson(json);
 
-  @JsonKey(includeFromJson: false, includeToJson: false)
-  Future<String> get downloadPath async {
-    Directory dir = await _getDownloadFolder();
+  static final _fileIdPattern = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
 
-    return "${dir.path}/$videoId.webm";
+  /// Remote identifiers must remain a single bounded filesystem component.
+  static bool isSafeFileId(String value) =>
+      _fileIdPattern.stringMatch(value) == value;
+
+  String get _fileId {
+    if (!isSafeFileId(videoId)) {
+      throw const FormatException('Invalid download video ID');
+    }
+    return videoId;
   }
+
+  Future<String> _privatePath(String extension) async {
+    final id = _fileId;
+    final dir = await _getDownloadFolder();
+    return p.join(dir.path, '$id.$extension');
+  }
+
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  Future<String> get downloadPath => _privatePath('webm');
 
   /// Effective path for legacy reasons, old  versions videos would be mp4, now it's all webm
   @JsonKey(includeFromJson: false, includeToJson: false)
   Future<String> get effectivePath async {
     if (storageUri != null) return storageUri!;
-    Directory dir = await _getDownloadFolder();
-
-    if (audioOnly) {
-      return "${dir.path}/$videoId.webm";
-    } else {
-      final path = "${dir.path}/$videoId.webm";
-      if (!await File(path).exists()) {
-        return "${dir.path}/$videoId.mp4";
-      }
-
-      return path;
+    final path = await downloadPath;
+    if (!audioOnly && !await File(path).exists()) {
+      return _privatePath('mp4');
     }
+    return path;
   }
 
   String get fileName {
+    final id = _fileId;
     final name = title.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
     final shortened = String.fromCharCodes(name.runes.take(50));
-    return '${shortened.isEmpty ? videoId : shortened}_$videoId.webm';
+    return '${shortened.isEmpty ? id : shortened}_$id.webm';
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
-  Future<String> get thumbnailPath async {
-    Directory dir = await _getDownloadFolder();
-    return "${dir.path}/$videoId.jpg";
-  }
+  Future<String> get thumbnailPath => _privatePath('jpg');
 
   Future<Directory> _getDownloadFolder() async {
     Directory dir = await getApplicationDocumentsDirectory();

@@ -1572,5 +1572,7 @@
   "phoneNavigationLimit": "Keep 2–5 bottom items, including at least one main screen tab. Settings always stays available. The star marks your startup tab.",
   "phoneNavigationReset": "Restore default navigation",
   "phoneNavigationSaveError": "Could not save the navigation layout. Please try again.",
-  "phoneNavigationMore": "More shortcuts"
+  "phoneNavigationMore": "More shortcuts",
+  "autoplayQueue": "Autoplay next in queue",
+  "autoplayQueueDescription": "Automatically continue through the queue. When off, stop when a video ends, including in repeat mode. Your queue stays available for manual playback."
 }

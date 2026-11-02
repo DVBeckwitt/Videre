@@ -94,6 +94,17 @@ void main() {
         isFalse);
   });
 
+  test(
+      'queue autoplay opt-out survives backup without accepting invalid values',
+      () async {
+    await source.saveSetting(SettingsValue(playerAutoplayQueue, 'false'));
+    await target.restoreBackup(
+        UserBackup.parse((await source.exportBackup()).encode()));
+    expect(target.getSettings(playerAutoplayQueue)?.value, 'false');
+    expect(UserBackup.validSetting(SettingsValue(playerAutoplayQueue, 'yes')),
+        isFalse);
+  });
+
   test('phone navigation placement and startup survive backup restore',
       () async {
     final layout = PhoneNavigation.defaults()

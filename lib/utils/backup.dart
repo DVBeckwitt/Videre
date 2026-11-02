@@ -205,6 +205,7 @@ class UserBackup {
       useDashSettingName,
       playerShuffle,
       playerAutoplayOnLoad,
+      playerAutoplayQueue,
       playRecommendedNextSettingName,
       useProxySettingName,
       useReturnYoutubeDislikeSettingName,

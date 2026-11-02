@@ -556,7 +556,7 @@ class Service {
             .firstWhere((element) => element.startsWith('SID='));
       } else {
         throw InvidiousServiceError(
-            'wrong error code (${response.statusCode}) or no cookie headers: ${response.headers['set-cookie']}');
+            'Unexpected login response (HTTP ${response.statusCode}) or missing session cookie');
       }
     } catch (err, stacktrace) {
       if (err is InvidiousServiceError) {

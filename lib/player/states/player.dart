@@ -509,11 +509,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void handleMediaEvent(MediaEvent event) {
     switch (event.state) {
       case MediaState.completed:
-        if (state.currentlyPlaying != null) {
-          saveProgress(state.currentlyPlaying!.lengthSeconds ?? 0);
-        }
+        unawaited(saveProgress(state.currentlyPlaying?.lengthSeconds ??
+            state.offlineCurrentlyPlaying?.lengthSeconds ??
+            0));
         // A late completion must not undo a Stop already in progress.
-        if (!state.isClosing) playNext();
+        if (!state.isClosing) {
+          if (settings.state.autoplayQueue) {
+            playNext();
+          } else if (_requestedPlaying != false) {
+            pause();
+          }
+        }
         _setPlaying(false);
         break;
       default:

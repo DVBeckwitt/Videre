@@ -174,6 +174,17 @@ Future<void> main() async {
     }
   });
 
+  test('queue autoplay defaults on and its opt-out persists independently',
+      () async {
+    expect(settingsCubit.state.autoplayQueue, isTrue);
+    final onLoad = settingsCubit.state.autoplayVideoOnLoad;
+    await settingsCubit.setAutoplayQueue(false);
+    expect(SettingsState.init().autoplayQueue, isFalse);
+    expect(settingsCubit.state.autoplayVideoOnLoad, onLoad);
+    await settingsCubit.setAutoplayQueue(true);
+    expect(SettingsState.init().autoplayQueue, isTrue);
+  });
+
   test('locale changes finish saving to both foreground and background storage',
       () async {
     await settingsCubit.setLocale([const Locale('fr')], ['French'], 'French');

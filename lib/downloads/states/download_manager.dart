@@ -161,7 +161,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<bool> addDownload(String videoId,
       {String quality = '720p', bool audioOnly = false}) async {
     await _ready;
-    if (db.getDownloadByVideoId(videoId) != null ||
+    if (!DownloadedVideo.isSafeFileId(videoId) ||
+        db.getDownloadByVideoId(videoId) != null ||
         _deleting.contains(videoId) ||
         !_enqueuing.add(videoId)) {
       return false;
