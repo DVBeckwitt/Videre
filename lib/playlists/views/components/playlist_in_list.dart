@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -107,7 +108,8 @@ class PlaylistInList extends StatelessWidget {
                       return GestureDetector(
                         child: AnimatedScale(
                             curve: Curves.easeInOutQuad,
-                            duration: animationDuration ~/ 2,
+                            duration: AppMotion.duration(
+                                context, animationDuration ~/ 2),
                             scale: hasFocus ? 1 : 0.9,
                             child: AnimatedContainer(
                               decoration: BoxDecoration(
@@ -116,7 +118,7 @@ class PlaylistInList extends StatelessWidget {
                                     ? colors.primaryContainer
                                     : colors.surface,
                               ),
-                              duration: animationDuration,
+                              duration: AppMotion.duration(context),
                               child: Padding(
                                 padding: const EdgeInsets.all(8.0),
                                 child: Column(

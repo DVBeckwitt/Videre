@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -20,6 +21,7 @@ class BrowsingSettingsScreen extends StatelessWidget {
   customizeApp(BuildContext context) {
     if (getDeviceType() == DeviceType.phone) {
       showDialog(
+          animationStyle: AppMotion.dialogStyle(context),
           context: context,
           useRootNavigator: false,
           builder: (context) => Dialog.fullscreen(
@@ -31,6 +33,7 @@ class BrowsingSettingsScreen extends StatelessWidget {
       return;
     }
     showDialog(
+        animationStyle: AppMotion.dialogStyle(context),
         barrierDismissible: true,
         useRootNavigator: false,
         context: context,
@@ -46,6 +49,7 @@ class BrowsingSettingsScreen extends StatelessWidget {
 
     var locals = AppLocalizations.of(context)!;
     String? newUrl = await showDialog<String>(
+        animationStyle: AppMotion.dialogStyle(context),
         context: context,
         useRootNavigator: false,
         builder: (BuildContext context) => Dialog(

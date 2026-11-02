@@ -20,6 +20,21 @@ void main() {
   const id = 'abcdefghijk';
   const channel = 'UCabcdefghijklmnopqrstuv';
 
+  test('backup restores motion choices and rejects invalid values', () async {
+    for (final value in ['system', 'reduced', 'off']) {
+      await source
+          .saveSetting(SettingsValue(motionPreferenceSettingName, value));
+      await target.restoreBackup(
+          UserBackup.parse((await source.exportBackup()).encode()),
+          replace: true);
+      expect(target.getSettings(motionPreferenceSettingName)?.value, value);
+    }
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(motionPreferenceSettingName, 'invalid')),
+        isFalse);
+  });
+
   setUp(() async {
     source = await SembastSqfDb.createInMemory();
     target = await SembastSqfDb.createInMemory();

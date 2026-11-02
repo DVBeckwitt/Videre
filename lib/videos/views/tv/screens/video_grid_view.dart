@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -54,9 +55,10 @@ class TvGridScreen extends StatelessWidget {
                             child: SizedBox(
                                 width: 15,
                                 height: 15,
-                                child: CircularProgressIndicator(
+                                child: MotionLoadingIndicator(
+                                    child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                )),
+                                ))),
                           )
                         : const SizedBox.shrink()
                   ],

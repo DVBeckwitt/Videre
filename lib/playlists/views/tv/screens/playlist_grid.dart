@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -44,8 +45,9 @@ class TvPlaylistGridScreen extends StatelessWidget {
                             child: SizedBox(
                                 width: 15,
                                 height: 15,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2)),
+                                child: MotionLoadingIndicator(
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2))),
                           )
                         : const SizedBox.shrink()
                   ],

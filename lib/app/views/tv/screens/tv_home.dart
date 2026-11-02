@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -96,7 +97,8 @@ class TvHomeScreen extends StatelessWidget {
                   children: [
                     AnimatedContainer(
                       width: homeState ? 250 : 118,
-                      duration: animationDuration ~/ 2,
+                      duration:
+                          AppMotion.duration(context, animationDuration ~/ 2),
                       curve: Curves.easeInOutQuad,
                       decoration: BoxDecoration(
                           color: homeState
@@ -260,7 +262,7 @@ class TvHomeScreen extends StatelessWidget {
                                   if (key != null && focus) {
                                     Scrollable.ensureVisible(
                                         key.currentContext!,
-                                        duration: animationDuration,
+                                        duration: AppMotion.duration(context),
                                         curve: Curves.easeInOutQuad,
                                         alignmentPolicy:
                                             ScrollPositionAlignmentPolicy
@@ -323,7 +325,9 @@ class MenuItemText extends StatelessWidget {
       style: style,
     )
         .animate()
-        .fadeIn(delay: animationDuration ~/ 2, duration: animationDuration ~/ 2)
+        .fadeIn(
+            delay: AppMotion.fadeDuration(context, animationDuration ~/ 2),
+            duration: AppMotion.fadeDuration(context, animationDuration ~/ 2))
         .slideX(curve: Curves.easeInOutQuad);
   }
 }

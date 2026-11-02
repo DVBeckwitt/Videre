@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:ui';
 
 import 'package:auto_route/annotations.dart';
@@ -65,7 +66,8 @@ class TvChannelScreen extends StatelessWidget {
                     child: SizedBox(
                         width: 50,
                         height: 50,
-                        child: CircularProgressIndicator()),
+                        child: MotionLoadingIndicator(
+                            child: CircularProgressIndicator())),
                   )
                 : DefaultTextStyle(
                     style: textTheme.bodyLarge!,
@@ -97,14 +99,14 @@ class TvChannelScreen extends StatelessWidget {
                             tween: Tween<double>(
                                 begin: 0,
                                 end: tv.showBackground ? overlayBlur : 0),
-                            duration: animationDuration,
+                            duration: AppMotion.duration(context),
                             curve: Curves.easeInOutQuad,
                             child: AnimatedContainer(
                               color: colors.surface.withValues(
                                   alpha: tv.showBackground
                                       ? overlayBackgroundOpacity
                                       : 0),
-                              duration: animationDuration,
+                              duration: AppMotion.duration(context),
                               child: TvOverscan(
                                 child: SingleChildScrollView(
                                   controller: tvCubit.scrollController,
@@ -128,7 +130,8 @@ class TvChannelScreen extends StatelessWidget {
                                                   borderRadius:
                                                       BorderRadius.circular(
                                                           35)),
-                                              duration: animationDuration,
+                                              duration:
+                                                  AppMotion.duration(context),
                                               child: Row(
                                                   mainAxisSize:
                                                       MainAxisSize.min,
@@ -170,7 +173,8 @@ class TvChannelScreen extends StatelessWidget {
                                           channelId: channelId,
                                           subCount: compactCurrency.format(
                                               channel.channel!.subCount),
-                                          onFocusChanged: tvCubit.scrollToTop,
+                                          onFocusChanged: (focused) => tvCubit
+                                              .scrollToTop(context, focused),
                                         ),
                                         TvExpandableText(
                                           text: channel.channel?.description ??

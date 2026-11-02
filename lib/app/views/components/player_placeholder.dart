@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/globals.dart';
@@ -15,9 +16,9 @@ class PlayerPlaceHolder extends StatelessWidget {
             value.state.showMiniPlaceholder && value.state.isMini);
         return AnimatedOpacity(
           opacity: showPlaceHolder ? 1 : 0,
-          duration: animationDuration,
+          duration: AppMotion.fadeDuration(context),
           child: AnimatedContainer(
-              duration: animationDuration,
+              duration: AppMotion.fadeDuration(context),
               curve: Curves.easeInOut,
               height: showPlaceHolder ? targetHeight : 0,
               color: colors.surface,
@@ -29,7 +30,8 @@ class PlayerPlaceHolder extends StatelessWidget {
                 ),
                 child: Center(
                   child: AnimatedOpacity(
-                      duration: animationDuration * 4,
+                      duration: AppMotion.fadeDuration(
+                          context, animationDuration * 4),
                       opacity: showPlaceHolder ? 1 : 0,
                       child: Icon(
                         Icons.play_arrow_outlined,

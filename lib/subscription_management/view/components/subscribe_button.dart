@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -92,9 +93,10 @@ class SubscribeButton extends StatelessWidget {
                             ? const SizedBox(
                                 width: 15,
                                 height: 15,
-                                child: CircularProgressIndicator(
+                                child: MotionLoadingIndicator(
+                                    child: CircularProgressIndicator(
                                   strokeWidth: 1,
-                                ))
+                                )))
                             : Icon(state.isSubscribed ? Icons.done : Icons.add),
                         Padding(
                           padding: const EdgeInsets.only(left: 8.0),

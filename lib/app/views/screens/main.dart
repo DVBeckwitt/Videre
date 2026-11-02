@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -51,7 +52,8 @@ class MainScreen extends StatelessWidget {
                   child: Container(
                       color: colors.surface.withValues(alpha: 0.5),
                       child: const Center(
-                        child: CircularProgressIndicator(),
+                        child: MotionLoadingIndicator(
+                            child: CircularProgressIndicator()),
                       )))
           ],
         ),

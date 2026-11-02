@@ -1,9 +1,9 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/utils/views/components/navigation_switcher.dart';
@@ -184,8 +184,9 @@ class VideoListItem extends StatelessWidget {
                                                               AnimatedContainer(
                                                             curve: Curves
                                                                 .easeOutQuad,
-                                                            duration:
-                                                                animationDuration,
+                                                            duration: AppMotion
+                                                                .duration(
+                                                                    context),
                                                             alignment: Alignment
                                                                 .centerLeft,
                                                             constraints: state
@@ -217,16 +218,16 @@ class VideoListItem extends StatelessWidget {
                                                             ),
                                                             child:
                                                                 AnimatedFractionallySizedBox(
-                                                                    widthFactor:
-                                                                        state.progress >
-                                                                                0
-                                                                            ? state
-                                                                                .progress
-                                                                            : 0,
+                                                                    widthFactor: state.progress >
+                                                                            0
+                                                                        ? state
+                                                                            .progress
+                                                                        : 0,
                                                                     heightFactor:
                                                                         1,
-                                                                    duration:
-                                                                        animationDuration,
+                                                                    duration: AppMotion
+                                                                        .duration(
+                                                                            context),
                                                                     curve: Curves
                                                                         .easeInOutQuad,
                                                                     child:
@@ -250,7 +251,7 @@ class VideoListItem extends StatelessWidget {
                                                                             ? CrossFadeState.showFirst
                                                                             : CrossFadeState.showSecond,
                                                                         duration:
-                                                                            animationDuration,
+                                                                            AppMotion.duration(context),
                                                                         secondChild:
                                                                             const SizedBox.shrink(),
                                                                         firstChild:

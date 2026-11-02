@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -55,6 +56,7 @@ class _SearchScreenState extends State<SearchScreen> {
               }
 
               return AutoTabsRouter.tabBar(
+                  animatePageTransition: AppMotion.allowsMovement(context),
                   physics: const NeverScrollableScrollPhysics(),
                   routes: const [
                     SearchVideoRoute(),
@@ -64,25 +66,27 @@ class _SearchScreenState extends State<SearchScreen> {
                   builder: (context, child, controller) {
                     final tabsController = AutoTabsRouter.of(context);
                     return Scaffold(
-                      bottomNavigationBar:
-                          state.showResults && deviceType == DeviceType.phone
-                              ? NavigationBar(
-                                  selectedIndex: tabsController.activeIndex,
-                                  onDestinationSelected:
-                                      tabsController.setActiveIndex,
-                                  destinations: [
-                                    NavigationDestination(
-                                        icon: const Icon(Icons.play_arrow),
-                                        label: locals.videos),
-                                    NavigationDestination(
-                                        icon: const Icon(Icons.people),
-                                        label: locals.channels),
-                                    NavigationDestination(
-                                        icon: const Icon(Icons.playlist_play),
-                                        label: locals.playlists),
-                                  ],
-                                )
-                              : null,
+                      bottomNavigationBar: state.showResults &&
+                              deviceType == DeviceType.phone
+                          ? NavigationBar(
+                              animationDuration: AppMotion.duration(
+                                  context, const Duration(milliseconds: 500)),
+                              selectedIndex: tabsController.activeIndex,
+                              onDestinationSelected:
+                                  tabsController.setActiveIndex,
+                              destinations: [
+                                NavigationDestination(
+                                    icon: const Icon(Icons.play_arrow),
+                                    label: locals.videos),
+                                NavigationDestination(
+                                    icon: const Icon(Icons.people),
+                                    label: locals.channels),
+                                NavigationDestination(
+                                    icon: const Icon(Icons.playlist_play),
+                                    label: locals.playlists),
+                              ],
+                            )
+                          : null,
                       appBar: AppBar(
                         title: TextField(
                           autofocus: widget.query == null,

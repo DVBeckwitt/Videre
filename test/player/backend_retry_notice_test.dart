@@ -9,16 +9,20 @@ import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/states/player_controls.dart';
 import 'package:clipious/player/views/components/backend_retry_notice.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/backend_request_indicator.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
+import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/tv/components/player_controls.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils/motion_binding.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -27,6 +31,9 @@ import 'package:flutter_test/flutter_test.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+
+class _MotionTestBinding extends AutomatedTestWidgetsFlutterBinding
+    with InterfaceMotionBinding {}
 
 class _BackendPlayerCubit extends TestPlayerCubit {
   _BackendPlayerCubit(super.initialState, super.settings);
@@ -43,6 +50,8 @@ class _BackendPlayerCubit extends TestPlayerCubit {
       ));
 
   void clearRecovery() => emit(state.copyWith(backendRecovery: null));
+
+  void setTimer(bool active) => emit(state.copyWith(hasTimer: active));
 }
 
 Future<void> pumpRecoveryFrame(WidgetTester tester) async {
@@ -53,6 +62,7 @@ Future<void> pumpRecoveryFrame(WidgetTester tester) async {
 }
 
 void main() {
+  final binding = _MotionTestBinding();
   late TestAppCubit app;
   late TestSettingsCubit settings;
   late _BackendPlayerCubit player;
@@ -90,24 +100,80 @@ void main() {
   });
 
   tearDown(() async {
+    binding.reduceInterfaceMotion = false;
     await player.close();
     await settings.close();
     await app.close();
     await db.close();
   });
 
-  Widget host(Widget child) => MultiBlocProvider(
+  Widget host(Widget child,
+          {MotionPreference motion = MotionPreference.system}) =>
+      MultiBlocProvider(
         providers: [
           BlocProvider<AppCubit>.value(value: app),
           BlocProvider<PlayerCubit>.value(value: player),
           BlocProvider<SettingsCubit>.value(value: settings),
         ],
         child: MaterialApp(
+          builder: (context, child) =>
+              MotionScope(preference: motion, child: child!),
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
           home: Scaffold(body: child),
         ),
       );
+
+  double opacity(WidgetTester tester, Finder child) => tester
+      .widgetList<FadeTransition>(
+          find.ancestor(of: child, matching: find.byType(FadeTransition)))
+      .fold(1.0, (value, fade) => value * fade.opacity.value);
+
+  for (final motion in MotionPreference.values) {
+    testWidgets('${motion.name}: sponsor notice remains readable before expiry',
+        (tester) async {
+      await tester.pumpWidget(host(const PlayerControls(), motion: motion));
+      final context = tester.element(find
+          .descendant(
+              of: find.byType(PlayerControls),
+              matching: find.byType(LayoutBuilder))
+          .first);
+      context.read<PlayerControlsCubit>().onStreamEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.sponsorSkipped));
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await tester.pump(const Duration(milliseconds: 600));
+      final notice = find.text(AppLocalizations.of(context)!.sponsorSkipped);
+      expect(notice, findsOneWidget);
+      expect(opacity(tester, notice), 1);
+      await tester.pump(const Duration(seconds: 1));
+      expect(notice, findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets(
+        '${motion.name}: sleep timer feedback keeps its three-second dwell',
+        (tester) async {
+      await tester.pumpWidget(host(const PlayerControls(), motion: motion));
+      expect(opacity(tester, find.byIcon(Icons.bedtime_off_outlined)), 0);
+      final sliders = find.byType(SystemSettingsSlider);
+      for (var i = 0; i < sliders.evaluate().length; i++) {
+        expect(opacity(tester, sliders.at(i)), 0);
+      }
+      player.setTimer(true);
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await tester.pump(const Duration(seconds: 1));
+      final notice = find.byIcon(Icons.bedtime_outlined);
+      expect(notice, findsOneWidget);
+      expect(opacity(tester, notice), 1);
+      await tester.pump(const Duration(milliseconds: 2400));
+      expect(opacity(tester, notice), 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   for (final mode in ['video', 'audio', 'TV']) {
     testWidgets('$mode recovery survives decoder events and reports outcomes',

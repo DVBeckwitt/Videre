@@ -1,8 +1,9 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:flutter_fadein/flutter_fadein.dart';
+import 'package:clipious/utils/views/components/motion_animation.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/views/components/playlist_in_list.dart';
 
@@ -18,8 +19,8 @@ class AnimatedPlaceHolder extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return animate
-        ? FadeIn(
+    return animate && AppMotion.allowsMovement(context)
+        ? MotionAnimation.fadeIn(
             child: Animate(
                 autoPlay: true,
                 onComplete: (controller) => controller.repeat(reverse: true),

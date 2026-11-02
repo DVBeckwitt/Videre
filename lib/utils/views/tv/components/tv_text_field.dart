@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:clipious/globals.dart';
@@ -68,7 +69,7 @@ class TvTextField extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.all(8.0),
           child: AnimatedContainer(
-            duration: animationDuration ~/ 2,
+            duration: AppMotion.duration(context, animationDuration ~/ 2),
             decoration: BoxDecoration(
                 color: hasFocus ? colors.secondaryContainer : colors.surface,
                 borderRadius: hasFocus ? BorderRadius.circular(10) : null),

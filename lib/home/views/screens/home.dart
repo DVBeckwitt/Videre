@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:back_button_interceptor/back_button_interceptor.dart';
@@ -206,6 +207,7 @@ class _MainScreenState extends State<MainContentScreen> {
               ),
             )
           : AutoTabsRouter.tabBar(
+              animatePageTransition: AppMotion.allowsMovement(context),
               key: ValueKey((
                 appState.server?.url,
                 deviceType,
@@ -227,6 +229,8 @@ class _MainScreenState extends State<MainContentScreen> {
                     backgroundColor: colorScheme.surface,
                     bottomNavigationBar: deviceType == DeviceType.phone
                         ? NavigationBar(
+                            animationDuration: AppMotion.duration(
+                                context, const Duration(milliseconds: 500)),
                             onDestinationSelected: (index) {
                               final item = phoneNavigation.bottom[index];
                               if (item.isTab) {

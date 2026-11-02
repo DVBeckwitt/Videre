@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -12,6 +13,7 @@ class AddPlayListButton extends StatelessWidget {
   addPlaylistDialog(BuildContext context) {
     var cubit = context.read<PlaylistListCubit>();
     showDialog<String>(
+        animationStyle: AppMotion.dialogStyle(context),
         useRootNavigator: false,
         context: context,
         builder: (BuildContext context) => Dialog(

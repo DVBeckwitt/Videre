@@ -1,8 +1,8 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/videos/states/add_to_playlist.dart';
 import 'package:clipious/videos/models/video.dart';
 
@@ -68,10 +68,11 @@ class AddToPlayListButton extends StatelessWidget {
                       child: const SizedBox(
                           height: 10,
                           width: 10,
-                          child: CircularProgressIndicator(
+                          child: MotionLoadingIndicator(
+                              child: CircularProgressIndicator(
                             strokeWidth: 1,
-                          ))),
-                  duration: animationDuration,
+                          )))),
+                  duration: AppMotion.duration(context),
                   firstCurve: Curves.easeInOutQuad,
                   secondCurve: Curves.easeInOutQuad,
                   sizeCurve: Curves.easeInOutQuad,
@@ -88,11 +89,11 @@ class AddToPlayListButton extends StatelessWidget {
                       : const Icon(Icons.favorite_border),
                 )
                     .animate(target: state.loading ? 0 : 1)
-                    .fade(begin: 0.2, duration: animationDuration)
+                    .fade(begin: 0.2, duration: AppMotion.fadeDuration(context))
                     .scale(
                         begin:
                             const Offset(buttonScaleOffset, buttonScaleOffset),
-                        duration: animationDuration,
+                        duration: AppMotion.duration(context),
                         curve: Curves.easeInOutQuad),
                 Stack(
                   children: [
@@ -110,12 +111,12 @@ class AddToPlayListButton extends StatelessWidget {
                         .animate(target: state.loading ? 0 : 1)
                         .fade(
                           begin: 0.2,
-                          duration: animationDuration,
+                          duration: AppMotion.fadeDuration(context),
                         )
                         .scale(
                             begin: const Offset(
                                 buttonScaleOffset, buttonScaleOffset),
-                            duration: animationDuration,
+                            duration: AppMotion.duration(context),
                             curve: Curves.easeInOutQuad),
                     state.playListCount > 0
                         ? Positioned(
@@ -138,12 +139,12 @@ class AddToPlayListButton extends StatelessWidget {
                                   .animate(target: state.loading ? 0 : 1)
                                   .fade(
                                     begin: 0.2,
-                                    duration: animationDuration,
+                                    duration: AppMotion.fadeDuration(context),
                                   )
                                   .scale(
                                       begin: const Offset(
                                           buttonScaleOffset, buttonScaleOffset),
-                                      duration: animationDuration,
+                                      duration: AppMotion.duration(context),
                                       curve: Curves.easeInOutQuad),
                             ),
                           )

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -145,6 +146,7 @@ class RemoteControlButton extends StatelessWidget {
   static Future<void> show(BuildContext context, PlayerCubit player,
           {bool startReceiving = false}) =>
       showDialog<void>(
+        animationStyle: AppMotion.dialogStyle(context),
         context: context,
         builder: (context) => _RemoteControlDialog(
             player: player, startReceiving: startReceiving),
@@ -353,7 +355,9 @@ class _RemoteControlDialogState extends State<_RemoteControlDialog> {
                         child: Text(locals.remoteDisconnect),
                       ),
                     ],
-                    if (_busy) const LinearProgressIndicator(),
+                    if (_busy)
+                      const MotionLoadingIndicator(
+                          child: LinearProgressIndicator()),
                     if (_message != null) ...[
                       const SizedBox(height: 12),
                       Semantics(liveRegion: true, child: Text(_message!)),

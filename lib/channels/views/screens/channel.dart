@@ -1,7 +1,8 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_fadein/flutter_fadein.dart';
+import 'package:clipious/utils/views/components/motion_animation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/channels/states/channel.dart';
 import 'package:clipious/channels/views/components/channel_load_error.dart';
@@ -35,6 +36,7 @@ class ChannelScreen extends StatelessWidget {
             }
             var deviceType = getDeviceType();
             return AutoTabsRouter.tabBar(
+                animatePageTransition: AppMotion.allowsMovement(context),
                 key: ValueKey(channelState.channel),
                 physics: const NeverScrollableScrollPhysics(),
                 routes: [
@@ -74,8 +76,10 @@ class ChannelScreen extends StatelessWidget {
                     bottomNavigationBar: deviceType == DeviceType.tablet ||
                             channelState.loading
                         ? null
-                        : FadeIn(
+                        : MotionAnimation.fadeIn(
                             child: NavigationBar(
+                              animationDuration: AppMotion.duration(
+                                  context, const Duration(milliseconds: 500)),
                               onDestinationSelected: tabsRouter.setActiveIndex,
                               selectedIndex: tabsRouter.activeIndex,
                               destinations: <Widget>[

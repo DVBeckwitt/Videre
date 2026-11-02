@@ -151,6 +151,7 @@ class SettingsScreen extends StatelessWidget {
                         locals.useDynamicTheme,
                         locals.themeBrightness,
                         locals.blackBackground,
+                        locals.animations,
                         locals.navigationBarStyle
                       ]).join(", "),
                       maxLines: 3,

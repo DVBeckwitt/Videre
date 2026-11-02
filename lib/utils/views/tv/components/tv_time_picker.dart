@@ -1,8 +1,8 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/utils/states/tv/time_picker.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -163,7 +163,7 @@ class TimeChanger extends StatelessWidget {
                 : colors.secondaryContainer.withValues(alpha: 0),
           ),
           padding: const EdgeInsets.all(8),
-          duration: animationDuration,
+          duration: AppMotion.duration(context),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,

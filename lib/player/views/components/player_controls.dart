@@ -1,3 +1,5 @@
+import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils/views/components/motion_animation.dart';
 import 'dart:math';
 
 import 'package:clipious/globals.dart';
@@ -327,42 +329,51 @@ class PlayerControls extends StatelessWidget {
                         Positioned(
                             top: 10,
                             left: 10,
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.5),
-                                  borderRadius: BorderRadius.circular(20)),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.fast_forward,
-                                    color: Colors.white,
-                                    size: 15,
-                                  ),
-                                  const SizedBox(
-                                    width: 5,
-                                  ),
-                                  Text(
-                                    locals.sponsorSkipped,
-                                    style: textTheme.bodySmall
-                                        ?.copyWith(color: Colors.white),
-                                  ),
-                                ],
-                              ),
-                            )
-                                .animate()
-                                .slideX(
-                                    duration: animationDuration,
-                                    curve: Curves.easeInOutQuad)
-                                .fadeIn(duration: animationDuration)
-                                .fadeOut(
-                                    delay: const Duration(seconds: 1),
-                                    duration: animationDuration)
-                                .slideX(
-                                    end: -0.5,
-                                    duration: animationDuration,
-                                    curve: Curves.easeInOutQuad,
-                                    delay: const Duration(seconds: 1))),
+                            child: MotionAnimation(
+                                builder: (context, controller) => Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                          color: Colors.black
+                                              .withValues(alpha: 0.5),
+                                          borderRadius:
+                                              BorderRadius.circular(20)),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.fast_forward,
+                                            color: Colors.white,
+                                            size: 15,
+                                          ),
+                                          const SizedBox(
+                                            width: 5,
+                                          ),
+                                          Text(
+                                            locals.sponsorSkipped,
+                                            style: textTheme.bodySmall
+                                                ?.copyWith(color: Colors.white),
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                        .animate(controller: controller)
+                                        .slideX(
+                                            duration:
+                                                AppMotion.duration(context),
+                                            curve: Curves.easeInOutQuad)
+                                        .fadeIn(
+                                            duration:
+                                                AppMotion.fadeDuration(context))
+                                        .fadeOut(
+                                            delay: const Duration(seconds: 1),
+                                            duration:
+                                                AppMotion.fadeDuration(context))
+                                        .slideX(
+                                            end: -0.5,
+                                            duration:
+                                                AppMotion.duration(context),
+                                            curve: Curves.easeInOutQuad,
+                                            delay:
+                                                const Duration(seconds: 1)))),
                       if (!isMini && !isPip)
                         Positioned(
                             left: 0,
@@ -710,37 +721,41 @@ class PlayerControls extends StatelessWidget {
                             heightFactor: 0.3,
                             child: AspectRatio(
                                 aspectRatio: 1,
-                                child: CircularProgressIndicator(
+                                child: MotionLoadingIndicator(
+                                    child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                )),
+                                ))),
                           ),
                         ),
                       // show icon when sleep is enabled or not
-                      Positioned(
-                              right: 20,
-                              bottom: 20,
-                              child: Icon(hasTimer
-                                  ? Icons.bedtime_outlined
-                                  : Icons.bedtime_off_outlined))
-                          .animate(target: hasTimer ? 1 : 0)
-                          .fadeIn(
-                              duration: animationDuration,
-                              curve: animationCurve)
-                          .slideY(
-                              duration: animationDuration,
-                              curve: animationCurve,
-                              begin: 2,
-                              end: 0)
-                          .fadeOut(
-                              delay: const Duration(seconds: 3),
-                              duration: animationDuration,
-                              curve: animationCurve)
-                          .slideY(
-                              delay: const Duration(seconds: 3),
-                              duration: animationDuration,
-                              curve: animationCurve,
-                              begin: 0,
-                              end: 2),
+                      MotionAnimation(
+                          builder: (context, controller) => Positioned(
+                                  right: 20,
+                                  bottom: 20,
+                                  child: Icon(hasTimer
+                                      ? Icons.bedtime_outlined
+                                      : Icons.bedtime_off_outlined))
+                              .animate(
+                                  controller: controller,
+                                  target: hasTimer ? 1 : 0)
+                              .fadeIn(
+                                  duration: AppMotion.fadeDuration(context),
+                                  curve: animationCurve)
+                              .slideY(
+                                  duration: AppMotion.duration(context),
+                                  curve: animationCurve,
+                                  begin: 2,
+                                  end: 0)
+                              .fadeOut(
+                                  delay: const Duration(seconds: 3),
+                                  duration: AppMotion.fadeDuration(context),
+                                  curve: animationCurve)
+                              .slideY(
+                                  delay: const Duration(seconds: 3),
+                                  duration: AppMotion.duration(context),
+                                  curve: animationCurve,
+                                  begin: 0,
+                                  end: 2)),
 
                       Positioned(
                               top: constraints.maxHeight * 0.15,
@@ -755,12 +770,14 @@ class PlayerControls extends StatelessWidget {
                           .slideX(
                               begin: 2,
                               end: 0,
-                              duration: animationDuration ~/ 2,
+                              duration: AppMotion.duration(
+                                  context, animationDuration ~/ 2),
                               curve: animationCurve)
                           .fade(
                               begin: 0,
                               end: 1,
-                              duration: animationDuration * 0.75,
+                              duration: AppMotion.fadeDuration(
+                                  context, animationDuration * 0.75),
                               curve: animationCurve),
                       Positioned(
                               top: constraints.maxHeight * 0.15,
@@ -775,12 +792,14 @@ class PlayerControls extends StatelessWidget {
                           .slideX(
                               begin: -2,
                               end: 0,
-                              duration: animationDuration ~/ 2,
+                              duration: AppMotion.duration(
+                                  context, animationDuration ~/ 2),
                               curve: animationCurve)
                           .fade(
                               begin: 0,
                               end: 1,
-                              duration: animationDuration * 0.75,
+                              duration: AppMotion.fadeDuration(
+                                  context, animationDuration * 0.75),
                               curve: animationCurve),
                       // Recovery status stays visible when the controls fade.
                       if (recovery != null && !failedRecovery)
@@ -926,11 +945,12 @@ class DoubleTapButton extends StatelessWidget {
       decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: opacity == 1 ? 0.3 : 0),
           shape: BoxShape.circle),
-      duration: const Duration(milliseconds: 150),
+      duration: AppMotion.duration(context, const Duration(milliseconds: 150)),
       height: double.infinity,
       child: AnimatedOpacity(
         opacity: opacity,
-        duration: Duration(milliseconds: opacity == 1 ? 150 : 500),
+        duration: AppMotion.fadeDuration(
+            context, Duration(milliseconds: opacity == 1 ? 150 : 500)),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,

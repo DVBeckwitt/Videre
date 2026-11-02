@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:math';
 
 import 'package:clipious/settings/models/db/settings.dart';
@@ -76,6 +77,7 @@ Future<void> showAlertDialog(
     {List<Widget>? actions}) async {
   var locals = AppLocalizations.of(context)!;
   return showDialog<void>(
+    animationStyle: AppMotion.dialogStyle(context),
     context: context,
     barrierDismissible: false, // user must tap button!
     builder: (BuildContext context) {
@@ -224,6 +226,7 @@ okCancelDialog(
     BuildContext context, String title, String message, Function() onOk) {
   var locals = AppLocalizations.of(context)!;
   showDialog(
+    animationStyle: AppMotion.dialogStyle(context),
     useRootNavigator: false,
     context: context,
     builder: (BuildContext context) {
@@ -403,6 +406,8 @@ Future<T?> showSafeModalBottomSheet<T>({
   RouteSettings? routeSettings,
 }) {
   return showModalBottomSheet<T>(
+    sheetAnimationStyle:
+        AppMotion.allowsMovement(context) ? null : AnimationStyle.noAnimation,
     context: context,
     builder: (context) => SafeArea(child: builder(context)),
     useSafeArea: true, // ✅ Always enforced

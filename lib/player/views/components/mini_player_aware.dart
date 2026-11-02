@@ -1,6 +1,6 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/player.dart';
 
 class MiniPlayerAware extends StatelessWidget {
@@ -25,7 +25,7 @@ class MiniPlayerAware extends StatelessWidget {
           return AnimatedContainer(
             padding: EdgeInsets.only(
                 bottom: !isHidden && isMini && !isClosing ? targetHeight : 0),
-            duration: animationDuration,
+            duration: AppMotion.duration(context),
             curve: Curves.easeInOutQuad,
             child: child,
           );

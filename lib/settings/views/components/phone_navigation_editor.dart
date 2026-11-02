@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -239,7 +240,9 @@ class _PhoneNavigationEditorState extends State<PhoneNavigationEditor> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(locals.phoneNavigationHelp),
-                    if (_saving) const LinearProgressIndicator(),
+                    if (_saving)
+                      const MotionLoadingIndicator(
+                          child: LinearProgressIndicator()),
                     for (final area in [
                       NavigationArea.top,
                       NavigationArea.bottom,

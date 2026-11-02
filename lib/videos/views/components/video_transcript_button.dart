@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
@@ -231,7 +232,9 @@ class _VideoTranscriptSheetState extends State<_VideoTranscriptSheet> {
           const SizedBox(height: 8),
           Expanded(
             child: _loading
-                ? const Center(child: CircularProgressIndicator())
+                ? const Center(
+                    child: MotionLoadingIndicator(
+                        child: CircularProgressIndicator()))
                 : _hasError
                     ? Center(
                         child: Column(

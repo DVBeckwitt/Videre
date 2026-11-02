@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/services/backend_discovery.dart';
@@ -26,6 +27,7 @@ Future<void> showBackendPicker(
   Future<Server> Function(Uri, String)? onDiscoverFromPage,
 }) =>
     showDialog<void>(
+      animationStyle: AppMotion.dialogStyle(context),
       context: context,
       useRootNavigator: false,
       barrierDismissible: false,
@@ -94,7 +96,7 @@ class _BackendPickerState extends State<BackendPicker> {
 
   void _reveal(BuildContext target) {
     Scrollable.ensureVisible(target,
-        duration: const Duration(milliseconds: 150),
+        duration: AppMotion.duration(target, const Duration(milliseconds: 150)),
         alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
   }
 
@@ -253,7 +255,8 @@ class _BackendPickerState extends State<BackendPicker> {
                   Semantics(
                     liveRegion: true,
                     child: Column(children: [
-                      const LinearProgressIndicator(),
+                      const MotionLoadingIndicator(
+                          child: LinearProgressIndicator()),
                       const SizedBox(height: 8),
                       Text(locals.backendChecking),
                     ]),
@@ -342,7 +345,8 @@ class _BackendPickerState extends State<BackendPicker> {
                     if (_saving) ...[
                       const SizedBox.square(
                         dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: MotionLoadingIndicator(
+                            child: CircularProgressIndicator(strokeWidth: 2)),
                       ),
                       const SizedBox(width: 8),
                     ],

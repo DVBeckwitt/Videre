@@ -1,7 +1,7 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
@@ -37,12 +37,13 @@ class AppBarDownloadButton extends StatelessWidget {
                         height: 15,
                         child: TweenAnimationBuilder(
                           builder: (context, value, child) {
-                            return CircularProgressIndicator(
+                            return MotionLoadingIndicator(
+                                child: CircularProgressIndicator(
                               value: state.totalProgress == 0 ? null : value,
                               strokeWidth: 2,
-                            );
+                            ));
                           },
-                          duration: animationDuration,
+                          duration: AppMotion.duration(context),
                           tween:
                               Tween<double>(begin: 0, end: state.totalProgress),
                         )),

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -55,7 +56,8 @@ class _SearchableSelectFromListScreenState<T>
                 onSubmitted: (value) =>
                     cubit.filterItems(widget.fetchItems, null, null, value),
               ),
-              if (state.loading) const LinearProgressIndicator(),
+              if (state.loading)
+                const MotionLoadingIndicator(child: LinearProgressIndicator()),
               if (state.hasError)
                 Text(AppLocalizations.of(context)!.error,
                     style:

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -5,6 +6,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import '../../states/download_manager.dart';
 
 Future<void> showDownloadFolder(BuildContext context) => showDialog<void>(
+    animationStyle: AppMotion.dialogStyle(context),
     context: context,
     builder: (_) => BlocProvider.value(
         value: context.read<DownloadManagerCubit>(),
@@ -70,7 +72,8 @@ class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
             if (_busy)
               const Padding(
                   padding: EdgeInsets.only(top: 16),
-                  child: LinearProgressIndicator()),
+                  child:
+                      MotionLoadingIndicator(child: LinearProgressIndicator())),
             if (_error != null)
               Padding(
                   padding: const EdgeInsets.only(top: 16),

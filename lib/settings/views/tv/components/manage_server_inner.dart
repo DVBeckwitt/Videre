@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -37,7 +38,8 @@ class TvManageServersInner extends StatelessWidget {
       var cubit = context.read<ServerListSettingsCubit>();
       var settings = context.watch<SettingsCubit>();
       return ListView(children: [
-        if (state.switching) const LinearProgressIndicator(),
+        if (state.switching)
+          const MotionLoadingIndicator(child: LinearProgressIndicator()),
         if (showAdvanced)
           SettingsTile(
             title: locals.skipSslVerification,

@@ -1,9 +1,9 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/video_filter_edit.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/select_list_dialog.dart';
@@ -207,7 +207,7 @@ class VideoFilterSetupScreen extends StatelessWidget {
                                               ? colors.primaryContainer
                                               : colors.primaryContainer
                                                   .withValues(alpha: 0.4)),
-                                      duration: animationDuration,
+                                      duration: AppMotion.duration(context),
                                       curve: Curves.easeInOutQuad,
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
@@ -229,10 +229,14 @@ class VideoFilterSetupScreen extends StatelessWidget {
                                             )
                                                 .animate()
                                                 .slideX(
-                                                    duration: animationDuration,
+                                                    duration:
+                                                        AppMotion.duration(
+                                                            context),
                                                     curve: Curves.easeInOutQuad)
                                                 .fadeIn(
-                                                    duration: animationDuration)
+                                                    duration:
+                                                        AppMotion.fadeDuration(
+                                                            context))
                                         ],
                                       ),
                                     ),
@@ -283,16 +287,16 @@ class VideoFilterSetupScreen extends StatelessWidget {
                       crossFadeState: cubit.showDateSettings
                           ? CrossFadeState.showFirst
                           : CrossFadeState.showSecond,
-                      duration: animationDuration,
+                      duration: AppMotion.duration(context),
                       sizeCurve: Curves.easeInOutQuad,
                       firstCurve: Curves.easeInOutQuad,
                       secondCurve: Curves.easeInOutQuad,
                     )
                         .animate()
                         .slideY(
-                            duration: animationDuration,
+                            duration: AppMotion.duration(context),
                             curve: Curves.easeInOutQuad)
-                        .fadeIn(duration: animationDuration),
+                        .fadeIn(duration: AppMotion.fadeDuration(context)),
                     SwitchListTile(
                         title: Text(locals.videoFilterHide),
                         subtitle: Text(

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -67,9 +68,10 @@ class CommentsView extends StatelessWidget {
                 child: const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(
+                    child: MotionLoadingIndicator(
+                        child: CircularProgressIndicator(
                       strokeWidth: 2,
-                    ))),
+                    )))),
           ));
         }
 

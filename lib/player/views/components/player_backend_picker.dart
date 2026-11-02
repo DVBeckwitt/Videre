@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -22,6 +23,7 @@ Future<void> showPlayerBackendPicker(BuildContext context,
   final request = player.state.requestedBackend ??
       player.state.currentlyPlaying!.backendPlayback!;
   final selection = await showDialog<PlayerBackendChoice>(
+    animationStyle: AppMotion.dialogStyle(context),
     context: context,
     useRootNavigator: false,
     builder: (_) => PlayerModalBackHandler(
@@ -68,7 +70,8 @@ class _PlayerBackendPickerState extends State<PlayerBackendPicker> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (context.mounted) {
         Scrollable.ensureVisible(context,
-            duration: const Duration(milliseconds: 150),
+            duration:
+                AppMotion.duration(context, const Duration(milliseconds: 150)),
             alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
       }
     });

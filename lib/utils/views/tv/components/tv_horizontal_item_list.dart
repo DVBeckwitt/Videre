@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -44,9 +45,10 @@ class TvHorizontalItemList<T> extends StatelessWidget {
           return Stack(
             children: [
               if (state.loading)
-                const LinearProgressIndicator(
+                const MotionLoadingIndicator(
+                    child: LinearProgressIndicator(
                   minHeight: 3,
-                ),
+                )),
               !state.loading && items.isEmpty && !canLoadMore
                   ? const SizedBox.shrink()
                   : SizedBox(

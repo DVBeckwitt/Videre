@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:ui' as ui;
 
 import 'package:feedback/feedback.dart' as capture;
@@ -89,7 +90,8 @@ class _FeedbackScreenshotFormState extends State<_FeedbackScreenshotForm> {
           Text(locals.feedbackScreenshotHelp),
           const SizedBox(height: 12),
           if (_failed) Text(locals.feedbackCaptureFailed),
-          if (_busy) const LinearProgressIndicator(),
+          if (_busy)
+            const MotionLoadingIndicator(child: LinearProgressIndicator()),
           FilledButton.icon(
             key: const ValueKey('feedback-attach-captured-screenshot'),
             onPressed: _busy ? null : _attach,

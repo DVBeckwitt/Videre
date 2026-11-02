@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -116,11 +117,12 @@ class DownloadedVideoView extends StatelessWidget {
               SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      value: progress.count == 0
-                          ? null
-                          : progress.count / progress.total)),
+                  child: MotionLoadingIndicator(
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          value: progress.count == 0
+                              ? null
+                              : progress.count / progress.total))),
             IconButton(
               tooltip: locals.downloads,
               onPressed: () => openVideoSheet(context),

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/video_filter.dart';
@@ -60,9 +61,10 @@ class VideoFilterChannel extends StatelessWidget {
                           child: const SizedBox(
                               height: 20,
                               width: 20,
-                              child: CircularProgressIndicator(
+                              child: MotionLoadingIndicator(
+                                  child: CircularProgressIndicator(
                                 strokeWidth: 1,
-                              ))),
+                              )))),
                       Visibility(
                           visible: cubit.hasChannel() && !state.loading,
                           child: Padding(

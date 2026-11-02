@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -118,6 +119,7 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
     final locals = AppLocalizations.of(context)!;
     if ((_controller.locked || _controller.loadFailed) && _sent == null) {
       final discard = await showDialog<bool>(
+        animationStyle: AppMotion.dialogStyle(context),
         context: context,
         builder: (context) => AlertDialog(
           title: Text(locals.feedbackDiscardTitle),
@@ -336,7 +338,7 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
       ),
       if (draft.diagnostics != null) _diagnostics(draft.diagnostics!, locals),
       if (_controller.busy) ...[
-        const LinearProgressIndicator(),
+        const MotionLoadingIndicator(child: LinearProgressIndicator()),
         Text(locals.feedbackPreparingDiagnostics),
       ],
       const SizedBox(height: 12),
@@ -350,7 +352,8 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
           icon: const Icon(Icons.add_photo_alternate_outlined),
           label: Text(locals.feedbackAddScreenshot),
         ),
-      if (_capturing) const LinearProgressIndicator(),
+      if (_capturing)
+        const MotionLoadingIndicator(child: LinearProgressIndicator()),
       if (_captureFailed) _notice(locals.feedbackCaptureFailed, error: true),
       const SizedBox(height: 8),
       Text(locals.feedbackScreenshotPrivacy,
@@ -400,7 +403,7 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
         Text(locals.feedbackNotIncluded),
       const SizedBox(height: 24),
       if (_controller.busy) ...[
-        const LinearProgressIndicator(),
+        const MotionLoadingIndicator(child: LinearProgressIndicator()),
         const SizedBox(height: 12),
         Semantics(liveRegion: true, child: Text(locals.feedbackSending)),
         const SizedBox(height: 12),
@@ -507,7 +510,9 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 720),
                 child: _controller.loading
-                    ? const Center(child: CircularProgressIndicator())
+                    ? const Center(
+                        child: MotionLoadingIndicator(
+                            child: CircularProgressIndicator()))
                     : Form(
                         key: _formKey,
                         child: ListView(

@@ -7,6 +7,7 @@ import 'package:clipious/settings/views/screens/settings.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../../utils/views/components/select_list_dialog.dart';
+import '../../../utils/motion.dart';
 
 @RoutePage()
 class AppearanceSettingsScreen extends StatelessWidget {
@@ -16,6 +17,7 @@ class AppearanceSettingsScreen extends StatelessWidget {
     var cubit = context.read<SettingsCubit>();
     var locals = AppLocalizations.of(context)!;
     showDialog(
+        animationStyle: AppMotion.dialogStyle(context),
         context: context,
         useRootNavigator: false,
         useSafeArea: true,
@@ -67,6 +69,20 @@ class AppearanceSettingsScreen extends StatelessWidget {
         title: locals.navigationBarStyle);
   }
 
+  void selectMotion(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final settings = context.read<SettingsCubit>();
+    SelectList.show<MotionPreference>(context,
+        values: MotionPreference.values,
+        value: settings.state.motionPreference,
+        itemBuilder: (value, selected) => ListTile(
+            selected: selected,
+            title: Text(value.label(locals)),
+            trailing: selected ? const Icon(Icons.check) : null),
+        onSelect: settings.setMotionPreference,
+        title: locals.animations);
+  }
+
   @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
@@ -107,6 +123,13 @@ class AppearanceSettingsScreen extends StatelessWidget {
                     onToggle: cubit.toggleBlackBackground,
                     title: Text(locals.blackBackground),
                     description: Text(locals.blackBackgroundDescription),
+                  ),
+                  SettingsTile(
+                    leading: const Icon(Icons.animation),
+                    title: Text(locals.animations),
+                    value: Text(
+                        '${state.motionPreference.label(locals)}\n${locals.animationsDescription}'),
+                    onPressed: selectMotion,
                   ),
                   SettingsTile(
                     leading: const Icon(Icons.label),

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -73,7 +74,7 @@ class DownloadModalSheet extends StatelessWidget {
           builder: (context, state) {
         var cubit = context.read<DownloadModalSheetCubit>();
         return AnimatedSwitcher(
-          duration: animationDuration,
+          duration: AppMotion.duration(context),
           switchInCurve: animationCurve,
           switchOutCurve: animationCurve,
           child: state.loading
@@ -82,7 +83,8 @@ class DownloadModalSheet extends StatelessWidget {
                   children: [
                     Padding(
                       padding: EdgeInsets.all(16.0),
-                      child: CircularProgressIndicator(),
+                      child: MotionLoadingIndicator(
+                          child: CircularProgressIndicator()),
                     ),
                   ],
                 )

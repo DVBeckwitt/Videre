@@ -255,6 +255,8 @@ class UserBackup {
         RegExp(r'^[a-z]{2,3}(?:[_-][A-Za-z0-9]{2,8})*$').hasMatch(value),
       lastSubtitle => value.length < 128,
       themeModeSettingName => ['system', 'light', 'dark'].contains(value),
+      motionPreferenceSettingName =>
+        ['system', 'reduced', 'off'].contains(value),
       navigationBarLabelBehaviorSettingName =>
         ['alwaysShow', 'alwaysHide', 'onlyShowSelected'].contains(value),
       appLayoutSettingName =>

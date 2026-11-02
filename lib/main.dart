@@ -1,3 +1,5 @@
+import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils/motion_binding.dart';
 import 'dart:async';
 import 'dart:io';
 import 'network/network_proxy.dart';
@@ -57,7 +59,7 @@ Future<void> main() async {
 
   HttpOverrides.global = MyHttpOverrides();
 
-  WidgetsFlutterBinding.ensureInitialized();
+  VidereWidgetsBinding();
 
   packageInfo = await PackageInfo.fromPlatform();
 
@@ -135,6 +137,8 @@ class MyApp extends StatelessWidget {
               .select((SettingsCubit value) => value.state.blackBackground);
           String? locale =
               context.select((SettingsCubit value) => value.state.locale);
+          final motionPreference = context
+              .select((SettingsCubit value) => value.state.motionPreference);
           ThemeMode themeMode =
               context.select((SettingsCubit value) => value.state.themeMode);
 
@@ -218,6 +222,8 @@ class MyApp extends StatelessWidget {
                 const SliderThemeData(inactiveTrackColor: Colors.blue);
 
             return MaterialApp.router(
+              builder: (context, child) =>
+                  MotionScope(preference: motionPreference, child: child!),
               routerConfig: appRouter.config(
                   navigatorObservers: () => [MyRouteObserver()],
                   includePrefixMatches: true),

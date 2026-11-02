@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -150,12 +151,11 @@ class TvSearchScreen extends StatelessWidget {
                                                 focusNode: tvCubit.resultFocus,
                                                 onFocusChange: (focused) {
                                                   if (focused) {
-                                                    tvCubit.scrollController
-                                                        .animateTo(0,
-                                                            duration:
-                                                                animationDuration,
-                                                            curve: Curves
-                                                                .easeOutQuad);
+                                                    AppMotion.scrollTo(
+                                                        context,
+                                                        tvCubit
+                                                            .scrollController,
+                                                        0);
                                                   }
                                                 },
                                                 child: TvHorizontalVideoList(

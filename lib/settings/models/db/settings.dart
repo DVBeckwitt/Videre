@@ -21,6 +21,7 @@ const rememberLastSubtitle = 'remember-last-subtitle';
 const lastSubtitle = 'last-subtitle';
 const skipSslVerificationSettingName = 'skip-ssl-verification';
 const themeModeSettingName = 'theme-mode';
+const motionPreferenceSettingName = 'motion-preference';
 const localeSettingName = 'locale';
 const useSearchHistorySettingName = 'use-search-history';
 const searchHistoryLimitSettingName = 'search-history-limit';

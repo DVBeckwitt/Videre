@@ -1,7 +1,6 @@
 import 'package:bloc/bloc.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:clipious/globals.dart';
 
 part 'tv_video.freezed.dart';
 
@@ -19,10 +18,16 @@ class TvVideoCubit extends Cubit<TvVideoState> {
     super.close();
   }
 
-  scrollUp() {
+  scrollUp({Duration duration = const Duration(milliseconds: 125)}) {
     var state = this.state.copyWith();
-    scrollController.animateTo(0,
-        duration: animationDuration ~/ 2, curve: Curves.easeInOutQuad);
+    if (scrollController.hasClients) {
+      if (duration == Duration.zero) {
+        scrollController.jumpTo(0);
+      } else {
+        scrollController.animateTo(0,
+            duration: duration, curve: Curves.easeInOutQuad);
+      }
+    }
     emit(state.copyWith(showImage: true));
   }
 

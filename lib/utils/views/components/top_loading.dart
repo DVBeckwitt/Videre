@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 
 class TopListLoading extends StatelessWidget {
@@ -11,9 +12,10 @@ class TopListLoading extends StatelessWidget {
         height: height,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(20),
-          child: LinearProgressIndicator(
+          child: MotionLoadingIndicator(
+              child: LinearProgressIndicator(
             minHeight: height,
-          ),
+          )),
         ));
   }
 }

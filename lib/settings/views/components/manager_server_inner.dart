@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
@@ -100,7 +101,8 @@ class ManagerServersView extends StatelessWidget {
             if (state.switching)
               const Align(
                   alignment: Alignment.topCenter,
-                  child: LinearProgressIndicator()),
+                  child:
+                      MotionLoadingIndicator(child: LinearProgressIndicator())),
             Positioned(
               right: 20,
               bottom: 20,

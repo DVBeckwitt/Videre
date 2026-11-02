@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -108,14 +109,16 @@ class Thumbnail extends StatelessWidget {
                                     decodeWidth, decodeHeight, imageProvider),
                                 fit: BoxFit.cover)),
                         // duration: animationDuration,
-                        duration: animationDuration ~/ 2,
+                        duration:
+                            AppMotion.duration(context, animationDuration ~/ 2),
                         curve: Curves.easeInOutQuad,
                         child: child,
                       ),
                       imageUrl: url,
-                      placeholderFadeInDuration: animationDuration,
-                      fadeInDuration: animationDuration,
-                      fadeOutDuration: animationDuration,
+                      placeholderFadeInDuration:
+                          AppMotion.fadeDuration(context),
+                      fadeInDuration: AppMotion.fadeDuration(context),
+                      fadeOutDuration: AppMotion.fadeDuration(context),
                       errorWidget: (context, url, error) {
                         // Each mounted widget must advance, even when its
                         // failed image stream is shared with another widget.
@@ -142,9 +145,10 @@ class Thumbnail extends StatelessWidget {
                         child: const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(
+                            child: MotionLoadingIndicator(
+                                child: CircularProgressIndicator(
                               strokeWidth: 1,
-                            )),
+                            ))),
                       ),
                     );
                   }

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -100,7 +101,7 @@ class HomeView extends StatelessWidget {
                                 firstCurve: Curves.easeInOutQuad,
                                 secondCurve: Curves.easeInOutQuad,
                                 sizeCurve: Curves.easeInOutQuad,
-                                duration: animationDuration,
+                                duration: AppMotion.duration(context),
                                 firstChild: ConstrainedBox(
                                   // Keep space for the feed on short screens; the
                                   // summaries remain available by scrolling them.

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/utils.dart';
@@ -72,7 +73,8 @@ class TvVideoItem extends StatelessWidget {
                   return GestureDetector(
                     child: AnimatedScale(
                       curve: Curves.easeInOutQuad,
-                      duration: animationDuration ~/ 2,
+                      duration:
+                          AppMotion.duration(context, animationDuration ~/ 2),
                       scale: hasFocus ? 1 : 0.9,
                       child: AnimatedContainer(
                           decoration: BoxDecoration(
@@ -80,7 +82,7 @@ class TvVideoItem extends StatelessWidget {
                             color: colors.primaryContainer
                                 .withValues(alpha: hasFocus ? 1 : 0),
                           ),
-                          duration: animationDuration,
+                          duration: AppMotion.duration(context),
                           child: AspectRatio(
                             aspectRatio: 16 / 13,
                             child: Column(

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -37,9 +38,10 @@ class TvHorizontalPaginatedListView<T> extends StatelessWidget {
         return Stack(
           children: [
             state.loading
-                ? const LinearProgressIndicator(
+                ? const MotionLoadingIndicator(
+                    child: LinearProgressIndicator(
                     minHeight: 3,
-                  )
+                  ))
                 : const SizedBox.shrink(),
             ListView.builder(
               controller: cubit.scrollController,

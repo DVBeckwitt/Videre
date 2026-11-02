@@ -17,6 +17,7 @@ import '../../../../feedback/views/open_feedback.dart';
 import '../../../../downloads/views/components/download_folder.dart';
 import '../../../states/settings.dart';
 import '../../screens/network_proxy.dart';
+import '../../../../utils/motion.dart';
 
 var log = Logger('TvSettings');
 
@@ -108,6 +109,20 @@ class TVSettingsScreen extends StatelessWidget {
             (element) => cubit.getThemeLabel(locals, element) == selected);
         cubit.setThemeMode(theme);
       },
+    ));
+  }
+
+  void selectMotion(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final cubit = context.read<SettingsCubit>();
+    AutoRouter.of(context).push(TvSelectFromListRoute(
+      title: locals.animations,
+      options:
+          MotionPreference.values.map((value) => value.label(locals)).toList(),
+      selected: cubit.state.motionPreference.label(locals),
+      onSelect: (String selected) => cubit.setMotionPreference(MotionPreference
+          .values
+          .firstWhere((value) => value.label(locals) == selected)),
     ));
   }
 
@@ -367,6 +382,12 @@ class TVSettingsScreen extends StatelessWidget {
                   onSelected: showDownloadFolder,
                 ),
                 SettingsTitle(title: locals.appearance),
+                SettingsTile(
+                  title: locals.animations,
+                  description:
+                      '${state.motionPreference.label(locals)}\n${locals.animationsDescription}',
+                  onSelected: selectMotion,
+                ),
                 SettingsTile(
                   title: locals.themeBrightness,
                   description: cubit.getThemeLabel(locals, state.themeMode),

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 
@@ -57,8 +58,9 @@ class BackendRetryNotice extends StatelessWidget {
                           children: [
                             const SizedBox.square(
                               dimension: 16,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
+                              child: MotionLoadingIndicator(
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white)),
                             ),
                             const SizedBox(width: 8),
                             Flexible(

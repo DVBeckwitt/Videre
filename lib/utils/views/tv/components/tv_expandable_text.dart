@@ -1,6 +1,6 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 
 import '../../../../utils.dart';
@@ -31,7 +31,7 @@ class TvExpandableText extends StatelessWidget {
             final bool hasFocus = focusNode.hasFocus;
 
             return AnimatedContainer(
-              duration: animationDuration,
+              duration: AppMotion.duration(context),
               decoration: BoxDecoration(
                 color: hasFocus
                     ? colors.primaryContainer

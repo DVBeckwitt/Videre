@@ -19,6 +19,7 @@ import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../player/states/player.dart';
 import '../../utils.dart';
+import '../../utils/motion.dart';
 import '../../utils/backup.dart';
 import '../../utils/models/country.dart';
 import '../models/db/settings.dart';
@@ -322,6 +323,7 @@ class SettingsCubit extends Cubit<SettingsState> {
       if (text == null || !context.mounted) return;
       final backup = UserBackup.parse(text);
       final replace = await showDialog<bool>(
+          animationStyle: AppMotion.dialogStyle(context),
           context: context,
           builder: (context) => AlertDialog(
                 title: Text(locals.importBackup),
@@ -453,6 +455,9 @@ class SettingsCubit extends Cubit<SettingsState> {
       await _set(lockOrientationFullScreen, b);
 
   _setThemeMode(ThemeMode t) async => await _set(themeModeSettingName, t.name);
+
+  Future<void> setMotionPreference(MotionPreference value) async =>
+      _set(motionPreferenceSettingName, value.name);
 
   setUseSearchHistory(bool b) async =>
       await _set(useSearchHistorySettingName, b);
@@ -612,6 +617,10 @@ sealed class SettingsState with _$SettingsState {
 
   bool get skipExponentially =>
       (_get(skipExponentialSettingName)?.value ?? 'true') == 'true';
+
+  MotionPreference get motionPreference => MotionPreference.values.firstWhere(
+      (value) => value.name == _get(motionPreferenceSettingName)?.value,
+      orElse: () => MotionPreference.system);
 
   ThemeMode get themeMode => ThemeMode.values.firstWhere(
       (element) => element.name == _get(themeModeSettingName)?.value,

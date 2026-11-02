@@ -1,5 +1,5 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
-import 'package:clipious/globals.dart';
 
 enum MultiValueSwitchPosition {
   left,
@@ -45,7 +45,7 @@ class MultiValueSwitch extends StatelessWidget {
               bottom: 0,
               left: isLeft ? 0 : width / 2,
               right: isRight ? 0 : width / 2,
-              duration: animationDuration,
+              duration: AppMotion.duration(context),
               curve: Curves.easeInOutQuad,
               child: Container(
                 decoration: BoxDecoration(

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:math';
 
 import 'package:auto_route/auto_route.dart';
@@ -87,7 +88,10 @@ class VideoFilterChannel extends StatelessWidget {
             children: [
               if (state.loading)
                 const SizedBox(
-                    height: 20, width: 20, child: CircularProgressIndicator()),
+                    height: 20,
+                    width: 20,
+                    child: MotionLoadingIndicator(
+                        child: CircularProgressIndicator())),
               if (!state.loading && state.channel == null)
                 SettingsTitle(title: locals.videoFilterAllChannels),
               if (!state.loading && state.channel != null)

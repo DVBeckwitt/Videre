@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:ui';
 
 import 'package:auto_route/auto_route.dart';
@@ -7,7 +8,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/views/tv/screens/tv_home.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
@@ -74,7 +74,7 @@ class TvVideoScreen extends StatelessWidget {
                 videoState.loadingVideo || videoState.error.isNotEmpty
                     ? CrossFadeState.showFirst
                     : CrossFadeState.showSecond,
-            duration: animationDuration,
+            duration: AppMotion.duration(context),
             firstChild: videoState.error.isNotEmpty
                 ? Center(
                     child: Container(
@@ -113,7 +113,8 @@ class TvVideoScreen extends StatelessWidget {
                       const SizedBox(
                           width: 50,
                           height: 50,
-                          child: CircularProgressIndicator()),
+                          child: MotionLoadingIndicator(
+                              child: CircularProgressIndicator())),
                     ],
                   )),
             secondChild: videoState.video == null
@@ -135,13 +136,13 @@ class TvVideoScreen extends StatelessWidget {
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        duration: animationDuration,
+                        duration: AppMotion.duration(context),
                         curve: Curves.easeInOutQuad,
                         child: TweenAnimationBuilder(
                             tween: Tween<double>(
                                 begin: 0,
                                 end: tvState.showImage ? 0 : overlayBlur),
-                            duration: animationDuration,
+                            duration: AppMotion.duration(context),
                             curve: Curves.easeInOutQuad,
                             child: TvOverscan(
                               child: Container(
@@ -176,7 +177,12 @@ class TvVideoScreen extends StatelessWidget {
                                                       autofocus: true,
                                                       onFocusChanged: (focus) {
                                                         if (focus) {
-                                                          tvCubit.scrollUp();
+                                                          tvCubit.scrollUp(
+                                                              duration: AppMotion.duration(
+                                                                  context,
+                                                                  const Duration(
+                                                                      milliseconds:
+                                                                          125)));
                                                         } else {
                                                           tvCubit.scrollDown();
                                                         }
@@ -307,8 +313,9 @@ class TvVideoScreen extends StatelessWidget {
                                                       opacity: tvState.showImage
                                                           ? 1
                                                           : 0,
-                                                      duration:
-                                                          animationDuration,
+                                                      duration: AppMotion
+                                                          .fadeDuration(
+                                                              context),
                                                       child: Icon(
                                                         Icons.expand_more,
                                                         size: 50,

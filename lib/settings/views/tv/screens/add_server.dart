@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -106,7 +107,7 @@ class TvAddServerScreen extends StatelessWidget {
                       const Gap(10),
                       ListTile(
                         leading: AnimatedRotation(
-                            duration: animationDuration,
+                            duration: AppMotion.duration(context),
                             curve: animationCurve,
                             turns: state.showAdvanced ? 0.5 : 0,
                             child: const Icon(Icons.expand_less)),
@@ -159,13 +160,14 @@ class TvAddServerScreen extends StatelessWidget {
                                 begin: -0.2,
                                 end: 0,
                                 curve: animationCurve,
-                                duration: animationDuration)
+                                duration: AppMotion.duration(context))
                             .fade(
                                 begin: 0,
                                 end: 1,
                                 curve: animationCurve,
-                                duration: animationDuration,
-                                delay: animationDuration ~/ 4),
+                                duration: AppMotion.fadeDuration(context),
+                                delay: AppMotion.fadeDuration(
+                                    context, animationDuration ~/ 4)),
                       FilledButton.tonal(
                           onPressed: state.loading || !state.valid
                               ? null
@@ -185,9 +187,10 @@ class TvAddServerScreen extends StatelessWidget {
                           child: state.loading
                               ? const SizedBox.square(
                                   dimension: 20,
-                                  child: CircularProgressIndicator(
+                                  child: MotionLoadingIndicator(
+                                      child: CircularProgressIndicator(
                                     strokeWidth: 1,
-                                  ))
+                                  )))
                               : Text(locals.testAndAddServer)),
                       CheckboxListTile(
                         title: Text(

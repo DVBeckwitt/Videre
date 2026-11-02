@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_fadein/flutter_fadein.dart';
+import 'package:clipious/utils/views/components/motion_animation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/states/playlist_list.dart';
@@ -11,7 +11,6 @@ import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/components/device_widget.dart';
 import 'package:clipious/utils/views/components/top_loading.dart';
 
-import '../../../globals.dart';
 import '../../../utils/views/components/placeholders.dart';
 
 class PlaylistList extends StatelessWidget {
@@ -52,9 +51,7 @@ class PlaylistList extends StatelessWidget {
                     )
                   : Padding(
                       padding: const EdgeInsets.all(8.0),
-                      child: FadeIn(
-                        duration: animationDuration,
-                        curve: Curves.easeInOutQuad,
+                      child: MotionAnimation.fadeIn(
                         child: RefreshIndicator(
                           onRefresh: () async {
                             if (!small && state.paginatedList.hasRefresh()) {

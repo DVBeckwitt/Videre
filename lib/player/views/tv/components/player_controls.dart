@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
@@ -17,7 +18,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
-import '../../../../globals.dart';
 import '../../../../utils.dart';
 import '../../../../utils/models/image_object.dart';
 import '../../../../utils/models/paginated_list.dart';
@@ -81,7 +81,7 @@ class TvPlayerControls extends StatelessWidget {
                     bottom: 0,
                     child: AnimatedOpacity(
                       opacity: playerState.controlsOpacity,
-                      duration: animationDuration,
+                      duration: AppMotion.fadeDuration(context),
                       child: Container(
                         decoration: BoxDecoration(
                             gradient: LinearGradient(
@@ -109,7 +109,7 @@ class TvPlayerControls extends StatelessWidget {
                           ? const SizedBox.shrink()
                           : AnimatedOpacity(
                               opacity: playerState.controlsOpacity,
-                              duration: animationDuration,
+                              duration: AppMotion.fadeDuration(context),
                               child: TvOverscan(
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
@@ -159,7 +159,7 @@ class TvPlayerControls extends StatelessWidget {
                     right: 0,
                     child: AnimatedOpacity(
                       opacity: playerState.controlsOpacity,
-                      duration: animationDuration,
+                      duration: AppMotion.fadeDuration(context),
                       child: TvOverscan(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
@@ -370,7 +370,8 @@ class TvPlayerControls extends StatelessWidget {
                                                     AnimatedFractionallySizedBox(
                                                   alignment:
                                                       Alignment.centerLeft,
-                                                  duration: animationDuration,
+                                                  duration: AppMotion.duration(
+                                                      context),
                                                   widthFactor: player.progress,
                                                   child: Container(
                                                     height: 8,
@@ -420,7 +421,7 @@ class TvPlayerControls extends StatelessWidget {
                       bottom: 50,
                       right: 0,
                       child: AnimatedSwitcher(
-                          duration: animationDuration,
+                          duration: AppMotion.duration(context),
                           child: playerState.showQueue
                               ? TvOverscan(
                                   child: FocusScope(

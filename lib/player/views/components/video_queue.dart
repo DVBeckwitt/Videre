@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -104,8 +105,8 @@ class _VideoQueueState extends State<VideoQueue> {
                   ((index - 1) * (compactVideoHeight + innerHorizontalPadding))
                       .clamp(0.0, _scrollController.position.maxScrollExtent);
               if (offset == _scrollController.offset) return;
-              _scrollController.animateTo(offset,
-                  duration: animationDuration * 4, curve: Curves.easeInOutQuad);
+              AppMotion.scrollTo(context, _scrollController, offset,
+                  duration: animationDuration * 4);
             },
             buildWhen: (previous, current) =>
                 previous.videos != current.videos ||

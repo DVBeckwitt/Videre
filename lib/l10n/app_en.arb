@@ -1573,6 +1573,10 @@
   "phoneNavigationReset": "Restore default navigation",
   "phoneNavigationSaveError": "Could not save the navigation layout. Please try again.",
   "phoneNavigationMore": "More shortcuts",
+  "animations": "Animations",
+  "animationsReduced": "Reduced",
+  "animationsOff": "Off",
+  "animationsDescription": "Reduced removes movement and pulsing while keeping brief fades. Off stops interface animations. The Android Remove animations setting is always respected.",
   "autoplayQueue": "Autoplay next in queue",
   "autoplayQueueDescription": "Automatically continue through the queue. When off, stop when a video ends, including in repeat mode. Your queue stays available for manual playback."
 }

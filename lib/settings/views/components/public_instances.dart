@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:math';
 
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -30,6 +31,7 @@ class PublicInstancesButton extends StatelessWidget {
             : () async {
                 final cubit = context.read<AddServerCubit>();
                 final url = await showDialog<String>(
+                    animationStyle: AppMotion.dialogStyle(context),
                     context: context,
                     builder: (_) => _PublicInstancesDialog(
                         loadInstances: loadInstances,
@@ -81,7 +83,9 @@ class _PublicInstancesDialogState extends State<_PublicInstancesDialog> {
                 future: instances,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState != ConnectionState.done) {
-                    return const Center(child: CircularProgressIndicator());
+                    return const Center(
+                        child: MotionLoadingIndicator(
+                            child: CircularProgressIndicator()));
                   }
                   final hosts = snapshot.data ?? [];
                   if (snapshot.hasError || hosts.isEmpty) {

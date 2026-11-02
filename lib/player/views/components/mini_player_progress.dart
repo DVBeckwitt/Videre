@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -32,7 +33,8 @@ class MiniPlayerProgress extends StatelessWidget {
                     widthFactor:
                         position.inMilliseconds / duration.inMilliseconds,
                     heightFactor: 1,
-                    duration: const Duration(milliseconds: 750),
+                    duration: AppMotion.duration(
+                        context, const Duration(milliseconds: 750)),
                     curve: Curves.easeInOutQuad,
                     child: Container(
                       decoration: BoxDecoration(

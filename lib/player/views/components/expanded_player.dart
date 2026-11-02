@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -145,6 +146,8 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
                 alignment: Alignment.bottomCenter,
                 heightFactor: 0.65,
                 child: NavigationBar(
+                    animationDuration: AppMotion.duration(
+                        context, const Duration(milliseconds: 500)),
                     selectedIndex:
                         video != null ? selectedVisibleIndex : selectedIndex,
                     onDestinationSelected: video != null

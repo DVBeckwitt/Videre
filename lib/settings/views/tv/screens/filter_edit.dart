@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -202,7 +203,7 @@ class TvFilterEditSettingsScreen extends StatelessWidget {
                                   return TvButton(
                                     onPressed: (context) => cubit.toggleDay(e),
                                     child: AnimatedContainer(
-                                        duration: animationDuration,
+                                        duration: AppMotion.duration(context),
                                         decoration: const BoxDecoration(
                                             shape: BoxShape.circle),
                                         child: Padding(
@@ -222,13 +223,15 @@ class TvFilterEditSettingsScreen extends StatelessWidget {
                                                   child: const Icon(Icons.check)
                                                       .animate()
                                                       .slideX(
-                                                          duration:
-                                                              animationDuration,
+                                                          duration: AppMotion
+                                                              .duration(
+                                                                  context),
                                                           curve: Curves
                                                               .easeInOutQuad)
                                                       .fadeIn(
-                                                          duration:
-                                                              animationDuration),
+                                                          duration: AppMotion
+                                                              .fadeDuration(
+                                                                  context)),
                                                 )
                                             ],
                                           ),

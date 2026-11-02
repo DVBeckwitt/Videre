@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:bloc/bloc.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
@@ -25,10 +26,10 @@ class TvChannelCubit extends Cubit<TvChannelController> {
     super.close();
   }
 
-  scrollToTop(bool scroll) {
+  scrollToTop(BuildContext context, bool scroll) {
     if (scroll) {
-      scrollController.animateTo(0,
-          duration: animationDuration ~/ 2, curve: Curves.easeInOutQuad);
+      AppMotion.scrollTo(context, scrollController, 0,
+          duration: animationDuration ~/ 2);
     }
   }
 
@@ -66,7 +67,7 @@ class TvChannelCubit extends Cubit<TvChannelController> {
     if (key.currentContext != null && focus) {
       Scrollable.ensureVisible(key.currentContext!,
           alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
-          duration: animationDuration,
+          duration: AppMotion.duration(key.currentContext!),
           curve: Curves.easeInOutQuad);
     }
   }

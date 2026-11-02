@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -57,7 +58,8 @@ class CompactVideo extends StatelessWidget {
                       bottom: 0,
                       child: AnimatedFractionallySizedBox(
                         alignment: Alignment.centerLeft,
-                        duration: animationDuration * 2,
+                        duration:
+                            AppMotion.duration(context, animationDuration * 2),
                         widthFactor: (highlighted ?? false) ? 1 : 0,
                         curve: Curves.easeInOutQuad,
                         child: AnimatedContainer(
@@ -66,7 +68,8 @@ class CompactVideo extends StatelessWidget {
                                   ? colors.secondaryContainer
                                   : colors.surface,
                               borderRadius: BorderRadius.circular(10)),
-                          duration: animationDuration * 2,
+                          duration: AppMotion.duration(
+                              context, animationDuration * 2),
                         ),
                       ),
                     ),

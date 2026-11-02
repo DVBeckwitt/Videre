@@ -1,5 +1,5 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/utils.dart';
 
 class TvButton extends StatelessWidget {
@@ -40,7 +40,7 @@ class TvButton extends StatelessWidget {
           return Align(
             alignment: Alignment.centerLeft,
             child: AnimatedContainer(
-              duration: animationDuration,
+              duration: AppMotion.duration(context),
               decoration: BoxDecoration(
                 color: hasFocus
                     ? focusedColor ??

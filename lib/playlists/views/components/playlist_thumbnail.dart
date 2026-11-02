@@ -1,4 +1,4 @@
-import 'package:clipious/globals.dart';
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -39,7 +39,7 @@ class PlaylistThumbnails extends StatelessWidget {
               child: Opacity(
                 opacity: 1 - (i / (maxThumbs)),
                 child: AnimatedCrossFade(
-                  duration: animationDuration,
+                  duration: AppMotion.duration(context),
                   firstChild: isPlaceHolder
                       ? const ThumbnailPlaceHolder(
                           borderRadius: 10,

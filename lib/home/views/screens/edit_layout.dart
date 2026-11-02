@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -100,7 +101,7 @@ class EditHomeLayoutScreen extends StatelessWidget {
                       ),
                       AnimatedOpacity(
                         opacity: layout.showBigSource ? 1 : 0.1,
-                        duration: animationDuration,
+                        duration: AppMotion.fadeDuration(context),
                         child: GridView.count(
                           shrinkWrap: true,
                           physics: const NeverScrollableScrollPhysics(),

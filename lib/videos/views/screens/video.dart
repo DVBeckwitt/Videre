@@ -1,7 +1,8 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_fadein/flutter_fadein.dart';
+import 'package:clipious/utils/views/components/motion_animation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
@@ -97,9 +98,10 @@ class VideoScreen extends StatelessWidget {
                 icon: const Icon(Icons.schema), label: locals.recommended));
 
             return AnimatedOpacity(
-              duration: animationDuration,
+              duration: AppMotion.fadeDuration(context),
               opacity: videoState.opacity,
               child: AutoTabsRouter.tabBar(
+                  animatePageTransition: AppMotion.allowsMovement(context),
                   key: ValueKey(videoState.video),
                   physics: deviceType == DeviceType.phone
                       ? const BouncingScrollPhysics(
@@ -125,7 +127,7 @@ class VideoScreen extends StatelessWidget {
                             ? []
                             : [
                                 AnimatedSwitcher(
-                                    duration: animationDuration,
+                                    duration: AppMotion.duration(context),
                                     child: videoState.downloading
                                         ? GestureDetector(
                                             onTap: () =>
@@ -145,8 +147,9 @@ class VideoScreen extends StatelessWidget {
                                                     width: 15,
                                                     child:
                                                         TweenAnimationBuilder(
-                                                            duration:
-                                                                animationDuration,
+                                                            duration: AppMotion
+                                                                .duration(
+                                                                    context),
                                                             tween: Tween<
                                                                     double>(
                                                                 begin: 0,
@@ -154,14 +157,16 @@ class VideoScreen extends StatelessWidget {
                                                                     .downloadProgress),
                                                             builder: (context,
                                                                 value, child) {
-                                                              return CircularProgressIndicator(
+                                                              return MotionLoadingIndicator(
+                                                                  child:
+                                                                      CircularProgressIndicator(
                                                                 value: videoState
                                                                             .downloadProgress ==
                                                                         0
                                                                     ? null
                                                                     : value,
                                                                 strokeWidth: 2,
-                                                              );
+                                                              ));
                                                             }))
                                               ],
                                             ),
@@ -215,8 +220,10 @@ class VideoScreen extends StatelessWidget {
                               videoState.loadingVideo ||
                               distractionFreeMode
                           ? null
-                          : FadeIn(
+                          : MotionAnimation.fadeIn(
                               child: NavigationBar(
+                                animationDuration: AppMotion.duration(
+                                    context, const Duration(milliseconds: 500)),
                                 onDestinationSelected:
                                     tabsRouter.setActiveIndex,
                                 selectedIndex: tabsRouter.activeIndex,
@@ -240,7 +247,7 @@ class VideoScreen extends StatelessWidget {
                                 VideoBackendStatus(state: videoState),
                                 Expanded(
                                     child: AnimatedSwitcher(
-                                        duration: animationDuration,
+                                        duration: AppMotion.duration(context),
                                         child: videoState.error.isNotEmpty
                                             ? Container(
                                                 alignment: Alignment.center,

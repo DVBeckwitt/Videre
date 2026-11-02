@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -34,6 +35,7 @@ class ManageSingleServerScreen extends StatelessWidget {
     TextEditingController field2Controller = TextEditingController();
 
     showDialog(
+      animationStyle: AppMotion.dialogStyle(context),
       context: context,
       useRootNavigator: false,
       builder: (BuildContext context) {

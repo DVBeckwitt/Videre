@@ -1,9 +1,9 @@
+import 'package:clipious/utils/motion.dart';
 import 'dart:ui';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:clipious/app/views/tv/screens/tv_home.dart';
-import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/states/playlist.dart';
 import 'package:clipious/playlists/views/screens/playlist.dart';
 import 'package:clipious/router.dart';
@@ -75,7 +75,7 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                         color: colors.secondaryContainer,
                       ),
                 AnimatedPositioned(
-                  duration: animationDuration,
+                  duration: AppMotion.duration(context),
                   curve: Curves.easeInOutQuad,
                   top: playlistState.showImage ? 285 : 0,
                   left: 0,
@@ -85,7 +85,7 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                       tween: Tween<double>(
                           begin: 0,
                           end: playlistState.showImage ? 0 : overlayBlur),
-                      duration: animationDuration,
+                      duration: AppMotion.duration(context),
                       curve: Curves.easeInOutQuad,
                       builder: (context, value, child) {
                         return BackdropFilter(
@@ -132,17 +132,20 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                                                             end: playlistState
                                                                 .loadingProgress),
                                                         duration:
-                                                            animationDuration,
+                                                            AppMotion.duration(
+                                                                context),
                                                         curve: Curves
                                                             .easeInOutQuad,
                                                         builder: (context,
                                                                 value, child) =>
-                                                            CircularProgressIndicator(
+                                                            MotionLoadingIndicator(
+                                                                child:
+                                                                    CircularProgressIndicator(
                                                           value: value > 0 &&
                                                                   value < 1
                                                               ? value
                                                               : null,
-                                                        ),
+                                                        )),
                                                       ),
                                                     ),
                                                   ),

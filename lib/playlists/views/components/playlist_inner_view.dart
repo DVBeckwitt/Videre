@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -55,14 +56,16 @@ class PlaylistInnerView extends StatelessWidget {
                                         tween: Tween<double>(
                                             begin: 0,
                                             end: playlistState.loadingProgress),
-                                        duration: animationDuration,
+                                        duration: AppMotion.duration(context),
                                         curve: Curves.easeInOutQuad,
                                         builder: (context, value, child) =>
-                                            CircularProgressIndicator(
+                                            MotionLoadingIndicator(
+                                                child:
+                                                    CircularProgressIndicator(
                                           value: value > 0 && value < 1
                                               ? value
                                               : null,
-                                        ),
+                                        )),
                                       ),
                                     ))
                                   ]

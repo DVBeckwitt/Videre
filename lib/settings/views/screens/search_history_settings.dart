@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -15,6 +16,7 @@ class SearchHistorySettingsScreen extends StatelessWidget {
   confirmClear(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     showDialog(
+        animationStyle: AppMotion.dialogStyle(context),
         context: context,
         useRootNavigator: false,
         useSafeArea: true,

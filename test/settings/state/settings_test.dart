@@ -12,6 +12,7 @@ import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/workmanager.dart';
 import 'package:workmanager/workmanager.dart';
@@ -49,6 +50,19 @@ Future<void> main() async {
     messenger.setMockMethodCallHandler(pathProvider, null);
     await documents.delete(recursive: true);
     WorkmanagerPlatform.instance = originalWorkmanager;
+  });
+
+  test('motion follows Android by default and persists each choice', () async {
+    expect(settingsCubit.state.motionPreference, MotionPreference.system);
+    for (final preference in MotionPreference.values) {
+      await settingsCubit.setMotionPreference(preference);
+      expect(settingsCubit.state.motionPreference, preference);
+      expect(
+          db.getSettings(motionPreferenceSettingName)?.value, preference.name);
+    }
+    await settingsCubit
+        .saveSetting(SettingsValue(motionPreferenceSettingName, 'invalid'));
+    expect(settingsCubit.state.motionPreference, MotionPreference.system);
   });
 
   test('disabling notifications cancels a pending frequency restart', () async {

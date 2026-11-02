@@ -59,6 +59,7 @@ const strictValidationTargets = [
   './test/utils/backup_test.dart',
   './test/utils/item_list_test.dart',
   './test/utils/select_list_test.dart',
+  './test/utils/motion_test.dart',
   './test/playlists/state/playlist_test.dart',
   './test/subscription_management/state/subscription_retry_test.dart',
   './test/utils/pagination_cubits_test.dart',

@@ -1,3 +1,4 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
@@ -207,7 +208,8 @@ class _NetworkProxySettingsScreenState
                   ),
                   if (_busy) ...[
                     const SizedBox(height: 16),
-                    const LinearProgressIndicator(),
+                    const MotionLoadingIndicator(
+                        child: LinearProgressIndicator()),
                   ],
                   if (_status != null) ...[
                     const SizedBox(height: 16),

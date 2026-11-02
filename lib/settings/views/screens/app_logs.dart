@@ -1,10 +1,10 @@
+import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/settings/states/app_logs.dart';
 
-import '../../../globals.dart';
 import '../../models/db/app_logs.dart';
 
 @RoutePage()
@@ -36,7 +36,7 @@ class AppLogsScreen extends StatelessWidget {
               child: Stack(
                 children: [
                   AnimatedPositioned(
-                    duration: animationDuration,
+                    duration: AppMotion.duration(context),
                     left: 0,
                     right: 0,
                     top: 0,
@@ -70,7 +70,7 @@ class AppLogsScreen extends StatelessWidget {
                       left: 0,
                       right: 0,
                       bottom: state.selected.isNotEmpty ? 0 : -50,
-                      duration: animationDuration,
+                      duration: AppMotion.duration(context),
                       child: InkWell(
                         onTap: cubit.copySelectedLogsToClipboard,
                         child: Container(

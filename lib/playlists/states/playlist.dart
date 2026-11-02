@@ -59,11 +59,6 @@ class PlaylistCubit extends Cubit<PlaylistState> {
     player.playVideo(state.playlist.videos, audio: isAudio);
   }
 
-  scrollToTop() {
-    scrollController.animateTo(0,
-        duration: animationDuration ~/ 2, curve: Curves.easeInOutQuad);
-  }
-
   getAllVideos() async {
     if (state.playlist.videoCount > 0 &&
         state.playlist.videos.length < state.playlist.videoCount) {
