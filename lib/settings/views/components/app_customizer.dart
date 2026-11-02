@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/utils.dart';
 
 import '../../states/app_customizer.dart';
 import '../../states/settings.dart';
@@ -14,6 +15,9 @@ class AppCustomizer extends StatelessWidget {
     var locals = AppLocalizations.of(context)!;
     var colors = Theme.of(context).colorScheme;
     var textTheme = Theme.of(context).textTheme;
+    final phone = getDeviceType() == DeviceType.phone;
+    bool canCustomize(HomeDataSource source) =>
+        source.route != null && (!phone || source != HomeDataSource.playlist);
     return BlocProvider(
       create: (context) => AppCustomizerCubit(
           context.read<SettingsCubit>().state.appLayout,
@@ -22,9 +26,12 @@ class AppCustomizer extends StatelessWidget {
         builder: (context, state) {
           var settings = context.read<SettingsCubit>();
           var appLayout = context.read<AppCustomizerCubit>();
+          final sources = state.where(canCustomize).toList();
           var onStart =
               context.select((SettingsCubit cubit) => cubit.state.onOpen);
-          if (onStart >= state.length) onStart = 0;
+          final startup = state.elementAtOrNull(onStart);
+          final visibleStartup =
+              sources.contains(startup) ? startup : sources.firstOrNull;
           return Column(
             children: [
               Padding(
@@ -36,18 +43,19 @@ class AppCustomizer extends StatelessWidget {
                 physics: const NeverScrollableScrollPhysics(),
                 shrinkWrap: true,
                 itemBuilder: (context, index) {
-                  HomeDataSource source = state[index];
+                  HomeDataSource source = sources[index];
 
                   return Row(
                     key: ValueKey(source),
                     children: [
                       IconButton(
-                          onPressed: () => settings.selectOnOpen(index),
+                          onPressed: () =>
+                              settings.selectOnOpen(state.indexOf(source)),
                           icon: Icon(
-                              onStart == index
+                              visibleStartup == source
                                   ? Icons.home
                                   : Icons.home_outlined,
-                              color: onStart == index
+                              color: visibleStartup == source
                                   ? colors.primary
                                   : colors.secondary)),
                       Checkbox(
@@ -73,15 +81,23 @@ class AppCustomizer extends StatelessWidget {
                     ],
                   );
                 },
-                itemCount: state.length,
-                onReorder: appLayout.reorder,
+                itemCount: sources.length,
+                onReorder: (oldIndex, newIndex) {
+                  final source = sources[oldIndex];
+                  final remaining = List.of(state)..remove(source);
+                  final target = newIndex == sources.length
+                      ? remaining.length
+                      : remaining.indexOf(sources[newIndex]);
+                  appLayout.reorder(state.indexOf(source), target);
+                },
               ),
               const Divider(),
               ListView(
                 physics: const NeverScrollableScrollPhysics(),
                 shrinkWrap: true,
                 children: HomeDataSource.values
-                    .where((element) => !state.contains(element))
+                    .where((element) =>
+                        canCustomize(element) && !state.contains(element))
                     .map((e) => Row(
                           children: [
                             Padding(
@@ -92,7 +108,7 @@ class AppCustomizer extends StatelessWidget {
                                     appLayout.updateSource(e, value ?? false),
                               ),
                             ),
-                            Text(e.getLabel(locals))
+                            Expanded(child: Text(e.getLabel(locals)))
                           ],
                         ))
                     .toList(),

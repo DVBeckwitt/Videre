@@ -260,7 +260,7 @@ class SembastSqfDb extends IDbClient {
       db.transaction((txn) async {
         await historyVideoCacheStore.record(videoId).delete(txn);
         await progressStore.record(videoId).delete(txn);
-        // A saved queue can bring a removed item back into Continue Watching.
+        // Remove the deleted video from any saved playback session as well.
         await settingsStore.record('playback-session').delete(txn);
       });
 

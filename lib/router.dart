@@ -186,6 +186,7 @@ class AppRouter extends RootStackRouter {
                           page: ChannelPlaylistsRoute.page, path: playlistsPath)
                     ]),
                 AutoRoute(page: DownloadManagerRoute.page),
+                AutoRoute(page: PlaylistLibraryRoute.page),
                 AutoRoute(page: SearchRoute.page, path: searchPath, children: [
                   AutoRoute(page: SearchVideoRoute.page, path: videosPath),
                   AutoRoute(page: SearchChannelRoute.page, path: channelPath),

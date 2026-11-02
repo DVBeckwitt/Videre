@@ -22,6 +22,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/components/app_customizer.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -158,6 +159,7 @@ Future<void> _pumpHomepage(
   Size size, {
   PlayerState? playerState,
   SettingsState? settingsState,
+  int firstIndex = 0,
   bool settle = true,
 }) async {
   tester.view.physicalSize = size;
@@ -165,7 +167,9 @@ Future<void> _pumpHomepage(
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
 
-  final appCubit = TestAppCubit(AppState(0, null, HomeLayout()));
+  await tester.runAsync(() => globals.db
+      .saveSetting(SettingsValue(onOpenSettingName, firstIndex.toString())));
+  final appCubit = TestAppCubit(AppState(firstIndex, null, HomeLayout()));
   final settingsCubit =
       TestSettingsCubit(settingsState ?? SettingsState.init(), appCubit);
 
@@ -425,6 +429,206 @@ void main() {
     await globals.db.close();
   });
 
+  testWidgets(
+      'phone navigation opens search with keyboard focus and returns to the selected tab',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    final navigation = find.byType(NavigationBar);
+    expect(
+        tester
+            .widget<NavigationBar>(navigation)
+            .destinations
+            .cast<NavigationDestination>()
+            .map((destination) => destination.label),
+        ['Home', 'Subscriptions', 'History', 'Search']);
+    final searchButton =
+        find.descendant(of: navigation, matching: find.byIcon(Icons.search));
+    expect(searchButton, findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(AppBar), matching: find.byIcon(Icons.search)),
+        findsNothing);
+
+    await tester.tap(find.descendant(
+        of: navigation, matching: find.byIcon(Icons.subscriptions)));
+    await tester.pumpAndSettle();
+    final selectedIndex =
+        tester.widget<NavigationBar>(navigation).selectedIndex;
+    await tester.tap(searchButton);
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<EditableText>(find.byType(EditableText));
+    expect(field.focusNode.hasFocus, isTrue);
+    expect(tester.testTextInput.isVisible, isTrue);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(
+        tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
+    await tester.tap(searchButton);
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue);
+    expect(tester.testTextInput.isVisible, isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'phone navigation keeps search available with a single configured tab',
+      (tester) async {
+    final settings = SettingsState.init();
+    await _pumpHomepage(tester, const Size(390, 844),
+        settingsState: settings.copyWith(settings: {
+          ...settings.settings,
+          appLayoutSettingName: SettingsValue(appLayoutSettingName, 'home'),
+        }));
+    expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).destinations,
+        hasLength(2));
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('tablet navigation keeps search in the app bar', (tester) async {
+    await _pumpHomepage(tester, const Size(1024, 768));
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(AppBar), matching: find.byIcon(Icons.search)),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(NavigationRail),
+            matching: find.byIcon(Icons.playlist_play)),
+        findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone navigation preserves a saved History startup tab',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844), firstIndex: 3);
+    final navigation = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    final destination = navigation.destinations[navigation.selectedIndex]
+        as NavigationDestination;
+    expect(destination.label, 'History');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone layout editor preserves saved indexes for visible tabs',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byIcon(Icons.settings));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Browsing'));
+    await tester.pumpAndSettle();
+    expect(find.text('Home, Subscriptions, History, Search'), findsOneWidget);
+    await tester.tap(find.text('Customize app sections'));
+    await tester.pumpAndSettle();
+    expect(find.text('Playlists'), findsNothing);
+    expect(find.text('Search'), findsNothing);
+
+    final context = tester.element(find.byType(AppCustomizer));
+    final settings = context.read<SettingsCubit>();
+    final historyRow =
+        find.ancestor(of: find.text('History'), matching: find.byType(Row));
+    await tester.tap(find.descendant(
+        of: historyRow, matching: find.byIcon(Icons.home_outlined)));
+    await tester.pumpAndSettle();
+    expect(settings.state.onOpen, 3);
+
+    tester
+        .widget<ReorderableListView>(find.byType(ReorderableListView))
+        .onReorder(2, 0);
+    await tester.pumpAndSettle();
+    expect(settings.state.appLayout.first, HomeDataSource.history);
+    expect(settings.state.appLayout, contains(HomeDataSource.playlist));
+    expect(settings.state.onOpen, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('startup selection skips a disabled search history section',
+      (tester) async {
+    final settings = SettingsState.init();
+    await _pumpHomepage(tester, const Size(390, 844),
+        firstIndex: 2,
+        settingsState: settings.copyWith(settings: {
+          ...settings.settings,
+          appLayoutSettingName: SettingsValue(
+              appLayoutSettingName, 'home,searchHistory,history,playlist'),
+          useSearchHistorySettingName:
+              SettingsValue(useSearchHistorySettingName, 'false'),
+        }));
+    final navigation = tester.widget<NavigationBar>(find.byType(NavigationBar));
+    final destination = navigation.destinations[navigation.selectedIndex]
+        as NavigationDestination;
+    expect(destination.label, 'History');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone navigation falls back from a saved Playlists startup tab',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844), firstIndex: 2);
+    expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        0);
+    await tester.tap(find.byTooltip('Playlists'));
+    await tester.pumpAndSettle();
+    expect(find.text('Playlists'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'phone navigation opens playlists from the top and returns to history',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    final navigation = find.byType(NavigationBar);
+    expect(
+        find.descendant(
+            of: navigation, matching: find.byIcon(Icons.playlist_play)),
+        findsNothing);
+    await tester.tap(
+        find.descendant(of: navigation, matching: find.byIcon(Icons.history)));
+    await tester.pumpAndSettle();
+    final selectedIndex =
+        tester.widget<NavigationBar>(navigation).selectedIndex;
+    await tester.tap(find.byTooltip('Playlists'));
+    await tester.pumpAndSettle();
+    expect(find.text('Playlists'), findsOneWidget);
+    expect(navigation, findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(
+        tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
+    expect(find.text('History'), findsWidgets);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'phone navigation keeps playlists reachable for a playlist-only layout',
+      (tester) async {
+    final settings = SettingsState.init();
+    await _pumpHomepage(tester, const Size(390, 844),
+        settingsState: settings.copyWith(settings: {
+          ...settings.settings,
+          appLayoutSettingName: SettingsValue(appLayoutSettingName, 'playlist'),
+        }));
+    await tester.tap(find.byTooltip('Playlists'));
+    await tester.pumpAndSettle();
+    expect(find.text('Playlists'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   group('Server.headersForUrl', () {
     const server = Server(
       url: 'https://example.com',
@@ -612,8 +816,6 @@ void main() {
     expectSelectedTab(1);
     await swipeLeft();
     expectSelectedTab(2);
-    await swipeLeft();
-    expectSelectedTab(3);
 
     final trailingEdgeDrag = await tester.startGesture(const Offset(350, 400));
     await trailingEdgeDrag.moveBy(const Offset(-120, 0));
@@ -621,10 +823,9 @@ void main() {
     expect(tabPosition.pixels, greaterThan(tabPosition.maxScrollExtent));
     await trailingEdgeDrag.up();
     await tester.pumpAndSettle();
-    expectSelectedTab(3);
-
-    await swipeRight();
     expectSelectedTab(2);
+    expect(find.byType(TextField), findsNothing);
+
     await swipeRight();
     expectSelectedTab(1);
     await swipeRight();
@@ -669,7 +870,7 @@ void main() {
     );
   });
 
-  testWidgets('landscape home keeps Continue Watching and the feed reachable',
+  testWidgets('landscape home shows the feed without automatic resume sections',
       (tester) async {
     await tester.runAsync(() async {
       await globals.db.upsertHistoryVideo(HistoryVideoCache('video-0',
@@ -677,27 +878,24 @@ void main() {
       await globals.db.saveProgress(Progress(0.5, 'video-0'));
     });
 
-    await _withThumbnailCacheManager(tester, (cacheManager) async {
-      await _pumpHomepage(tester, const Size(640, 360), settle: false);
-      await _pumpUntilRequestCount(tester, cacheManager, 1);
-      cacheManager.failRequest(0);
-      await _pumpUntilThumbnailSettles(tester);
-      await tester.pumpAndSettle();
+    await _pumpHomepage(tester, const Size(640, 360));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Continue Watching'), findsNothing);
+    expect(find.text('Resume queue'), findsNothing);
+    expect(find.text('Resume this video'), findsNothing);
+    expect(find.text('Popular').hitTestable(), findsOneWidget);
+    expect(find.text('Trending').hitTestable(), findsOneWidget);
 
-      expect(tester.takeException(), isNull);
-      expect(find.text('Continue Watching'), findsOneWidget);
-      expect(find.text('Resume this video').hitTestable(), findsOneWidget);
-      expect(find.text('Trending').hitTestable(), findsOneWidget);
-
-      final summaries = find.ancestor(
-          of: find.text('Continue Watching'),
-          matching: find.byType(SingleChildScrollView));
-      await tester.drag(summaries, const Offset(0, -120));
-      await tester.pumpAndSettle();
-      expect(find.text('Popular').hitTestable(), findsOneWidget);
-      expect(find.text('Trending').hitTestable(), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
+    final summaries = find.ancestor(
+        of: find.text('Popular'), matching: find.byType(SingleChildScrollView));
+    await tester.drag(summaries, const Offset(0, -120));
+    await tester.pumpAndSettle();
+    expect(find.text('Trending').hitTestable(), findsOneWidget);
+    await tester.drag(summaries, const Offset(0, 120));
+    await tester.pumpAndSettle();
+    expect(find.text('Popular').hitTestable(), findsOneWidget);
+    expect(find.text('Trending').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('tablet homepage tabs ignore horizontal swipes', (tester) async {

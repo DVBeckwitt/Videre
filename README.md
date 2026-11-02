@@ -27,7 +27,7 @@ Watch, listen, and download through a public Invidious instance or your own serv
 - **Local Library.** Save subscriptions, Watch Later, playlists, and history on your device without an account.
 - **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
 - **Watch Offline.** Video, audio, and playlist downloads on phones and tablets, with pause, resume, retry, and Wi-Fi-only mode.
-- **Saved Playback.** Resume unfinished videos on phone or TV and restore your saved queue.
+- **Saved Playback.** Remember playback positions when reopening videos on phone or TV.
 - **Export/Import Profiles.** Back up and restore your local library and preferences as JSON, or import NewPipe subscriptions.
 - **TV Streaming.** Pair Videre on your phone and TV over Wi-Fi. Send the current video and position, then control play/pause from your phone.
 
@@ -71,7 +71,7 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Downloads.** Phones and tablets only. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos; playlists download at 720p. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.
 
-**Continue Watching.** Resume unfinished videos or choose **Resume queue**. Nothing autoplays at startup. Progress and queues stay on your device, with no cloud sync.
+**Watch Later.** Open a video's menu, choose **Add to playlist**, then **Watch Later**. On phones, open the Playlists button in the top bar to find it again. Watch Later is stored on your device and needs no account.
 
 **Phone remote.** Open Videre on both devices on the same trusted Wi-Fi. On TV, select **Receive from phone**. On your phone, open **Send to TV / remote control**, enter the TV's IP, port, and six-digit code, then **Send current video**. Position and play/pause state transfer; control play/pause from your phone. Uses unencrypted local HTTP; no Chromecast or automatic discovery.
 

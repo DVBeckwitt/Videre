@@ -588,7 +588,7 @@ sealed class SettingsState with _$SettingsState {
       orElse: () => ThemeMode.system);
 
   bool get useSearchHistory =>
-      _get(useSearchHistorySettingName)?.value == 'true';
+      (_get(useSearchHistorySettingName)?.value ?? 'true') == 'true';
 
   bool get screenControls =>
       (_get(screenControlsSettingName)?.value ?? 'true') == 'true';

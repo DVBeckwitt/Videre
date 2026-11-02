@@ -223,7 +223,7 @@ void main() {
     await cubit.close();
   });
 
-  test('local history changes refresh Continue Watching after deleting data',
+  test('local history changes publish a revision after deleting data',
       () async {
     for (final id in ['first', 'second']) {
       await db.upsertHistoryVideo(HistoryVideoCache(id, id, '', ''));

@@ -9,7 +9,6 @@ import 'package:clipious/home/states/home.dart';
 import 'package:clipious/router.dart';
 
 import '../../../utils/views/components/app_icon.dart';
-import 'continue_watching.dart';
 
 const double smallVideoViewHeight = 140;
 
@@ -115,7 +114,6 @@ class HomeView extends StatelessWidget {
                                       child: Column(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            const ContinueWatching(),
                                             ...getSmallSources(
                                                 context, layout, isLoggedIn),
                                           ]),

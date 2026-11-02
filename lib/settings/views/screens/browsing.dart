@@ -10,6 +10,8 @@ import 'package:locale_names/locale_names.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../../utils/views/components/select_list_dialog.dart';
+import '../../../utils.dart';
+import '../../../home/models/db/home_layout.dart';
 import '../components/app_customizer.dart';
 
 @RoutePage()
@@ -209,9 +211,15 @@ class BrowsingSettingsScreen extends StatelessWidget {
                   SettingsTile(
                     leading: const Icon(Icons.app_settings_alt),
                     title: Text(locals.customizeAppLayout),
-                    value: Text(state.appLayout
-                        .map((e) => e.getLabel(locals))
-                        .join(", ")),
+                    value: Text([
+                      ...state.appLayout
+                          .where((e) =>
+                              e.route != null &&
+                              (getDeviceType() != DeviceType.phone ||
+                                  e != HomeDataSource.playlist))
+                          .map((e) => e.getLabel(locals)),
+                      if (getDeviceType() == DeviceType.phone) locals.search,
+                    ].join(", ")),
                     onPressed: (ctx) => customizeApp(ctx),
                   ),
                   SettingsTile.switchTile(

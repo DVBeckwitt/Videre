@@ -101,6 +101,19 @@ Future<void> main() async {
     expect(await fileDb.getLocale(), isNull);
   });
 
+  test('search history defaults on and respects saved choices after reload',
+      () async {
+    expect(settingsCubit.state.useSearchHistory, isTrue);
+    expect(SettingsState.init().useSearchHistory, isTrue);
+
+    await settingsCubit.setUseSearchHistory(false);
+    expect(settingsCubit.state.useSearchHistory, isFalse);
+    expect(SettingsState.init().useSearchHistory, isFalse);
+
+    await settingsCubit.setUseSearchHistory(true);
+    expect(SettingsState.init().useSearchHistory, isTrue);
+  });
+
   test('overlapping setting writes retain both values in the current state',
       () async {
     await Future.wait<void>([

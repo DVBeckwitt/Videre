@@ -610,6 +610,26 @@ class NotificationSettingsRoute extends PageRouteInfo<void> {
 }
 
 /// generated route for
+/// [PlaylistLibraryScreen]
+class PlaylistLibraryRoute extends PageRouteInfo<void> {
+  const PlaylistLibraryRoute({List<PageRouteInfo>? children})
+      : super(
+          PlaylistLibraryRoute.name,
+          initialChildren: children,
+          argsEquality: false,
+        );
+
+  static const String name = 'PlaylistLibraryRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const PlaylistLibraryScreen();
+    },
+  );
+}
+
+/// generated route for
 /// [PlaylistViewScreen]
 class PlaylistViewRoute extends PageRouteInfo<PlaylistViewRouteArgs> {
   PlaylistViewRoute({

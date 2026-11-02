@@ -14,7 +14,6 @@ import 'package:clipious/videos/views/components/subscriptions.dart';
 import 'package:clipious/videos/views/components/trending.dart';
 
 import '../../../../home/models/db/home_layout.dart';
-import '../../../../home/views/components/continue_watching.dart';
 import '../../../../player/views/tv/screens/tv_player_view.dart';
 import '../../../../router.dart';
 import '../../../../utils/views/components/app_icon.dart';
@@ -243,7 +242,6 @@ class TvHomeScreen extends StatelessWidget {
                             shrinkWrap: true,
                             // crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const ContinueWatching(),
                               ...allowedPages
                                   .where((e) =>
                                       e == HomeDataSource.subscription ||

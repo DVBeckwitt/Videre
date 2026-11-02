@@ -6,8 +6,6 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
-import 'package:clipious/home/views/components/continue_watching.dart';
-import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/models/playback_session.dart';
@@ -20,18 +18,14 @@ import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
-import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/db/progress.dart';
-import 'package:clipious/videos/models/db/history_video_cache.dart';
-import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast.dart';
 
@@ -652,66 +646,6 @@ void main() {
       delayed.savedProgress[35]!.complete();
       await older;
       expect(delayed.state.position, const Duration(seconds: 38));
-    });
-
-    testWidgets(
-        'Continue Watching honors hidden and masked cached-video filters',
-        (tester) async {
-      await tester.binding.setSurfaceSize(const Size(1400, 800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      final videos = [
-        HistoryVideoCache('title', 'spoiler', 'Author', ''),
-        HistoryVideoCache('channel', 'Channel video', 'Author', '',
-            authorId: 'blocked-channel'),
-        HistoryVideoCache('length', 'Long video', 'Author', '',
-            lengthSeconds: 700),
-      ];
-      final filters = [
-        VideoFilter(value: 'spoiler'),
-        VideoFilter(value: '', channelId: 'blocked-channel')..filterAll = true,
-        VideoFilter(value: '600')
-          ..type = FilterType.length
-          ..operation = FilterOperation.higherThan,
-      ];
-      // Sembast schedules real async work; keep it outside the widget clock.
-      await tester.runAsync(() async {
-        for (final video in videos) {
-          await db.upsertHistoryVideo(video);
-          await db.saveProgress(Progress(0.5, video.videoId));
-        }
-        for (final filter in filters) {
-          filter.hideFromFeed = true;
-          await db.saveFilter(filter);
-        }
-      });
-      final legacy = HistoryVideoCache.fromJson({
-        'videoId': 'old',
-        'title': 'Old',
-        'author': null,
-        'thumbnail': '',
-        'created': '2026-01-01T00:00:00.000',
-      });
-      expect(legacy.toVideo().authorId, isNull);
-      expect(legacy.toVideo().lengthSeconds, isNull);
-      await tester.pumpWidget(BlocProvider<PlayerCubit>.value(
-          value: player,
-          child: const MaterialApp(
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-              home: Scaffold(body: ContinueWatching()))));
-      await tester.pumpAndSettle();
-      expect(find.byType(CompactVideo), findsNothing);
-      await tester.runAsync(() async {
-        for (final filter in filters) {
-          filter.hideFromFeed = false;
-          await db.saveFilter(filter);
-        }
-      });
-      playbackHistoryRevision.value++;
-      await tester.pumpAndSettle();
-      expect(find.byType(CompactVideo), findsNWidgets(3));
-      expect(find.text('**********'), findsNWidgets(3));
-      await tester.pumpWidget(const SizedBox.shrink());
     });
 
     test(

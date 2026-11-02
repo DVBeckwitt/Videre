@@ -27,6 +27,24 @@ class MainContentScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainContentScreen> {
+  TabsRouter? _initializedTabsRouter;
+
+  void _initializeStartupTab(TabsRouter router, int index) {
+    if (identical(_initializedTabsRouter, router)) return;
+    _initializedTabsRouter = router;
+    // homeIndex controls Back navigation, not the initially selected tab.
+    // Keep an explicit incoming tab route ahead of the saved startup choice.
+    if (index == 0 || router.activeIndex != 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          identical(_initializedTabsRouter, router) &&
+          router.activeIndex == 0 &&
+          index < router.pageCount) {
+        router.setActiveIndex(index);
+      }
+    });
+  }
+
   void openSettings(BuildContext context) {
     AutoRouter.of(context).push(const SettingsRoute());
   }
@@ -90,21 +108,31 @@ class _MainScreenState extends State<MainContentScreen> {
       var app = context.read<AppCubit>();
       var settings = context.watch<SettingsCubit>().state;
 
-      var allowedPages = settings.appLayout
+      final deviceType = getDeviceType();
+      final configuredPages = settings.appLayout
           .where((element) =>
               element.isPermitted(context, app.isLoggedIn) &&
               element.route != null)
           .toList();
+      final initialPage =
+          settings.appLayout.elementAtOrNull(appState.firstIndex);
+      final allowedPages = configuredPages
+          .where((page) =>
+              deviceType != DeviceType.phone || page != HomeDataSource.playlist)
+          .toList();
+      if (allowedPages.isEmpty &&
+          configuredPages.contains(HomeDataSource.playlist)) {
+        allowedPages.add(HomeDataSource.home);
+      }
       var navigationWidgets = allowedPages
           .map((e) => e.getBottomBarNavigationWidget(context))
           .toList();
 
-      var selectedIndex = appState.firstIndex;
-      if (selectedIndex >= allowedPages.length) {
+      var selectedIndex =
+          allowedPages.indexOf(initialPage ?? HomeDataSource.home);
+      if (selectedIndex < 0) {
         selectedIndex = 0;
       }
-
-      final deviceType = getDeviceType();
 
       return allowedPages.isEmpty
           ? Scaffold(
@@ -134,16 +162,28 @@ class _MainScreenState extends State<MainContentScreen> {
                   : const NeverScrollableScrollPhysics(),
               builder: (context, child, controller) {
                 final tabsRouter = AutoTabsRouter.of(context);
+                _initializeStartupTab(tabsRouter, selectedIndex);
                 final selectedPage = allowedPages[tabsRouter.activeIndex];
                 return Scaffold(
                     // so we rebuild the view if the server changes
                     backgroundColor: colorScheme.surface,
-                    bottomNavigationBar: deviceType == DeviceType.phone &&
-                            allowedPages.length >= 2
+                    bottomNavigationBar: deviceType == DeviceType.phone
                         ? NavigationBar(
-                            onDestinationSelected: tabsRouter.setActiveIndex,
+                            onDestinationSelected: (index) {
+                              if (index == allowedPages.length) {
+                                AutoRouter.of(context).push(SearchRoute());
+                              } else {
+                                tabsRouter.setActiveIndex(index);
+                              }
+                            },
                             selectedIndex: tabsRouter.activeIndex,
-                            destinations: navigationWidgets,
+                            destinations: [
+                              ...navigationWidgets,
+                              NavigationDestination(
+                                icon: const Icon(Icons.search),
+                                label: locals.search,
+                              ),
+                            ],
                           )
                         : null,
                     appBar: AppBar(
@@ -173,12 +213,20 @@ class _MainScreenState extends State<MainContentScreen> {
                                 icon: const Icon(Icons.checklist))
                             : const SizedBox.shrink(),
                         const AppBarDownloadButton(),
-                        IconButton(
-                          onPressed: () {
-                            AutoRouter.of(context).push(SearchRoute());
-                          },
-                          icon: const Icon(Icons.search),
-                        ),
+                        if (deviceType == DeviceType.phone)
+                          IconButton(
+                            tooltip: locals.playlists,
+                            onPressed: () => AutoRouter.of(context)
+                                .push(const PlaylistLibraryRoute()),
+                            icon: const Icon(Icons.playlist_play),
+                          )
+                        else
+                          IconButton(
+                            onPressed: () {
+                              AutoRouter.of(context).push(SearchRoute());
+                            },
+                            icon: const Icon(Icons.search),
+                          ),
                         IconButton(
                           onPressed: () => openSettings(context),
                           icon: const Icon(Icons.settings),

@@ -1323,8 +1323,6 @@
   "watchLater": "Watch Later",
   "onDevice": "On this device",
   "onServer": "On your server",
-  "continueWatching": "Continue Watching",
-  "resumeQueue": "Resume queue",
   "remoteReceive": "Receive from phone",
   "downloadPlaylist": "Download playlist (720p)",
   "downloadsWifiOnly": "Download on Wi-Fi only",

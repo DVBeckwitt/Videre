@@ -71,9 +71,22 @@ void main() {
     await db.close();
   });
 
+  test('search history remembers submitted queries by default', () async {
+    await search.search('cats');
+    final reopened = SearchCubit(SearchState.init(), settings);
+    addTearDown(reopened.close);
+    expect(reopened.state.searchHistory, ['cats']);
+
+    await settings.setUseSearchHistory(false);
+    search.state.queryController.text = 'birds';
+    await search.search('birds');
+    expect(search.state.searchHistory, isEmpty);
+    expect(db.getSearchHistory(), ['cats']);
+  });
+
   testWidgets('moving the caret keeps submitted results visible',
       (tester) async {
-    await search.search('cats');
+    await tester.runAsync(() => search.search('cats'));
     search.state.queryController.selection =
         const TextSelection.collapsed(offset: 2);
     expect(search.state.showResults, isTrue);
@@ -106,7 +119,7 @@ void main() {
     suggestions.complete(1);
     await tester.pump();
     expect(search.state.suggestions, ['birds suggestion']);
-    await search.search('birds');
+    await tester.runAsync(() => search.search('birds'));
     expect(search.state.showResults, isTrue);
   });
 
