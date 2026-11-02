@@ -48,6 +48,7 @@ const strictValidationTargets = [
   './test/utils/image_object_test.dart',
   './test/utils/selected_server_test.dart',
   './test/videos/view/tv_animation_test.dart',
+  './test/videos/view/tv_history_test.dart',
   './test/downloads/download_manager_test.dart',
   './test/player/media_item_artwork_test.dart',
   './test/player/player_queue_lifecycle_test.dart',

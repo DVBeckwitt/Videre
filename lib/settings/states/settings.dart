@@ -14,6 +14,7 @@ import 'package:locale_names/locale_names.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../globals.dart';
+import '../../main.dart' show isTv;
 import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
@@ -464,7 +465,8 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setAppLayout(List<HomeDataSource> layout) async {
     var layoutToString = layout.map((e) => e.name).join(",");
-    await _set(appLayoutSettingName, layoutToString);
+    await _set(
+        isTv ? tvAppLayoutSettingName : appLayoutSettingName, layoutToString);
   }
 
   Future<void> setPhoneNavigation(PhoneNavigation layout) =>
@@ -638,6 +640,26 @@ sealed class SettingsState with _$SettingsState {
   List<HomeDataSource> get appLayout {
     var savedLayout = _get(appLayoutSettingName)?.value;
     var defaultLayout = HomeDataSource.defaultSettings();
+    if (isTv) {
+      final tvLayout = _get(tvAppLayoutSettingName)?.value;
+      final names = (tvLayout ??
+              savedLayout ??
+              defaultLayout.map((e) => e.name).join(','))
+          .split(',');
+      final layout = [
+        for (final name in names)
+          for (final source in HomeDataSource.values)
+            if (source.name == name &&
+                source.showOn != HomeDataSourceAppearance.phone)
+              source
+      ].toSet().toList();
+      // Older TV layouts predate History. A TV-specific save makes later
+      // opt-outs explicit without changing the phone/tablet layout.
+      if (tvLayout == null && !layout.contains(HomeDataSource.history)) {
+        layout.add(HomeDataSource.history);
+      }
+      return layout;
+    }
     return (savedLayout ?? defaultLayout.map((e) => e.name).join(","))
         .split(',')
         .where((element) => element.isNotEmpty)

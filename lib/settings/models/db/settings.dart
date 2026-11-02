@@ -34,6 +34,7 @@ const skipStepSettingName = 'skip-step';
 const skipExponentialSettingName = 'skip-exponentially';
 const fillFullScreen = 'fill-fullscreen';
 const appLayoutSettingName = 'app-layout';
+const tvAppLayoutSettingName = 'tv-app-layout';
 const phoneNavigationSettingName = 'phone-navigation';
 const navigationBarLabelBehaviorSettingName = 'navigation-bar-label-behavior';
 const distractionFreeModeSettingName = 'distraction-free-mode';

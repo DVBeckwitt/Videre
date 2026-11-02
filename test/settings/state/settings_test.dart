@@ -8,6 +8,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/main.dart' as app;
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -30,7 +31,10 @@ Future<void> main() async {
   late SettingsCubit settingsCubit;
   late WorkmanagerPlatform originalWorkmanager;
   late _Workmanager workmanager;
+  late bool originalIsTv;
   setUp(() async {
+    originalIsTv = app.isTv;
+    app.isTv = false;
     originalWorkmanager = WorkmanagerPlatform.instance;
     workmanager = _Workmanager();
     WorkmanagerPlatform.instance = workmanager;
@@ -44,6 +48,7 @@ Future<void> main() async {
     settingsCubit = TestSettingsCubit(SettingsState.init(), appCubit);
   });
   tearDown(() async {
+    app.isTv = originalIsTv;
     await settingsCubit.close();
     await appCubit.close();
     await db.close();
@@ -99,6 +104,63 @@ Future<void> main() async {
 
     expect(settingsCubit.state.country.code, 'FR');
     expect(SettingsState.init().country.code, 'FR');
+  });
+
+  test('TV defaults include History without changing phone sections', () {
+    final phoneLayout = settingsCubit.state.appLayout;
+    app.isTv = true;
+    expect(settingsCubit.state.appLayout, [
+      HomeDataSource.search,
+      HomeDataSource.subscription,
+      HomeDataSource.history,
+      HomeDataSource.playlist,
+      HomeDataSource.popular,
+      HomeDataSource.trending,
+    ]);
+    app.isTv = false;
+    expect(settingsCubit.state.appLayout, phoneLayout);
+  });
+
+  test('legacy TV sections gain History and preserve later opt-outs', () async {
+    const legacy = 'search,playlist,trending';
+    await settingsCubit
+        .saveSetting(SettingsValue(appLayoutSettingName, legacy));
+    app.isTv = true;
+    expect(settingsCubit.state.appLayout, [
+      HomeDataSource.search,
+      HomeDataSource.playlist,
+      HomeDataSource.trending,
+      HomeDataSource.history,
+    ]);
+    final withoutHistory = settingsCubit.state.appLayout
+      ..remove(HomeDataSource.history);
+    await settingsCubit.setAppLayout(withoutHistory);
+    expect(SettingsState.init().appLayout, withoutHistory);
+    expect(db.getSettings(appLayoutSettingName)?.value, legacy);
+    expect(db.getSettings(tvAppLayoutSettingName)?.value, legacy);
+
+    await settingsCubit.setAppLayout([]);
+    expect(SettingsState.init().appLayout, isEmpty);
+    app.isTv = false;
+    expect(settingsCubit.state.appLayout, withoutHistory);
+  });
+
+  test('TV layout ignores phone-only sections without editing their settings',
+      () async {
+    await settingsCubit.setAppLayout([
+      HomeDataSource.home,
+      HomeDataSource.history,
+      HomeDataSource.downloads,
+      HomeDataSource.playlist,
+    ]);
+    final phoneLayout = settingsCubit.state.appLayout;
+    app.isTv = true;
+    expect(settingsCubit.state.appLayout,
+        [HomeDataSource.history, HomeDataSource.playlist]);
+    await settingsCubit.setAppLayout([HomeDataSource.search]);
+    app.isTv = false;
+    expect(settingsCubit.state.appLayout, phoneLayout);
+    expect(HomeDataSource.history.showOn, HomeDataSourceAppearance.both);
   });
 
   test(

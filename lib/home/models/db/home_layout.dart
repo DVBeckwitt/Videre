@@ -31,7 +31,7 @@ enum HomeDataSource {
   popular(route: PopularRoute()),
   trending(route: TrendingRoute()),
   subscription(route: SubscriptionRoute()),
-  history(showOn: HomeDataSourceAppearance.phone, route: HistoryRoute()),
+  history(route: HistoryRoute()),
   playlist(route: PlaylistsRoute()),
   downloads(showOn: HomeDataSourceAppearance.phone, route: DownloadsRoute()),
   searchHistory(
@@ -51,7 +51,7 @@ enum HomeDataSource {
 
   static List<HomeDataSource> defaultSettings() {
     return isTv
-        ? [search, subscription, playlist, popular, trending]
+        ? [search, subscription, history, playlist, popular, trending]
         : [home, subscription, playlist, history];
   }
 

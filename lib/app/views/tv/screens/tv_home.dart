@@ -19,6 +19,7 @@ import '../../../../player/views/tv/screens/tv_player_view.dart';
 import '../../../../router.dart';
 import '../../../../utils/views/components/app_icon.dart';
 import '../../../../videos/views/components/popular.dart';
+import '../../../../videos/views/tv/screens/history.dart';
 import '../../../states/app.dart';
 
 const overlayBackgroundOpacity = 0.8;
@@ -65,6 +66,11 @@ class TvHomeScreen extends StatelessWidget {
         playlistList: SingleEndpointList(service.getUserPlaylists)));
   }
 
+  void openHistory(BuildContext context) {
+    Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => const TvHistoryScreen()));
+  }
+
   @override
   Widget build(BuildContext context) {
     ColorScheme colors = Theme.of(context).colorScheme;
@@ -104,16 +110,18 @@ class TvHomeScreen extends StatelessWidget {
                           color: homeState
                               ? colors.secondaryContainer.withValues(alpha: 0.5)
                               : Colors.transparent),
-                      child: Padding(
-                          padding: EdgeInsets.only(
-                              top: TvOverscan.vertical,
-                              left: TvOverscan.horizontal,
-                              bottom: TvOverscan.vertical,
-                              right: homeState ? TvOverscan.horizontal : 8),
-                          child: Column(
-                              mainAxisAlignment: MainAxisAlignment.start,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
+                      child: ClipRect(
+                        child: OverflowBox(
+                          alignment: Alignment.centerLeft,
+                          minWidth: homeState ? 250 : 118,
+                          maxWidth: homeState ? 250 : 118,
+                          child: Padding(
+                              padding: EdgeInsets.only(
+                                  top: TvOverscan.vertical,
+                                  left: TvOverscan.horizontal,
+                                  bottom: TvOverscan.vertical,
+                                  right: homeState ? TvOverscan.horizontal : 8),
+                              child: ListView(children: [
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 30.0),
                                   child: SizedBox(
@@ -125,16 +133,19 @@ class TvHomeScreen extends StatelessWidget {
                                             height: 50,
                                           ),
                                           if (homeState)
-                                            Padding(
-                                                padding: const EdgeInsets.only(
-                                                    left: 16.0),
-                                                child: MenuItemText(
-                                                  'Videre',
-                                                  style: textTheme.titleLarge!
-                                                      .copyWith(
-                                                          color:
-                                                              colors.primary),
-                                                ))
+                                            Expanded(
+                                                child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            left: 16.0),
+                                                    child: MenuItemText(
+                                                      'Videre',
+                                                      style: textTheme
+                                                          .titleLarge!
+                                                          .copyWith(
+                                                              color: colors
+                                                                  .primary),
+                                                    )))
                                         ],
                                       )),
                                 ),
@@ -154,6 +165,8 @@ class TvHomeScreen extends StatelessWidget {
                                                   openSearch(context),
                                                 (HomeDataSource.subscription) =>
                                                   openSubscriptions(context),
+                                                (HomeDataSource.history) =>
+                                                  openHistory(context),
                                                 (HomeDataSource.playlist) =>
                                                   openPlaylists(context),
                                                 (HomeDataSource.trending) =>
@@ -177,8 +190,10 @@ class TvHomeScreen extends StatelessWidget {
                                                       child: Icon(e.getIcon()),
                                                     ),
                                                     if (homeState)
-                                                      MenuItemText(
-                                                          e.getLabel(locals))
+                                                      Expanded(
+                                                          child: MenuItemText(
+                                                              e.getLabel(
+                                                                  locals)))
                                                   ],
                                                 ),
                                               ),
@@ -202,8 +217,9 @@ class TvHomeScreen extends StatelessWidget {
                                           padding: EdgeInsets.only(right: 8),
                                           child: Icon(Icons.phonelink)),
                                       if (homeState)
-                                        const MenuItemText(
-                                            'Receive from phone'),
+                                        Expanded(
+                                            child: MenuItemText(
+                                                locals.remoteReceive)),
                                     ]),
                                   ),
                                 ),
@@ -222,12 +238,16 @@ class TvHomeScreen extends StatelessWidget {
                                           child: Icon(Icons.settings),
                                         ),
                                         if (homeState)
-                                          MenuItemText(locals.settings)
+                                          Expanded(
+                                              child:
+                                                  MenuItemText(locals.settings))
                                       ],
                                     ),
                                   ),
                                 )
                               ])),
+                        ),
+                      ),
                     ),
                     Expanded(
                       // terrible work around to be able to scroll to all the global keys
@@ -323,6 +343,8 @@ class MenuItemText extends StatelessWidget {
     return Text(
       text,
       style: style,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
     )
         .animate()
         .fadeIn(

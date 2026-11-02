@@ -133,6 +133,22 @@ void main() {
         target.getSettings(phoneNavigationSettingName)?.value, layout.encode());
   });
 
+  test('TV history opt-out and empty layout survive backup restore', () async {
+    for (final layout in ['search,playlist,trending', 'history,search', '']) {
+      await source.saveSetting(SettingsValue(tvAppLayoutSettingName, layout));
+      await target.restoreBackup(
+          UserBackup.parse((await source.exportBackup()).encode()),
+          replace: true);
+      expect(target.getSettings(tvAppLayoutSettingName)?.value, layout);
+    }
+    for (final invalid in ['history,history', 'search,unknown', 'home', ',']) {
+      expect(
+          UserBackup.validSetting(
+              SettingsValue(tvAppLayoutSettingName, invalid)),
+          isFalse);
+    }
+  });
+
   test('watched subscription visibility survives backup restore', () async {
     for (final value in ['true', 'false']) {
       await source.saveSetting(

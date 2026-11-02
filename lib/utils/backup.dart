@@ -259,6 +259,16 @@ class UserBackup {
         ['system', 'reduced', 'off'].contains(value),
       navigationBarLabelBehaviorSettingName =>
         ['alwaysShow', 'alwaysHide', 'onlyShowSelected'].contains(value),
+      tvAppLayoutSettingName => value.isEmpty ||
+          (value.split(',').toSet().length == value.split(',').length &&
+              value.split(',').every((item) => const {
+                    'popular',
+                    'trending',
+                    'subscription',
+                    'history',
+                    'playlist',
+                    'search'
+                  }.contains(item))),
       appLayoutSettingName =>
         value.split(',').toSet().length == value.split(',').length &&
             value.split(',').every((item) => const {
