@@ -83,6 +83,7 @@ class AppCustomizer extends StatelessWidget {
                 },
                 itemCount: sources.length,
                 onReorder: (oldIndex, newIndex) {
+                  if (newIndex == oldIndex || newIndex == oldIndex + 1) return;
                   final source = sources[oldIndex];
                   final remaining = List.of(state)..remove(source);
                   final target = newIndex == sources.length

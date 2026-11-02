@@ -546,9 +546,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(settings.state.onOpen, 3);
 
-    tester
+    final reorder = tester
         .widget<ReorderableListView>(find.byType(ReorderableListView))
-        .onReorder(2, 0);
+        .onReorder;
+    final originalLayout = settings.state.appLayout;
+    reorder(2, 2);
+    reorder(2, 3);
+    await tester.pumpAndSettle();
+    expect(settings.state.appLayout, originalLayout);
+    expect(settings.state.onOpen, 3);
+
+    reorder(2, 0);
     await tester.pumpAndSettle();
     expect(settings.state.appLayout.first, HomeDataSource.history);
     expect(settings.state.appLayout, contains(HomeDataSource.playlist));
