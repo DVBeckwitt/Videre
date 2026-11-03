@@ -24,7 +24,9 @@ class DownloadedVideoView extends StatelessWidget {
       context: context,
       builder: (ctx) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          if (!video.downloadComplete && !video.downloadFailed)
+          if (!video.downloadComplete &&
+              !video.downloadFailed &&
+              !video.authenticationRequired)
             ListTile(
               leading: Icon(paused ? Icons.play_arrow : Icons.pause),
               title:
@@ -38,10 +40,13 @@ class DownloadedVideoView extends StatelessWidget {
                 }
               },
             ),
-          if (video.downloadFailed)
+          if (video.downloadFailed || video.authenticationRequired)
             ListTile(
               leading: const Icon(Icons.refresh),
               title: Text(locals.retry),
+              subtitle: video.authenticationRequired
+                  ? Text(locals.downloadSignInRequired)
+                  : null,
               onTap: () {
                 Navigator.of(ctx).pop();
                 cubit.retryDownload(video);
@@ -92,17 +97,19 @@ class DownloadedVideoView extends StatelessWidget {
     final progress = state.downloadProgresses[video.videoId];
     final paused = state.pausedVideoIds.contains(video.videoId);
     final pending = !video.downloadComplete && !video.downloadFailed;
-    final status = video.storageFailed
-        ? locals.downloadFolderError
-        : video.downloadFailed
-            ? locals.videoFailedDownloadRetry
-            : paused
-                ? locals.downloadPaused
-                : state.waitingForWifi
-                    ? locals.downloadsWaitingForWifi
-                    : progress == null
-                        ? locals.downloadQueued
-                        : null;
+    final status = video.authenticationRequired
+        ? locals.downloadSignInRequired
+        : video.storageFailed
+            ? locals.downloadFolderError
+            : video.downloadFailed
+                ? locals.videoFailedDownloadRetry
+                : paused
+                    ? locals.downloadPaused
+                    : state.waitingForWifi
+                        ? locals.downloadsWaitingForWifi
+                        : progress == null
+                            ? locals.downloadQueued
+                            : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

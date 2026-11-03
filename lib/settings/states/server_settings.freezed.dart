@@ -15,6 +15,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ServerSettingsState {
   Server get server;
+  bool get authenticating;
   bool get canDelete;
 
   /// Create a copy of ServerSettingsState
@@ -31,16 +32,19 @@ mixin _$ServerSettingsState {
         (other.runtimeType == runtimeType &&
             other is ServerSettingsState &&
             (identical(other.server, server) || other.server == server) &&
+            (identical(other.authenticating, authenticating) ||
+                other.authenticating == authenticating) &&
             (identical(other.canDelete, canDelete) ||
                 other.canDelete == canDelete));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, server, canDelete);
+  int get hashCode =>
+      Object.hash(runtimeType, server, authenticating, canDelete);
 
   @override
   String toString() {
-    return 'ServerSettingsState(server: $server, canDelete: $canDelete)';
+    return 'ServerSettingsState(server: $server, authenticating: $authenticating, canDelete: $canDelete)';
   }
 }
 
@@ -50,7 +54,7 @@ abstract mixin class $ServerSettingsStateCopyWith<$Res> {
           ServerSettingsState value, $Res Function(ServerSettingsState) _then) =
       _$ServerSettingsStateCopyWithImpl;
   @useResult
-  $Res call({Server server, bool canDelete});
+  $Res call({Server server, bool authenticating, bool canDelete});
 
   $ServerCopyWith<$Res> get server;
 }
@@ -69,6 +73,7 @@ class _$ServerSettingsStateCopyWithImpl<$Res>
   @override
   $Res call({
     Object? server = null,
+    Object? authenticating = null,
     Object? canDelete = null,
   }) {
     return _then(_self.copyWith(
@@ -76,6 +81,10 @@ class _$ServerSettingsStateCopyWithImpl<$Res>
           ? _self.server
           : server // ignore: cast_nullable_to_non_nullable
               as Server,
+      authenticating: null == authenticating
+          ? _self.authenticating
+          : authenticating // ignore: cast_nullable_to_non_nullable
+              as bool,
       canDelete: null == canDelete
           ? _self.canDelete
           : canDelete // ignore: cast_nullable_to_non_nullable
@@ -185,13 +194,14 @@ extension ServerSettingsStatePatterns on ServerSettingsState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(Server server, bool canDelete)? $default, {
+    TResult Function(Server server, bool authenticating, bool canDelete)?
+        $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _ServerSettingsState() when $default != null:
-        return $default(_that.server, _that.canDelete);
+        return $default(_that.server, _that.authenticating, _that.canDelete);
       case _:
         return orElse();
     }
@@ -212,12 +222,13 @@ extension ServerSettingsStatePatterns on ServerSettingsState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(Server server, bool canDelete) $default,
+    TResult Function(Server server, bool authenticating, bool canDelete)
+        $default,
   ) {
     final _that = this;
     switch (_that) {
       case _ServerSettingsState():
-        return $default(_that.server, _that.canDelete);
+        return $default(_that.server, _that.authenticating, _that.canDelete);
     }
   }
 
@@ -235,12 +246,13 @@ extension ServerSettingsStatePatterns on ServerSettingsState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(Server server, bool canDelete)? $default,
+    TResult? Function(Server server, bool authenticating, bool canDelete)?
+        $default,
   ) {
     final _that = this;
     switch (_that) {
       case _ServerSettingsState() when $default != null:
-        return $default(_that.server, _that.canDelete);
+        return $default(_that.server, _that.authenticating, _that.canDelete);
       case _:
         return null;
     }
@@ -250,11 +262,17 @@ extension ServerSettingsStatePatterns on ServerSettingsState {
 /// @nodoc
 
 class _ServerSettingsState extends ServerSettingsState {
-  const _ServerSettingsState({required this.server, this.canDelete = false})
+  const _ServerSettingsState(
+      {required this.server,
+      this.authenticating = false,
+      this.canDelete = false})
       : super._();
 
   @override
   final Server server;
+  @override
+  @JsonKey()
+  final bool authenticating;
   @override
   @JsonKey()
   final bool canDelete;
@@ -274,16 +292,19 @@ class _ServerSettingsState extends ServerSettingsState {
         (other.runtimeType == runtimeType &&
             other is _ServerSettingsState &&
             (identical(other.server, server) || other.server == server) &&
+            (identical(other.authenticating, authenticating) ||
+                other.authenticating == authenticating) &&
             (identical(other.canDelete, canDelete) ||
                 other.canDelete == canDelete));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, server, canDelete);
+  int get hashCode =>
+      Object.hash(runtimeType, server, authenticating, canDelete);
 
   @override
   String toString() {
-    return 'ServerSettingsState(server: $server, canDelete: $canDelete)';
+    return 'ServerSettingsState(server: $server, authenticating: $authenticating, canDelete: $canDelete)';
   }
 }
 
@@ -295,7 +316,7 @@ abstract mixin class _$ServerSettingsStateCopyWith<$Res>
       __$ServerSettingsStateCopyWithImpl;
   @override
   @useResult
-  $Res call({Server server, bool canDelete});
+  $Res call({Server server, bool authenticating, bool canDelete});
 
   @override
   $ServerCopyWith<$Res> get server;
@@ -315,6 +336,7 @@ class __$ServerSettingsStateCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   $Res call({
     Object? server = null,
+    Object? authenticating = null,
     Object? canDelete = null,
   }) {
     return _then(_ServerSettingsState(
@@ -322,6 +344,10 @@ class __$ServerSettingsStateCopyWithImpl<$Res>
           ? _self.server
           : server // ignore: cast_nullable_to_non_nullable
               as Server,
+      authenticating: null == authenticating
+          ? _self.authenticating
+          : authenticating // ignore: cast_nullable_to_non_nullable
+              as bool,
       canDelete: null == canDelete
           ? _self.canDelete
           : canDelete // ignore: cast_nullable_to_non_nullable

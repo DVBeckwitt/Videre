@@ -84,6 +84,8 @@ class BackendPlayback {
   bool matches(Server current) =>
       identical(NetworkProxy.instance.config, _proxyConfiguration) &&
       preferredServer.url == current.url &&
+      preferredServer.profileId == current.profileId &&
+      preferredServer.accountId == current.accountId &&
       preferredServer.authToken == current.authToken &&
       preferredServer.sidCookie == current.sidCookie &&
       preferredServer.backendSelector == current.backendSelector &&

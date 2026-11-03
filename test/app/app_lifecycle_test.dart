@@ -37,6 +37,8 @@ class _PendingServerDb extends IDbClient {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('startup finishing after close does not emit into the closed app',
       () async {
     final database = _PendingServerDb();

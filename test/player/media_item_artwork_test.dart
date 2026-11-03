@@ -1,8 +1,14 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
+// ignore: depend_on_referenced_packages
+import 'package:audio_service_platform_interface/audio_service_platform_interface.dart';
+// ignore: depend_on_referenced_packages
+import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -11,10 +17,18 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+
+class _UnusedArtworkCache implements BaseCacheManager {
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Content artwork must not access the file cache');
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -67,7 +81,8 @@ void main() {
 
     expect(item.artUri,
         Uri.parse('https://selected.example/vi/artwork-video/default.jpg'));
-    expect(item.artHeaders, selectedServer.customHeaders);
+    expect(
+        item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
     expect(item.id, 'artwork-video');
     expect(item.title, 'Artwork video');
     expect(item.artist, 'Channel');
@@ -84,7 +99,8 @@ void main() {
     final item = (await controller.getMediaItem(0))!;
 
     expect(item.artUri, Uri.parse('https://metadata.example/ggpht/avatar=s88'));
-    expect(item.artHeaders, metadataServer.customHeaders);
+    expect(
+        item.artHeaders, metadataServer.headersForUrl(item.artUri.toString()));
   });
 
   test('active artwork uses the recovered backend headers', () async {
@@ -103,7 +119,8 @@ void main() {
 
     expect(item.artUri,
         Uri.parse('https://selected.example/vi/artwork-video/default.jpg'));
-    expect(item.artHeaders, recoveredServer.customHeaders);
+    expect(
+        item.artHeaders, recoveredServer.headersForUrl(item.artUri.toString()));
   });
 
   test('unrelated external artwork never receives instance headers', () async {
@@ -133,5 +150,86 @@ void main() {
     expect(item.id, 'artwork-video');
     expect(item.artUri, isNull);
     expect(item.artHeaders, isNull);
+  });
+
+  test('switching people clears native metadata while the session stays idle',
+      () async {
+    const client = MethodChannel('com.ryanheise.audio_service.client.methods');
+    const native = MethodChannel('com.ryanheise.audio_service.handler.methods');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final calls = StreamController<MethodCall>.broadcast();
+    Map<Object?, Object?>? nativeState;
+    Map<Object?, Object?>? nativeItem;
+    Map<Object?, Object?>? stateAtClear;
+    List<Object?>? nativeQueue;
+    messenger.setMockMethodCallHandler(client, (_) async => null);
+    messenger.setMockMethodCallHandler(native, (call) async {
+      final arguments = call.arguments as Map<Object?, Object?>;
+      if (call.method == 'setState') {
+        nativeState = arguments['state'] as Map<Object?, Object?>;
+      } else if (call.method == 'setMediaItem') {
+        nativeItem = arguments['mediaItem'] as Map<Object?, Object?>;
+        if (nativeItem?['id'] == '') stateAtClear = nativeState;
+      } else if (call.method == 'setQueue') {
+        nativeQueue = arguments['queue'] as List<Object?>;
+      }
+      calls.add(call);
+      return null;
+    });
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(client, null);
+      messenger.setMockMethodCallHandler(native, null);
+      await calls.close();
+    });
+    Future<MethodCall> waitForCall(
+            String method, bool Function(MethodCall) matches) =>
+        calls.stream
+            .firstWhere((call) => call.method == method && matches(call))
+            .timeout(const Duration(seconds: 5));
+
+    final controller = createPlayer(const Video(videoId: 'private-video'));
+    AudioServicePlatform.instance = MethodChannelAudioService();
+    final handler = await AudioService.init(
+        builder: () => MediaHandler(controller),
+        cacheManager: _UnusedArtworkCache());
+    final started = waitForCall(
+        'setState', (call) => call.arguments['state']['playing'] == true);
+    final titled = waitForCall('setMediaItem',
+        (call) => call.arguments['mediaItem']['id'] == 'private-video');
+    final queued = waitForCall(
+        'setQueue', (call) => (call.arguments['queue'] as List).isNotEmpty);
+    final privateItem = MediaItem(
+        id: 'private-video',
+        title: 'Private title',
+        artist: 'Private author',
+        album: 'Private album',
+        artUri: Uri.parse('content://private-artwork'));
+    handler.mediaItem.add(privateItem);
+    handler.queue.add([privateItem]);
+    handler.playbackState.add(PlaybackState(
+        processingState: AudioProcessingState.ready, playing: true));
+    await Future.wait([started, titled, queued]);
+
+    final cleared = waitForCall(
+        'setMediaItem', (call) => call.arguments['mediaItem']['id'] == '');
+    final stopped = waitForCall('stopService', (_) => true);
+    final queueCleared = waitForCall(
+        'setQueue', (call) => (call.arguments['queue'] as List).isEmpty);
+    await controller.prepareForProfileSwitch();
+    await Future.wait([cleared, stopped, queueCleared]);
+
+    expect(nativeItem?['id'], '');
+    expect(nativeItem?['title'], '');
+    expect(nativeItem?['artist'], '');
+    expect(nativeItem?['album'], isNull);
+    expect(nativeItem?['artUri'], isNull);
+    expect(nativeItem?['extras'], isNull);
+    expect(nativeQueue, isEmpty);
+    expect(stateAtClear?['processingState'], AudioProcessingState.idle.index);
+    expect(stateAtClear?['playing'], isFalse);
+    expect(nativeState?['processingState'], AudioProcessingState.idle.index);
+    expect(nativeState?['playing'], isFalse);
+    expect(handler.mediaItem.value, isNull);
   });
 }

@@ -47,6 +47,18 @@ class SettingsCubit extends Cubit<SettingsState> {
     onReady();
   }
 
+  Future<void> reloadForProfile() async {
+    if (isClosed) return;
+    EasyDebounce.cancel(_backgroundRestartDebounce);
+    emit(SettingsState.init().copyWith(packageInfo: state.packageInfo));
+    await _getSubscriptionNotification();
+    if (isClosed) return;
+    // Periodic work follows the selected person's notification preference.
+    // Reuse the saved permission decision; switching never prompts for access.
+    await configureBackgroundService(this);
+    await setupTasks(this);
+  }
+
   onReady() async {
     await getPackageInfo();
     await _getSubscriptionNotification();

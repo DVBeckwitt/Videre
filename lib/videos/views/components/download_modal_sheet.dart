@@ -88,60 +88,87 @@ class DownloadModalSheet extends StatelessWidget {
                     ),
                   ],
                 )
-              : Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Column(
+              : state.failed
+                  ? Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8.0),
-                            child: Row(
-                              children: [
-                                Text(locals.quality),
-                                const Gap(10),
-                                DropdownButton<String>(
-                                  value: state.availableQualities
-                                      .map((e) => e.qualityLabel)
-                                      .where((e) => e == state.quality)
-                                      .firstOrNull,
-                                  onChanged: state.audioOnly
-                                      ? null
-                                      : (value) => cubit.setQuality(value),
-                                  items: state.availableQualities
-                                      .map((e) => DropdownMenuItem<String>(
-                                          value: e.qualityLabel,
-                                          child: Text(
-                                              '${e.qualityLabel ?? ''} (~${prettyBytes(double.parse(e.clen))})')))
-                                      .toList(),
-                                ),
-                              ],
-                            ),
+                          Text(locals.itemlistErrorGeneric),
+                          const Gap(8),
+                          FilledButton.icon(
+                            autofocus: true,
+                            onPressed: cubit.init,
+                            icon: const Icon(Icons.refresh),
+                            label: Text(locals.retry),
                           ),
-                          InkWell(
-                            onTap: () => cubit.setAudioOnly(!state.audioOnly),
-                            child: Row(
-                              children: [
-                                Text(locals.videoDownloadAudioOnly),
-                                const Gap(10),
-                                Switch(
-                                  value: state.audioOnly,
-                                  onChanged: cubit.setAudioOnly,
-                                )
-                              ],
-                            ),
-                          ),
-                          IconButton.filledTonal(
-                            onPressed: () => downloadVideo(context, state),
-                            icon: const Icon(Icons.download),
-                          )
                         ],
                       ),
-                    ],
-                  ),
-                ),
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8.0),
+                                child: Row(
+                                  children: [
+                                    Text(locals.quality),
+                                    const Gap(10),
+                                    DropdownButton<String>(
+                                      value: state.availableQualities
+                                          .map((e) => e.qualityLabel)
+                                          .where((e) => e == state.quality)
+                                          .firstOrNull,
+                                      onChanged: state.audioOnly
+                                          ? null
+                                          : (value) => cubit.setQuality(value),
+                                      items: state.availableQualities.map((e) {
+                                        final size = double.tryParse(e.clen);
+                                        return DropdownMenuItem<String>(
+                                            value: e.qualityLabel,
+                                            child: Text(size == null ||
+                                                    !size.isFinite ||
+                                                    size < 0
+                                                ? e.qualityLabel!
+                                                : '${e.qualityLabel} (~${prettyBytes(size)})'));
+                                      }).toList(),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              InkWell(
+                                onTap: state.availableQualities.isEmpty
+                                    ? null
+                                    : () =>
+                                        cubit.setAudioOnly(!state.audioOnly),
+                                child: Row(
+                                  children: [
+                                    Text(locals.videoDownloadAudioOnly),
+                                    const Gap(10),
+                                    Switch(
+                                      value: state.audioOnly,
+                                      onChanged:
+                                          state.availableQualities.isEmpty
+                                              ? null
+                                              : cubit.setAudioOnly,
+                                    )
+                                  ],
+                                ),
+                              ),
+                              IconButton.filledTonal(
+                                onPressed: () => downloadVideo(context, state),
+                                icon: const Icon(Icons.download),
+                              )
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
         );
       }),
     );

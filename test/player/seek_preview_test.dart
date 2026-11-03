@@ -14,6 +14,8 @@ import 'package:clipious/player/views/components/seek_preview.dart';
 import 'package:clipious/player/views/tv/components/player_controls.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/network/gateway_context.dart';
+import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/storyboard.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -30,7 +32,8 @@ import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
 class _SpriteCache extends cache.BaseCacheManager {
-  final requests = <({String url, Map<String, String>? headers})>[];
+  final requests =
+      <({String url, String? key, Map<String, String>? headers})>[];
   bool fail = false;
   final file = MemoryFileSystem.test().file('sprite.png')
     ..writeAsBytesSync(base64Decode(
@@ -41,7 +44,7 @@ class _SpriteCache extends cache.BaseCacheManager {
       {String? key,
       Map<String, String>? headers,
       bool withProgress = false}) async* {
-    requests.add((url: url, headers: headers));
+    requests.add((url: url, key: key, headers: headers));
     if (fail) throw StateError('unavailable storyboard');
     yield cache.FileInfo(file, cache.FileSource.Cache, DateTime.utc(2100), url);
   }
@@ -172,7 +175,14 @@ void main() {
       expect(cacheManager.requests, hasLength(1));
       expect(cacheManager.requests.single.url,
           'https://instance.example/sb/i/id/L2/M0.png');
-      expect(cacheManager.requests.single.headers, server.customHeaders);
+      expect(cacheManager.requests.single.headers, {
+        ...server.customHeaders,
+        gatewayContextHeader: GatewayRequestContext.forAccount(
+                server.profileId, server.accountId, server.url)!
+            .encoded,
+      });
+      expect(cacheManager.requests.single.key,
+          invidiousImageCacheKey(cacheManager.requests.single.url, server));
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }

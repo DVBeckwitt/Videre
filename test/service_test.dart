@@ -8,11 +8,11 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
-import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
+import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -51,47 +51,49 @@ void main() {
   });
 
   group('history synchronization', () {
-    late Level previousLogLevel;
-
-    setUp(() {
-      previousLogLevel = Logger.root.level;
-      Logger.root.level = Level.FINE;
+    test('awaits memberships without manufacturing completed playback',
+        () async {
+      final database = await SembastSqfDb.createInMemory();
+      db = database;
+      await database.upsertServer(const Server(
+          url: 'https://instance.example', authToken: 'test-history-token'));
+      await database.saveProgress(Progress(0.4, 'partial'));
+      final client = MockClient((request) async {
+        expect(request.url.path, '/api/v1/auth/history');
+        expect(request.headers['Authorization'], 'Bearer test-history-token');
+        return http.Response('["first","partial","second"]', 200);
+      });
+      addTearDown(() async {
+        client.close();
+        await database.close();
+      });
+      await Service(httpClient: client).syncHistory();
+      expect(database.getVideoProgress('partial'), 0.4);
+      expect(database.getVideoProgress('first'), 0);
+      expect(WatchRepository(database).isWatched('first'), isTrue);
+      expect(WatchRepository(database).isWatched('partial'), isFalse);
+      expect(WatchRepository(database).isWatched('second'), isTrue);
     });
 
-    tearDown(() => Logger.root.level = previousLogLevel);
-
-    Future<void> waitForHistoryLog(String message) async {
-      await Logger('Service')
-          .onRecord
-          .firstWhere((record) => record.message == message)
-          .timeout(const Duration(seconds: 2));
-    }
-
-    test('awaits every write and preserves existing partial progress',
+    test('failed server pulls preserve local positions and pending intent',
         () async {
-      final database = _HistoryDb();
+      final database = await SembastSqfDb.createInMemory();
       db = database;
-      final completed = waitForHistoryLog('updated watch status of second');
-
-      _HistoryService().syncHistory();
-      await completed;
-
-      expect(database.progress, {'first': 1.0, 'partial': 0.4, 'second': 1.0});
-      expect(database.maxActiveWrites, 1);
-    });
-
-    test('asynchronous storage failures stay inside the sync error handler',
-        () async {
-      final database = _HistoryDb(failWrites: true);
-      db = database;
-      final handled =
-          waitForHistoryLog('failed to sync history, probably not logged in');
-
-      _HistoryService().syncHistory();
-      await handled;
-
-      expect(database.progress, {'partial': 0.4});
-      expect(database.activeWrites, 0);
+      const account =
+          Server(url: 'https://instance.example', authToken: 'token');
+      await database.upsertServer(account);
+      await database.saveProgress(Progress(0.4, 'partial'));
+      final repository = WatchRepository(database);
+      await repository.mark('pending', true, account: account);
+      final client = MockClient((_) async => http.Response('Unavailable', 503));
+      addTearDown(() async {
+        client.close();
+        await database.close();
+      });
+      await Service(httpClient: client).syncHistory();
+      expect(database.getVideoProgress('partial'), 0.4);
+      expect(repository.pending(account.accountId), hasLength(1));
+      expect(repository.syncStatus(account.accountId)?['state'], 'pending');
     });
   });
 
@@ -898,41 +900,4 @@ void main() {
       }
     });
   });
-}
-
-class _HistoryService extends Service {
-  @override
-  Future<List<String>> getUserHistory(int page, int maxResults) async =>
-      ['first', 'partial', 'second'];
-}
-
-class _HistoryDb implements IDbClient {
-  final bool failWrites;
-  final progress = <String, double>{'partial': 0.4};
-  int activeWrites = 0;
-  int maxActiveWrites = 0;
-
-  _HistoryDb({this.failWrites = false});
-
-  @override
-  Future<bool> isLoggedInToCurrentServer() async => true;
-
-  @override
-  double getVideoProgress(String videoId) => progress[videoId] ?? 0;
-
-  @override
-  Future<void> saveProgress(Progress value) async {
-    activeWrites++;
-    if (activeWrites > maxActiveWrites) maxActiveWrites = activeWrites;
-    try {
-      await Future<void>.delayed(Duration.zero);
-      if (failWrites) throw StateError('Storage unavailable');
-      progress[value.videoId] = value.progress;
-    } finally {
-      activeWrites--;
-    }
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }

@@ -113,6 +113,10 @@ class BackendDiscoveryBrowser(private val activity: Activity) {
         }
         val request = Request(result, policy,
             PageArguments(url!!, origin, title!!, help!!, usePage!!, cancel!!, noOptions!!))
+        if (!WebViewBrowserLease.acquire(this)) {
+            result.error("BROWSER_BUSY", null, null)
+            return
+        }
         current = request
         activeOwner = this
         proxyPreferences.registerOnSharedPreferenceChangeListener(proxyChanged)
@@ -315,6 +319,7 @@ class BackendDiscoveryBrowser(private val activity: Activity) {
             // Destroyed WebViews cannot issue new loads. Block future browser
             // sessions until process restart if the global override is unknown.
             proxyCleanupFailed = true
+            WebViewBrowserLease.block()
             request.error = "BROWSER_PROXY_CLEANUP_FAILED"
             complete(request)
         }
@@ -324,6 +329,7 @@ class BackendDiscoveryBrowser(private val activity: Activity) {
         if (current !== request) return
         current = null
         if (activeOwner === this) activeOwner = null
+        WebViewBrowserLease.release(this)
         val error = request.error
         if (error == null) request.result.success(request.value)
         else request.result.error(error, null, null)

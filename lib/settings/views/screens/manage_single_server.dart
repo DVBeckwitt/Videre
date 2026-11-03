@@ -6,6 +6,9 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/settings/states/server_settings.dart';
 import 'package:clipious/settings/views/components/backend_picker.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
+import 'package:clipious/settings/views/components/watch_sync_status.dart';
+import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/string.dart';
 import 'package:settings_ui/settings_ui.dart';
@@ -19,7 +22,7 @@ class ManageSingleServerScreen extends StatelessWidget {
 
   const ManageSingleServerScreen({super.key, required this.server});
 
-  static void showKeyValueDialog(
+  static Future<void> showKeyValueDialog(
     BuildContext context, {
     required String field1Title,
     required String field2Title,
@@ -34,7 +37,7 @@ class ManageSingleServerScreen extends StatelessWidget {
     TextEditingController field1Controller = TextEditingController();
     TextEditingController field2Controller = TextEditingController();
 
-    showDialog(
+    return showDialog<void>(
       animationStyle: AppMotion.dialogStyle(context),
       context: context,
       useRootNavigator: false,
@@ -114,6 +117,7 @@ class ManageSingleServerScreen extends StatelessWidget {
 
   void showLogInWithCookiesDialog(BuildContext context) async {
     var locals = AppLocalizations.of(context)!;
+    var dialogOpen = true;
     showKeyValueDialog(context,
         field1Title: locals.username,
         field2Title: locals.password,
@@ -125,19 +129,35 @@ class ManageSingleServerScreen extends StatelessWidget {
         field2Secret: true,
         okText: locals.ok, onOk: (username, password) async {
       var cubit = context.read<ServerSettingsCubit>();
+      if (cubit.state.authenticating) return;
       try {
         await cubit.logInWithCookie(username, password);
-        if (context.mounted) {
+        if (dialogOpen && context.mounted) {
           Navigator.of(context).pop();
         }
-      } catch (err) {
-        if (context.mounted) {
+      } catch (_) {
+        if (dialogOpen && context.mounted) {
           showAlertDialog(
-              context, locals.error, [Text(locals.wrongUsernamePassword)]);
+              context, locals.error, [Text(locals.accountActionFailed)]);
         }
-        rethrow;
       }
-    });
+    }).whenComplete(() => dialogOpen = false);
+  }
+
+  Future<void> _accountAction(
+      BuildContext context, Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (error) {
+      if (context.mounted) {
+        final locals = AppLocalizations.of(context)!;
+        await showAlertDialog(context, locals.error, [
+          Text(error is GatewayUnsupported
+              ? error.toString()
+              : locals.accountActionFailed)
+        ]);
+      }
+    }
   }
 
   @override
@@ -158,7 +178,7 @@ class ManageSingleServerScreen extends StatelessWidget {
                   (server.sidCookie != null && server.sidCookie!.isNotEmpty);
           return Scaffold(
               appBar: AppBar(
-                title: Text(server.url),
+                title: Text(server.name.isEmpty ? server.url : server.name),
               ),
               backgroundColor: colorScheme.surface,
               body: SafeArea(
@@ -168,9 +188,26 @@ class ManageSingleServerScreen extends StatelessWidget {
                     darkTheme: theme,
                     sections: [
                       SettingsSection(tiles: [
+                        SettingsTile.navigation(
+                          title: Text(locals.accountName),
+                          value: Text(
+                              server.name.isEmpty ? server.url : server.name),
+                          leading: const Icon(Icons.badge_outlined),
+                          onPressed: (context) async {
+                            final name = await showProfileNameDialog(context,
+                                title: locals.accountName,
+                                label: locals.accountName,
+                                initialName: server.name);
+                            if (name != null && context.mounted) {
+                              await _accountAction(
+                                  context, () => cubit.renameAccount(name));
+                            }
+                          },
+                        ),
                         SettingsTile.switchTile(
                           initialValue: server.inUse,
-                          onToggle: cubit.useServer,
+                          onToggle: (value) => _accountAction(
+                              context, () => cubit.useServer(value)),
                           title: Text(locals.useThisServer),
                           enabled: !server.inUse,
                         )
@@ -198,24 +235,36 @@ class ManageSingleServerScreen extends StatelessWidget {
                       SettingsSection(
                           title: Text(locals.authentication),
                           tiles: [
+                            CustomSettingsTile(
+                                child: WatchSyncStatus(account: server)),
+                            SettingsTile.navigation(
+                              leading: const Icon(Icons.shield_outlined),
+                              enabled: !state.authenticating,
+                              title: Text(locals.protectedServerSignIn),
+                              description:
+                                  Text(locals.protectedServerSignInDescription),
+                              onPressed: (context) =>
+                                  _accountAction(context, cubit.logInProtected),
+                            ),
                             SettingsTile(
                               leading: server.authToken?.isNotEmpty ?? false
                                   ? const Icon(Icons.check)
                                   : const Icon(Icons.token),
-                              enabled: !isLoggedIn && !state.hasBasicAuth,
+                              enabled: !state.authenticating &&
+                                  !isLoggedIn &&
+                                  !state.hasBasicAuth,
                               title: Text(locals.tokenLogin),
                               value: Text(server.authToken?.isNotEmpty ?? false
                                   ? locals.loggedIn
                                   : locals.tokenLoginDescription),
-                              onPressed: (context) async {
-                                await cubit.logInWithToken();
-                              },
+                              onPressed: (context) =>
+                                  _accountAction(context, cubit.logInWithToken),
                             ),
                             SettingsTile(
                               leading: server.sidCookie?.isNotEmpty ?? false
                                   ? const Icon(Icons.check)
                                   : const Icon(Icons.cookie_outlined),
-                              enabled: !isLoggedIn,
+                              enabled: !state.authenticating && !isLoggedIn,
                               title: Text(locals.cookieLogin),
                               value: Text(server.sidCookie?.isNotEmpty ?? false
                                   ? locals.loggedIn
@@ -226,7 +275,8 @@ class ManageSingleServerScreen extends StatelessWidget {
                               leading: const Icon(Icons.exit_to_app),
                               enabled: isLoggedIn,
                               title: Text(locals.logout),
-                              onPressed: (context) => cubit.logOut(),
+                              onPressed: (context) =>
+                                  _accountAction(context, cubit.logOut),
                             )
                           ]),
                       SettingsSection(
@@ -273,12 +323,15 @@ class ManageSingleServerScreen extends StatelessWidget {
                       SettingsSection(title: const Text(''), tiles: [
                         SettingsTile(
                           enabled: state.canDelete,
-                          onPressed: (context) async {
+                          onPressed: (context) =>
+                              _accountAction(context, () async {
+                            final route = ModalRoute.of(context);
                             await cubit.deleteServer();
-                            if (context.mounted) {
+                            if (context.mounted &&
+                                (route?.isCurrent ?? false)) {
                               Navigator.of(context).pop();
                             }
-                          },
+                          }),
                           leading: Icon(
                             Icons.delete,
                             color: state.canDelete

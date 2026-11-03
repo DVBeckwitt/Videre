@@ -2,6 +2,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:logging/logging.dart';
 
 import '../backend_selector.dart';
+import '../../../network/gateway_context.dart';
 
 part 'server.freezed.dart';
 
@@ -13,6 +14,10 @@ final _log = Logger('Server');
 sealed class Server with _$Server {
   const factory Server(
       {required String url,
+      @Default('default') String profileId,
+      String? id,
+      @Default('') String name,
+      @Default(false) bool gatewayEnabled,
       String? authToken,
       String? sidCookie,
       @Default({}) Map<String, String> customHeaders,
@@ -26,6 +31,10 @@ sealed class Server with _$Server {
 
   const Server._();
 
+  /// Legacy accounts retain their URL key; new accounts use stable IDs so
+  /// several accounts can share an endpoint without overwriting credentials.
+  String get accountId => id ?? url;
+
   Map<String, String>? headersForUrl(String url) {
     final serverUri = Uri.tryParse(this.url);
     final targetUri = Uri.tryParse(url);
@@ -38,7 +47,14 @@ sealed class Server with _$Server {
         targetUri.port == serverUri.port;
 
     _log.fine('Use server headers: $useHeaders');
-    return useHeaders ? customHeaders : null;
+    return useHeaders
+        ? gatewayContextHeaders(
+            profileId: profileId,
+            accountId: accountId,
+            serverUrl: this.url,
+            targetUrl: url,
+            headers: customHeaders)
+        : null;
   }
 
   factory Server.fromJson(Map<String, Object?> json) => _$ServerFromJson(json);

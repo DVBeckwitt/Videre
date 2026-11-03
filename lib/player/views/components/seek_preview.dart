@@ -55,6 +55,7 @@ class SeekPreview extends StatelessWidget {
   Widget _frame(BuildContext context, StoryboardFrame frame, Server server) {
     final board = frame.storyboard;
     final url = invidiousImageUrl(frame.url, server);
+    final cacheKey = invidiousImageCacheKey(url, server);
     final scale = width / board.width;
     final height = board.height * scale;
     final sheetWidth = width * board.columns;
@@ -62,9 +63,12 @@ class SeekPreview extends StatelessWidget {
     final decodeWidth = math.min(board.width * board.columns,
         (sheetWidth * MediaQuery.devicePixelRatioOf(context)).ceil());
     return Image(
-      key: ValueKey(url),
-      image: ResizeImage.resizeIfNeeded(decodeWidth, null,
-          CachedNetworkImageProvider(url, headers: server.headersForUrl(url))),
+      key: ValueKey(cacheKey),
+      image: ResizeImage.resizeIfNeeded(
+          decodeWidth,
+          null,
+          CachedNetworkImageProvider(url,
+              cacheKey: cacheKey, headers: server.headersForUrl(url))),
       width: sheetWidth,
       height: sheetHeight,
       fit: BoxFit.fitWidth,

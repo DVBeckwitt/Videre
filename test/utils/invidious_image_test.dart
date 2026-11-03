@@ -1,4 +1,5 @@
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/utils/invidious_image.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -100,9 +101,33 @@ void main() {
     );
     final proxied = invidiousImageUrl(
         'https://yt3.googleusercontent.com/avatar', authenticated);
-    expect(authenticated.headersForUrl(proxied), authenticated.customHeaders);
+    expect(authenticated.headersForUrl(proxied), {
+      ...authenticated.customHeaders,
+      gatewayContextHeader: GatewayRequestContext.forAccount(
+              authenticated.profileId,
+              authenticated.accountId,
+              authenticated.url)!
+          .encoded,
+    });
     final external =
         invidiousImageUrl('https://cdn.example/image.jpg', authenticated);
     expect(authenticated.headersForUrl(external), isNull);
+  });
+
+  test('instance image caches are isolated by person and account', () {
+    const url = 'https://instance.example/thumbnail.jpg';
+    const alice = Server(
+        url: 'https://instance.example', profileId: 'alice', id: 'account-a');
+    final bob = alice.copyWith(profileId: 'bob');
+    final otherAccount = alice.copyWith(id: 'account-b');
+    final key = invidiousImageCacheKey(url, alice);
+    expect(key, startsWith('videre-account-image:'));
+    expect(invidiousImageCacheKey(url, alice), key);
+    expect(invidiousImageCacheKey(url, bob), isNot(key));
+    expect(invidiousImageCacheKey(url, otherAccount), isNot(key));
+    expect(key, isNot(contains('alice')));
+    const external = 'https://images.example/thumbnail.jpg';
+    expect(invidiousImageCacheKey(external, alice), external);
+    expect(invidiousImageCacheKey(external, bob), external);
   });
 }

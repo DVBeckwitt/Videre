@@ -5,6 +5,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -264,6 +265,7 @@ void main() {
     expect(native.sources, hasLength(2));
     final first = native.sources.first as UriAudioSource;
     final second = native.sources.last as UriAudioSource;
+    expect(first.headers, preferred.headersForUrl(first.uri.toString()));
     expect(first.headers?['Cookie'], contains('ROUTE=0'));
     expect(second.headers?['Cookie'], contains('ROUTE=1'));
     expect(second.headers?['Cookie'], contains('login=kept'));
@@ -271,8 +273,14 @@ void main() {
     expect(native.sourcePositions,
         [const Duration(seconds: 12), const Duration(seconds: 12)]);
     expect(native.nativePlaying, isTrue);
-    expect(audio.state.video!.backendPlayback!.server.customHeaders,
-        second.headers);
+    final effectiveServer = audio.state.video!.backendPlayback!.server;
+    expect(
+        second.headers, effectiveServer.headersForUrl(second.uri.toString()));
+    expect(second.headers?[gatewayContextHeader], isNotEmpty);
+    expect(effectiveServer.customHeaders,
+        {'Cookie': 'login=kept; ROUTE=1', 'X-Instance': 'kept'});
+    expect(
+        effectiveServer.customHeaders, isNot(contains(gatewayContextHeader)));
     expect((await db.getCurrentlySelectedServer()).customHeaders,
         preferred.customHeaders);
     expect(player.events.where((event) => event.state == MediaState.error),
@@ -478,8 +486,8 @@ void main() {
     final audio = create(native, video: cached);
     await audio.playVideo(false);
 
-    expect((native.sources.single as UriAudioSource).headers,
-        current.customHeaders);
+    final source = native.sources.single as UriAudioSource;
+    expect(source.headers, current.headersForUrl(source.uri.toString()));
     expect(native.playCalls, 1);
     expect(retryService.retryCalls, 0);
     expect(retryService.metadataCalls, 0);

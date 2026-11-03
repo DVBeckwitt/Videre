@@ -55,6 +55,7 @@ class _Service extends Service {
   Future<VideosWithContinuation> getChannelVideos(
           String channelId, String? continuation,
           {bool saveLastSeen = true,
+          Server? serverOverride,
           ChannelSortBy sortBy = ChannelSortBy.newest}) async =>
       VideosWithContinuation([], null);
 

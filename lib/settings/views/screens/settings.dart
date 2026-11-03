@@ -1,4 +1,5 @@
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -71,6 +72,12 @@ class SettingsScreen extends StatelessWidget {
               darkTheme: theme,
               sections: [
                 SettingsSection(tiles: [
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.account_circle_outlined),
+                    title: Text(locals.profiles),
+                    description: Text(locals.profileLibraryHelp),
+                    onPressed: showProfilePicker,
+                  ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.home_outlined),
                     title: Text(locals.browsing),

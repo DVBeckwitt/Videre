@@ -18,6 +18,7 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
 
   MediaPlayerCubit(super.initialState, this.player) {
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
+    player.addBeforeProfileSwitch(stopForProxyChange);
   }
 
   Future<void> _proxyChanging() async {
@@ -31,6 +32,7 @@ abstract class MediaPlayerCubit<T extends MediaPlayerState> extends Cubit<T> {
   @override
   Future<void> close() async {
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
+    player.removeBeforeProfileSwitch(stopForProxyChange);
     await super.close();
   }
 

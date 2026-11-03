@@ -69,6 +69,7 @@ class Thumbnail extends StatelessWidget {
                     final cubit = context.read<ThumbnailCubit>();
 
                     final url = invidiousImageUrl(state.selected!, server);
+                    final cacheKey = invidiousImageCacheKey(url, server);
                     final source = images
                         ?.where((image) => image.url == state.selected)
                         .firstOrNull;
@@ -94,8 +95,8 @@ class Thumbnail extends StatelessWidget {
                     }
 
                     return CachedNetworkImage(
-                      key: ValueKey(url),
-                      cacheKey: url,
+                      key: ValueKey(cacheKey),
+                      cacheKey: cacheKey,
                       httpHeaders: server.headersForUrl(url),
                       memCacheWidth: decodeWidth,
                       memCacheHeight: decodeHeight,

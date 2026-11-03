@@ -16,6 +16,7 @@ T _$identity<T>(T value) => value;
 mixin _$DownloadModalSheetState {
   bool get audioOnly;
   bool get loading;
+  bool get failed;
   List<AdaptiveFormat> get availableQualities;
   String get quality;
 
@@ -35,18 +36,19 @@ mixin _$DownloadModalSheetState {
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
             (identical(other.loading, loading) || other.loading == loading) &&
+            (identical(other.failed, failed) || other.failed == failed) &&
             const DeepCollectionEquality()
                 .equals(other.availableQualities, availableQualities) &&
             (identical(other.quality, quality) || other.quality == quality));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, audioOnly, loading,
+  int get hashCode => Object.hash(runtimeType, audioOnly, loading, failed,
       const DeepCollectionEquality().hash(availableQualities), quality);
 
   @override
   String toString() {
-    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, availableQualities: $availableQualities, quality: $quality)';
+    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, availableQualities: $availableQualities, quality: $quality)';
   }
 }
 
@@ -59,6 +61,7 @@ abstract mixin class $DownloadModalSheetStateCopyWith<$Res> {
   $Res call(
       {bool audioOnly,
       bool loading,
+      bool failed,
       List<AdaptiveFormat> availableQualities,
       String quality});
 }
@@ -78,6 +81,7 @@ class _$DownloadModalSheetStateCopyWithImpl<$Res>
   $Res call({
     Object? audioOnly = null,
     Object? loading = null,
+    Object? failed = null,
     Object? availableQualities = null,
     Object? quality = null,
   }) {
@@ -89,6 +93,10 @@ class _$DownloadModalSheetStateCopyWithImpl<$Res>
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
+              as bool,
+      failed: null == failed
+          ? _self.failed
+          : failed // ignore: cast_nullable_to_non_nullable
               as bool,
       availableQualities: null == availableQualities
           ? _self.availableQualities
@@ -193,7 +201,7 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(bool audioOnly, bool loading,
+    TResult Function(bool audioOnly, bool loading, bool failed,
             List<AdaptiveFormat> availableQualities, String quality)?
         $default, {
     required TResult orElse(),
@@ -201,7 +209,7 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
     final _that = this;
     switch (_that) {
       case _DownloadModalSheetState() when $default != null:
-        return $default(_that.audioOnly, _that.loading,
+        return $default(_that.audioOnly, _that.loading, _that.failed,
             _that.availableQualities, _that.quality);
       case _:
         return orElse();
@@ -223,14 +231,14 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(bool audioOnly, bool loading,
+    TResult Function(bool audioOnly, bool loading, bool failed,
             List<AdaptiveFormat> availableQualities, String quality)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _DownloadModalSheetState():
-        return $default(_that.audioOnly, _that.loading,
+        return $default(_that.audioOnly, _that.loading, _that.failed,
             _that.availableQualities, _that.quality);
     }
   }
@@ -249,14 +257,14 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(bool audioOnly, bool loading,
+    TResult? Function(bool audioOnly, bool loading, bool failed,
             List<AdaptiveFormat> availableQualities, String quality)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _DownloadModalSheetState() when $default != null:
-        return $default(_that.audioOnly, _that.loading,
+        return $default(_that.audioOnly, _that.loading, _that.failed,
             _that.availableQualities, _that.quality);
       case _:
         return null;
@@ -270,6 +278,7 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
   const _DownloadModalSheetState(
       {this.audioOnly = false,
       this.loading = false,
+      this.failed = false,
       final List<AdaptiveFormat> availableQualities = const [],
       this.quality = '720p'})
       : _availableQualities = availableQualities;
@@ -280,6 +289,9 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
   @override
   @JsonKey()
   final bool loading;
+  @override
+  @JsonKey()
+  final bool failed;
   final List<AdaptiveFormat> _availableQualities;
   @override
   @JsonKey()
@@ -311,18 +323,19 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
             (identical(other.loading, loading) || other.loading == loading) &&
+            (identical(other.failed, failed) || other.failed == failed) &&
             const DeepCollectionEquality()
                 .equals(other._availableQualities, _availableQualities) &&
             (identical(other.quality, quality) || other.quality == quality));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, audioOnly, loading,
+  int get hashCode => Object.hash(runtimeType, audioOnly, loading, failed,
       const DeepCollectionEquality().hash(_availableQualities), quality);
 
   @override
   String toString() {
-    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, availableQualities: $availableQualities, quality: $quality)';
+    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, availableQualities: $availableQualities, quality: $quality)';
   }
 }
 
@@ -337,6 +350,7 @@ abstract mixin class _$DownloadModalSheetStateCopyWith<$Res>
   $Res call(
       {bool audioOnly,
       bool loading,
+      bool failed,
       List<AdaptiveFormat> availableQualities,
       String quality});
 }
@@ -356,6 +370,7 @@ class __$DownloadModalSheetStateCopyWithImpl<$Res>
   $Res call({
     Object? audioOnly = null,
     Object? loading = null,
+    Object? failed = null,
     Object? availableQualities = null,
     Object? quality = null,
   }) {
@@ -367,6 +382,10 @@ class __$DownloadModalSheetStateCopyWithImpl<$Res>
       loading: null == loading
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
+              as bool,
+      failed: null == failed
+          ? _self.failed
+          : failed // ignore: cast_nullable_to_non_nullable
               as bool,
       availableQualities: null == availableQualities
           ? _self._availableQualities

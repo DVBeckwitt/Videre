@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -80,7 +82,10 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                           label: locals.refresh,
                           icon: Icons.refresh,
                           onPressed: (_) {
-                            if (!state.loading) list.refreshItems();
+                            if (!state.loading) {
+                              unawaited(service.syncHistory());
+                              list.refreshItems();
+                            }
                           },
                         ),
                       ],

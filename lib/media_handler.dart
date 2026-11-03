@@ -7,7 +7,25 @@ class MediaHandler extends BaseAudioHandler
         SeekHandler {
   final PlayerCubit controller;
 
-  MediaHandler(this.controller);
+  MediaHandler(this.controller) {
+    controller.attachMediaHandler(this);
+  }
+
+  /// Retire the previous person's native session without the closing animation.
+  Future<void> clearSession() async {
+    playbackState.add(PlaybackState());
+    queue.add(const <MediaItem>[]);
+    queueTitle.add('');
+    await playbackState.firstWhere(
+        (state) => state.processingState == AudioProcessingState.idle);
+    // audio_service ignores null metadata at the native boundary. Send an
+    // empty item while idle to clear Android's retained title and artwork and
+    // invalidate any pending artwork fetch from the previous person.
+    const empty = MediaItem(id: '', title: '', artist: '');
+    mediaItem.add(empty);
+    await mediaItem.firstWhere((item) => identical(item, empty));
+    mediaItem.add(null);
+  }
 
   // mix in default seek callback implementations
 

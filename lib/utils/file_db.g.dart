@@ -9,6 +9,9 @@ part of 'file_db.dart';
 FileDbGenericSettings _$FileDbGenericSettingsFromJson(
         Map<String, dynamic> json) =>
     FileDbGenericSettings()
+      ..profileId = json['profileId'] as String? ?? 'default'
+      ..legacyNotificationAccountId =
+          json['legacyNotificationAccountId'] as String?
       ..server = json['server'] == null
           ? null
           : Server.fromJson(json['server'] as Map<String, dynamic>)
@@ -18,6 +21,8 @@ FileDbGenericSettings _$FileDbGenericSettingsFromJson(
 Map<String, dynamic> _$FileDbGenericSettingsToJson(
         FileDbGenericSettings instance) =>
     <String, dynamic>{
+      'profileId': instance.profileId,
+      'legacyNotificationAccountId': instance.legacyNotificationAccountId,
       'server': instance.server,
       'subscriptionNotifications': instance.subscriptionNotifications,
       'locale': instance.locale,

@@ -1034,8 +1034,36 @@ void main() {
 
       expect(
         controller.sources.last.headers,
-        {'X-Proxy-Token': 'service-token'},
+        server.headersForUrl(expected),
       );
+    });
+
+    test(
+        'subtitle requests retain the protected account context and origin boundary',
+        () async {
+      const server = Server(
+          url: 'https://inv.example',
+          id: 'protected-account',
+          gatewayEnabled: true,
+          customHeaders: {'X-Proxy-Token': 'caption-token'});
+      await db.upsertServer(server);
+      await db.useServer(server);
+      const sourceUrl = 'https://r1.googlevideo.com/captioned.mp4';
+      final started = controller.waitForSource(sourceUrl);
+      cubit.switchVideo(Video(videoId: 'caption-context', formatStreams: [
+        _stream(sourceUrl, '360p')
+      ], captions: [
+        Caption('English', 'en', '/captions/en.vtt'),
+        Caption('Untrusted', 'de', 'https://outside.example/captions/de.vtt')
+      ]));
+      await started;
+      final subtitles = controller.sources.last.subtitles!;
+      expect(subtitles.first.headers,
+          server.headersForUrl('https://inv.example/captions/en.vtt'));
+      expect(subtitles.first.headers?['X-Proxy-Token'], 'caption-token');
+      expect(subtitles.first.headers?['X-Videre-Gateway-Context'], isNotEmpty);
+      expect(subtitles.last.headers, isNull);
+      expect(controller.sources.last.headers, isNull);
     });
 
     test('uses quality when optional progressive labels are absent', () async {
@@ -1171,7 +1199,8 @@ void main() {
 
       expect(Uri.parse(controller.sources.last.url).queryParametersAll['sig'],
           ['one', 'two']);
-      expect(controller.sources.last.headers, isNull);
+      expect(controller.sources.last.headers,
+          (await db.getCurrentlySelectedServer()).headersForUrl(expected));
     });
 
     test('defers fallback until exception dispatch finishes', () async {
@@ -1520,7 +1549,7 @@ void main() {
       await started;
       expect(
         controller.sources.last.headers,
-        {'Authorization': 'Basic secret'},
+        authenticatedServer.headersForUrl('https://inv.example/360.mp4'),
       );
       expect(controller.sources.last.resolutions, {
         '360p': 'https://inv.example/360.mp4',

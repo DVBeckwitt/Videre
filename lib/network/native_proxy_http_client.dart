@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'gateway_session_bridge.dart';
 
 /// Bounded JSON/API transport for background engines. Android owns its routing
 /// policy, so a stale worker cannot reset or bypass the foreground proxy.
@@ -47,7 +48,10 @@ class NativeProxyHttpClient extends http.BaseClient {
         'followRedirects': request.followRedirects,
         'maxRedirects': request.maxRedirects,
       });
-    } on PlatformException {
+    } on PlatformException catch (error) {
+      if (error.code == 'GATEWAY_AUTH_REQUIRED') {
+        throw const GatewayAuthenticationRequired();
+      }
       // Platform messages may include URLs or request headers. Keep them out of
       // exceptions logged by service callers and never retry through Dart IO.
       throw http.ClientException('Native proxy request failed.', url);

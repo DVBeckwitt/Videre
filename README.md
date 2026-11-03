@@ -25,6 +25,9 @@ Watch, listen, and download through a public Invidious instance or your own serv
 - **SponsorBlock.** Skip community-marked sponsor segments by default.
 - **Dislike Counts.** Estimates from Return YouTube Dislike, enabled by default.
 - **Local Library.** Save subscriptions, Watch Later, playlists, and history on your device without an account.
+- **People and Accounts.** Keep separate local libraries for each person, with multiple saved accounts on the same instance.
+- **Watched Status.** Mark videos watched or unwatched on phone and TV; signed-in accounts retry pending changes to server history.
+- **Protected Servers.** Sign in through an Authentik gateway with an isolated browser session for each account.
 - **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
 - **Watch Offline.** Video, audio, and playlist downloads on phones and tablets, with pause, resume, retry, and Wi-Fi-only mode.
 - **Saved Playback.** Remember playback positions when reopening videos on phone or TV.
@@ -40,6 +43,10 @@ Also included: searchable transcripts with seek and copy, subtitles, video filte
 3. **Watch.** Find videos, follow channels, or save to Watch Later. No account required.
 
 Add more addresses in **Settings → Manage servers → Add server**. Switch with **Use this server**; saved addresses and per-server logins are retained. Accounts stay with their original instance.
+
+Open **Profiles** from the home screen or Settings to add, rename, or switch people. Your existing library becomes **Default**. Each person has separate history, resume positions, Watch Later, playlists, subscriptions, and downloads. Profiles organize a shared device; they do not require a PIN. Portable JSON backups export the current person's library without saved account credentials.
+
+For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
 
 For playback problems, **Connection help** checks the video API and lets you switch instances or open the video in a browser.
 
@@ -71,9 +78,9 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Download folder.** Choose a folder with **Settings → Download folder** or the folder button in **Downloads**. New downloads use that folder; existing files stay where they are. Videre temporarily assembles media in app storage, then saves the finished file in your chosen folder for offline playback and access from other apps. App storage remains the default. Folder permissions are device-specific and excluded from backups. If removable storage is disconnected or access is revoked, reconnect it or choose the same folder again before retrying. Deleting a download also deletes its saved file; files in a chosen folder otherwise survive uninstalling Videre.
 
-**SOCKS5 / Orbot.** Open **Settings → Network proxy**, select **Use Orbot preset**, and start Orbot with its SOCKS listener enabled. The editable preset is `127.0.0.1:9050`; Orbot VPN mode is not required. Save proxy settings before adding your first server; once a server is selected, use **Test connection**. Applying a change stops playback and pauses unfinished downloads; resume them afterward. Saving unchanged settings does not interrupt them. Internet requests fail when the enabled proxy is unavailable. Browser sign-in uses the browser's connection, and phone/TV remote control stays on the LAN. Native and full-app Orbot playback have been checked on a Pixel 8 Pro; public-instance video availability remains separate. See [coverage and verification limits](./docs/socks-proxy.md).
+**SOCKS5 / Orbot.** Open **Settings → Network proxy**, select **Use Orbot preset**, and start Orbot with its SOCKS listener enabled. The editable preset is `127.0.0.1:9050`; Orbot VPN mode is not required. Save proxy settings before adding your first server; once a server is selected, use **Test connection**. Applying a change stops playback and pauses unfinished downloads; resume them afterward. Saving unchanged settings does not interrupt them. Internet requests fail when the enabled proxy is unavailable. External browser sign-in uses the browser's connection; protected-server sign-in follows the configured proxy and requires WebView proxy-override support. Phone/TV remote control stays on the LAN. Native and full-app Orbot playback have been checked on a Pixel 8 Pro; public-instance video availability remains separate. See [coverage and verification limits](./docs/socks-proxy.md).
 
-**Subscriptions.** Enable **Settings → Browsing → Hide watched subscription videos** to hide videos marked watched (90% played) from subscription feeds, including home sections and TV. Partly watched videos stay visible. Turn the setting off to show everything again. When a page is entirely hidden, use **Load more** to reach older videos. This uses the watch progress stored on this device, including history already synced from your account.
+**Subscriptions.** Enable **Settings → Browsing → Hide watched subscription videos** to hide watched videos from subscription feeds, including home sections and TV. This uses the current person's watched status. Manual choices take priority; local playback counts as watched at 90% completion, and imported server history counts when no local playback state exists. Partly played videos stay visible unless manually marked watched. Turn the setting off to show everything again. When a page is entirely hidden, use **Load more** to reach older videos.
 
 **Phone navigation.** Open the home pencil button → **Navigation**, or **Settings → Browsing → Customize app sections**. Hold and drag items to reorder them or move them between **Bottom tabs**, **Top icons**, and **Hidden**. Tap an item for move options or to choose a startup tab. Changes save automatically and are included in library backups. Keep 2–5 bottom items, including at least one main screen tab; Settings stays available. **Restore default navigation** returns to Home, Subscriptions, History, Search below and Downloads, Queue, Playlists above. Tablet and TV layouts have their own settings.
 

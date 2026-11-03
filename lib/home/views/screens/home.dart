@@ -11,6 +11,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:logging/logging.dart';
@@ -270,6 +271,11 @@ class _MainScreenState extends State<MainContentScreen> {
                         ],
                       ),
                       actions: [
+                        IconButton(
+                          tooltip: locals.profiles,
+                          onPressed: () => showProfilePicker(context),
+                          icon: const Icon(Icons.account_circle_outlined),
+                        ),
                         selectedPage == HomeDataSource.subscription
                             ? IconButton(
                                 onPressed: () =>

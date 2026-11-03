@@ -17,10 +17,13 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   const factory DownloadedVideo(
       {required String videoId,
       required String title,
+      @Default('default') String profileId,
+      String? accountId,
       String? author,
       String? authorUrl,
       @Default(false) bool downloadComplete,
       @Default(false) bool downloadFailed,
+      @Default(false) bool authenticationRequired,
       @Default(false) bool storageFailed,
       String? folderUri,
       String? storageUri,
@@ -78,7 +81,14 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
 
   Future<Directory> _getDownloadFolder() async {
     Directory dir = await getApplicationDocumentsDirectory();
-    dir = Directory(p.join(dir.path, _downloadFolder));
+    if (!isSafeFileId(profileId)) {
+      throw const FormatException('Invalid download profile ID');
+    }
+    // The original person's files retain their historical locations. Other
+    // people get private staging and media paths even for the same video ID.
+    dir = Directory(profileId == 'default'
+        ? p.join(dir.path, _downloadFolder)
+        : p.join(dir.path, _downloadFolder, 'profiles', profileId));
     if (!(await dir.exists())) {
       await dir.create(recursive: true);
     }

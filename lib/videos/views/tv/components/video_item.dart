@@ -159,7 +159,7 @@ class TvVideoItem extends StatelessWidget {
                                                   : [
                                                       if (state.progress >
                                                               0.05 &&
-                                                          state.progress < 1)
+                                                          !state.watched)
                                                         Expanded(
                                                           child: Container(
                                                             margin:
@@ -188,8 +188,7 @@ class TvVideoItem extends StatelessWidget {
                                                               child: Container(
                                                                 decoration:
                                                                     BoxDecoration(
-                                                                  color: state.progress ==
-                                                                          1
+                                                                  color: state.watched
                                                                       ? colors
                                                                           .primaryContainer
                                                                       : colors
@@ -203,7 +202,7 @@ class TvVideoItem extends StatelessWidget {
                                                             ),
                                                           ),
                                                         ),
-                                                      if (state.progress == 1)
+                                                      if (state.watched)
                                                         Container(
                                                           margin:
                                                               const EdgeInsets

@@ -1,4 +1,26 @@
+import 'dart:convert';
+
+import 'package:uuid/uuid.dart';
+
 import '../settings/models/db/server.dart';
+
+/// Private instance images must not reuse another person's cached response.
+String invidiousImageCacheKey(String url, Server server) {
+  final target = Uri.tryParse(url);
+  final origin = Uri.tryParse(server.url);
+  if (target == null ||
+      origin == null ||
+      !const {'http', 'https'}.contains(target.scheme) ||
+      !const {'http', 'https'}.contains(origin.scheme) ||
+      target.origin != origin.origin) {
+    return url;
+  }
+  return 'videre-account-image:${const Uuid().v5(Namespace.url.value, jsonEncode([
+            server.profileId,
+            server.accountId,
+            url
+          ]))}';
+}
 
 /// Routes YouTube artwork through Invidious, independently of the video-stream
 /// and SOCKS proxy settings. Resolve at request time so saved metadata benefits

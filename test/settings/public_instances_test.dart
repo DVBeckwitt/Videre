@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:clipious/globals.dart';
+import 'package:clipious/utils/sembast_sqflite_database.dart';
 
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/settings/states/add_server.dart';
@@ -10,8 +12,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   late AddServerCubit cubit;
-  setUp(() => cubit = AddServerCubit(const AddServerState()));
-  tearDown(() => cubit.close());
+  setUp(() async {
+    db = await SembastSqfDb.createInMemory();
+    cubit = AddServerCubit(const AddServerState());
+  });
+  tearDown(() async {
+    await cubit.close();
+    await db.close();
+  });
 
   Future<void> pumpPicker(
       WidgetTester tester, Future<List<PublicInstance>> Function() loader,

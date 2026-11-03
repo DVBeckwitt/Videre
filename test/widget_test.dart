@@ -13,6 +13,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/expanded_player.dart';
@@ -55,6 +56,12 @@ import 'test_player_cubit.dart';
 import 'test_settings_cubit.dart';
 
 const _instanceHeaders = {'Authorization': 'Basic test'};
+final _instanceRequestHeaders = gatewayContextHeaders(
+    profileId: 'default',
+    accountId: 'https://example.com',
+    serverUrl: 'https://example.com',
+    targetUrl: 'https://example.com',
+    headers: _instanceHeaders);
 late final cache.BaseCacheManager _testDefaultThumbnailCacheManager;
 final _thumbnailTestFile = MemoryFileSystem.test().file('thumbnail.png')
   ..writeAsBytesSync(
@@ -119,7 +126,7 @@ class _TestService extends Service {
   }
 
   @override
-  void syncHistory() {}
+  Future<void> syncHistory() async {}
 
   @override
   Future<bool> isLoggedIn() async => loggedIn;
@@ -146,7 +153,10 @@ class _TestService extends Service {
 
   @override
   Future<UserFeed> getUserFeed(
-      {int? maxResults, int? page, bool saveLastSeen = true}) async {
+      {int? maxResults,
+      int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride}) async {
     feedRequests.add(page ?? 1);
     if (failNextFeed) {
       failNextFeed = false;
@@ -171,6 +181,7 @@ class _TestService extends Service {
   Future<VideosWithContinuation> getChannelVideos(
           String channelId, String? continuation,
           {bool saveLastSeen = true,
+          Server? serverOverride,
           ChannelSortBy sortBy = ChannelSortBy.newest}) async =>
       VideosWithContinuation([], null);
 }
@@ -1371,11 +1382,11 @@ void main() {
     test('returns headers for the exact normalized HTTP origin', () {
       expect(
         server.headersForUrl('https://example.com/video'),
-        equals(_instanceHeaders),
+        equals(_instanceRequestHeaders),
       );
       expect(
         server.headersForUrl('https://EXAMPLE.com:443/video'),
-        equals(_instanceHeaders),
+        equals(_instanceRequestHeaders),
       );
     });
 
@@ -2342,7 +2353,7 @@ void main() {
         for (var index = 0; index < expectedUrls.length; index++) {
           await _pumpUntilRequestCount(tester, cacheManager, index + 1);
           expect(cacheManager.requests[index].url, expectedUrls[index]);
-          expect(cacheManager.requests[index].headers, _instanceHeaders);
+          expect(cacheManager.requests[index].headers, _instanceRequestHeaders);
           cacheManager.failRequest(index);
         }
         await tester.pumpAndSettle();
@@ -2388,7 +2399,8 @@ void main() {
         await _pumpUntilRequestCount(tester, cacheManager, 1);
 
         expect(cacheManager.requests.single.url, maxresUrl);
-        expect(cacheManager.requests.single.headers, equals(_instanceHeaders));
+        expect(cacheManager.requests.single.headers,
+            equals(_instanceRequestHeaders));
         expect(find.byType(CircularProgressIndicator), findsOneWidget);
         final control = find.byKey(const ValueKey('video-thumbnail-control'));
         expect(control, findsOneWidget);
@@ -2403,7 +2415,8 @@ void main() {
           cacheManager.requests.map((request) => request.url),
           [maxresUrl, fallbackUrl],
         );
-        expect(cacheManager.requests.last.headers, equals(_instanceHeaders));
+        expect(cacheManager.requests.last.headers,
+            equals(_instanceRequestHeaders));
         expect(find.byType(CircularProgressIndicator), findsOneWidget);
         expect(control, findsOneWidget);
         await tester.tap(control);

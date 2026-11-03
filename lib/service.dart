@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
@@ -35,6 +36,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:logging/logging.dart';
 import 'package:uuid/uuid.dart';
+import 'package:sembast/sembast.dart';
 
 import 'channels/models/channel.dart';
 import 'channels/models/channel_playlists.dart';
@@ -43,10 +45,15 @@ import 'comments/models/video_comments.dart';
 import 'notifications/models/db/subscription_notifications.dart';
 import 'network/native_proxy_http_client.dart';
 import 'network/origin_scoped_http_client.dart';
+import 'network/gateway_context.dart';
+import 'settings/services/gateway_auth.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
 import 'subscription_management/models/subscription.dart';
 import 'videos/models/sponsor_segment_types.dart';
+import 'videos/services/watch_history.dart';
+import 'utils/interfaces/db.dart';
+import 'utils/sembast_sqflite_database.dart';
 
 const urlGetVideo = '/api/v1/videos/:id';
 const urlGetTranscript = '/api/v1/transcripts/:id';
@@ -88,6 +95,47 @@ class Service {
   final _videoRequests = <String, Future<Response>>{};
   final _browseCache = <String, ({DateTime expires, Response response})>{};
   Future<void> _localPlaylistWrite = Future.value();
+  final Map<String, int> _authenticationAttempts = {};
+  String _accountKey(Server server) =>
+      jsonEncode([server.profileId, server.accountId]);
+  int _beginAuthentication(Server server) => _authenticationAttempts
+      .update(_accountKey(server), (value) => value + 1, ifAbsent: () => 1);
+
+  Future<Server?> _storeCredentials(Server original, int generation,
+      {String? authToken, String? sidCookie, bool? gatewayEnabled}) async {
+    final owner = db.forProfile(original.profileId);
+    bool unchanged(Server? saved) =>
+        saved != null &&
+        saved.url == original.url &&
+        saved.authToken == original.authToken &&
+        saved.sidCookie == original.sidCookie &&
+        (_authenticationAttempts[_accountKey(original)] ?? 0) == generation;
+    Server updated(Server saved) => saved.copyWith(
+        authToken: authToken,
+        sidCookie: sidCookie,
+        gatewayEnabled: gatewayEnabled ?? saved.gatewayEnabled);
+    if (owner is SembastSqfDb) {
+      return owner.db.transaction((txn) async {
+        final record = owner.serversStore.record(original.accountId);
+        final data = await record.get(txn);
+        final saved = data == null ? null : Server.fromJson(data);
+        if (!unchanged(saved)) return null;
+        final result = updated(saved!);
+        await record.put(txn, result.toJson());
+        return result;
+      });
+    }
+    final saved = owner.getAccount(original.accountId);
+    if (!unchanged(saved)) return null;
+    final result = updated(saved!);
+    await owner.upsertServer(result);
+    return result;
+  }
+
+  void clearSessionCaches() {
+    _videoRequests.clear();
+    _browseCache.clear();
+  }
 
   Service(
       {Client? httpClient,
@@ -326,7 +374,15 @@ class Service {
         headers['Content-Type'] = 'application/json';
       }
 
-      return ServerRequest(uri: uri, headers: headers, server: server);
+      return ServerRequest(
+          uri: uri,
+          headers: gatewayContextHeaders(
+              profileId: server.profileId,
+              accountId: server.accountId,
+              serverUrl: server.url,
+              targetUrl: uri.toString(),
+              headers: headers),
+          server: server);
     } catch (err) {
       log.severe('Couldn\'t build url', err);
       rethrow;
@@ -567,28 +623,122 @@ class Service {
     }
   }
 
-  Future<String?> logIn(String serverUrl) async {
-    String url =
-        '$serverUrl/authorize_token?scopes=:feed,:subscriptions*,:playlists*,:history*&callback_url=videre-auth://';
+  Future<String?> logIn(String accountId, {String? profileId}) async {
+    final owner = db.forProfile(profileId ?? db.profileId);
+    final original = owner.getAccount(accountId);
+    if (original == null) {
+      throw InvidiousServiceError('Account no longer exists');
+    }
+    final generation = _beginAuthentication(original);
+    final nonce = const Uuid().v4();
+    final serverUrl = original.url;
+    final callback = Uri(
+        scheme: 'videre-auth',
+        host: 'callback',
+        queryParameters: {'state': nonce});
+    final url =
+        Uri.parse('$serverUrl/authorize_token').replace(queryParameters: {
+      'scopes': ':feed,:subscriptions*,:playlists*,:history*',
+      'callback_url': callback.toString(),
+    }).toString();
     final result = await FlutterWebAuth2.authenticate(
         url: url, callbackUrlScheme: 'videre-auth');
 
-    final token = Uri.parse(result).queryParameters['token'];
+    final returned = Uri.parse(result);
+    if (returned.scheme != callback.scheme ||
+        returned.host != callback.host ||
+        returned.queryParameters['state'] != nonce) {
+      throw InvidiousServiceError('Sign-in returned an unexpected callback');
+    }
+    final token = returned.queryParameters['token'];
 
-    Server? server = db.getServer(serverUrl);
+    Server? server = owner.getAccount(original.accountId);
 
     if (server != null) {
-      server = server.copyWith(authToken: Uri.decodeComponent(token ?? ''));
-
-      await db.upsertServer(server);
-      if (server.inUse) {
-        fileDb.useServer(server);
+      if (_authenticationAttempts[_accountKey(original)] != generation ||
+          server.authToken != original.authToken ||
+          server.sidCookie != original.sidCookie) {
+        throw InvidiousServiceError('This sign-in was superseded');
       }
+      if (token == null || token.isEmpty) {
+        throw InvidiousServiceError('Sign-in did not return an account token');
+      }
+      // queryParameters has already decoded the callback value.
+      server = await _storeCredentials(original, generation, authToken: token);
+      if (server == null) {
+        throw InvidiousServiceError('This sign-in was superseded');
+      }
+      if (server.inUse) {
+        await fileDb.refreshAccount(server);
+      }
+      await syncAccountHistory(server, database: owner, force: true);
 
       return server.authToken;
     } else {
       throw InvidiousServiceError('logging in to deleted server');
     }
+  }
+
+  Future<Server?> authenticateProtected(Server server) async {
+    final token = await GatewayAuth.signIn(server);
+    if (token == null) return null;
+    if (token.isEmpty) {
+      throw InvidiousServiceError(
+          'Protected sign-in did not return an account token');
+    }
+    return server.copyWith(
+        authToken: token, sidCookie: null, gatewayEnabled: true);
+  }
+
+  Future<Server?> logOutProtected(Server server) async {
+    final generation = _beginAuthentication(server);
+    await GatewayAuth.signOut(server);
+    final saved =
+        await _storeCredentials(server, generation, gatewayEnabled: false);
+    if (saved != null && saved.inUse) {
+      await fileDb.refreshAccount(saved);
+    }
+    return saved;
+  }
+
+  Future<Server?> logInAccountWithCookie(
+      Server original, String username, String password) async {
+    final generation = _beginAuthentication(original);
+    final cookie = await loginWithCookies(original.url, username, password,
+        headers: original.headersForUrl(original.url));
+    final saved =
+        await _storeCredentials(original, generation, sidCookie: cookie);
+    if (saved == null) {
+      throw InvidiousServiceError('This sign-in was superseded');
+    }
+    if (saved.inUse) await fileDb.refreshAccount(saved);
+    await syncAccountHistory(saved, force: true);
+    return saved;
+  }
+
+  Future<Server?> logInProtected(Server original) async {
+    final owner = db.forProfile(original.profileId);
+    final generation = _beginAuthentication(original);
+    final authenticated = await authenticateProtected(original);
+    if (authenticated == null) return null;
+    final latest = owner.getAccount(original.accountId);
+    if (latest == null) {
+      await GatewayAuth.signOut(original);
+      throw InvidiousServiceError('Account was removed during sign-in');
+    }
+    if (_authenticationAttempts[_accountKey(original)] != generation ||
+        latest.authToken != original.authToken ||
+        latest.sidCookie != original.sidCookie) {
+      throw InvidiousServiceError('This sign-in was superseded');
+    }
+    final saved = await _storeCredentials(original, generation,
+        authToken: authenticated.authToken, gatewayEnabled: true);
+    if (saved == null) {
+      throw InvidiousServiceError('This sign-in was superseded');
+    }
+    if (saved.inUse) await fileDb.refreshAccount(saved);
+    await syncAccountHistory(saved, database: owner, force: true);
+    return saved;
   }
 
   Map<String, String> getAuthenticationHeaders(Server s) {
@@ -679,14 +829,18 @@ class Service {
   }
 
   Future<UserFeed> getUserFeed(
-      {int? maxResults, int? page, bool saveLastSeen = true}) async {
+      {int? maxResults,
+      int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride}) async {
     // for background service to be able to use
     final req = await buildRequest(urlGetUserFeed,
         query: {
           'max_results': maxResults?.toString(),
           'page': page?.toString()
         },
-        authenticated: true);
+        authenticated: true,
+        serverOverride: serverOverride);
 
     final response = await _get(req);
     var feed = UserFeed.fromJson(handleResponse(response));
@@ -701,7 +855,11 @@ class Service {
       if (videos.isNotEmpty) {
         var toSave = SubscriptionNotification(
             videos.first.videoId, DateTime.now().millisecondsSinceEpoch);
-        await fileDb.setLastSubscriptionNotification(toSave);
+        if (req.server != null) {
+          await fileDb
+              .forAccount(req.server!)
+              .setLastSubscriptionNotification(toSave);
+        }
       }
     }
 
@@ -802,15 +960,23 @@ class Service {
   }
 
   Future<bool> isLoggedIn() async {
-    return await db.isLoggedInToCurrentServer();
+    final owner = db.forProfile(db.profileId);
+    return await _authenticatedAccount(owner) != null;
+  }
+
+  Future<Server?> _authenticatedAccount(IDbClient owner) async {
+    final account = await owner.getCurrentlySelectedServer();
+    return hasHistoryAccount(account) ? account : null;
   }
 
   Future<bool> validateCurrentSession() async {
-    if (!await isLoggedIn()) return false;
-
-    final server = await db.getCurrentlySelectedServer();
+    final owner = db.forProfile(db.profileId);
+    final server = await _authenticatedAccount(owner);
+    if (server == null) return false;
+    final generation = _authenticationAttempts[_accountKey(server)] ?? 0;
     try {
-      final req = await buildRequest(urlGetSubscriptions, authenticated: true);
+      final req = await buildRequest(urlGetSubscriptions,
+          authenticated: true, serverOverride: server);
       final response = await _get(req);
       final subscriptions = handleResponse(response);
       if (subscriptions is! Iterable) {
@@ -823,7 +989,7 @@ class Service {
     } on InvidiousServiceError catch (error, stackTrace) {
       if (!error.isAuthenticationFailure) rethrow;
 
-      await _clearAuthentication(server);
+      await _clearAuthentication(server, generation);
       log.warning(
         'Cleared credentials rejected by the Invidious subscriptions endpoint',
         error,
@@ -845,13 +1011,16 @@ class Service {
     }
   }
 
-  Future<void> _clearAuthentication(Server server) async {
-    final loggedOutServer = server.copyWith(authToken: null, sidCookie: null);
-    await db.upsertServer(loggedOutServer);
+  Future<void> _clearAuthentication(Server server, int generation) async {
+    // A gateway challenge cannot establish that Invidious rejected its token.
+    final gateway = await GatewayAuth.status(server);
+    if (gateway.enabled) return;
+    final loggedOutServer = await _storeCredentials(server, generation);
+    if (loggedOutServer == null) return;
     if (!loggedOutServer.inUse) return;
 
     try {
-      await fileDb.useServer(loggedOutServer);
+      await fileDb.refreshAccount(loggedOutServer);
     } catch (error, stackTrace) {
       log.warning(
         'Failed to mirror invalidated credentials to the file database',
@@ -862,9 +1031,13 @@ class Service {
   }
 
   Future<bool> subscribe(String channelId) async {
-    if (!await isLoggedIn()) return false;
+    final owner = db.forProfile(db.profileId);
+    final account = await _authenticatedAccount(owner);
+    if (account == null) return false;
     final req = await buildRequest(urlAddDeleteSubscriptions,
-        pathParams: {":ucid": channelId}, authenticated: true);
+        pathParams: {":ucid": channelId},
+        authenticated: true,
+        serverOverride: account);
 
     final response = await httpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
@@ -872,10 +1045,14 @@ class Service {
   }
 
   Future<bool> unSubscribe(String channelId) async {
-    if (!await isLoggedIn()) return false;
+    final owner = db.forProfile(db.profileId);
+    final account = await _authenticatedAccount(owner);
+    if (account == null) return false;
 
     final req = await buildRequest(urlAddDeleteSubscriptions,
-        pathParams: {":ucid": channelId}, authenticated: true);
+        pathParams: {":ucid": channelId},
+        authenticated: true,
+        serverOverride: account);
 
     final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
@@ -883,17 +1060,18 @@ class Service {
   }
 
   Future<bool> isSubscribedToChannel(String channelId) async {
-    if (!await isLoggedIn()) return false;
-
     return (await getSubscriptions())
             .indexWhere((element) => element.authorId == channelId) >
         -1;
   }
 
   Future<List<Subscription>> getSubscriptions() async {
-    if (!await isLoggedIn()) return [];
+    final owner = db.forProfile(db.profileId);
+    final account = await _authenticatedAccount(owner);
+    if (account == null) return [];
 
-    var req = await buildRequest(urlGetSubscriptions, authenticated: true);
+    var req = await buildRequest(urlGetSubscriptions,
+        authenticated: true, serverOverride: account);
 
     final response = await _get(req);
     Iterable i = handleResponse(response);
@@ -928,8 +1106,10 @@ class Service {
         (await postProcessVideos(channel.latestVideos ?? [])).cast();
 
     if (channel.latestVideos != null && channel.latestVideos!.isNotEmpty) {
-      await fileDb.setChannelNotificationLastViewedVideo(
-          channel.authorUrl, channel.latestVideos![0].videoId);
+      await fileDb
+          .forAccount(req.server!)
+          .setChannelNotificationLastViewedVideo(
+              channel.authorUrl, channel.latestVideos![0].videoId);
     }
     return channel;
   }
@@ -937,13 +1117,15 @@ class Service {
   Future<VideosWithContinuation> getChannelVideos(
       String channelId, String? continuation,
       {bool saveLastSeen = true,
+      Server? serverOverride,
       ChannelSortBy sortBy = ChannelSortBy.newest}) async {
-    final req = await buildRequest(urlGetChannelVideos, pathParams: {
-      ':id': channelId
-    }, query: {
-      'continuation': continuation,
-      'sort_by': sortBy.name,
-    });
+    final req = await buildRequest(urlGetChannelVideos,
+        pathParams: {':id': channelId},
+        query: {
+          'continuation': continuation,
+          'sort_by': sortBy.name,
+        },
+        serverOverride: serverOverride);
     final response = await _get(req);
 
     var videosWithContinuation =
@@ -952,8 +1134,10 @@ class Service {
         (await postProcessVideos(videosWithContinuation.videos)).cast();
 
     if (saveLastSeen && videosWithContinuation.videos.isNotEmpty) {
-      await fileDb.setChannelNotificationLastViewedVideo(
-          channelId, videosWithContinuation.videos.first.videoId);
+      await fileDb
+          .forAccount(req.server!)
+          .setChannelNotificationLastViewedVideo(
+              channelId, videosWithContinuation.videos.first.videoId);
     }
     return videosWithContinuation;
   }
@@ -985,14 +1169,20 @@ class Service {
   }
 
   Future<List<Playlist>> getUserPlaylists({bool postProcessing = true}) async {
-    var local = getLocalPlaylists();
+    final owner = db.forProfile(db.profileId);
+    // Start the account read before filtering yields so both halves belong to
+    // the same person/account even if the active session changes meanwhile.
+    final pendingAccount = _historyAccount(owner);
+    var local = getLocalPlaylists(database: owner);
     if (postProcessing) {
       local = await Future.wait(local.map((p) async =>
           p.copyWith(videos: await VideoFilter.filterVideos(p.videos))));
     }
     try {
-      if (!await isLoggedIn()) return local;
-      var req = await buildRequest(urlGetUserPlaylists, authenticated: true);
+      final account = await pendingAccount;
+      if (account == null) return local;
+      var req = await buildRequest(urlGetUserPlaylists,
+          authenticated: true, serverOverride: account);
 
       final response = await _get(req);
       Iterable i = handleResponse(response);
@@ -1011,8 +1201,8 @@ class Service {
     }
   }
 
-  List<Playlist> getLocalPlaylists() {
-    final stored = db.getSettings(localPlaylistsSetting)?.value;
+  List<Playlist> getLocalPlaylists({IDbClient? database}) {
+    final stored = (database ?? db).getSettings(localPlaylistsSetting)?.value;
     final playlists = stored == null
         ? <Playlist>[]
         : (jsonDecode(stored) as List)
@@ -1030,13 +1220,15 @@ class Service {
     return playlists;
   }
 
-  Future<void> _updateLocalPlaylists(void Function(List<Playlist>) update) {
+  Future<void> _updateLocalPlaylists(void Function(List<Playlist>) update,
+      {IDbClient? database}) {
+    final owner = database ?? db.forProfile(db.profileId);
     // Serialize saves so two quick additions cannot overwrite each other.
     return _localPlaylistWrite =
         _localPlaylistWrite.catchError((_) {}).then((_) async {
-      final playlists = getLocalPlaylists();
+      final playlists = getLocalPlaylists(database: owner);
       update(playlists);
-      await db.saveSetting(SettingsValue(localPlaylistsSetting,
+      await owner.saveSetting(SettingsValue(localPlaylistsSetting,
           jsonEncode(playlists.map((p) => p.toJson()).toList())));
     });
   }
@@ -1083,14 +1275,17 @@ class Service {
 
   Future<void> addVideoToPlaylist(String playListId, String videoId,
       {Video? video}) async {
+    final owner = db.forProfile(db.profileId);
     if (playListId.startsWith('local:')) {
       final cached = video ??
-          db.getHistoryVideoByVideoId(videoId)?.toVideo() ??
-          getLocalPlaylists()
+          owner.getHistoryVideoByVideoId(videoId)?.toVideo() ??
+          getLocalPlaylists(database: owner)
               .expand((p) => p.videos)
               .where((v) => v.videoId == videoId)
               .firstOrNull;
-      final savedVideo = cached ?? await getVideo(videoId);
+      final savedVideo = cached ??
+          await getVideo(videoId,
+              serverOverride: await owner.getCurrentlySelectedServer());
       await _updateLocalPlaylists((playlists) {
         final index = playlists.indexWhere((p) => p.playlistId == playListId);
         if (index < 0) throw StateError('Playlist no longer exists');
@@ -1112,7 +1307,7 @@ class Service {
         ];
         playlists[index] =
             playlist.copyWith(videos: videos, videoCount: videos.length);
-      });
+      }, database: owner);
       return;
     }
     var req = await buildRequest(urlPostUserPlaylistVideo,
@@ -1164,12 +1359,15 @@ class Service {
   }
 
   Future<List<String>> getUserHistory(int page, int maxResults) async {
-    if (!await _hasHistoryAccount()) {
-      return getLocalHistoryPage(page, maxResults);
+    final owner = db.forProfile(db.profileId);
+    final account = await _historyAccount(owner);
+    if (account == null) {
+      return _localHistoryPage(owner, page, maxResults);
     }
     final req = await buildRequest(urlGetClearHistory,
         query: {'page': page.toString(), 'max_results': maxResults.toString()},
-        authenticated: true);
+        authenticated: true,
+        serverOverride: account);
 
     final response = await _get(req);
     Iterable i = handleResponse(response);
@@ -1177,42 +1375,130 @@ class Service {
     return List<String>.from(i.map((e) => e as String));
   }
 
-  Future<List<String>> getLocalHistoryPage(int page, int maxResults) async => db
-      .getLocalHistory()
-      .skip((page - 1) * maxResults)
-      .take(maxResults)
-      .map((v) => v.videoId)
-      .toList();
+  Future<List<String>> getLocalHistoryPage(int page, int maxResults) async =>
+      _localHistoryPage(db.forProfile(db.profileId), page, maxResults);
 
-  void syncHistory() async {
+  List<String> _localHistoryPage(IDbClient owner, int page, int maxResults) =>
+      owner
+          .getLocalHistory()
+          .skip((page - 1) * maxResults)
+          .take(maxResults)
+          .map((v) => v.videoId)
+          .toList();
+
+  final Map<String, WatchHistorySync> _watchSynchronizers = {};
+
+  bool isVideoWatched(String videoId) =>
+      WatchRepository.forDatabase(db)?.isWatched(videoId) ??
+      db.getVideoProgress(videoId) >= watchedProgressThreshold;
+
+  Future<void> markVideoWatched(Video video, bool watched) async {
+    final database = db.forProfile(db.profileId);
+    final repository = WatchRepository.forDatabase(database);
+    if (repository == null) throw StateError('Watch storage is unavailable');
+    Server? account;
     try {
-      if (await db.isLoggedInToCurrentServer()) {
-        for (final videoId in await getUserHistory(1, 200)) {
-          if (db.getVideoProgress(videoId) != 0) continue;
-          await db.saveProgress(Progress.named(progress: 1, videoId: videoId));
-          log.fine('updated watch status of $videoId');
-        }
-      }
-    } catch (err) {
-      log.fine('failed to sync history, probably not logged in');
+      account = await database.getCurrentlySelectedServer();
+    } catch (_) {
+      // A person's local library also works before an instance is configured.
+    }
+    await repository.mark(video.videoId, watched, account: account);
+    if (account != null) {
+      unawaited(syncAccountHistory(account, database: database, pull: false));
     }
   }
 
-  Future<void> clearUserHistory() async {
-    if (!await _hasHistoryAccount()) return db.clearLocalHistory();
-    var req = await buildRequest(urlGetClearHistory,
-        authenticated: true, forceJson: true);
+  Future<void> syncHistory() async {
+    final database = db.forProfile(db.profileId);
+    try {
+      final account = await database.getCurrentlySelectedServer();
+      await syncAccountHistory(account, database: database);
+    } catch (_) {
+      // Startup without a configured server is an ordinary local-only state.
+    }
+  }
 
-    final response = await httpClient.delete(req.uri, headers: req.headers);
-    handleResponse(response);
+  Future<void> syncAccountHistory(Server account,
+      {IDbClient? database, bool force = false, bool pull = true}) async {
+    final worker = _watchSynchronizer(account, database: database);
+    await worker?.run(account, force: force, pull: pull);
+  }
+
+  WatchHistorySync? _watchSynchronizer(Server account, {IDbClient? database}) {
+    final scoped = (database ?? db).forProfile(account.profileId);
+    if (scoped is! SembastSqfDb || !hasHistoryAccount(account)) return null;
+    final key = '${identityHashCode(scoped.db)}:${account.profileId}';
+    return _watchSynchronizers.putIfAbsent(
+        key,
+        () => WatchHistorySync(
+              repository: WatchRepository(scoped),
+              readPage: (server, page, size) async {
+                final req = await buildRequest(urlGetClearHistory,
+                    query: {'page': '$page', 'max_results': '$size'},
+                    authenticated: true,
+                    serverOverride: server);
+                final response = await _get(req);
+                return List<String>.from(handleResponse(response) as List);
+              },
+              changeHistory: (server, videoId, present) async {
+                final req = await buildRequest(urlAddDeleteHistory,
+                    pathParams: {':id': videoId},
+                    authenticated: true,
+                    forceJson: true,
+                    serverOverride: server);
+                final response = present
+                    ? await httpClient.post(req.uri, headers: req.headers)
+                    : await httpClient.delete(req.uri, headers: req.headers);
+                handleResponse(response);
+              },
+              accountIsCurrent: (server) async {
+                final saved = (await scoped.getServers())
+                    .where(
+                        (candidate) => candidate.accountId == server.accountId)
+                    .firstOrNull;
+                return saved != null &&
+                    saved.url == server.url &&
+                    saved.authToken == server.authToken &&
+                    saved.sidCookie == server.sidCookie &&
+                    mapEquals(saved.customHeaders, server.customHeaders);
+              },
+            ));
+  }
+
+  Future<void> clearUserHistory() async {
+    final owner = db.forProfile(db.profileId);
+    final account = await _historyAccount(owner);
+    if (account == null) return owner.clearLocalHistory();
+    Future<void> deleteRemote() async {
+      final req = await buildRequest(urlGetClearHistory,
+          authenticated: true, forceJson: true, serverOverride: account);
+      final response = await httpClient.delete(req.uri, headers: req.headers);
+      handleResponse(response);
+    }
+
+    final worker = _watchSynchronizer(account, database: owner);
+    if (worker == null) return deleteRemote();
+    await worker.deleteHistory(account, deleteRemote: deleteRemote);
   }
 
   Future<void> deleteFromUserHistory(String videoId) async {
-    if (!await _hasHistoryAccount()) return db.deleteLocalHistory(videoId);
-    var req = await buildRequest(urlAddDeleteHistory,
-        pathParams: {':id': videoId}, authenticated: true, forceJson: true);
-    final response = await httpClient.delete(req.uri, headers: req.headers);
-    handleResponse(response);
+    final owner = db.forProfile(db.profileId);
+    final account = await _historyAccount(owner);
+    if (account == null) return owner.deleteLocalHistory(videoId);
+    Future<void> deleteRemote() async {
+      final req = await buildRequest(urlAddDeleteHistory,
+          pathParams: {':id': videoId},
+          authenticated: true,
+          forceJson: true,
+          serverOverride: account);
+      final response = await httpClient.delete(req.uri, headers: req.headers);
+      handleResponse(response);
+    }
+
+    final worker = _watchSynchronizer(account, database: owner);
+    if (worker == null) return deleteRemote();
+    await worker.deleteHistory(account,
+        videoId: videoId, deleteRemote: deleteRemote);
   }
 
   Future<void> addToUserHistory(String videoId) async {
@@ -1223,19 +1509,23 @@ class Service {
     handleResponse(response);
   }
 
-  Future<bool> _hasHistoryAccount() async {
+  Future<Server?> _historyAccount(IDbClient owner) async {
     try {
-      return await isLoggedIn();
+      return await _authenticatedAccount(owner);
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
   Future<Playlist> getPublicPlaylists(String playlistId,
-      {int? page, bool saveLastSeen = true}) async {
-    if (playlistId.startsWith('local:')) return getUserPlaylist(playlistId);
+      {int? page, bool saveLastSeen = true, Server? serverOverride}) async {
+    if (playlistId.startsWith('local:')) {
+      return getUserPlaylist(playlistId, serverOverride: serverOverride);
+    }
     final req = await buildRequest(urlGetPublicPlaylist,
-        pathParams: {':id': playlistId}, query: {'page': page?.toString()});
+        pathParams: {':id': playlistId},
+        query: {'page': page?.toString()},
+        serverOverride: serverOverride);
 
     final response = await _get(req);
     var playlist = Playlist.fromJson(handleResponse(response));
@@ -1245,24 +1535,31 @@ class Service {
         videos: videos, removedByFilter: oldLength - videos.length);
 
     if (saveLastSeen) {
-      await fileDb.setPlaylistNotificationLastViewedVideo(
-          playlist.playlistId, playlist.videoCount);
+      await fileDb
+          .forAccount(req.server!)
+          .setPlaylistNotificationLastViewedVideo(
+              playlist.playlistId, playlist.videoCount);
     }
 
     return playlist;
   }
 
-  Future<Playlist> getUserPlaylist(String playlistId, {int? page}) async {
+  Future<Playlist> getUserPlaylist(String playlistId,
+      {int? page, Server? serverOverride}) async {
     if (playlistId.startsWith('local:')) {
-      final playlist =
-          getLocalPlaylists().firstWhere((p) => p.playlistId == playlistId);
+      final playlist = getLocalPlaylists(
+              database: serverOverride == null
+                  ? null
+                  : db.forProfile(serverOverride.profileId))
+          .firstWhere((p) => p.playlistId == playlistId);
       return playlist.copyWith(
           videos: await VideoFilter.filterVideos(playlist.videos));
     }
     final req = await buildRequest(urlGetUserPlaylist,
         pathParams: {':id': playlistId},
         query: {'page': page?.toString()},
-        authenticated: true);
+        authenticated: true,
+        serverOverride: serverOverride);
 
     final response = await _get(req);
     var playlist = Playlist.fromJson(handleResponse(response))
@@ -1293,14 +1590,17 @@ class Service {
 
 class ServerRequest {
   final Uri uri;
+  final Server? server;
   final Map<String, String> headers;
   final String _cacheKey;
 
   ServerRequest(
-      {required this.uri, required Map<String, String> headers, Server? server})
+      {required this.uri, required Map<String, String> headers, this.server})
       : headers = Map.unmodifiable(headers),
         _cacheKey = jsonEncode([
           uri.toString(),
+          server?.profileId,
+          server?.accountId,
           server?.authToken,
           server?.sidCookie,
           SplayTreeMap.of({

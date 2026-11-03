@@ -8,6 +8,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/tv_home.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -24,44 +25,50 @@ import '../../../states/app.dart';
 
 const overlayBackgroundOpacity = 0.8;
 const double overlayBlur = 25.0;
-GlobalKey popularTitle = GlobalKey(debugLabel: 'popular title');
-GlobalKey subscriptionTitle = GlobalKey(debugLabel: 'subscription title');
-GlobalKey trendingTitle = GlobalKey(debugLabel: 'trending title');
 
 @RoutePage()
-class TvHomeScreen extends StatelessWidget {
+class TvHomeScreen extends StatefulWidget {
   const TvHomeScreen({super.key});
 
-  openSettings(BuildContext context) {
+  @override
+  State<TvHomeScreen> createState() => _TvHomeScreenState();
+}
+
+class _TvHomeScreenState extends State<TvHomeScreen> {
+  final popularTitle = GlobalKey(debugLabel: 'popular title');
+  final subscriptionTitle = GlobalKey(debugLabel: 'subscription title');
+  final trendingTitle = GlobalKey(debugLabel: 'trending title');
+
+  void openSettings(BuildContext context) {
     AutoRouter.of(context).push(const TVSettingsRoute());
   }
 
-  openPopular(BuildContext context) {
+  void openPopular(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     AutoRouter.of(context).push(TvGridRoute(
         paginatedVideoList: SingleEndpointList(service.getPopular),
         title: locals.popular));
   }
 
-  openTrending(BuildContext context) {
+  void openTrending(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     AutoRouter.of(context).push(TvGridRoute(
         paginatedVideoList: SingleEndpointList(service.getTrending),
         title: locals.trending));
   }
 
-  openSubscriptions(BuildContext context) {
+  void openSubscriptions(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     AutoRouter.of(context).push(TvGridRoute(
         paginatedVideoList: SubscriptionVideoList(),
         title: locals.subscriptions));
   }
 
-  openSearch(BuildContext context) {
+  void openSearch(BuildContext context) {
     AutoRouter.of(context).push(const TvSearchRoute());
   }
 
-  openPlaylists(BuildContext context) {
+  void openPlaylists(BuildContext context) {
     AutoRouter.of(context).push(TvPlaylistGridRoute(
         playlistList: SingleEndpointList(service.getUserPlaylists)));
   }
@@ -201,6 +208,27 @@ class TvHomeScreen extends StatelessWidget {
                                           ),
                                         )
                                         .toList()),
+                                TvButton(
+                                  onFocusChanged:
+                                      homeCubit.menuItemFocusChanged,
+                                  onPressed: (context) =>
+                                      showProfilePicker(context),
+                                  unfocusedColor: Colors.transparent,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Row(children: [
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 8),
+                                        child:
+                                            Icon(Icons.account_circle_outlined),
+                                      ),
+                                      if (homeState)
+                                        Expanded(
+                                            child:
+                                                MenuItemText(locals.profiles)),
+                                    ]),
+                                  ),
+                                ),
                                 TvButton(
                                   onFocusChanged:
                                       homeCubit.menuItemFocusChanged,

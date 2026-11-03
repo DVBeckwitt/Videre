@@ -9,6 +9,7 @@ import 'package:clipious/videos/views/components/download_modal_sheet.dart';
 
 import '../../../main.dart';
 import 'add_to_queue_button.dart';
+import 'watch_status_button.dart';
 
 class VideoModalSheet extends StatelessWidget {
   final Video video;
@@ -76,6 +77,8 @@ class VideoModalSheet extends StatelessWidget {
           runSpacing: 8,
           alignment: WrapAlignment.center,
           children: [
+            WatchStatusButton(
+                video: video, afterChange: () => Navigator.pop(context)),
             AddToPlayListButton(
               videoId: video.videoId,
               video: video,

@@ -9,6 +9,7 @@ import '../globals.dart';
 import '../settings/models/db/settings.dart';
 import 'reloadable_http_client.dart';
 import 'direct_http_client.dart';
+import 'gateway_http_client.dart';
 import 'socks_proxy.dart';
 
 class ProxyTestNeedsServer implements Exception {}
@@ -147,8 +148,9 @@ class NetworkProxy {
     try {
       configureSocksHttpClient(client, config,
           badCertificateCallback: _allowCertificate);
-      final request =
-          await client.getUrl(uri).timeout(const Duration(seconds: 20));
+      final request = await GatewayHttpClient(client)
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 20));
       // This check must validate the selected instance itself. Automatic
       // redirects would forward arbitrary instance access headers off-origin.
       request.followRedirects = false;

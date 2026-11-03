@@ -27,6 +27,9 @@ import '../../downloads/models/downloaded_video.dart';
 import '../../main.dart';
 import '../../media_handler.dart';
 import '../../settings/models/db/settings.dart';
+import '../../settings/models/db/server.dart';
+import '../../utils/interfaces/db.dart';
+import '../../videos/services/watch_history.dart';
 import '../../settings/states/settings.dart';
 import '../../utils/models/pair.dart';
 import '../../videos/models/db/progress.dart' as db_progress;
@@ -60,6 +63,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   String? _speedVideoId;
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
+  late IDbClient _profileDatabase;
+  WatchRepository? _watchRepository;
+  Server? _watchAccount;
+  String? _watchVideoId;
+  int? _watchRevision;
+  bool _switchingProfile = false;
+  MediaHandler? _mediaSessionHandler;
+  final _beforeProfileSwitch = <AsyncCallback>{};
+  Future<void> _watchBinding = Future.value();
   late final AudioSession _audioSession;
   bool _hasAudioSession = false;
   AudioSession get audioSession => _audioSession;
@@ -81,6 +93,16 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// The current user's play/pause intent also applies to a replacement source.
   bool get requestedPlaying => _requestedPlaying ?? state.isPlaying;
 
+  void attachMediaHandler(MediaHandler handler) {
+    _mediaSessionHandler = handler;
+  }
+
+  void addBeforeProfileSwitch(AsyncCallback callback) =>
+      _beforeProfileSwitch.add(callback);
+
+  void removeBeforeProfileSwitch(AsyncCallback callback) =>
+      _beforeProfileSwitch.remove(callback);
+
   /// Changes before a new video's metadata is awaited, invalidating the old
   /// decoder's pending backend recovery as well as its native callbacks.
   int get backendPlaybackGeneration => _videoSwitchGeneration;
@@ -92,6 +114,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   PlayerCubit(super.initialState, this.settings, {bool resume = false})
       : _resumeOnReady = resume {
+    _profileDatabase = db.forProfile(db.profileId);
     // Metadata can be pending before any decoder mounts and registers its own
     // native teardown. The parent must invalidate that pending work as well.
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
@@ -117,8 +140,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     hide();
   }
 
-  PlaybackSession? get savedSession =>
-      PlaybackSession.decode(db.getSettings(playbackSessionSetting)?.value);
+  PlaybackSession? get savedSession => PlaybackSession.decode(
+      _profileDatabase.getSettings(playbackSessionSetting)?.value);
 
   @override
   void onChange(Change<PlayerState> change) {
@@ -149,7 +172,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final id = snapshot.currentlyPlaying?.videoId ??
         snapshot.offlineCurrentlyPlaying?.videoId;
     if (id == null || _sessionOwner != this) return _sessionWrite;
-    final database = db;
+    final database = _profileDatabase;
+    final watchRepository = _watchRepository;
+    final watchRevision = _watchRevision;
     final setting = SettingsValue(
         playbackSessionSetting,
         PlaybackSession(
@@ -165,7 +190,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         ).encode());
     // An older TV screen may close after its replacement has begun playing.
     return _sessionWrite = _sessionWrite.then((_) async {
-      if (_sessionOwner == this) await database.saveSetting(setting);
+      if (_sessionOwner == this) {
+        if (watchRepository != null && watchRevision != null) {
+          await watchRepository.saveSessionIfCurrent(
+              id, watchRevision, setting);
+        } else {
+          await database.saveSetting(setting);
+        }
+      }
     }).catchError((Object error) {
       log.warning('Could not save playback session', error);
     });
@@ -175,7 +207,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final saved = savedSession;
     if (saved == null) return;
     final offline = saved.offlineIds
-        .map(db.getDownloadByVideoId)
+        .map(_profileDatabase.getDownloadByVideoId)
         .whereType<DownloadedVideo>()
         .where((v) => v.downloadComplete)
         .toList();
@@ -337,7 +369,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void setEvent(MediaEvent event) {
-    if (isClosed || _isDisposing || state.isClosing) return;
+    if (isClosed || _isDisposing || _switchingProfile || state.isClosing)
+      return;
     // The previous decoder can still emit while replacement metadata loads.
     if (_backendSwitchPending && event.type != MediaEventType.backendRetry) {
       return;
@@ -374,6 +407,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (lifecycle == AppLifecycleState.resumed) {
       // AudioService can outlive the Activity that held these parameters.
       unawaited(_updateAutoPip(state));
+      if (!_switchingProfile) unawaited(service.syncHistory());
     } else {
       unawaited(_saveSession(state));
     }
@@ -665,7 +699,89 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   double get getBottom => state.isHidden ? -targetHeight : 0;
 
+  /// Save under the old person before the application selects the new one.
+  /// Clear immediately: an animation callback must never clear the next queue.
+  Future<void> prepareForProfileSwitch() async {
+    if (isClosed) return;
+    pause();
+    final saved = _saveSession(state);
+    _switchingProfile = true;
+    _progressGeneration++;
+    _videoSwitchGeneration++;
+    _requestedBackendVideoId = null;
+    _backendSwitchPending = false;
+    _manualSelectionPending = false;
+    _clearBackendProgress();
+    cancelSleep();
+    _pitchVideoId = null;
+    _speedVideoId = null;
+    // Invoke teardown before the empty state removes the decoder widgets.
+    // Its synchronous prefix invalidates setup; await native stop below.
+    final stopping = Future.wait(
+        List.of(_beforeProfileSwitch).map((callback) => callback()));
+    // Late decoder events are blocked above. Publish idle explicitly because
+    // the UI can dispose before its queued pause event reaches AudioService.
+    final clearingSession = _mediaSessionHandler?.clearSession();
+    emit(PlayerState.init(null));
+    await Future.wait(
+        [saved, stopping, if (clearingSession != null) clearingSession]);
+    if (_sessionOwner == this) _sessionOwner = null;
+    if (_hasAudioSession) await audioSession.setActive(false);
+    await _updateAutoPip(state, disable: true);
+    _watchRepository = null;
+    _watchAccount = null;
+    _watchVideoId = null;
+    _watchRevision = null;
+  }
+
+  Future<void> reloadForProfile() async {
+    if (isClosed) return;
+    _profileDatabase = db.forProfile(db.profileId);
+    _watchBinding = Future.value();
+    _switchingProfile = false;
+    restoreSession();
+  }
+
+  Future<void> _bindWatchSession(String videoId, {bool intentional = false}) {
+    final database = _profileDatabase;
+    final generation = _videoSwitchGeneration;
+    final binding = _watchBinding.then((_) async {
+      if (_switchingProfile ||
+          generation != _videoSwitchGeneration ||
+          isClosed) {
+        return;
+      }
+      if (!intentional && _watchVideoId == videoId) return;
+      final repository = WatchRepository.forDatabase(database);
+      Server? account;
+      try {
+        account = await database.getCurrentlySelectedServer();
+      } catch (_) {
+        // Offline/local playback does not require a configured server.
+      }
+      if (_switchingProfile ||
+          generation != _videoSwitchGeneration ||
+          isClosed) {
+        return;
+      }
+      final revision = await repository?.beginPlayback(videoId);
+      if (_switchingProfile ||
+          generation != _videoSwitchGeneration ||
+          isClosed) {
+        return;
+      }
+      _watchRepository = repository;
+      _watchAccount = account;
+      _watchVideoId = videoId;
+      _watchRevision = revision;
+    });
+    // A temporary storage failure must not poison every later playback attempt.
+    _watchBinding = binding.then<void>((_) {}, onError: (Object _) {});
+    return binding;
+  }
+
   Future<void> saveProgress(int timeInSeconds) async {
+    if (_switchingProfile) return;
     final videoId = state.currentlyPlaying?.videoId ??
         state.offlineCurrentlyPlaying?.videoId;
     final length = state.currentlyPlaying?.lengthSeconds ??
@@ -682,15 +798,28 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       var progress = db_progress.Progress.named(
           progress: currentProgress, videoId: videoId);
 
-      await db.saveProgress(progress);
-
-      if (progress.progress > 0.1) {
-        EasyThrottle.throttle('invidious-progress-sync-${progress.videoId}',
-            const Duration(minutes: 10), () async {
-          if (await service.isLoggedIn()) {
-            service.addToUserHistory(progress.videoId);
-          }
-        });
+      final generation = _progressGeneration;
+      await _bindWatchSession(videoId);
+      if (_switchingProfile ||
+          generation != _progressGeneration ||
+          _watchVideoId != videoId) return;
+      final repository = _watchRepository;
+      final revision = _watchRevision;
+      final database = _profileDatabase;
+      final account = _watchAccount;
+      if (repository != null && revision != null) {
+        final accepted = await repository.recordPlayback(
+            videoId, currentProgress, revision,
+            account: account);
+        if (accepted &&
+            account != null &&
+            progress.progress > 0.1 &&
+            repository.pending(account.accountId).isNotEmpty) {
+          unawaited(service.syncAccountHistory(account,
+              database: database, pull: false));
+        }
+      } else {
+        await database.saveProgress(progress);
       }
     }
   }
@@ -734,7 +863,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> onProgress(Duration? position) async {
-    if (isClosed) return;
+    if (isClosed || _switchingProfile) return;
     final generation = _progressGeneration;
     final videoId = state.currentlyPlaying?.videoId ??
         state.offlineCurrentlyPlaying?.videoId;
@@ -934,7 +1063,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       {Duration? startAt,
       bool? playing,
       BackendPlayback? backendRequest}) async {
-    if (isClosed) return;
+    if (isClosed || _switchingProfile) return;
     _requestedPlaying = playing;
     final generation = ++_videoSwitchGeneration;
     bool active() => !isClosed && generation == _videoSwitchGeneration;
@@ -1024,7 +1153,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final length = currentlyPlaying?.lengthSeconds ??
           offlineCurrentlyPlaying?.lengthSeconds ??
           0;
-      final progress = db.getVideoProgress(video.videoId);
+      await _bindWatchSession(video.videoId,
+          intentional: backendRequest == null);
+      if (!active() || _switchingProfile) return;
+      final progress = _profileDatabase.getVideoProgress(video.videoId);
       final resumeAt = startAt ??
           Duration(seconds: progress < 0.9 ? (length * progress).floor() : 0);
       _sessionOwner = this;
@@ -1046,7 +1178,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       unawaited(_saveSession(state));
 
       if (currentlyPlaying != null) {
-        await db.upsertHistoryVideo(HistoryVideoCache(
+        await _profileDatabase.upsertHistoryVideo(HistoryVideoCache(
             currentlyPlaying.videoId,
             currentlyPlaying.title ?? '',
             currentlyPlaying.author,
@@ -1164,6 +1296,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> playOfflineVideos(List<DownloadedVideo> offlineVids) async {
+    if (_switchingProfile ||
+        offlineVids.any(
+            (video) => video.profileId != _profileDatabase.profileId)) return;
     _requestedPlaying = null;
     log.fine('Playing ${offlineVids.length} offline videos');
     await _playVideos(offlineVids);
@@ -1182,6 +1317,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> switchToOfflineVideo(DownloadedVideo video) async {
+    if (video.profileId != _profileDatabase.profileId) return;
     await _switchToVideo(video);
   }
 
@@ -1194,6 +1330,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void play() {
+    if (_switchingProfile || isClosed || _isDisposing) return;
     _requestedPlaying = true;
     final recovery = state.backendRecovery;
     emit(state.copyWith(

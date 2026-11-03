@@ -8,6 +8,10 @@ part of 'server.dart';
 
 _Server _$ServerFromJson(Map<String, dynamic> json) => _Server(
       url: json['url'] as String,
+      profileId: json['profileId'] as String? ?? 'default',
+      id: json['id'] as String?,
+      name: json['name'] as String? ?? '',
+      gatewayEnabled: json['gatewayEnabled'] as bool? ?? false,
       authToken: json['authToken'] as String?,
       sidCookie: json['sidCookie'] as String?,
       customHeaders: (json['customHeaders'] as Map<String, dynamic>?)?.map(
@@ -20,6 +24,10 @@ _Server _$ServerFromJson(Map<String, dynamic> json) => _Server(
 
 Map<String, dynamic> _$ServerToJson(_Server instance) => <String, dynamic>{
       'url': instance.url,
+      'profileId': instance.profileId,
+      'id': instance.id,
+      'name': instance.name,
+      'gatewayEnabled': instance.gatewayEnabled,
       'authToken': instance.authToken,
       'sidCookie': instance.sidCookie,
       'customHeaders': instance.customHeaders,

@@ -24,6 +24,7 @@ import '../notifications/models/db/channel_notifications.dart';
 import '../notifications/models/db/playlist_notifications.dart';
 import '../notifications/models/db/subscription_notifications.dart';
 import '../settings/models/db/server.dart';
+import '../settings/models/errors/no_server_selected.dart';
 import 'interfaces/db.dart';
 
 part 'file_db.g.dart';
@@ -37,6 +38,8 @@ const _subNotifsFile = 'subscription_notifications.json',
     _channelNotifFile = 'channel_notifications.json',
     _playlistNotifsFile = "playlist_notifications.json",
     _genericSettings = "generic_settings.json",
+    _profileSettings = 'profile_settings.json',
+    _notificationCursors = 'notification_cursors.json',
     _fileDbFolder = 'fileDb';
 const _fileNotFoundErrorCode = 2;
 
@@ -47,7 +50,80 @@ class FileDB extends IDbClient {
   // files through atomic replacement; this is not a cross-isolate write lock.
   static final _pendingUpdates = <String, Future<void>>{};
 
-  FileDB();
+  final String? _fixedProfileId;
+  final Server? _fixedAccount;
+  String _lastProfileId = 'default';
+
+  FileDB()
+      : _fixedProfileId = null,
+        _fixedAccount = null;
+
+  FileDB._forProfile(String id, {Server? account})
+      : _fixedProfileId = id,
+        _fixedAccount = account {
+    if (id.isEmpty || id.length > 128) {
+      throw ArgumentError.value(id, 'id', 'Invalid profile ID');
+    }
+  }
+
+  @override
+  String get profileId => _fixedProfileId ?? _lastProfileId;
+
+  @override
+  FileDB forProfile(String id) => FileDB._forProfile(id);
+
+  /// Freeze both ownership and credentials for a background operation.
+  FileDB forAccount(Server server) =>
+      FileDB._forProfile(server.profileId, account: server);
+
+  String _profilePath(String name, String id) => id == 'default'
+      ? name
+      : '${base64Url.encode(utf8.encode(id)).replaceAll('=', '')}.$name';
+
+  Future<String> _selectedProfileId() async {
+    if (_fixedProfileId != null) return _fixedProfileId;
+    final settings =
+        await _readGenericSettings(await _openAppFile(_genericSettings));
+    _lastProfileId = settings.profileId;
+    return settings.profileId;
+  }
+
+  Future<void> _updateProfileFile(
+      String path, Future<void> Function(File) update) async {
+    final id = await _selectedProfileId();
+    await _updateFile(_profilePath(path, id), update);
+  }
+
+  @override
+  Future<void> useProfile(String id) {
+    if (id.isEmpty || id.length > 128) {
+      throw ArgumentError.value(id, 'id', 'Invalid profile ID');
+    }
+    if (_fixedProfileId != null) {
+      if (_fixedProfileId != id) {
+        throw StateError('A fixed profile view cannot switch profiles');
+      }
+      return Future.value();
+    }
+    return _updateFile(_genericSettings, (file) async {
+      final current = await _readGenericSettings(file);
+      await _writeMapToFile(
+          await _openAppFile(_profilePath(_profileSettings, current.profileId)),
+          current.toJson());
+      final selected =
+          current.profileId == id ? current : await _readProfileSettings(id);
+      await _writeMapToFile(file, selected.toJson());
+      _lastProfileId = id;
+    });
+  }
+
+  Future<FileDbGenericSettings> _readProfileSettings(String id) async {
+    final settings = await _readGenericSettings(
+        await _openAppFile(_profilePath(_profileSettings, id)));
+    settings.profileId = id;
+    if (settings.server?.profileId != id) settings.server = null;
+    return settings;
+  }
 
   Future<void> setSubscriptionNotifications(bool b) => _updateGenericSettings(
       (settings) => settings.subscriptionNotifications = b);
@@ -64,43 +140,118 @@ class FileDB extends IDbClient {
   }
 
   Future<void> updateGenericSettings(FileDbGenericSettings settings) =>
-      _updateFile(
-          _genericSettings, (file) => _writeMapToFile(file, settings.toJson()));
+      forProfile(settings.profileId)._updateGenericSettings((current) {
+        current.server = settings.server;
+        current.subscriptionNotifications = settings.subscriptionNotifications;
+        current.locale = settings.locale;
+      });
 
   Future<void> _updateGenericSettings(
           FutureOr<void> Function(FileDbGenericSettings) update) =>
       _updateFile(_genericSettings, (file) async {
-        final settings = await _readGenericSettings(file);
+        final active = await _readGenericSettings(file);
+        final id = _fixedProfileId ?? active.profileId;
+        final settings =
+            id == active.profileId ? active : await _readProfileSettings(id);
         await update(settings);
-        await _writeMapToFile(file, settings.toJson());
+        settings.profileId = id;
+        if (settings.server?.profileId != id) settings.server = null;
+        await _writeMapToFile(
+            await _openAppFile(_profilePath(_profileSettings, id)),
+            settings.toJson());
+        if (id == active.profileId) {
+          await _writeMapToFile(file, settings.toJson());
+          _lastProfileId = id;
+        }
       });
 
   Future<FileDbGenericSettings> getGenericSettings() async {
-    return _readGenericSettings(await _openAppFile(_genericSettings));
+    final active =
+        await _readGenericSettings(await _openAppFile(_genericSettings));
+    _lastProfileId = active.profileId;
+    if (_fixedProfileId != null && _fixedProfileId != active.profileId) {
+      final settings = await _readProfileSettings(_fixedProfileId);
+      if (_fixedAccount != null) settings.server = _fixedAccount;
+      return settings;
+    }
+    if (active.server?.profileId != active.profileId) active.server = null;
+    if (_fixedAccount != null) active.server = _fixedAccount;
+    return active;
   }
 
   Future<FileDbGenericSettings> _readGenericSettings(File file) async {
     var content = await _readFileAsMap(file);
     if (content.isNotEmpty) {
-      return FileDbGenericSettings.fromJson(content);
+      final settings = FileDbGenericSettings.fromJson(content);
+      // Existing notification files belong to the legacy selected account,
+      // not to every account subsequently added to the Default person.
+      if (!content.containsKey('legacyNotificationAccountId') &&
+          settings.profileId == 'default' &&
+          settings.server != null &&
+          settings.server!.id == null) {
+        settings.legacyNotificationAccountId = settings.server!.accountId;
+      }
+      return settings;
     } else {
       return FileDbGenericSettings();
     }
   }
 
-  Future<SubscriptionNotification?> getLastSubscriptionNotification() async {
-    File f = await _openAppFile(_subNotifsFile);
-    var content = await _readFileAsMap(f);
-    if (content.isNotEmpty) {
-      return SubscriptionNotification.fromJson(content);
-    } else {
-      return null;
-    }
+  Future<_NotificationContext> _notificationContext() async {
+    final settings = await getGenericSettings();
+    return _NotificationContext(settings.profileId, settings.server?.accountId,
+        settings.legacyNotificationAccountId);
   }
 
-  Future<void> setLastSubscriptionNotification(SubscriptionNotification sub) =>
-      _updateFile(
-          _subNotifsFile, (file) => _writeMapToFile(file, sub.toJson()));
+  Future<Map<String, dynamic>> _accountCursors(
+      _NotificationContext context) async {
+    final contents = await _readFileAsMap(await _openAppFile(
+        _profilePath(_notificationCursors, context.profileId)));
+    final account = contents[context.accountKey];
+    return account is Map ? Map<String, dynamic>.from(account) : {};
+  }
+
+  Future<void> _updateCursors(_NotificationContext context,
+          void Function(Map<String, dynamic>) update) =>
+      _updateFile(_profilePath(_notificationCursors, context.profileId),
+          (file) async {
+        final contents = await _readFileAsMap(file);
+        final existing = contents[context.accountKey];
+        final account = existing is Map
+            ? Map<String, dynamic>.from(existing)
+            : <String, dynamic>{};
+        update(account);
+        contents[context.accountKey] = account;
+        await _writeMapToFile(file, contents);
+      });
+
+  Map<String, dynamic> _cursorSection(
+          Map<String, dynamic> account, String section) =>
+      account[section] is Map
+          ? Map<String, dynamic>.from(account[section] as Map)
+          : {};
+
+  Future<SubscriptionNotification?> getLastSubscriptionNotification() async {
+    final context = await _notificationContext();
+    final account = await _accountCursors(context);
+    final cursor = account['subscription'];
+    if (cursor is Map) {
+      return SubscriptionNotification.fromJson(
+          Map<String, dynamic>.from(cursor));
+    }
+    if (!context.useLegacyCursors) return null;
+    final content = await _readFileAsMap(
+        await _openAppFile(_profilePath(_subNotifsFile, context.profileId)));
+    return content.isEmpty ? null : SubscriptionNotification.fromJson(content);
+  }
+
+  Future<void> setLastSubscriptionNotification(
+      SubscriptionNotification sub) async {
+    final context = await _notificationContext();
+    await _updateCursors(context, (account) {
+      account['subscription'] = sub.toJson();
+    });
+  }
 
   Future<ChannelNotification?> getChannelNotification(String channelId) async {
     return (await getAllChannelNotifications())
@@ -108,32 +259,65 @@ class FileDB extends IDbClient {
   }
 
   Future<List<ChannelNotification>> getAllChannelNotifications() async {
-    File f = await _openAppFile(_channelNotifFile);
-    var contents = await _readFileAsMap(f);
-    return contents.values.map((e) => ChannelNotification.fromJson(e)).toList();
+    final context = await _notificationContext();
+    final contents = await _readFileAsMap(
+        await _openAppFile(_profilePath(_channelNotifFile, context.profileId)));
+    final cursors = _cursorSection(await _accountCursors(context), 'channels');
+    return contents.values.map((value) {
+      final notification = ChannelNotification.fromJson(value);
+      final cursor = cursors[notification.channelId];
+      if (cursor is Map) {
+        notification.lastSeenVideoId = cursor['lastSeenVideoId'] as String;
+        notification.timestamp = cursor['timestamp'] as int;
+      } else if (!context.useLegacyCursors ||
+          (value as Map).containsKey('cursorAccountId')) {
+        notification.lastSeenVideoId = '';
+        notification.timestamp = 0;
+      }
+      return notification;
+    }).toList();
   }
 
   Future<void> deleteChannelNotification(ChannelNotification notif) =>
       _updateFileMap(_channelNotifFile,
           (contents) => contents.remove(notif.channelId) != null);
 
-  Future<void> upsertChannelNotification(ChannelNotification notif) =>
-      _updateFileMap(_channelNotifFile, (contents) {
-        contents[notif.channelId] = notif.toJson();
-        return true;
-      });
+  Future<void> upsertChannelNotification(ChannelNotification notif) async {
+    final context = await _notificationContext();
+    await _updateFile(_profilePath(_channelNotifFile, context.profileId),
+        (file) async {
+      final contents = await _readFileAsMap(file);
+      final previous = contents[notif.channelId];
+      contents[notif.channelId] = previous is Map
+          ? {...previous, 'channelName': notif.channelName}
+          : {...notif.toJson(), 'cursorAccountId': context.accountKey};
+      await _writeMapToFile(file, contents);
+    });
+    await _updateCursors(context, (account) {
+      final channels = _cursorSection(account, 'channels');
+      channels[notif.channelId] = {
+        'lastSeenVideoId': notif.lastSeenVideoId,
+        'timestamp': notif.timestamp
+      };
+      account['channels'] = channels;
+    });
+  }
 
   Future<void> setChannelNotificationLastViewedVideo(
-          String channelId, String videoId) =>
-      _updateFileMap(_channelNotifFile, (contents) {
-        final current = contents[channelId];
-        if (current == null) return false;
-        final notif = ChannelNotification.fromJson(current)
-          ..lastSeenVideoId = videoId
-          ..timestamp = DateTime.now().millisecondsSinceEpoch;
-        contents[channelId] = notif.toJson();
-        return true;
-      });
+      String channelId, String videoId) async {
+    final context = await _notificationContext();
+    final contents = await _readFileAsMap(
+        await _openAppFile(_profilePath(_channelNotifFile, context.profileId)));
+    if (!contents.containsKey(channelId)) return;
+    await _updateCursors(context, (account) {
+      final channels = _cursorSection(account, 'channels');
+      channels[channelId] = {
+        'lastSeenVideoId': videoId,
+        'timestamp': DateTime.now().millisecondsSinceEpoch
+      };
+      account['channels'] = channels;
+    });
+  }
 
   Future<PlaylistNotification?> getPlaylistNotification(
       String playlistId) async {
@@ -142,38 +326,69 @@ class FileDB extends IDbClient {
   }
 
   Future<List<PlaylistNotification>> getAllPlaylistNotifications() async {
-    File f = await _openAppFile(_playlistNotifsFile);
-    var contents = await _readFileAsMap(f);
-    return contents.values
-        .map((e) => PlaylistNotification.fromJson(e))
-        .toList();
+    final context = await _notificationContext();
+    final contents = await _readFileAsMap(await _openAppFile(
+        _profilePath(_playlistNotifsFile, context.profileId)));
+    final cursors = _cursorSection(await _accountCursors(context), 'playlists');
+    return contents.values.map((value) {
+      final notification = PlaylistNotification.fromJson(value);
+      final cursor = cursors[notification.playlistId];
+      if (cursor is Map) {
+        notification.lastVideoCount = cursor['lastVideoCount'] as int;
+        notification.timestamp = cursor['timestamp'] as int;
+      } else if (!context.useLegacyCursors ||
+          (value as Map).containsKey('cursorAccountId')) {
+        notification.lastVideoCount = 0;
+        notification.timestamp = 0;
+      }
+      return notification;
+    }).toList();
   }
 
   Future<void> deletePlaylistNotification(PlaylistNotification notif) =>
       _updateFileMap(_playlistNotifsFile,
           (contents) => contents.remove(notif.playlistId) != null);
 
-  Future<void> upsertPlaylistNotification(PlaylistNotification notif) =>
-      _updateFileMap(_playlistNotifsFile, (contents) {
-        contents[notif.playlistId] = notif.toJson();
-        return true;
-      });
+  Future<void> upsertPlaylistNotification(PlaylistNotification notif) async {
+    final context = await _notificationContext();
+    await _updateFile(_profilePath(_playlistNotifsFile, context.profileId),
+        (file) async {
+      final contents = await _readFileAsMap(file);
+      final previous = contents[notif.playlistId];
+      contents[notif.playlistId] = previous is Map
+          ? {...previous, 'playlistName': notif.playlistName}
+          : {...notif.toJson(), 'cursorAccountId': context.accountKey};
+      await _writeMapToFile(file, contents);
+    });
+    await _updateCursors(context, (account) {
+      final playlists = _cursorSection(account, 'playlists');
+      playlists[notif.playlistId] = {
+        'lastVideoCount': notif.lastVideoCount,
+        'timestamp': notif.timestamp
+      };
+      account['playlists'] = playlists;
+    });
+  }
 
   Future<void> setPlaylistNotificationLastViewedVideo(
-          String playlistId, int videoCount) =>
-      _updateFileMap(_playlistNotifsFile, (contents) {
-        final current = contents[playlistId];
-        if (current == null) return false;
-        final notif = PlaylistNotification.fromJson(current)
-          ..lastVideoCount = videoCount
-          ..timestamp = DateTime.now().millisecondsSinceEpoch;
-        contents[playlistId] = notif.toJson();
-        return true;
-      });
+      String playlistId, int videoCount) async {
+    final context = await _notificationContext();
+    final contents = await _readFileAsMap(await _openAppFile(
+        _profilePath(_playlistNotifsFile, context.profileId)));
+    if (!contents.containsKey(playlistId)) return;
+    await _updateCursors(context, (account) {
+      final playlists = _cursorSection(account, 'playlists');
+      playlists[playlistId] = {
+        'lastVideoCount': videoCount,
+        'timestamp': DateTime.now().millisecondsSinceEpoch
+      };
+      account['playlists'] = playlists;
+    });
+  }
 
   Future<void> _updateFileMap(
           String path, bool Function(Map<String, dynamic>) update) =>
-      _updateFile(path, (file) async {
+      _updateProfileFile(path, (file) async {
         final contents = await _readFileAsMap(file);
         if (update(contents)) await _writeMapToFile(file, contents);
       });
@@ -199,12 +414,17 @@ class FileDB extends IDbClient {
     return File(dbPath);
   }
 
-  Future<void> _writeMapToFile(File f, Map<String, dynamic> map) async {
+  Future<void> _writeMapToFile(File f, Map<String, dynamic> map,
+      {FutureOr<bool> Function()? stillCurrent}) async {
     var string = jsonEncode(map);
     _log.fine("Writing json to ${f.path}");
     final temporary = File('${f.path}.${const Uuid().v4()}.tmp');
     try {
       await temporary.writeAsString(string, flush: true);
+      if (stillCurrent != null) {
+        final current = stillCurrent();
+        if (!(current is Future<bool> ? await current : current)) return;
+      }
       await temporary.rename(f.path);
     } finally {
       if (await temporary.exists()) await temporary.delete();
@@ -222,13 +442,15 @@ class FileDB extends IDbClient {
   }
 
   Future<void> clearDb() async {
+    final id = await _selectedProfileId();
     for (final path in const [
       _channelNotifFile,
       _playlistNotifsFile,
       _subNotifsFile,
-      _genericSettings,
+      _profileSettings,
+      _notificationCursors,
     ]) {
-      await _updateFile(path, (file) async {
+      await _updateFile(_profilePath(path, id), (file) async {
         try {
           await file.delete();
         } on FileSystemException catch (error) {
@@ -237,23 +459,76 @@ class FileDB extends IDbClient {
         }
       });
     }
+    await _updateFile(_genericSettings, (file) async {
+      final active = await _readGenericSettings(file);
+      if (active.profileId == id) {
+        await _writeMapToFile(
+            file, (FileDbGenericSettings()..profileId = id).toJson());
+      }
+    });
   }
 
   /*
   * This is getting worst and worst. we will only implement the required things for the work manager.
    */
   @override
-  Future<void> useServer(Server server) =>
-      _updateGenericSettings((settings) => settings.server = server);
+  Future<void> useServer(Server server) {
+    if (_fixedProfileId != null && _fixedProfileId != server.profileId) {
+      throw StateError('The account belongs to another profile');
+    }
+    return forProfile(server.profileId)
+        ._updateGenericSettings((settings) => settings.server = server);
+  }
+
+  /// Refresh credentials only for an account that is still selected and
+  /// already mirrored. Selection belongs to useProfile/useServer/syncWithDb.
+  /// An authentication result may have waited behind a newer account switch.
+  Future<void> refreshAccount(Server expected) {
+    if (_fixedProfileId != null && _fixedProfileId != expected.profileId) {
+      throw StateError('The account belongs to another profile');
+    }
+    return _updateFile(_genericSettings, (file) async {
+      final active = await _readGenericSettings(file);
+      if (active.profileId != expected.profileId ||
+          active.server?.accountId != expected.accountId) {
+        return;
+      }
+      var latest = _savedSelectedAccount(expected);
+      if (latest == null) return;
+      active.server = latest;
+      await _writeMapToFile(
+          await _openAppFile(_profilePath(_profileSettings, active.profileId)),
+          active.toJson(),
+          stillCurrent: () => _savedSelectedAccount(expected) == latest);
+      // A second credential update can finish while the archive is written.
+      // Read it again rather than publishing the queued caller's old tokens.
+      latest = _savedSelectedAccount(expected);
+      if (latest == null) return;
+      active.server = latest;
+      final publishing = latest;
+      await _writeMapToFile(file, active.toJson(),
+          stillCurrent: () => _savedSelectedAccount(expected) == publishing);
+    });
+  }
+
+  Server? _savedSelectedAccount(Server expected) {
+    if (db.profileId != expected.profileId) return null;
+    final saved =
+        db.forProfile(expected.profileId).getAccount(expected.accountId);
+    return saved?.inUse == true ? saved : null;
+  }
 
   @override
   Future<Server> getCurrentlySelectedServer() async {
-    return (await getGenericSettings()).server!;
+    final server = (await getGenericSettings()).server;
+    if (server == null) throw NoServerSelected();
+    return server;
   }
 
   @override
   Future<List<Server>> getServers() async {
-    return [(await getGenericSettings()).server!];
+    final server = (await getGenericSettings()).server;
+    return server == null ? [] : [server];
   }
 
   @override
@@ -263,13 +538,43 @@ class FileDB extends IDbClient {
 
   Future<void> syncWithDb() async {
     _log.fine('Syncing file settings with DB');
-    await _updateGenericSettings((fileSettings) async {
-      fileSettings.locale = db.getSettings(localeSettingName)?.value;
+    final id = _fixedProfileId ?? db.profileId;
+    await _updateFile(_genericSettings, (file) async {
+      // A delayed read from the previous person must not undo a later switch.
+      if (db.profileId != id) return;
+      final active = await _readGenericSettings(file);
+      if (db.profileId != id) return;
+      final database = db.forProfile(id);
+      await _writeMapToFile(
+          await _openAppFile(_profilePath(_profileSettings, active.profileId)),
+          active.toJson());
+      final settings =
+          active.profileId == id ? active : await _readProfileSettings(id);
+      // Resolve selection inside the file queue. It may have changed while an
+      // earlier update or the documents-directory lookup was still pending.
+      Server? selected;
       try {
-        fileSettings.server = await db.getCurrentlySelectedServer();
-      } catch (err) {
-        _log.fine("No server selected in the DB settings, we proceed without");
+        selected = await database.getCurrentlySelectedServer();
+        selected = _savedSelectedAccount(selected);
+        if (selected == null) return;
+      } on NoServerSelected {
+        _log.fine('No server selected in this profile');
       }
+      settings.locale = database.getSettings(localeSettingName)?.value;
+      settings.server = selected;
+      // Check again after filesystem work before publishing the new snapshot.
+      if (db.profileId != id) return;
+      final publishing = selected;
+      await _writeMapToFile(file, settings.toJson(), stillCurrent: () {
+        if (db.profileId != id) return false;
+        if (publishing == null) {
+          return database
+              .getServers()
+              .then((servers) => servers.isEmpty && db.profileId == id);
+        }
+        return _savedSelectedAccount(publishing) == publishing;
+      });
+      if (db.profileId == id) _lastProfileId = id;
     });
   }
 
@@ -482,6 +787,9 @@ class FileDB extends IDbClient {
 
 @JsonSerializable()
 class FileDbGenericSettings {
+  @JsonKey(defaultValue: 'default')
+  String profileId = 'default';
+  String? legacyNotificationAccountId;
   Server?
       server; // we only store the currently used server because that's what we're interested in
   bool subscriptionNotifications = false;
@@ -493,4 +801,18 @@ class FileDbGenericSettings {
       _$FileDbGenericSettingsFromJson(json);
 
   Map<String, dynamic> toJson() => _$FileDbGenericSettingsToJson(this);
+}
+
+class _NotificationContext {
+  final String profileId;
+  final String? accountId;
+  final String? legacyAccountId;
+
+  const _NotificationContext(
+      this.profileId, this.accountId, this.legacyAccountId);
+
+  String get accountKey => accountId ?? '';
+
+  bool get useLegacyCursors =>
+      accountId == null || accountId == legacyAccountId;
 }

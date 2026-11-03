@@ -7,6 +7,7 @@ import '../../home/models/db/home_layout.dart';
 import '../../search/models/db/search_history_item.dart';
 import '../../settings/models/db/app_logs.dart';
 import '../../settings/models/db/server.dart';
+import '../../settings/models/db/person_profile.dart';
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/db/video_filter.dart';
 import '../../settings/models/errors/no_server_selected.dart';
@@ -16,9 +17,42 @@ import '../../videos/models/db/progress.dart';
 import '../backup.dart';
 
 abstract class IDbClient {
+  String get profileId => PersonProfile.defaultId;
+
+  Future<List<PersonProfile>> getProfiles() async =>
+      [PersonProfile.defaultProfile];
+
+  Future<PersonProfile> createProfile(String name) async =>
+      throw UnsupportedError('Profiles require the app database');
+
+  Future<void> renameProfile(String id, String name) async =>
+      throw UnsupportedError('Profiles require the app database');
+
+  Future<void> useProfile(String id) async {
+    if (id != profileId) {
+      throw UnsupportedError('Profiles require the app database');
+    }
+  }
+
+  /// Capture this view before asynchronous work to keep it in its person's
+  /// library even if the selected person changes while the work is pending.
+  IDbClient forProfile(String id) {
+    if (id == profileId) return this;
+    throw UnsupportedError('Profiles require the app database');
+  }
+
   close();
 
   Server? getServer(String url);
+
+  /// Resolve an account identity without the legacy URL lookup fallback.
+  /// A deleted URL-keyed account must never resolve to its replacement.
+  Server? getAccount(String accountId) {
+    final account = getServer(accountId);
+    return account?.accountId == accountId && account?.profileId == profileId
+        ? account
+        : null;
+  }
 
   /// Call super at the end
   @mustCallSuper

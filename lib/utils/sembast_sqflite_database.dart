@@ -7,6 +7,7 @@ import 'package:clipious/offline_subscriptions/models/offline_subscription.dart'
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/app_logs.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/person_profile.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/interfaces/db.dart';
@@ -30,26 +31,127 @@ const singleId = 1;
 class SembastSqfDb extends IDbClient {
   final log = Logger('SembastSqfLDB');
   final Database db;
-  final downloadedVideosStore = stringMapStoreFactory.store('downloadedVideo');
-  final homeLayoutStore =
-      intMapStoreFactory.store('homeLayout'); // always use id = 1
-  final searchHistoryStore =
-      stringMapStoreFactory.store('searchHistory'); // use term as key
+  final String? _fixedProfileId;
+  final _profilesStore = stringMapStoreFactory.store('personProfiles');
+  final _profileStateStore = stringMapStoreFactory.store('personProfileState');
+  final _globalSettingsStore = stringMapStoreFactory.store('settings');
+  static const _deviceSettings = {
+    networkSocksProxySettingName,
+    skipSslVerificationSettingName,
+    'download-folder',
+    forceTvUiSettingName,
+  };
+
+  // Default keeps the original stores. Migrating never duplicates or removes
+  // its library, downloads or accounts; new people receive empty stores.
+  String _storeName(String name) =>
+      profileId == PersonProfile.defaultId ? name : 'profile:$profileId:$name';
+
+  StoreRef<String, Map<String, Object?>> get downloadedVideosStore =>
+      stringMapStoreFactory.store(_storeName('downloadedVideo'));
+  StoreRef<int, Map<String, Object?>> get homeLayoutStore =>
+      intMapStoreFactory.store(_storeName('homeLayout'));
+  StoreRef<String, Map<String, Object?>> get searchHistoryStore =>
+      stringMapStoreFactory.store(_storeName('searchHistory'));
   final appLogsStore = stringMapStoreFactory.store('appLogs');
-  final serversStore =
-      stringMapStoreFactory.store('serviers'); // use server url as key
-  final videoFiltersStore = stringMapStoreFactory.store('videoFilters');
-  final settingsStore =
-      stringMapStoreFactory.store('settings'); // settings name as key;
+  StoreRef<String, Map<String, Object?>> get serversStore =>
+      stringMapStoreFactory.store(_storeName('serviers'));
+  StoreRef<String, Map<String, Object?>> get videoFiltersStore =>
+      stringMapStoreFactory.store(_storeName('videoFilters'));
+  StoreRef<String, Map<String, Object?>> get settingsStore =>
+      stringMapStoreFactory.store(_storeName('settings'));
   final deArrowCacheStore =
       stringMapStoreFactory.store('dearrow'); // use video id as key
-  final historyVideoCacheStore =
-      stringMapStoreFactory.store('historyVideoCache'); // use historyVideoCache
-  final progressStore = stringMapStoreFactory.store('progress');
-  final offlineSubscriptions =
-      stringMapStoreFactory.store('offline_subscriptions');
+  StoreRef<String, Map<String, Object?>> get historyVideoCacheStore =>
+      stringMapStoreFactory.store(_storeName('historyVideoCache'));
+  StoreRef<String, Map<String, Object?>> get progressStore =>
+      stringMapStoreFactory.store(_storeName('progress'));
+  StoreRef<String, Map<String, Object?>> get offlineSubscriptions =>
+      stringMapStoreFactory.store(_storeName('offline_subscriptions'));
 
-  SembastSqfDb(this.db);
+  SembastSqfDb(this.db) : _fixedProfileId = null;
+
+  SembastSqfDb._forProfile(this.db, this._fixedProfileId);
+
+  @override
+  String get profileId =>
+      _fixedProfileId ??
+      (_profileStateStore.record('active').getSync(db)?['id'] as String?) ??
+      PersonProfile.defaultId;
+
+  @override
+  SembastSqfDb forProfile(String id) {
+    if (id != PersonProfile.defaultId &&
+        _profilesStore.record(id).getSync(db) == null) {
+      throw StateError('Profile no longer exists');
+    }
+    return _fixedProfileId == id ? this : SembastSqfDb._forProfile(db, id);
+  }
+
+  Future<void> _initializeProfiles() => db.transaction((txn) async {
+        final record = _profilesStore.record(PersonProfile.defaultId);
+        if (!await record.exists(txn)) {
+          await record.put(txn, PersonProfile.defaultProfile.toJson());
+        }
+        final active = _profileStateStore.record('active');
+        if (!await active.exists(txn)) {
+          await active.put(txn, {'id': PersonProfile.defaultId});
+        }
+      });
+
+  @override
+  Future<List<PersonProfile>> getProfiles() async {
+    await _initializeProfiles();
+    return (await _profilesStore.find(db))
+        .map((record) => PersonProfile.fromJson(record.value))
+        .toList();
+  }
+
+  String _profileName(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || trimmed.length > 80) {
+      throw const FormatException(
+          'Use a profile name between 1 and 80 characters.');
+    }
+    return trimmed;
+  }
+
+  @override
+  Future<PersonProfile> createProfile(String name) async {
+    final profile =
+        PersonProfile(id: const Uuid().v4(), name: _profileName(name));
+    await _initializeProfiles();
+    await _profilesStore.record(profile.id).put(db, profile.toJson());
+    return profile;
+  }
+
+  @override
+  Future<void> renameProfile(String id, String name) async {
+    final profile = PersonProfile(id: id, name: _profileName(name));
+    await _initializeProfiles();
+    await db.transaction((txn) async {
+      final record = _profilesStore.record(id);
+      if (!await record.exists(txn)) {
+        throw StateError('Profile no longer exists');
+      }
+      await record.put(txn, profile.toJson());
+    });
+  }
+
+  @override
+  Future<void> useProfile(String id) async {
+    if (_fixedProfileId != null) {
+      if (id == _fixedProfileId) return;
+      throw StateError('A captured profile cannot change its owner');
+    }
+    await _initializeProfiles();
+    await db.transaction((txn) async {
+      if (!await _profilesStore.record(id).exists(txn)) {
+        throw StateError('Profile no longer exists');
+      }
+      await _profileStateStore.record('active').put(txn, {'id': id});
+    });
+  }
 
   static Future<SembastSqfDb> create() async {
     final docsDir = await getApplicationDocumentsDirectory();
@@ -62,17 +164,24 @@ class SembastSqfDb extends IDbClient {
       version: 1,
     );
 
-    return SembastSqfDb(db);
+    final client = SembastSqfDb(db);
+    await client._initializeProfiles();
+    return client;
   }
 
   static Future<SembastSqfDb> createInMemory() async {
     var factory = newDatabaseFactoryMemory();
     var db = await factory.openDatabase("${const Uuid().v4()}.db");
-    return SembastSqfDb(db);
+    final client = SembastSqfDb(db);
+    await client._initializeProfiles();
+    return client;
   }
 
   @override
   Future<void> addToSearchHistory(SearchHistoryItem searchHistoryItem) async {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).addToSearchHistory(searchHistoryItem);
+    }
     searchHistoryItem.time = DateTime.now().millisecondsSinceEpoch;
     await searchHistoryStore
         .record(searchHistoryItem.search)
@@ -122,11 +231,14 @@ class SembastSqfDb extends IDbClient {
 
   @override
   close() async {
-    await db.close();
+    if (_fixedProfileId == null) await db.close();
   }
 
   @override
   Future<void> deleteDownload(DownloadedVideo vid) async {
+    if (vid.profileId != profileId) {
+      throw StateError('Download belongs to a different profile');
+    }
     await downloadedVideosStore.record(vid.videoId).delete(db);
   }
 
@@ -137,12 +249,13 @@ class SembastSqfDb extends IDbClient {
 
   @override
   deleteServerById(Server server) async {
-    await serversStore.record(server.url).delete(db);
+    _checkServerOwner(server);
+    await serversStore.record(server.accountId).delete(db);
   }
 
   @override
   deleteSetting(String name) async {
-    await settingsStore.record(name).delete(db);
+    await _settingsFor(name).record(name).delete(db);
   }
 
   @override
@@ -165,9 +278,31 @@ class SembastSqfDb extends IDbClient {
 
   @override
   List<SettingsValue> getAllSettings() {
-    return settingsStore
+    final personal = settingsStore
         .findSync(db)
         .map((e) => SettingsValue.fromJson(e.value))
+        .where((setting) => !_deviceSettings.contains(setting.name));
+    final device = _globalSettingsStore
+        .findSync(db)
+        .map((e) => SettingsValue.fromJson(e.value))
+        .where((setting) => _deviceSettings.contains(setting.name));
+    return [...personal, ...device];
+  }
+
+  StoreRef<String, Map<String, Object?>> _settingsFor(String name) =>
+      _deviceSettings.contains(name) ? _globalSettingsStore : settingsStore;
+
+  void _checkServerOwner(Server server) {
+    if (server.profileId != profileId) {
+      throw StateError('Account belongs to a different profile');
+    }
+  }
+
+  List<Server> _savedServers() {
+    return serversStore
+        .findSync(db)
+        .map((record) => Server.fromJson(record.value))
+        .where((server) => server.profileId == profileId)
         .toList();
   }
 
@@ -219,21 +354,42 @@ class SembastSqfDb extends IDbClient {
   }
 
   @override
-  Server? getServer(String url) {
-    var v = serversStore.record(url).getSync(db);
-    return v != null ? Server.fromJson(v) : null;
+  Server? getServer(String key) {
+    final saved = serversStore.record(key).getSync(db);
+    if (saved != null) {
+      final server = Server.fromJson(saved);
+      if (server.profileId == profileId) return server;
+    }
+    // Exact account keys (including legacy URL keys) win. A URL that is not
+    // itself an account key resolves only within this person, preferring the
+    // selected account when several new accounts share an endpoint.
+    final matches = _savedServers().where((server) => server.url == key);
+    return matches.where((server) => server.inUse).firstOrNull ??
+        matches.firstOrNull;
   }
 
   @override
   Future<List<Server>> getServers() async {
-    return (await serversStore.find(db))
-        .map((e) => Server.fromJson(e.value))
-        .toList();
+    return _savedServers();
+  }
+
+  @override
+  Future<Server> getCurrentlySelectedServer() => _fixedProfileId == null
+      ? forProfile(profileId).getCurrentlySelectedServer()
+      : super.getCurrentlySelectedServer();
+
+  @override
+  Future<void> deleteServer(Server server) async {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).deleteServer(server);
+    }
+    _checkServerOwner(server);
+    await super.deleteServer(server);
   }
 
   @override
   SettingsValue? getSettings(String name) {
-    var v = settingsStore.record(name).getSync(db);
+    var v = _settingsFor(name).record(name).getSync(db);
     return v != null ? SettingsValue.fromJson(v) : null;
   }
 
@@ -256,43 +412,73 @@ class SembastSqfDb extends IDbClient {
       .toList();
 
   @override
-  Future<void> deleteLocalHistory(String videoId) =>
-      db.transaction((txn) async {
-        await historyVideoCacheStore.record(videoId).delete(txn);
-        await progressStore.record(videoId).delete(txn);
-        // Remove the deleted video from any saved playback session as well.
-        await settingsStore.record('playback-session').delete(txn);
-      });
+  Future<void> deleteLocalHistory(String videoId) {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).deleteLocalHistory(videoId);
+    }
+    return db.transaction((txn) async {
+      await historyVideoCacheStore.record(videoId).delete(txn);
+      await progressStore.record(videoId).delete(txn);
+      await stringMapStoreFactory
+          .store('watchState:$profileId')
+          .record(videoId)
+          .delete(txn);
+      for (final name in ['watchMembership', 'watchOutbox']) {
+        await stringMapStoreFactory.store('$name:$profileId').delete(txn,
+            finder: Finder(filter: Filter.equals('videoId', videoId)));
+      }
+      // Remove the deleted video from any saved playback session as well.
+      await settingsStore.record('playback-session').delete(txn);
+    });
+  }
 
   @override
-  Future<void> clearLocalHistory() => db.transaction((txn) async {
-        await historyVideoCacheStore.delete(txn);
-        await progressStore.delete(txn);
-        await settingsStore.record('playback-session').delete(txn);
-      });
+  Future<void> clearLocalHistory() {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).clearLocalHistory();
+    }
+    return db.transaction((txn) async {
+      await historyVideoCacheStore.delete(txn);
+      await progressStore.delete(txn);
+      for (final name in ['watchState', 'watchMembership', 'watchOutbox']) {
+        await stringMapStoreFactory.store('$name:$profileId').delete(txn);
+      }
+      await settingsStore.record('playback-session').delete(txn);
+    });
+  }
 
   @override
-  Future<UserBackup> exportBackup() async => UserBackup.parse(jsonEncode({
-        'format': 'videre',
-        'version': 1,
-        'settings': getAllSettings()
-            .where(UserBackup.validSetting)
-            .map((setting) => setting.toJson())
-            .toList(),
-        'subscriptions': (await getOfflineSubscriptions())
-            .map((sub) => sub.toJson())
-            .toList(),
-        'filters': getAllFilters()
-            .map((filter) => {...filter.toJson(), 'uuid': filter.uuid})
-            .toList(),
-        'progress':
-            getAllProgress().map((progress) => progress.toJson()).toList(),
-        'history': getLocalHistory().map((video) => video.toJson()).toList(),
-        'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
-      }));
+  Future<UserBackup> exportBackup() async {
+    if (_fixedProfileId == null) return forProfile(profileId).exportBackup();
+    return UserBackup.parse(jsonEncode({
+      'format': 'videre',
+      'version': 1,
+      'settings': getAllSettings()
+          .where(UserBackup.validSetting)
+          .map((setting) => setting.toJson())
+          .toList(),
+      'subscriptions':
+          (await getOfflineSubscriptions()).map((sub) => sub.toJson()).toList(),
+      'filters': getAllFilters()
+          .map((filter) => {...filter.toJson(), 'uuid': filter.uuid})
+          .toList(),
+      'progress':
+          getAllProgress().map((progress) => progress.toJson()).toList(),
+      'history': getLocalHistory().map((video) => video.toJson()).toList(),
+      'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
+      'watchState': stringMapStoreFactory
+          .store('watchState:$profileId')
+          .findSync(db)
+          .map((record) => {...record.value, 'videoId': record.key})
+          .toList(),
+    }));
+  }
 
   @override
   Future<void> restoreBackup(UserBackup backup, {bool replace = false}) async {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).restoreBackup(backup, replace: replace);
+    }
     final stores = {
       'settings': settingsStore,
       'subscriptions': offlineSubscriptions,
@@ -315,6 +501,7 @@ class SembastSqfDb extends IDbClient {
           if (entry.key == 'settings') {
             for (final setting
                 in getAllSettings().where(UserBackup.validSetting)) {
+              if (_deviceSettings.contains(setting.name)) continue;
               await settingsStore.record(setting.name).delete(txn);
             }
           } else {
@@ -323,11 +510,43 @@ class SembastSqfDb extends IDbClient {
         }
         for (final row in backup.sections[entry.key]!) {
           final key = row[keys[entry.key]] as String;
+          // Portable libraries never reconfigure another person's/device's
+          // network security, storage grants or platform selection.
+          if (entry.key == 'settings' && _deviceSettings.contains(key)) {
+            continue;
+          }
           if (!replace && await entry.value.record(key).exists(txn)) continue;
           await entry.value.record(key).put(txn, row);
         }
       }
       if (!backup.subscriptionsOnly) {
+        final watchedStore =
+            stringMapStoreFactory.store('watchState:$profileId');
+        final outboxStore =
+            stringMapStoreFactory.store('watchOutbox:$profileId');
+        final oldWatched = {
+          for (final row in await watchedStore.find(txn)) row.key: row.value
+        };
+        if (replace) {
+          await watchedStore.delete(txn);
+          await outboxStore.delete(txn);
+        }
+        for (final row
+            in backup.sections['watchState'] ?? <Map<String, dynamic>>[]) {
+          final videoId = row['videoId'] as String;
+          final previous = oldWatched[videoId];
+          if (!replace && previous != null) continue;
+          final revision = (previous?['revision'] as int? ?? 0) + 1;
+          await watchedStore
+              .record(videoId)
+              .put(txn, {...row, 'revision': revision});
+          // Imported library state is local. Cancel superseded intents rather
+          // than uploading the imported data to any saved account.
+          if (!replace) {
+            await outboxStore.delete(txn,
+                finder: Finder(filter: Filter.equals('videoId', videoId)));
+          }
+        }
         final old = replace
             ? <dynamic>[]
             : jsonDecode(getSettings('local-playlists')?.value ?? '[]') as List;
@@ -380,6 +599,9 @@ class SembastSqfDb extends IDbClient {
 
   @override
   saveProgress(Progress progress) async {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).saveProgress(progress);
+    }
     // Compare and write together: overlapping playback/seek updates must not
     // miss a watched-status transition by reading the same previous value.
     final watchedChanged = await db.transaction((txn) async {
@@ -397,7 +619,9 @@ class SembastSqfDb extends IDbClient {
 
   @override
   saveSetting(SettingsValue setting) async {
-    await settingsStore.record(setting.name).put(db, setting.toJson());
+    await _settingsFor(setting.name)
+        .record(setting.name)
+        .put(db, setting.toJson());
   }
 
   @override
@@ -407,6 +631,9 @@ class SembastSqfDb extends IDbClient {
 
   @override
   Future<void> upsertDownload(DownloadedVideo vid) async {
+    if (vid.profileId != profileId) {
+      throw StateError('Download belongs to a different profile');
+    }
     await downloadedVideosStore.record(vid.videoId).put(db, vid.toJson());
   }
 
@@ -422,18 +649,34 @@ class SembastSqfDb extends IDbClient {
 
   @override
   upsertServer(Server server) async {
-    await serversStore.record(server.url).put(db, server.toJson());
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).upsertServer(server);
+    }
+    _checkServerOwner(server);
+    await serversStore.record(server.accountId).put(db, server.toJson());
     await super.upsertServer(server);
   }
 
   @override
-  Future<void> useServer(Server server) => db.transaction((txn) async {
-        await serversStore.update(txn, {'inUse': false},
-            finder: Finder(filter: Filter.equals('inUse', true)));
-        await serversStore
-            .record(server.url)
-            .put(txn, server.copyWith(inUse: true).toJson());
-      });
+  Future<void> useServer(Server server) {
+    if (_fixedProfileId == null) return forProfile(profileId).useServer(server);
+    _checkServerOwner(server);
+    final record = serversStore.record(server.accountId);
+    final existed = record.getSync(db) != null;
+    return db.transaction((txn) async {
+      final stored = await record.get(txn);
+      if (stored == null && existed) {
+        throw StateError('Account no longer exists');
+      }
+      // Selection changes only selection. A queued token refresh must not be
+      // overwritten by the account snapshot captured before this transaction.
+      final latest = stored == null ? server : Server.fromJson(stored);
+      _checkServerOwner(latest);
+      await serversStore.update(txn, {'inUse': false},
+          finder: Finder(filter: Filter.equals('inUse', true)));
+      await record.put(txn, latest.copyWith(inUse: true).toJson());
+    });
+  }
 
   @override
   Future<void> addOfflineSubscription(OfflineSubscription sub) async {

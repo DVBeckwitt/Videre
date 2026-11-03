@@ -3,22 +3,24 @@ import 'package:flutter/foundation.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
+import '../../utils/interfaces/db.dart';
 import '../models/db/server.dart';
 
 class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
   final AppCubit appCubit;
+  final IDbClient _profileDb = db.forProfile(db.profileId);
 
   ServerListSettingsCubit(super.initialState, this.appCubit) {
     refreshServers();
   }
 
   Future<void> refreshServers() async {
-    final servers = await db.getServers();
+    final servers = await _profileDb.getServers();
     if (!isClosed) emit(state.copyWith(dbServers: servers));
   }
 
-  bool isLoggedInToServer(String url) {
-    Server server = state.dbServers.firstWhere((s) => s.url == url,
+  bool isLoggedInToServer(String accountId) {
+    Server server = state.dbServers.firstWhere((s) => s.accountId == accountId,
         orElse: () => const Server(url: 'notFound'));
 
     return (server.authToken?.isNotEmpty ?? false) ||
@@ -26,8 +28,9 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
   }
 
   Future<void> saveServer(Server server) async {
-    await db.upsertServer(server);
-    if (state.dbServers.isEmpty) {
+    if (server.profileId != _profileDb.profileId) return;
+    await _profileDb.upsertServer(server);
+    if (state.dbServers.isEmpty && db.profileId == _profileDb.profileId) {
       await switchServer(server);
     } else {
       await refreshServers();
@@ -35,7 +38,7 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
   }
 
   Future<void> switchServer(Server s) async {
-    if (isClosed || state.switching) return;
+    if (isClosed || state.switching || db.profileId != s.profileId) return;
     emit(state.copyWith(switching: true));
     try {
       await appCubit.switchServer(s);
@@ -72,5 +75,6 @@ class ServerListSettingsState {
       Object.hash(runtimeType, switching, Object.hashAll(dbServers));
 
   @override
-  String toString() => 'ServerListSettingsState(dbServers: $dbServers)';
+  String toString() =>
+      'ServerListSettingsState(accounts: ${dbServers.length}, switching: $switching)';
 }

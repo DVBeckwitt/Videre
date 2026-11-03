@@ -3,4 +3,5 @@
     <!-- Keep browser data left by earlier verification builds out of backups. -->
     <exclude domain="root" path="app_webview_videre_verification/" />
     <exclude domain="root" path="app_webview/" />
+    <exclude domain="sharedpref" path="videre_gateway_sessions.xml" />
 </full-backup-content>

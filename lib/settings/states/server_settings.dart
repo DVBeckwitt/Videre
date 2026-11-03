@@ -3,6 +3,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
+import '../../utils/interfaces/db.dart';
 import '../models/db/server.dart';
 import '../models/backend_selector.dart';
 import '../services/backend_discovery.dart';
@@ -11,9 +12,11 @@ part 'server_settings.freezed.dart';
 
 class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   final AppCubit app;
+  final IDbClient _profileDb;
   Future<void> _serverUpdates = Future.value();
 
-  ServerSettingsCubit(super.initialState, this.app) {
+  ServerSettingsCubit(super.initialState, this.app)
+      : _profileDb = db.forProfile(initialState.server.profileId) {
     canDelete();
   }
 
@@ -23,7 +26,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<Server> discoverBackends() async {
-    final saved = db.getServer(state.server.url);
+    final saved = _profileDb.getAccount(state.server.accountId);
     if (saved == null) throw StateError('Server no longer exists');
     final selector = await BackendDiscovery(service.httpClient).discover(saved);
     return _saveDiscoveredBackends(selector);
@@ -31,7 +34,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
 
   Future<Server> discoverBrowserBackends(
       {required Uri pageUri, required String source}) async {
-    final saved = db.getServer(state.server.url);
+    final saved = _profileDb.getAccount(state.server.accountId);
     if (saved == null) throw StateError('Server no longer exists');
     final selector = await BackendDiscovery(service.httpClient)
         .discoverBrowserPage(saved, pageUri: pageUri, source: source);
@@ -62,7 +65,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Server _savedServer() {
-    final saved = db.getServer(state.server.url);
+    final saved = _profileDb.getAccount(state.server.accountId);
     if (saved == null) throw StateError('Server no longer exists');
     return saved;
   }
@@ -79,13 +82,18 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> _saveServer(Server updated) async {
-    await db.upsertServer(updated);
+    await _profileDb.upsertServer(updated);
 
     // Editing an inactive server must not switch background jobs to it.
+    if (db.profileId != updated.profileId) {
+      if (!isClosed) emit(state.copyWith(server: updated));
+      return;
+    }
     final selected = await db.getCurrentlySelectedServer();
-    if (selected.url == updated.url) {
-      await fileDb.useServer(selected);
-      if (!app.isClosed && app.state.server?.url == selected.url) {
+    if (selected.accountId == updated.accountId &&
+        selected.profileId == updated.profileId) {
+      await fileDb.refreshAccount(selected);
+      if (!app.isClosed && _isActive(selected)) {
         app.setServer(selected);
       }
     }
@@ -106,39 +114,82 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> logOut() async {
-    await _updateServer(
-        (saved) => saved.copyWith(sidCookie: null, authToken: null));
+    await service.logOutProtected(_savedServer());
+    final latest = _savedServer();
+    if (!isClosed) emit(state.copyWith(server: latest));
+    if (!app.isClosed && _isActive(latest)) app.setServer(latest);
   }
 
-  Future<void> logInWithToken() async {
-    final serverUrl = state.server.url;
-    await service.logIn(serverUrl);
-    final server = _savedServer();
-    if (!isClosed) emit(state.copyWith(server: server));
-    // Only refresh the app if it is still on the authenticated server.
-    if (!app.isClosed && app.state.server?.url == server.url) {
-      app.setServer(server);
+  Future<void> _authenticate(Future<void> Function() action) async {
+    if (isClosed || state.authenticating) return;
+    emit(state.copyWith(authenticating: true));
+    try {
+      await action();
+    } finally {
+      if (!isClosed) emit(state.copyWith(authenticating: false));
     }
   }
 
-  Future<void> logInWithCookie(String username, String password) async {
-    final saved = _savedServer();
-    final cookie = await service.loginWithCookies(saved.url, username, password,
-        headers: saved.customHeaders);
-    // Authentication can outlive this screen or another server edit/switch.
-    await _updateServer((latest) => latest.copyWith(sidCookie: cookie));
+  Future<void> logInWithToken() => _authenticate(() async {
+        final serverAtStart = _savedServer();
+        await service.logIn(serverAtStart.accountId,
+            profileId: serverAtStart.profileId);
+        final server = _savedServer();
+        if (!isClosed) emit(state.copyWith(server: server));
+        // Only refresh the app if it is still on the authenticated server.
+        if (!app.isClosed && _isActive(server)) {
+          app.setServer(server);
+        }
+      });
+
+  Future<void> logInWithCookie(String username, String password) =>
+      _authenticate(() async {
+        final saved = _savedServer();
+        await service.logInAccountWithCookie(saved, username, password);
+        final latest = _savedServer();
+        if (!isClosed) emit(state.copyWith(server: latest));
+        if (!app.isClosed && _isActive(latest)) app.setServer(latest);
+      });
+
+  Future<void> logInProtected() => _authenticate(() async {
+        await service.logInProtected(_savedServer());
+        final saved = _savedServer();
+        if (!isClosed) emit(state.copyWith(server: saved));
+        if (!app.isClosed && _isActive(saved)) app.setServer(saved);
+      });
+
+  Future<void> renameAccount(String name) async {
+    final clean = name.trim();
+    if (clean.isEmpty || clean.length > 80) {
+      throw const FormatException(
+          'Account name must contain 1 to 80 characters');
+    }
+    await _updateServer((saved) => saved.copyWith(name: clean));
+  }
+
+  bool _isActive(Server server) =>
+      db.profileId == server.profileId &&
+      app.state.server?.profileId == server.profileId &&
+      app.state.server?.accountId == server.accountId;
+
+  bool get isActiveProfile => db.profileId == state.server.profileId;
+
+  Future<void> _deleteGatewaySession(Server server) async {
+    await service.logOutProtected(server);
   }
 
   Future<void> deleteServer() async {
-    await db.deleteServer(state.server);
+    if ((await _profileDb.getServers()).length < 2) return;
+    await _deleteGatewaySession(_savedServer());
+    await _profileDb.deleteServer(state.server);
 
-    final currentServer = await db.getCurrentlySelectedServer();
-    await fileDb.useServer(currentServer);
-    if (!app.isClosed) app.setServer(currentServer);
+    if (!isActiveProfile) return;
+    final currentServer = await _profileDb.getCurrentlySelectedServer();
+    if (!app.isClosed) await app.switchServer(currentServer);
   }
 
   Future<void> canDelete() async {
-    bool canDelete = (await db.getServers()).length > 1;
+    bool canDelete = (await _profileDb.getServers()).length > 1;
     if (!isClosed) emit(state.copyWith(canDelete: canDelete));
   }
 }
@@ -147,6 +198,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
 sealed class ServerSettingsState with _$ServerSettingsState {
   const factory ServerSettingsState(
       {required Server server,
+      @Default(false) bool authenticating,
       @Default(false) bool canDelete}) = _ServerSettingsState;
 
   const ServerSettingsState._();

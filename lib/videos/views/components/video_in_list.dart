@@ -169,76 +169,71 @@ class VideoListItem extends StatelessWidget {
                                           children: [
                                             Expanded(
                                               child: NavigationSwitcher(
-                                                child: state.progress > 0.05
-                                                    ? Align(
-                                                        alignment: Alignment
-                                                            .centerRight,
-                                                        child: Padding(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .symmetric(
-                                                                  horizontal:
-                                                                      4.0,
-                                                                  vertical: 8),
-                                                          child:
-                                                              AnimatedContainer(
-                                                            curve: Curves
-                                                                .easeOutQuad,
-                                                            duration: AppMotion
-                                                                .duration(
-                                                                    context),
+                                                child:
+                                                    state.watched ||
+                                                            state.progress >
+                                                                0.05
+                                                        ? Align(
                                                             alignment: Alignment
-                                                                .centerLeft,
-                                                            constraints: state
-                                                                        .progress ==
-                                                                    1
-                                                                ? const BoxConstraints(
-                                                                    maxWidth:
-                                                                        20)
-                                                                : const BoxConstraints(
-                                                                    maxWidth:
-                                                                        1200),
-                                                            width:
-                                                                double.infinity,
-                                                            height:
-                                                                state.progress ==
-                                                                        1
+                                                                .centerRight,
+                                                            child: Padding(
+                                                              padding:
+                                                                  const EdgeInsets
+                                                                      .symmetric(
+                                                                      horizontal:
+                                                                          4.0,
+                                                                      vertical:
+                                                                          8),
+                                                              child:
+                                                                  AnimatedContainer(
+                                                                curve: Curves
+                                                                    .easeOutQuad,
+                                                                duration: AppMotion
+                                                                    .duration(
+                                                                        context),
+                                                                alignment: Alignment
+                                                                    .centerLeft,
+                                                                constraints: state
+                                                                        .watched
+                                                                    ? const BoxConstraints(
+                                                                        maxWidth:
+                                                                            20)
+                                                                    : const BoxConstraints(
+                                                                        maxWidth:
+                                                                            1200),
+                                                                width: double
+                                                                    .infinity,
+                                                                height: state
+                                                                        .watched
                                                                     ? 20
                                                                     : small
                                                                         ? 1
                                                                         : 5,
-                                                            decoration:
-                                                                BoxDecoration(
-                                                              color: colorScheme
-                                                                  .secondaryContainer,
-                                                              borderRadius:
-                                                                  BorderRadius
-                                                                      .circular(
-                                                                          20),
-                                                            ),
-                                                            child:
-                                                                AnimatedFractionallySizedBox(
-                                                                    widthFactor: state.progress >
-                                                                            0
-                                                                        ? state
-                                                                            .progress
-                                                                        : 0,
-                                                                    heightFactor:
-                                                                        1,
-                                                                    duration: AppMotion
-                                                                        .duration(
-                                                                            context),
-                                                                    curve: Curves
-                                                                        .easeInOutQuad,
-                                                                    child:
-                                                                        Container(
+                                                                decoration:
+                                                                    BoxDecoration(
+                                                                  color: colorScheme
+                                                                      .secondaryContainer,
+                                                                  borderRadius:
+                                                                      BorderRadius
+                                                                          .circular(
+                                                                              20),
+                                                                ),
+                                                                child: AnimatedFractionallySizedBox(
+                                                                    widthFactor: state.watched
+                                                                        ? 1
+                                                                        : state.progress > 0
+                                                                            ? state.progress
+                                                                            : 0,
+                                                                    heightFactor: 1,
+                                                                    duration: AppMotion.duration(context),
+                                                                    curve: Curves.easeInOutQuad,
+                                                                    child: Container(
                                                                       alignment:
                                                                           Alignment
                                                                               .center,
                                                                       decoration:
                                                                           BoxDecoration(
-                                                                        color: state.progress ==
-                                                                                1
+                                                                        color: state.watched
                                                                             ? colorScheme.primaryContainer
                                                                             : colorScheme.primary,
                                                                         borderRadius:
@@ -246,8 +241,7 @@ class VideoListItem extends StatelessWidget {
                                                                       ),
                                                                       child:
                                                                           AnimatedCrossFade(
-                                                                        crossFadeState: state.progress ==
-                                                                                1
+                                                                        crossFadeState: state.watched
                                                                             ? CrossFadeState.showFirst
                                                                             : CrossFadeState.showSecond,
                                                                         duration:
@@ -265,10 +259,11 @@ class VideoListItem extends StatelessWidget {
                                                                         ),
                                                                       ),
                                                                     )),
-                                                          ),
-                                                        ),
-                                                      )
-                                                    : const SizedBox.shrink(),
+                                                              ),
+                                                            ),
+                                                          )
+                                                        : const SizedBox
+                                                            .shrink(),
                                               ),
                                             ),
                                             if (!small)

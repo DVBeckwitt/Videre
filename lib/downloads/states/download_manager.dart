@@ -19,6 +19,8 @@ import 'package:path/path.dart' as p;
 import 'package:clipious/network/network_proxy.dart';
 
 import '../../player/states/player.dart';
+import '../../network/gateway_session_bridge.dart';
+import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
 import 'resumable_download.dart';
 import '../services/download_storage.dart';
@@ -40,21 +42,75 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final PlayerCubit player;
   final DownloadStorage storage;
   late final Future<void> _ready;
+  late IDbClient _library;
   StreamSubscription<dynamic>? _networkSubscription;
+  final Set<Future<void>> _mutations = {};
   final Set<String> _deleting = {};
   final Set<String> _enqueuing = {};
   bool _processing = false, _wifiConnected = false, _closing = false;
+  bool _switchingProfile = false;
+  int _generation = 0;
   String? _activeId;
   Future<void>? _activeJob;
+  Completer<void>? _drainFinished;
 
   DownloadManagerCubit(super.initialState, this.player,
       {DownloadStorage? storage})
       : storage = storage ?? DownloadStorage() {
+    _library = db.forProfile(db.profileId);
     _ready = onReady();
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
   }
 
+  bool get _current => !_closing && _library.profileId == db.profileId;
+
+  Future<T> _mutate<T>(Future<T> Function() action) {
+    final result = Future<T>.sync(action);
+    final settled =
+        result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    _mutations.add(settled);
+    unawaited(settled.then((_) => _mutations.remove(settled)));
+    return result;
+  }
+
+  /// Called before changing the active person or account. A cancelled transfer
+  /// can finish only in its original library; switching waits for all writers.
+  Future<void> pauseForProfileSwitch() async {
+    _switchingProfile = true;
+    for (final progress in state.downloadProgresses.values) {
+      progress.cancelToken.cancel();
+    }
+    await _ready;
+    await Future.wait(List.of(_mutations));
+    final paused = {
+      ...state.pausedVideoIds,
+      for (final video in _library.getAllDownloads())
+        if (!video.downloadComplete) video.videoId,
+    };
+    await _library.saveSetting(
+        SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+    if (_current) emit(state.copyWith(pausedVideoIds: paused));
+    await _activeJob;
+    await _drainFinished?.future;
+  }
+
+  /// Called after the profile/account selection has committed. Paused jobs stay
+  /// paused until resumed explicitly, and retain the account that created them.
+  Future<void> reloadForProfile() async {
+    await pauseForProfileSwitch();
+    if (_closing) return;
+    _generation++;
+    _library = db.forProfile(db.profileId);
+    _deleting.clear();
+    _enqueuing.clear();
+    _loadLibrary();
+    _switchingProfile = false;
+    _networkChanged(_wifiConnected);
+  }
+
   Future<void> _proxyChanging() async {
+    final library = _library;
+    final generation = _generation;
     // Stop current transfers before yielding, even while another consumer is
     // still disposing. Policy changes close the underlying HTTP connections;
     // these failures must be treated as cancellation rather than retried jobs.
@@ -62,6 +118,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       progress.cancelToken.cancel();
     }
     await _ready;
+    if (generation != _generation || _closing) return;
     final paused = {
       ...state.pausedVideoIds,
       for (final video in state.videos)
@@ -71,32 +128,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     for (final progress in state.downloadProgresses.values) {
       progress.cancelToken.cancel();
     }
-    await db.saveSetting(
+    await library.saveSetting(
         SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
     await _activeJob;
   }
 
   Future<void> onReady() async {
-    Set<String> paused = {};
-    DownloadFolder? folder;
-    try {
-      folder = DownloadFolder.fromJson(
-          jsonDecode(db.getSettings(downloadFolderSetting)?.value ?? 'null'));
-    } on FormatException {
-      // Invalid local preferences fall back to private storage.
-    }
-    try {
-      final saved = jsonDecode(db.getSettings(_pausedSetting)?.value ?? '[]');
-      if (saved is List) paused = saved.whereType<String>().toSet();
-    } on FormatException {
-      // An interrupted settings import should not block the download library.
-    }
-    emit(state.copyWith(
-        folderUri: folder?.uri,
-        folderName: folder?.name,
-        wifiOnly: db.getSettings(_wifiSetting)?.value == 'true',
-        pausedVideoIds: paused,
-        videos: db.getAllDownloads()));
+    _loadLibrary();
     if (Platform.isAndroid) {
       _networkSubscription = const EventChannel('videre/network_changes')
           .receiveBroadcastStream()
@@ -115,10 +153,35 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     _networkChanged(_wifiConnected);
   }
 
+  void _loadLibrary() {
+    Set<String> paused = {};
+    DownloadFolder? folder;
+    try {
+      folder = DownloadFolder.fromJson(jsonDecode(
+          _library.getSettings(downloadFolderSetting)?.value ?? 'null'));
+    } on FormatException {
+      // Invalid local preferences fall back to private storage.
+    }
+    try {
+      final saved =
+          jsonDecode(_library.getSettings(_pausedSetting)?.value ?? '[]');
+      if (saved is List) paused = saved.whereType<String>().toSet();
+    } on FormatException {
+      // An interrupted settings import should not block the download library.
+    }
+    emit(state.copyWith(
+        folderUri: folder?.uri,
+        folderName: folder?.name,
+        wifiOnly: _library.getSettings(_wifiSetting)?.value == 'true',
+        pausedVideoIds: paused,
+        downloadProgresses: {},
+        videos: _library.getAllDownloads()));
+  }
+
   bool get _networkAllowed => !state.wifiOnly || _wifiConnected;
 
   void _networkChanged(bool connected) {
-    if (_closing) return;
+    if (!_current) return;
     _wifiConnected = connected;
     emit(state.copyWith(waitingForWifi: !_networkAllowed));
     if (!_networkAllowed) {
@@ -130,63 +193,83 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
   }
 
-  Future<void> setWifiOnly(bool value) async {
-    await _ready;
-    await db.saveSetting(SettingsValue(_wifiSetting, value.toString()));
-    emit(state.copyWith(wifiOnly: value));
-    _networkChanged(_wifiConnected);
-  }
+  Future<void> setWifiOnly(bool value) => _mutate(() async {
+        await _ready;
+        if (!_current || _switchingProfile) return;
+        await _library
+            .saveSetting(SettingsValue(_wifiSetting, value.toString()));
+        emit(state.copyWith(wifiOnly: value));
+        _networkChanged(_wifiConnected);
+      });
 
   Future<void> chooseFolder() async {
     await _ready;
+    if (!_current || _switchingProfile) return;
+    final generation = _generation;
+    final library = _library;
     final folder = await storage.pickFolder(state.folderUri);
-    if (folder == null || _closing) return;
-    await db.saveSetting(
+    if (folder == null ||
+        !_current ||
+        _switchingProfile ||
+        generation != _generation) {
+      return;
+    }
+    await library.saveSetting(
         SettingsValue(downloadFolderSetting, jsonEncode(folder.toJson())));
-    if (!_closing) {
+    if (_current && generation == _generation) {
       emit(state.copyWith(folderUri: folder.uri, folderName: folder.name));
     }
   }
 
-  Future<void> usePrivateFolder() async {
-    await _ready;
-    await db.deleteSetting(downloadFolderSetting);
-    if (!_closing) emit(state.copyWith(folderUri: null, folderName: null));
-  }
+  Future<void> usePrivateFolder() => _mutate(() async {
+        await _ready;
+        if (!_current || _switchingProfile) return;
+        await _library.deleteSetting(downloadFolderSetting);
+        if (_current) emit(state.copyWith(folderUri: null, folderName: null));
+      });
 
   void setVideos() {
-    if (!_closing) emit(state.copyWith(videos: db.getAllDownloads()));
+    if (_current) emit(state.copyWith(videos: _library.getAllDownloads()));
   }
 
   Future<bool> addDownload(String videoId,
-      {String quality = '720p', bool audioOnly = false}) async {
-    await _ready;
-    if (!DownloadedVideo.isSafeFileId(videoId) ||
-        db.getDownloadByVideoId(videoId) != null ||
-        _deleting.contains(videoId) ||
-        !_enqueuing.add(videoId)) {
-      return false;
-    }
-    try {
-      await db.upsertDownload(DownloadedVideo(
-          videoId: videoId,
-          title: videoId,
-          lengthSeconds: 0,
-          quality: quality,
-          folderUri: state.folderUri,
-          audioOnly: audioOnly));
-    } finally {
-      _enqueuing.remove(videoId);
-    }
-    setVideos();
-    unawaited(_drain());
-    return true;
-  }
+          {String quality = '720p', bool audioOnly = false}) =>
+      _mutate(() async {
+        await _ready;
+        if (!_current ||
+            _switchingProfile ||
+            !DownloadedVideo.isSafeFileId(videoId) ||
+            _library.getDownloadByVideoId(videoId) != null ||
+            _deleting.contains(videoId) ||
+            !_enqueuing.add(videoId)) {
+          return false;
+        }
+        try {
+          final account = await _library.getCurrentlySelectedServer();
+          if (!_current || _switchingProfile) return false;
+          await _library.upsertDownload(DownloadedVideo(
+              videoId: videoId,
+              title: videoId,
+              profileId: _library.profileId,
+              accountId: account.accountId,
+              lengthSeconds: 0,
+              quality: quality,
+              folderUri: state.folderUri,
+              audioOnly: audioOnly));
+        } finally {
+          _enqueuing.remove(videoId);
+        }
+        setVideos();
+        unawaited(_drain());
+        return true;
+      });
 
   Future<int> addDownloads(Iterable<String> videoIds,
       {String quality = '720p', bool audioOnly = false}) async {
     var added = 0;
+    final generation = _generation;
     for (final id in videoIds.toSet()) {
+      if (generation != _generation || _switchingProfile) break;
       if (await addDownload(id, quality: quality, audioOnly: audioOnly)) {
         added++;
       }
@@ -195,15 +278,19 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<void> _drain() async {
-    if (_processing || _closing || !_networkAllowed) return;
+    if (_processing || !_current || _switchingProfile || !_networkAllowed) {
+      return;
+    }
     _processing = true;
+    final finished = _drainFinished = Completer<void>();
     try {
-      while (!_closing && _networkAllowed) {
-        final next = db
+      while (_current && !_switchingProfile && _networkAllowed) {
+        final next = _library
             .getAllDownloads()
             .where((v) =>
                 !v.downloadComplete &&
                 !v.downloadFailed &&
+                !v.authenticationRequired &&
                 !state.pausedVideoIds.contains(v.videoId) &&
                 !_deleting.contains(v.videoId))
             .firstOrNull;
@@ -216,10 +303,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       }
     } finally {
       _processing = false;
+      finished.complete();
+      _drainFinished = null;
     }
   }
 
   Future<void> _download(DownloadedVideo video) async {
+    final library = _library;
     final token = CancelToken();
     final progress = DownloadProgress(token);
     emit(state.copyWith(downloadProgresses: {video.videoId: progress}));
@@ -230,7 +320,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     void update(int count, int total, int step, int steps) {
       final now = DateTime.now();
       if (token.isCancelled ||
-          _closing ||
+          !_current ||
           (count != total && now.difference(lastUpdate).inMilliseconds < 250)) {
         return;
       }
@@ -245,6 +335,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
 
     try {
+      if (video.profileId != library.profileId) {
+        throw StateError('The download belongs to another profile');
+      }
+      if (video.accountId == null) {
+        // Bind old queued records exactly once before their first resumed
+        // request. All later retries and restarts resolve this same account.
+        final account = await library.getCurrentlySelectedServer();
+        if (token.isCancelled) throw token.cancelError!;
+        video = video.copyWith(accountId: account.accountId);
+        await library.upsertDownload(video);
+      }
       if (video.folderUri != null) await storage.checkFolder(video.folderUri!);
       for (var attempt = 0; attempt < 3; attempt++) {
         final artworkToken = CancelToken();
@@ -252,7 +353,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         try {
           if (token.isCancelled) throw token.cancelError!;
           // Signed media URLs expire. Refresh them before every retry.
-          final server = await db.getCurrentlySelectedServer();
+          final server = library.getAccount(video.accountId!);
+          if (server == null || server.profileId != library.profileId) {
+            throw StateError('The download account is no longer available');
+          }
           if (token.isCancelled) throw token.cancelError!;
           final vid = await Future.any([
             service
@@ -268,8 +372,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               author: vid.author,
               authorUrl: vid.authorUrl,
               lengthSeconds: vid.lengthSeconds ?? 0,
-              downloadFailed: false);
-          await db.upsertDownload(video);
+              downloadFailed: false,
+              authenticationRequired: false);
+          await library.upsertDownload(video);
           setVideos();
           final formats = vid.adaptiveFormats ?? <AdaptiveFormat>[];
           final audios = formats
@@ -353,13 +458,14 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             // Record ownership before writing so retries reuse this document
             // and deletion can clean up an interrupted save after a restart.
             video = video.copyWith(storageUri: uri);
-            await db.upsertDownload(video);
+            await library.upsertDownload(video);
             if (token.isCancelled) throw token.cancelError!;
             await storage.writeDocument(output, uri, token);
           }
-          await db.upsertDownload(video.copyWith(
+          await library.upsertDownload(video.copyWith(
               downloadComplete: true,
               downloadFailed: false,
+              authenticationRequired: false,
               storageFailed: false));
           setVideos();
           update(1, 1, steps - 1, steps);
@@ -373,6 +479,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         } catch (error) {
           if (token.isCancelled || _closing) return;
           if (attempt == 2 ||
+              _requiresSignIn(error) ||
               (error is PlatformException &&
                   error.code == 'DOWNLOAD_STORAGE') ||
               error is StateError ||
@@ -390,11 +497,22 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       }
     } catch (error, stack) {
       if (!token.isCancelled && !_closing) {
+        if (_requiresSignIn(error)) {
+          final paused = {...state.pausedVideoIds, video.videoId};
+          await library.upsertDownload(video.copyWith(
+              downloadFailed: false,
+              authenticationRequired: true,
+              downloadComplete: false));
+          await library.saveSetting(
+              SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+          if (_current) emit(state.copyWith(pausedVideoIds: paused));
+          return;
+        }
         log.warning(
-            'Download failed for ${video.videoId}; partial files are kept',
-            error,
+            'Download failed for ${video.videoId}; partial files are kept (${error.runtimeType})',
+            null,
             stack);
-        await db.upsertDownload(video.copyWith(
+        await library.upsertDownload(video.copyWith(
             downloadFailed: true,
             downloadComplete: false,
             storageFailed: error is PlatformException &&
@@ -402,12 +520,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       }
     } finally {
       dio.close(force: true);
-      if (!_closing) {
+      if (_current) {
         emit(state.copyWith(downloadProgresses: {}));
         setVideos();
       }
     }
   }
+
+  static bool _requiresSignIn(Object error) =>
+      error is GatewayAuthenticationRequired ||
+      (error is DioException && error.error is GatewayAuthenticationRequired);
 
   Future<void> _downloadArtwork(Dio dio, DownloadedVideo video, String thumb,
       Server server, CancelToken token) async {
@@ -441,33 +563,46 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
   }
 
-  Future<void> pauseDownload(DownloadedVideo video) async {
-    final paused = {...state.pausedVideoIds, video.videoId};
-    emit(state.copyWith(pausedVideoIds: paused));
-    state.downloadProgresses[video.videoId]?.cancelToken.cancel();
-    await db.saveSetting(
-        SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-  }
+  Future<void> pauseDownload(DownloadedVideo video) => _mutate(() async {
+        await _ready;
+        if (!_current ||
+            _switchingProfile ||
+            video.profileId != _library.profileId) {
+          return;
+        }
+        final paused = {...state.pausedVideoIds, video.videoId};
+        emit(state.copyWith(pausedVideoIds: paused));
+        state.downloadProgresses[video.videoId]?.cancelToken.cancel();
+        await _library.saveSetting(
+            SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+      });
 
-  Future<void> retryDownload(DownloadedVideo video) async {
-    await _ready;
-    if (_closing || _deleting.contains(video.videoId)) return;
-    final paused = {...state.pausedVideoIds}..remove(video.videoId);
-    emit(state.copyWith(pausedVideoIds: paused));
-    await db.saveSetting(
-        SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-    if (_closing || _deleting.contains(video.videoId)) return;
-    // A sheet can remain open while the job completes or is removed. Only
-    // retry the current saved job; a captured UI snapshot must not restore it.
-    final current = db.getDownloadByVideoId(video.videoId);
-    if (current == null || current.downloadComplete) return;
-    if (current.downloadFailed) {
-      await db.upsertDownload(
-          current.copyWith(downloadFailed: false, storageFailed: false));
-    }
-    setVideos();
-    unawaited(_drain());
-  }
+  Future<void> retryDownload(DownloadedVideo video) => _mutate(() async {
+        await _ready;
+        if (!_current ||
+            _switchingProfile ||
+            video.profileId != _library.profileId ||
+            _deleting.contains(video.videoId)) {
+          return;
+        }
+        final paused = {...state.pausedVideoIds}..remove(video.videoId);
+        emit(state.copyWith(pausedVideoIds: paused));
+        await _library.saveSetting(
+            SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+        if (_closing || _deleting.contains(video.videoId)) return;
+        // A sheet can remain open while the job completes or is removed. Only
+        // retry the current saved job; a captured UI snapshot must not restore it.
+        final current = _library.getDownloadByVideoId(video.videoId);
+        if (current == null || current.downloadComplete) return;
+        if (current.downloadFailed || current.authenticationRequired) {
+          await _library.upsertDownload(current.copyWith(
+              downloadFailed: false,
+              authenticationRequired: false,
+              storageFailed: false));
+        }
+        setVideos();
+        unawaited(_drain());
+      });
 
   Future<void> _deleteParts(DownloadedVideo video) async {
     final path = await video.downloadPath;
@@ -485,43 +620,66 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     if (await artwork.exists()) await artwork.delete();
   }
 
-  Future<void> deleteVideo(DownloadedVideo video) async {
-    _deleting.add(video.videoId);
-    try {
-      state.downloadProgresses[video.videoId]?.cancelToken.cancel();
-      if (_activeId == video.videoId) await _activeJob;
-      // The active job may have created a document since this UI snapshot.
-      video = db.getDownloadByVideoId(video.videoId) ?? video;
-      if (video.storageUri != null) {
-        await storage.deleteDocument(video.storageUri!);
-      }
-      await _deleteParts(video);
-      for (final path in [
-        if (video.storageUri == null) await video.effectivePath,
-        await video.downloadPath,
-        await video.thumbnailPath
-      ]) {
-        final file = File(path);
-        if (await file.exists()) await file.delete();
-      }
-      await db.deleteDownload(video);
-      final paused = {...state.pausedVideoIds}..remove(video.videoId);
-      await db.saveSetting(
-          SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
-      emit(state.copyWith(pausedVideoIds: paused));
-      setVideos();
-    } finally {
-      _deleting.remove(video.videoId);
-    }
-  }
+  Future<void> deleteVideo(DownloadedVideo video) => _mutate(() async {
+        await _ready;
+        if (!DownloadedVideo.isSafeFileId(video.videoId) ||
+            !DownloadedVideo.isSafeFileId(video.profileId)) {
+          throw const FormatException('Invalid download identity');
+        }
+        if (!_current ||
+            _switchingProfile ||
+            video.profileId != _library.profileId) {
+          return;
+        }
+        final saved = _library.getDownloadByVideoId(video.videoId);
+        if (saved == null) return;
+        video = saved;
+        _deleting.add(video.videoId);
+        try {
+          state.downloadProgresses[video.videoId]?.cancelToken.cancel();
+          if (_activeId == video.videoId) await _activeJob;
+          // The active job may have created a document since this UI snapshot.
+          video = _library.getDownloadByVideoId(video.videoId) ?? video;
+          if (video.storageUri != null) {
+            await storage.deleteDocument(video.storageUri!);
+          }
+          await _deleteParts(video);
+          for (final path in [
+            if (video.storageUri == null) await video.effectivePath,
+            await video.downloadPath,
+            await video.thumbnailPath
+          ]) {
+            final file = File(path);
+            if (await file.exists()) await file.delete();
+          }
+          await _library.deleteDownload(video);
+          final paused = {...state.pausedVideoIds}..remove(video.videoId);
+          await _library.saveSetting(
+              SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
+          emit(state.copyWith(pausedVideoIds: paused));
+          setVideos();
+        } finally {
+          _deleting.remove(video.videoId);
+        }
+      });
 
   bool canPlayAll() =>
+      _current &&
+      !_switchingProfile &&
       state.videos.any((v) => v.downloadComplete && !v.downloadFailed);
-  void playAll() => player.playOfflineVideos(state.videos
-      .where((v) => v.downloadComplete && !v.downloadFailed)
-      .toList());
+  void playAll() {
+    if (!_current || _switchingProfile) return;
+    player.playOfflineVideos(state.videos
+        .where((v) => v.downloadComplete && !v.downloadFailed)
+        .toList());
+  }
 
   Future<void> copyToDownloadFolder(DownloadedVideo video) async {
+    if (!_current ||
+        _switchingProfile ||
+        video.profileId != _library.profileId) {
+      return;
+    }
     final file = File(await video.effectivePath);
     if (await file.exists()) {
       final name =
@@ -538,6 +696,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       progress.cancelToken.cancel();
     }
     await _networkSubscription?.cancel();
+    await Future.wait(List.of(_mutations));
     await _activeJob;
     return super.close();
   }

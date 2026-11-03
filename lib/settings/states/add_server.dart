@@ -3,9 +3,9 @@ import 'dart:convert';
 import 'package:bloc/bloc.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:http/http.dart' as http;
+import 'package:uuid/uuid.dart';
 
 import '../../globals.dart';
 import '../models/db/server.dart';
@@ -27,6 +27,8 @@ class AddServerCubit extends Cubit<AddServerState> {
       TextEditingController(text: 'https://');
   final TextEditingController headerNameController = TextEditingController();
   final TextEditingController headerValueController = TextEditingController();
+  final TextEditingController nameController = TextEditingController();
+  final String _profileId = db.profileId;
 
   AddServerCubit(super.initialState) {
     urlController.addListener(
@@ -48,6 +50,7 @@ class AddServerCubit extends Cubit<AddServerState> {
     urlController.dispose();
     headerNameController.dispose();
     headerValueController.dispose();
+    nameController.dispose();
     return super.close();
   }
 
@@ -55,26 +58,45 @@ class AddServerCubit extends Cubit<AddServerState> {
     if (isClosed || state.loading) return null;
     final serverUrl = normalizeUrl(urlController.text);
     final headers = Map<String, String>.from(state.headers);
+    final protectedServer = state.protectedServer;
+    final accountName = nameController.text.trim();
     final advancedTest = state.advancedTest || state.publicInstance != null;
+    Server? protectedSession;
     emit(state.copyWith(loading: true));
     try {
       if (serverUrl == null) {
         throw const FormatException(
             'Enter an instance address, such as https://invidious.example.');
       }
+      if (accountName.length > 80) {
+        throw const FormatException(
+            'Account name must not exceed 80 characters');
+      }
 
-      final existingServer = db.getServer(serverUrl);
-
-      if (existingServer != null) {
-        throw ServerAlreadyExists();
+      final sameEndpointAccounts =
+          (await db.forProfile(_profileId).getServers())
+              .where((account) => account.url == serverUrl)
+              .length;
+      var server = Server(
+          id: const Uuid().v4(),
+          profileId: _profileId,
+          name: accountName.isEmpty && sameEndpointAccounts > 0
+              ? '${Uri.parse(serverUrl).host} (${sameEndpointAccounts + 1})'
+              : accountName,
+          url: serverUrl,
+          customHeaders: headers);
+      if (protectedServer) {
+        final authenticated = await service.authenticateProtected(server);
+        if (authenticated == null) return null;
+        server = authenticated;
+        protectedSession = server;
       }
 
       await service
-          .validateServer(serverUrl, headers)
+          .validateServer(serverUrl, server.headersForUrl(serverUrl))
           .timeout(const Duration(seconds: 15));
 
       if (advancedTest) {
-        Server server = Server(url: serverUrl, customHeaders: headers);
         final video = await service
             .getVideo('dQw4w9WgXcQ', serverOverride: server)
             .timeout(const Duration(seconds: 15));
@@ -90,25 +112,35 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
 
-      return Server(url: serverUrl, customHeaders: headers);
+      return server;
+    } catch (_) {
+      if (protectedSession != null) {
+        await service.logOutProtected(protectedSession);
+      }
+      rethrow;
     } finally {
       if (!isClosed) emit(state.copyWith(loading: false));
     }
   }
 
-  setShowAdvanced(bool advanced) {
+  void setShowAdvanced(bool advanced) {
     if (isClosed || state.loading) return;
     emit(state.copyWith(showAdvanced: advanced));
   }
 
-  addHeader(String key, String value) {
+  void setProtectedServer(bool value) {
+    if (isClosed || state.loading) return;
+    emit(state.copyWith(protectedServer: value));
+  }
+
+  Future<void> addHeader(String key, String value) async {
     if (isClosed || state.loading) return;
     final Map<String, String> headers = Map.from(state.headers);
     headers[key] = value;
     emit(state.copyWith(headers: headers));
   }
 
-  removeHeader(String key) {
+  void removeHeader(String key) {
     if (isClosed || state.loading) return;
     final Map<String, String> headers = Map.from(state.headers);
     headers.remove(key);
@@ -121,7 +153,11 @@ class AddServerCubit extends Cubit<AddServerState> {
     if (isClosed || state.loading) return;
     urlController.text = url;
     // Headers entered for a private server must not follow a public choice.
-    emit(state.copyWith(headers: {}, publicInstance: url, advancedTest: true));
+    emit(state.copyWith(
+        headers: {},
+        publicInstance: url,
+        advancedTest: true,
+        protectedServer: false));
   }
 
   static Future<List<PublicInstance>> getPublicInstances(
@@ -193,7 +229,7 @@ class AddServerCubit extends Cubit<AddServerState> {
     }
   }
 
-  setAdvancedTest(bool advancedTest) {
+  void setAdvancedTest(bool advancedTest) {
     if (isClosed || state.loading || state.publicInstance != null) return;
     emit(state.copyWith(advancedTest: advancedTest));
   }
@@ -206,6 +242,7 @@ sealed class AddServerState with _$AddServerState {
       @Default(false) bool valid,
       @Default(false) bool showAdvanced,
       @Default(true) bool advancedTest,
+      @Default(false) bool protectedServer,
       String? publicInstance,
       @Default({}) Map<String, String> headers}) = _AddServerState;
 }

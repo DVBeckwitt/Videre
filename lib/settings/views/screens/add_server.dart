@@ -18,6 +18,7 @@ import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/screens/manage_single_server.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/utils.dart';
@@ -276,6 +277,11 @@ class AddServerScreen extends StatelessWidget {
         title: Text(locals.addServer),
         actions: [
           IconButton(
+            tooltip: locals.profiles,
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: () => showProfilePicker(context),
+          ),
+          IconButton(
             tooltip: locals.networkProxy,
             icon: const Icon(Icons.vpn_lock_outlined),
             onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
@@ -330,6 +336,20 @@ class AddServerScreen extends StatelessWidget {
                         enableIMEPersonalizedLearning: false,
                       ),
                       const Gap(10),
+                      TextField(
+                        controller: cubit.nameController,
+                        readOnly: state.loading,
+                        maxLength: 80,
+                        decoration:
+                            InputDecoration(labelText: locals.accountName),
+                      ),
+                      SwitchListTile(
+                        title: Text(locals.protectedServer),
+                        subtitle: Text(locals.protectedServerHelp),
+                        value: state.protectedServer,
+                        onChanged:
+                            state.loading ? null : cubit.setProtectedServer,
+                      ),
                       ListTile(
                         leading: AnimatedRotation(
                             duration: AppMotion.duration(context),

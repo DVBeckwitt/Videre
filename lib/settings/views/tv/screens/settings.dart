@@ -1,4 +1,5 @@
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/extensions.dart';
 import 'package:clipious/router.dart';
@@ -276,6 +277,12 @@ class TVSettingsScreen extends StatelessWidget {
                       value: state.hideWatchedSubscriptions),
                 ),
                 SettingsTitle(title: locals.servers),
+                SettingsTile(
+                  title: locals.profiles,
+                  description: locals.profileLibraryHelp,
+                  leading: const Icon(Icons.account_circle_outlined),
+                  onSelected: showProfilePicker,
+                ),
                 BlocBuilder<AppCubit, AppState>(
                     buildWhen: (previous, current) =>
                         previous.server != current.server,

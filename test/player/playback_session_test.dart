@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:audio_session/audio_session.dart';
+import 'package:audio_service/audio_service.dart'
+    show AudioProcessingState, MediaControl, MediaItem, PlaybackState;
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
@@ -24,6 +26,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -82,6 +85,20 @@ class _AudioStartRecorder extends AudioPlayerCubit {
   Future<void> playVideo(bool offline, {Duration? startAt}) async {
     startedAt = startAt;
     startedOffline = offline;
+    await super.playVideo(offline, startAt: startAt);
+  }
+}
+
+class _ProfileStopRecorder extends _AudioStartRecorder {
+  _ProfileStopRecorder(super.initialState, super.player, super.settings);
+
+  final stopRequested = Completer<void>();
+  final stopped = Completer<void>();
+
+  @override
+  Future<void> stopForProxyChange() {
+    if (!stopRequested.isCompleted) stopRequested.complete();
+    return stopped.future;
   }
 }
 
@@ -105,16 +122,16 @@ class _DelayedProgressPlayer extends _SessionPlayer {
       savedProgress.putIfAbsent(timeInSeconds, () => Completer<void>()).future;
 }
 
-Future<void> waitForSavedPosition(int seconds) async {
+Future<void> waitForSavedPosition(int seconds, {String? videoId}) async {
   final database = db as SembastSqfDb;
   await database.settingsStore
       .record(playbackSessionSetting)
       .onSnapshot(database.db)
-      .firstWhere((snapshot) =>
-          PlaybackSession.decode(snapshot?.value['value'] as String?)
-              ?.seconds ==
-          seconds)
-      .timeout(const Duration(seconds: 5));
+      .firstWhere((snapshot) {
+    final session = PlaybackSession.decode(snapshot?.value['value'] as String?);
+    return session?.seconds == seconds &&
+        (videoId == null || session?.currentId == videoId);
+  }).timeout(const Duration(seconds: 5));
 }
 
 void main() {
@@ -388,6 +405,118 @@ void main() {
       expect(db.getVideoProgress('a'), 1);
     });
 
+    test(
+        'manual unwatched survives progress and session callbacks from old playback',
+        () async {
+      player.seedDownload(const DownloadedVideo(
+          videoId: 'a', title: 'A', lengthSeconds: 100, quality: 'audio'));
+      await player.onProgress(const Duration(seconds: 94));
+      final repository = WatchRepository(db as SembastSqfDb);
+      await repository.mark('a', false);
+      await player.onProgress(const Duration(seconds: 97));
+      player.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await Future<void>.delayed(Duration.zero);
+      expect(db.getVideoProgress('a'), 0);
+      expect(repository.isWatched('a'), isFalse);
+      expect(player.savedSession?.seconds, 0);
+    });
+
+    test(
+        'switching people preserves old queue and restores the new queue silently',
+        () async {
+      final database = db as SembastSqfDb;
+      final oldDatabase = database.forProfile(database.profileId);
+      final other = await database.createProfile('Another person');
+      await database.forProfile(other.id).saveSetting(SettingsValue(
+          playbackSessionSetting,
+          const PlaybackSession(
+                  videos: [Video(videoId: 'new')],
+                  currentId: 'new',
+                  seconds: 12)
+              .encode()));
+      player.seedState(player.state.copyWith(
+          currentlyPlaying: const Video(videoId: 'old', lengthSeconds: 100),
+          videos: const [Video(videoId: 'old', lengthSeconds: 100)],
+          position: const Duration(seconds: 37),
+          isHidden: false));
+      await player.saveProgress(37);
+      await player.prepareForProfileSwitch();
+      expect(player.state.hasVideo, isFalse);
+      expect(player.state.videos, isEmpty);
+      await database.useProfile(other.id);
+      // A late native event while switching must not create history for the new person.
+      await player.onProgress(const Duration(seconds: 99));
+      await player.reloadForProfile();
+      expect(player.state.videos.map((video) => video.videoId), ['new']);
+      expect(player.state.hasVideo, isFalse);
+      expect(player.state.isHidden, isTrue);
+      expect(player.state.isPlaying, isFalse);
+      expect(database.getVideoProgress('old'), 0);
+      expect(oldDatabase.getVideoProgress('old'), 0.37);
+      expect(
+          PlaybackSession.decode(
+                  oldDatabase.getSettings(playbackSessionSetting)?.value)
+              ?.seconds,
+          37);
+    });
+
+    test('switching people retires native metadata and awaits the decoder',
+        () async {
+      const video =
+          Video(videoId: 'old', title: 'Old title', lengthSeconds: 100);
+      player.seedState(player.state.copyWith(
+          currentlyPlaying: video,
+          videos: [video],
+          position: const Duration(seconds: 37),
+          isPlaying: true,
+          isHidden: false));
+      final handler = MediaHandler(player);
+      const item = MediaItem(id: 'old', title: 'Old title');
+      handler.mediaItem.add(item);
+      handler.queue.add([item]);
+      handler.playbackState.add(PlaybackState(
+          processingState: AudioProcessingState.ready,
+          playing: true,
+          updatePosition: const Duration(seconds: 37),
+          controls: [MediaControl.pause],
+          queueIndex: 0));
+      final decoder = _ProfileStopRecorder(
+          const AudioPlayerState(video: video), player, settings);
+      addTearDown(() async {
+        if (!decoder.stopped.isCompleted) decoder.stopped.complete();
+        await decoder.close();
+      });
+
+      var finished = false;
+      final switching = player.prepareForProfileSwitch().then((_) {
+        finished = true;
+      });
+      await decoder.stopRequested.future;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(finished, isFalse,
+          reason: 'Native stop must finish before switching.');
+      expect(player.state.hasVideo, isFalse);
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.idle);
+      expect(handler.playbackState.value.playing, isFalse);
+      expect(handler.playbackState.value.controls, isEmpty);
+      expect(handler.playbackState.value.updatePosition, Duration.zero);
+      expect(handler.playbackState.value.queueIndex, isNull);
+      expect(handler.queue.value, isEmpty);
+      expect(handler.mediaItem.value, isNull);
+
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      await handler.play();
+      expect(player.requestedPlaying, isFalse);
+      expect(handler.playbackState.value.playing, isFalse);
+      decoder.stopped.complete();
+      await switching;
+      expect(player.savedSession?.currentId, 'old');
+      expect(player.savedSession?.seconds, 37);
+    });
+
     test('pause saves the exact position between periodic checkpoints',
         () async {
       player.seedDownload(const DownloadedVideo(
@@ -582,12 +711,13 @@ void main() {
       delayed.seedDownload(const DownloadedVideo(
           videoId: 'old', title: 'Old', lengthSeconds: 100, quality: 'audio'));
       final progress = delayed.onProgress(const Duration(seconds: 75));
+      final newSessionSaved = waitForSavedPosition(0, videoId: 'new');
       delayed.seedDownload(const DownloadedVideo(
           videoId: 'new', title: 'New', lengthSeconds: 100, quality: 'audio'));
       delayed.savedProgress[75]!.complete();
       await progress;
       expect(delayed.state.position, Duration.zero);
-      await Future<void>.delayed(Duration.zero);
+      await newSessionSaved;
       expect(delayed.savedSession?.currentId, 'new');
       expect(delayed.savedSession?.seconds, 0);
     });

@@ -4,6 +4,8 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/notifications/models/db/subscription_notifications.dart';
 import 'package:clipious/router.dart';
 import 'package:logging/logging.dart';
+import '../settings/models/db/server.dart';
+import '../settings/models/errors/no_server_selected.dart';
 
 final log = Logger('notifications');
 
@@ -75,6 +77,18 @@ initializeNotifications() {
 }
 
 class NotificationController {
+  static bool Function() canHandleActions = () => true;
+
+  static Future<Server?> _selectedAccount() async {
+    if (!canHandleActions()) return null;
+    try {
+      final server = await db.getCurrentlySelectedServer();
+      return canHandleActions() ? server : null;
+    } on NoServerSelected {
+      return null;
+    }
+  }
+
   /// Use this method to detect when a new notification or a schedule is created
   @pragma("vm:entry-point")
   static Future<void> onNotificationCreatedMethod(
@@ -102,22 +116,35 @@ class NotificationController {
       ReceivedAction receivedAction) async {
     if (receivedAction.payload != null && receivedAction.payload!.isNotEmpty) {
       var payload = receivedAction.payload!;
+      final account = await _selectedAccount();
+      if (account == null) return;
+      // Old notifications must never open another person's private content.
+      if (payload['profileId'] != null &&
+          (payload['profileId'] != account.profileId ||
+              payload['accountId'] != account.accountId)) return;
+      if (payload['profileId'] == null && account.profileId != 'default')
+        return;
+      final notifications = fileDb.forAccount(account);
       if (receivedAction.channelKey == NotificationTypes.channel.id &&
           payload.containsKey(channelId) &&
           payload.containsKey(lastSeenVideo)) {
-        log.fine('Launching channel screen ${receivedAction.payload}');
+        log.fine('Launching channel screen');
         appRouter.push(ChannelRoute(channelId: payload[channelId]!));
-        await fileDb.setChannelNotificationLastViewedVideo(
+        await notifications.setChannelNotificationLastViewedVideo(
             payload[channelId]!, payload[lastSeenVideo]!);
       } else if (receivedAction.channelKey == NotificationTypes.playlist.id &&
           payload.containsKey(playlistId)) {
-        log.fine('Launching playlist screen ${receivedAction.payload}');
-        service.getPublicPlaylists(payload[playlistId]!).then((value) async {
-          appRouter
-              .push(PlaylistViewRoute(playlist: value, canDeleteVideos: false));
-          await fileDb.setPlaylistNotificationLastViewedVideo(
-              value.playlistId, value.videoCount);
-        });
+        log.fine('Launching playlist screen');
+        final value = await service.getPublicPlaylists(payload[playlistId]!,
+            serverOverride: account, saveLastSeen: false);
+        final current = await _selectedAccount();
+        if (current == null ||
+            current.profileId != account.profileId ||
+            current.accountId != account.accountId) return;
+        appRouter
+            .push(PlaylistViewRoute(playlist: value, canDeleteVideos: false));
+        await notifications.setPlaylistNotificationLastViewedVideo(
+            value.playlistId, value.videoCount);
       } else if (receivedAction.channelKey ==
               NotificationTypes.subscription.id &&
           payload.containsKey(lastSeenVideo)) {
@@ -127,8 +154,9 @@ class NotificationController {
             MainContentRoute(children: [SubscriptionRoute()])
           ]),
         ]);
-        await fileDb.setLastSubscriptionNotification(SubscriptionNotification(
-            payload[lastSeenVideo]!, DateTime.now().millisecondsSinceEpoch));
+        await notifications.setLastSubscriptionNotification(
+            SubscriptionNotification(payload[lastSeenVideo]!,
+                DateTime.now().millisecondsSinceEpoch));
       }
     }
   }

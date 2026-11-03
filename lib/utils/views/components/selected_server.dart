@@ -18,7 +18,8 @@ class SelectedServerBuilder extends StatefulWidget {
 class _SelectedServerBuilderState extends State<SelectedServerBuilder> {
   Future<Server>? _initialServer;
 
-  Server _fresh(Server server) => db.getServer(server.url) ?? server;
+  Server? _fresh(Server server) =>
+      db.forProfile(server.profileId).getAccount(server.accountId);
 
   @override
   Widget build(BuildContext context) {

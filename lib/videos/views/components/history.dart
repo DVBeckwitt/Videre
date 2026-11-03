@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -82,7 +84,10 @@ class _HistoryViewState extends State<HistoryView> {
                       : Padding(
                           padding: const EdgeInsets.only(top: 3),
                           child: RefreshIndicator(
-                            onRefresh: () => listCubit.refreshItems(),
+                            onRefresh: () {
+                              unawaited(service.syncHistory());
+                              return listCubit.refreshItems();
+                            },
                             child: ListView.builder(
                               controller: listCubit.scrollController,
                               scrollDirection: Axis.vertical,

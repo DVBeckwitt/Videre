@@ -16,6 +16,7 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 
 /** One transport shared by foreground video, audio-service and background engines. */
@@ -29,6 +30,7 @@ object ProxyDataSource {
         if (preferences != null) return
         val store = context.applicationContext.getSharedPreferences("videre_network_proxy", Context.MODE_PRIVATE)
         preferences = store
+        GatewaySessions.initialize(context)
         try {
             val saved = store.getString("configuration", null)
             val loaded = if (saved == null) ProxyPolicy() else {
@@ -67,15 +69,19 @@ object ProxyDataSource {
     fun factory(userAgent: String?, headers: Map<String, String>?, sourceUri: String?): HttpDataSource.Factory {
         // Plugin registration loads persisted policy before player creation.
         // If a caller beats registration, calls remain blocked until it finishes.
-        return OkHttpDataSource.Factory(calls.forSource(sourceUri, headers?.keys ?: emptySet())).apply {
+        val gateway = headers?.entries?.firstOrNull { it.key.equals(GATEWAY_CONTEXT_HEADER, true) }
+            ?.value?.let(GatewayContext::parse)
+        val outgoing = headers?.filterKeys { !it.equals(GATEWAY_CONTEXT_HEADER, true) }
+        return OkHttpDataSource.Factory(calls.forSource(sourceUri, outgoing?.keys ?: emptySet(), gateway)).apply {
             setUserAgent(userAgent)
-            if (headers != null) setDefaultRequestProperties(headers)
+            if (outgoing != null) setDefaultRequestProperties(outgoing)
         }
     }
 }
 
 class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private var channel: MethodChannel? = null
+    private var gatewayChannel: MethodChannel? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingLock = Any()
     private val pending = mutableSetOf<Call>()
@@ -98,6 +104,39 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         ).also {
             it.setMethodCallHandler(this)
         }
+        gatewayChannel = MethodChannel(binding.binaryMessenger, "videre/gateway_sessions",
+            StandardMethodCodec.INSTANCE, binding.binaryMessenger.makeBackgroundTaskQueue()).also {
+            it.setMethodCallHandler { call, result ->
+                try {
+                    val context = GatewayContext.parse(call.argument<String>("context") ?: "")
+                    when (call.method) {
+                        "status" -> result.success(GatewaySessions.status(context))
+                        "resolve" -> {
+                            val url = (call.argument<String>("url") ?: "").toHttpUrlOrNull()
+                                ?: throw IllegalArgumentException()
+                            val session = GatewaySessions.resolve(context, url)
+                            result.success(mapOf("enabled" to session.enabled, "needsSignIn" to session.needsSignIn,
+                                "cookies" to session.cookies, "revision" to session.revision))
+                        }
+                        "ingest" -> {
+                            val url = (call.argument<String>("url") ?: "").toHttpUrlOrNull()
+                                ?: throw IllegalArgumentException()
+                            val cookies = call.argument<List<String>>("setCookies") ?: emptyList()
+                            result.success(GatewaySessions.ingest(context, url, cookies,
+                                call.argument<Int>("statusCode") ?: 0, call.argument("contentType"),
+                                call.argument("location"), call.argument<Number>("revision")?.toLong()))
+                        }
+                        "signOut" -> {
+                            GatewaySessions.signOut(context, call.argument<Number>("revision")?.toLong())
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
+                    }
+                } catch (_: Exception) {
+                    result.error("GATEWAY_SESSION_UNAVAILABLE", "The protected server session is unavailable.", null)
+                }
+            }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -108,6 +147,8 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         }
         staleCalls.forEach(Call::cancel)
         channel?.setMethodCallHandler(null)
+        gatewayChannel?.setMethodCallHandler(null)
+        gatewayChannel = null
         channel = null
     }
 
@@ -154,7 +195,9 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         httpCall.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 finish(httpCall, epoch) {
-                    result.error("NATIVE_HTTP_ERROR", "The network request failed or was cancelled.", null)
+                    if (error is GatewayAuthenticationRequired) {
+                        result.error("GATEWAY_AUTH_REQUIRED", "Sign in again to the protected server.", null)
+                    } else result.error("NATIVE_HTTP_ERROR", "The network request failed or was cancelled.", null)
                 }
             }
 

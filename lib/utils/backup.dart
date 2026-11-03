@@ -26,7 +26,8 @@ class UserBackup {
     'filters',
     'progress',
     'history',
-    'playlists'
+    'playlists',
+    'watchState'
   ];
 
   String encode() => jsonEncode({
@@ -50,12 +51,33 @@ class UserBackup {
       }
       final sections = <String, List<Map<String, dynamic>>>{};
       for (final name in sectionNames) {
-        final rows = data[name] as List;
-        if (rows.length > 50000)
+        // Older v1 libraries predate manual watched state.
+        final rows =
+            (name == 'watchState' ? data[name] ?? [] : data[name]) as List;
+        if (rows.length > 50000) {
           throw const FormatException('Too many entries.');
+        }
         sections[name] = rows.map((row) {
           final value = Map<String, dynamic>.from(row as Map);
           switch (name) {
+            case 'watchState':
+              final videoId = value['videoId'];
+              final manual = value['manualWatched'];
+              if (videoId is! String ||
+                  !_videoId.hasMatch(videoId) ||
+                  (manual != null && manual is! bool) ||
+                  value['localPlayback'] is! bool ||
+                  value['completed'] is! bool) {
+                throw const FormatException('Invalid watched state.');
+              }
+              // Account observations, credentials, pending operations and
+              // session revisions never travel with a portable library.
+              return {
+                'videoId': videoId,
+                'manualWatched': manual,
+                'localPlayback': value['localPlayback'],
+                'completed': value['completed'],
+              };
             case 'settings':
               final setting = SettingsValue.fromJson(value);
               if (!validSetting(setting)) {
@@ -177,8 +199,9 @@ class UserBackup {
             'Only YouTube channel subscriptions are supported.');
       }
       final name = row['name'] as String;
-      if (name.length > 1000)
+      if (name.length > 1000) {
         throw const FormatException('Invalid channel name.');
+      }
       final sub = OfflineSubscription(
           channelId: uri.pathSegments.last, channelName: name);
       subscriptions[sub.channelId] = sub.toJson();

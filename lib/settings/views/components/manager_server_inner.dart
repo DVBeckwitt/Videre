@@ -70,13 +70,14 @@ class ManagerServersView extends StatelessWidget {
                                         : Icons.dns_outlined,
                                     color: s.inUse ? colorScheme.primary : null,
                                   ),
-                                  title: Text(s.url),
+                                  title: Text(s.name.isEmpty ? s.url : s.name),
                                   value: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                          '${cubit.isLoggedInToServer(s.url) ? '${locals.loggedIn}, ' : ''}${locals.tapToManage}'),
+                                          '${cubit.isLoggedInToServer(s.accountId) ? '${locals.loggedIn}, ' : ''}${locals.tapToManage}'),
+                                      if (s.name.isNotEmpty) Text(s.url),
                                       if (!s.inUse)
                                         TextButton(
                                           onPressed: state.switching

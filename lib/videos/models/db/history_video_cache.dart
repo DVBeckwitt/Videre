@@ -37,13 +37,15 @@ class HistoryVideoCache {
   }
 
   static Future<HistoryVideoCache> fromVideoIdToVideo(String e) async {
-    var cachedVideo = db.getHistoryVideoByVideoId(e);
+    final owner = db.forProfile(db.profileId);
+    var cachedVideo = owner.getHistoryVideoByVideoId(e);
     if (cachedVideo == null) {
-      var vid = await service.getVideo(e);
+      final account = await owner.getCurrentlySelectedServer();
+      final vid = await service.getVideo(e, serverOverride: account);
       cachedVideo = HistoryVideoCache(vid.videoId, vid.title ?? '', vid.author,
           ImageObject.getBestThumbnail(vid.videoThumbnails)?.url ?? '',
           authorId: vid.authorId, lengthSeconds: vid.lengthSeconds);
-      await db.upsertHistoryVideo(cachedVideo);
+      await owner.upsertHistoryVideo(cachedVideo);
     }
     return cachedVideo;
   }

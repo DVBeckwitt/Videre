@@ -16,6 +16,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/workmanager.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:workmanager/workmanager.dart';
 
 import '../../test_app_cubit.dart';
@@ -81,6 +82,55 @@ Future<void> main() async {
     expect(workmanager.cancelAllCalls, 1);
     expect(workmanager.registrations, 0);
     expect(settingsCubit.state.backgroundNotifications, isFalse);
+  });
+
+  test('profile reload replaces notification work with the selected preference',
+      () async {
+    await settingsCubit
+        .saveSetting(SettingsValue(backgroundNotificationsSettingName, 'true'));
+    await settingsCubit.setBackgroundCheckFrequency(3);
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.backgroundNotifications, isFalse);
+    expect(workmanager.registrations, 0);
+    expect(workmanager.cancelUniqueCalls, 1);
+
+    await db.useProfile('default');
+    await fileDb.useProfile('default');
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.backgroundNotifications, isTrue);
+    expect(workmanager.registrations, 1);
+    expect(workmanager.cancelUniqueCalls, 2);
+    expect(workmanager.initializeCalls, 1);
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+    expect(workmanager.registrations, 1);
+  });
+
+  test(
+      'profile reload keeps device package metadata while replacing preferences',
+      () async {
+    final info = PackageInfo(
+        appName: 'Videre',
+        packageName: 'com.github.dvbeckwitt.videre',
+        version: '1.22.34',
+        buildNumber: '60896');
+    await settingsCubit.close();
+    settingsCubit = TestSettingsCubit(
+        SettingsState.init().copyWith(packageInfo: info), appCubit);
+    await settingsCubit.setUseProxy(true);
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+
+    await settingsCubit.reloadForProfile();
+
+    expect(settingsCubit.state.useProxy, isFalse);
+    expect(settingsCubit.state.packageInfo.appName, info.appName);
+    expect(settingsCubit.state.packageInfo.packageName, info.packageName);
+    expect(settingsCubit.state.packageInfo.version, info.version);
+    expect(settingsCubit.state.packageInfo.buildNumber, info.buildNumber);
   });
 
   test('disabling during a restart prevents late task registration', () async {
@@ -425,9 +475,17 @@ Future<void> main() async {
 
 class _Workmanager extends WorkmanagerPlatform {
   int cancelAllCalls = 0;
+  int cancelUniqueCalls = 0;
+  int initializeCalls = 0;
   int registrations = 0;
   Completer<void>? cancelPending;
   final cancellationStarted = Completer<void>();
+
+  @override
+  Future<void> initialize(Function callbackDispatcher,
+      {bool isInDebugMode = false}) async {
+    initializeCalls++;
+  }
 
   @override
   Future<void> cancelAll() async {
@@ -436,6 +494,7 @@ class _Workmanager extends WorkmanagerPlatform {
 
   @override
   Future<void> cancelByUniqueName(String uniqueName) async {
+    cancelUniqueCalls++;
     if (!cancellationStarted.isCompleted) cancellationStarted.complete();
     await cancelPending?.future;
   }

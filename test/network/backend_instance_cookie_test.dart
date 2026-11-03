@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -128,6 +129,9 @@ Map<String, String> _expectedHeaders(_InstanceFixture fixture, String? choice,
       'x-instance': 'custom-${fixture.name}',
       'accept': 'application/json',
       if (token) 'authorization': 'Bearer token-${fixture.name}',
+      gatewayContextHeader.toLowerCase(): GatewayRequestContext.forAccount(
+              'default', fixture.origin, fixture.origin)!
+          .encoded,
     };
 
 Map<String, String> _normalizedHeaders(Map<String, String> headers) => {
@@ -263,6 +267,9 @@ void main() {
       expect(_normalizedHeaders(requests.last.headers), {
         'cookie': _expectedCookie(fixture, '1'),
         'x-instance': 'custom-${fixture.name}',
+        gatewayContextHeader.toLowerCase(): GatewayRequestContext.forAccount(
+                'default', fixture.origin, fixture.origin)!
+            .encoded,
       });
       final offOriginMedia = '${foreign.origin}/companion/fixture-media';
       expect(recoveredSession.server.headersForUrl(offOriginMedia), isNull);

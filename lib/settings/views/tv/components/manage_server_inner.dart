@@ -58,9 +58,9 @@ class TvManageServersInner extends StatelessWidget {
                   s.inUse ? Icons.check_circle : Icons.dns_outlined,
                   color: s.inUse ? colorScheme.primary : null,
                 ),
-                title: s.url,
+                title: s.name.isEmpty ? s.url : s.name,
                 description:
-                    '${cubit.isLoggedInToServer(s.url) ? '${locals.loggedIn}, ' : ''}${locals.tapToManage}',
+                    '${s.name.isEmpty ? '' : '${s.url}\n'}${cubit.isLoggedInToServer(s.accountId) ? '${locals.loggedIn}, ' : ''}${locals.tapToManage}',
                 onSelected: (context) => openServer(context, s),
               ),
               if (!s.inUse)

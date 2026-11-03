@@ -6,6 +6,9 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:gap/gap.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/settings/views/components/backend_picker.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
+import 'package:clipious/settings/views/components/watch_sync_status.dart';
+import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/utils/string.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -201,22 +204,22 @@ class TvManageSingleServerScreen extends StatelessWidget {
           ),
           TvButton(
             onPressed: (context) async {
+              if (cubit.state.authenticating) return;
               try {
                 await cubit.logInWithCookie(
                     userController.text, passwordController.text);
                 if (context.mounted) {
                   Navigator.of(context).pop();
                 }
-              } catch (err) {
+              } catch (_) {
                 if (context.mounted) {
                   showTvAlertdialog(context, locals.error, [
                     Text(
-                      locals.wrongUsernamePassword,
+                      locals.accountActionFailed,
                       style: textTheme.titleLarge,
                     )
                   ]);
                 }
-                rethrow;
               }
             },
             child: Padding(
@@ -226,6 +229,22 @@ class TvManageSingleServerScreen extends StatelessWidget {
             ),
           ),
         ]);
+  }
+
+  Future<void> _accountAction(
+      BuildContext context, Future<void> Function() action) async {
+    try {
+      await action();
+    } catch (error) {
+      if (context.mounted) {
+        final locals = AppLocalizations.of(context)!;
+        showTvAlertdialog(context, locals.error, [
+          Text(error is GatewayUnsupported
+              ? error.toString()
+              : locals.accountActionFailed)
+        ]);
+      }
+    }
   }
 
   @override
@@ -246,11 +265,28 @@ class TvManageSingleServerScreen extends StatelessWidget {
 
             return ListView(
               children: [
-                SettingsTitle(title: server.url),
+                SettingsTitle(
+                    title: server.name.isEmpty ? server.url : server.name),
+                SettingsTile(
+                  title: locals.accountName,
+                  description: server.name.isEmpty ? server.url : server.name,
+                  leading: const Icon(Icons.badge_outlined),
+                  onSelected: (context) async {
+                    final name = await showProfileNameDialog(context,
+                        title: locals.accountName,
+                        label: locals.accountName,
+                        initialName: server.name);
+                    if (name != null && context.mounted) {
+                      await _accountAction(
+                          context, () => cubit.renameAccount(name));
+                    }
+                  },
+                ),
                 SettingsTile(
                   enabled: !server.inUse,
                   title: locals.useThisServer,
-                  onSelected: (context) => cubit.useServer(true),
+                  onSelected: (context) =>
+                      _accountAction(context, () => cubit.useServer(true)),
                   autofocus: true,
                   trailing: Switch(
                       onChanged: server.inUse ? null : (value) {},
@@ -273,15 +309,25 @@ class TvManageSingleServerScreen extends StatelessWidget {
                   ),
                 ),
                 SettingsTitle(title: locals.authentication),
+                WatchSyncStatus(account: server),
+                SettingsTile(
+                  title: locals.protectedServerSignIn,
+                  enabled: !state.authenticating,
+                  description: locals.protectedServerSignInDescription,
+                  leading: const Icon(Icons.shield_outlined),
+                  onSelected: (context) =>
+                      _accountAction(context, cubit.logInProtected),
+                ),
                 SettingsTile(
                   title: locals.cookieLogin,
-                  enabled: !isLoggedIn,
+                  enabled: !state.authenticating && !isLoggedIn,
                   onSelected: (context) => showLogInWithCookiesDialog(context),
                 ),
                 SettingsTile(
                   title: locals.logout,
                   enabled: isLoggedIn,
-                  onSelected: (context) => cubit.logOut(),
+                  onSelected: (context) =>
+                      _accountAction(context, cubit.logOut),
                 ),
                 SettingsTitle(title: locals.customHeaders),
                 ...state.server.customHeaders.keys.map((k) {
@@ -311,12 +357,13 @@ class TvManageSingleServerScreen extends StatelessWidget {
                 SettingsTile(
                   title: locals.delete,
                   enabled: state.canDelete,
-                  onSelected: (context) async {
+                  onSelected: (context) => _accountAction(context, () async {
+                    final route = ModalRoute.of(context);
                     await cubit.deleteServer();
-                    if (context.mounted) {
+                    if (context.mounted && (route?.isCurrent ?? false)) {
                       Navigator.of(context).pop();
                     }
-                  },
+                  }),
                 )
               ],
             );

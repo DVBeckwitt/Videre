@@ -6,6 +6,7 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -20,6 +21,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
+import 'package:dio/dio.dart';
 
 class _Player extends Fake implements PlayerCubit {}
 
@@ -429,6 +431,23 @@ void main() {
         lessThan(150));
   });
 
+  test('different people keep separate files for the same video', () async {
+    final other = video.copyWith(profileId: 'another-person');
+    final originalMedia = File(await video.downloadPath);
+    final otherMedia = File(await other.downloadPath);
+    expect(otherMedia.path, isNot(originalMedia.path));
+    expect(await other.thumbnailPath, isNot(await video.thumbnailPath));
+    await originalMedia.writeAsString('original');
+    await otherMedia.writeAsString('other');
+    await otherMedia.delete();
+    expect(await originalMedia.readAsString(), 'original');
+
+    for (final id in ['../outside', r'..\outside', '', 'a' * 129]) {
+      await expectLater(video.copyWith(profileId: id).downloadPath,
+          throwsA(isA<FormatException>()));
+    }
+  });
+
   test('pause survives restart and resume keeps the queued job', () async {
     await manager.pauseDownload(video);
     await manager.close();
@@ -581,6 +600,309 @@ void main() {
     expect((await db.getCurrentlySelectedServer()).url, nextServer.url);
     expect(await File(await audio.downloadPath).readAsBytes(),
         [0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  test('a queued download retains its account after a same-server switch',
+      () async {
+    await manager.deleteVideo(video);
+    final remote = await audioVideo(video.videoId);
+    const original = Server(
+        id: 'first-account',
+        url: 'https://instance.invalid',
+        authToken: 'first');
+    const other = Server(
+        id: 'second-account',
+        url: 'https://instance.invalid',
+        authToken: 'second');
+    await db.useServer(original);
+    await manager.addDownload(video.videoId, audioOnly: true);
+    await db.useServer(other);
+    await manager.close();
+    await openManager();
+    Server? requestedAccount;
+    service = _DownloadService((_) async => remote,
+        onServer: (server) => requestedAccount = server);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    expect(requestedAccount?.accountId, original.accountId);
+    expect(requestedAccount?.authToken, original.authToken);
+    expect(
+        db.getDownloadByVideoId(video.videoId)!.accountId, original.accountId);
+    expect((await db.getCurrentlySelectedServer()).accountId, other.accountId);
+  });
+
+  test('download retries cannot move to a different account on the same server',
+      () async {
+    final remote = await audioVideo(video.videoId);
+    const original = Server(
+        id: 'retry-original',
+        url: 'https://instance.invalid',
+        authToken: 'first');
+    const other = Server(
+        id: 'retry-other',
+        url: 'https://instance.invalid',
+        authToken: 'second');
+    await db.useServer(original);
+    await db.upsertDownload(video.copyWith(audioOnly: true));
+    final requests = <String>[];
+    var attempts = 0;
+    service = _DownloadService((_) async {
+      if (++attempts == 1) {
+        await db.useServer(other);
+        throw const SocketException('Temporary failure');
+      }
+      return remote;
+    }, onServer: (server) => requests.add(server!.accountId));
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    expect(requests, [original.accountId, original.accountId]);
+    expect(
+        db.getDownloadByVideoId(video.videoId)!.accountId, original.accountId);
+  });
+
+  for (final removeOriginal in [false, true]) {
+    test(
+        'a legacy download ${removeOriginal ? 'rejects a replacement account' : 'retains its existing account'} at the same URL',
+        () async {
+      await manager.deleteVideo(video);
+      final remote = await audioVideo(video.videoId);
+      const original =
+          Server(url: 'https://instance.invalid', authToken: 'legacy-account');
+      const replacement = Server(
+          id: 'replacement-account',
+          url: 'https://instance.invalid',
+          authToken: 'replacement-account');
+      await db.upsertServer(original);
+      await db.useServer(original);
+      await manager.addDownload(video.videoId, audioOnly: true);
+      final queued = db.getDownloadByVideoId(video.videoId)!;
+      final partial = File('${await queued.downloadPath}.audio.part');
+      await partial.writeAsBytes([0, 1, 2]);
+      await db.upsertServer(replacement);
+      await db.useServer(replacement);
+      if (removeOriginal) await db.deleteServer(original);
+      final requests = <Server>[];
+      service = _DownloadService((_) async => remote,
+          onServer: (server) => requests.add(server!));
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.single.downloadComplete ||
+          state.videos.single.downloadFailed);
+
+      final saved = db.getDownloadByVideoId(video.videoId)!;
+      expect(saved.accountId, original.accountId);
+      if (removeOriginal) {
+        expect(requests, isEmpty);
+        expect(saved.downloadFailed, isTrue);
+        expect(saved.downloadComplete, isFalse);
+        expect(await partial.readAsBytes(), [0, 1, 2]);
+      } else {
+        expect(requests.single.accountId, original.accountId);
+        expect(requests.single.authToken, original.authToken);
+        expect(saved.downloadComplete, isTrue);
+      }
+      expect((await db.getCurrentlySelectedServer()).accountId,
+          replacement.accountId);
+    });
+  }
+
+  for (final wrapped in [false, true]) {
+    test('expired gateway pauses a download across restart (Dio: $wrapped)',
+        () async {
+      await db.upsertDownload(video.copyWith(audioOnly: true));
+      final partial = File('${await video.downloadPath}.audio.part');
+      await partial.writeAsBytes([0, 1, 2]);
+      var requests = 0;
+      service = _DownloadService((_) async {
+        requests++;
+        if (wrapped) {
+          throw DioException(
+              requestOptions: RequestOptions(path: '/audio'),
+              error: const GatewayAuthenticationRequired());
+        }
+        throw const GatewayAuthenticationRequired();
+      });
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.single.authenticationRequired &&
+          state.downloadProgresses.isEmpty);
+      expect(requests, 1);
+      expect(manager.state.videos.single.downloadFailed, isFalse);
+      expect(manager.state.pausedVideoIds, contains(video.videoId));
+      expect(await partial.readAsBytes(), [0, 1, 2]);
+      await manager.close();
+      await openManager();
+      expect(manager.state.videos.single.authenticationRequired, isTrue);
+      expect(requests, 1);
+
+      final remote = await audioVideo(video.videoId);
+      service = _DownloadService((_) async => remote);
+      await manager.retryDownload(manager.state.videos.single);
+      await waitFor((state) => state.videos.single.downloadComplete);
+      expect(manager.state.videos.single.authenticationRequired, isFalse);
+      expect(manager.state.pausedVideoIds, isEmpty);
+    });
+  }
+
+  test('switching people cancels metadata and ignores its late completion',
+      () async {
+    final originalLibrary = db.forProfile(db.profileId);
+    final metadata = Completer<Video>();
+    final started = Completer<void>();
+    service = _DownloadService((_) {
+      started.complete();
+      return metadata.future;
+    });
+    await manager.setWifiOnly(false);
+    await started.future;
+    await manager.pauseForProfileSwitch().timeout(const Duration(seconds: 2));
+    final person = await db.createProfile('Another person');
+    await db.useProfile(person.id);
+    await db.useServer(Server(
+        profileId: person.id,
+        id: 'another-account',
+        url: 'https://instance.invalid'));
+    await manager.reloadForProfile();
+    metadata.complete(Video(videoId: video.videoId, title: 'Late result'));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(manager.state.videos, isEmpty);
+    expect(db.getAllDownloads(), isEmpty);
+    expect(originalLibrary.getAllDownloads(), hasLength(1));
+    expect(originalLibrary.getAllDownloads().single.downloadFailed, isFalse);
+    expect(originalLibrary.getSettings('downloads-paused')!.value,
+        contains(video.videoId));
+    expect(await File(await video.downloadPath).exists(), isFalse);
+  });
+
+  test('stale actions cannot delete or resume another person\'s matching video',
+      () async {
+    final original = video.copyWith(downloadComplete: true);
+    await db.upsertDownload(original);
+    await File(await original.downloadPath).writeAsString('original');
+    await manager.pauseForProfileSwitch();
+    final person = await db.createProfile('Another person');
+    await db.useProfile(person.id);
+    await db.saveSetting(SettingsValue('downloads-wifi-only', 'true'));
+    final other = video.copyWith(
+        profileId: person.id, title: 'Other', downloadComplete: true);
+    await db.upsertDownload(other);
+    await File(await other.downloadPath).writeAsString('other');
+    await manager.reloadForProfile();
+
+    await manager.deleteVideo(original);
+    await manager.retryDownload(original);
+    await manager.pauseDownload(original);
+
+    expect(db.getAllDownloads(), [other]);
+    expect(manager.state.videos, [other]);
+    expect(manager.state.pausedVideoIds, isEmpty);
+    expect(await File(await other.downloadPath).readAsString(), 'other');
+    expect(await File(await original.downloadPath).readAsString(), 'original');
+  });
+
+  test('a profile switch preserves an active partial and resumes its owner',
+      () async {
+    const originalBytes = [0, 1, 2, 3, 4, 5, 6, 7];
+    const otherBytes = [8, 9, 10, 11, 12, 13, 14, 15];
+    final releaseFirstResponse = Completer<void>();
+    addTearDown(() {
+      if (!releaseFirstResponse.isCompleted) releaseFirstResponse.complete();
+    });
+    final ranges = <String?>[];
+    var originalRequests = 0;
+    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    mediaServer!.listen((request) async {
+      try {
+        if (request.uri.queryParameters['person'] != 'default') {
+          request.response.add(otherBytes);
+        } else {
+          ranges.add(request.headers.value(HttpHeaders.rangeHeader));
+          if (++originalRequests == 1) {
+            request.response.bufferOutput = false;
+            request.response.add(originalBytes.take(3).toList());
+            await request.response.flush();
+            await releaseFirstResponse.future;
+            request.response.add(originalBytes.skip(3).toList());
+          } else {
+            request.response.statusCode = HttpStatus.partialContent;
+            request.response.headers
+                .set(HttpHeaders.contentRangeHeader, 'bytes 3-7/8');
+            request.response.add(originalBytes.skip(3).toList());
+          }
+        }
+        await request.response.close();
+      } on SocketException {
+        // The profile switch intentionally closes the first response early.
+      } on HttpException {
+        // A cancelled connection can reject the remaining response bytes.
+      }
+    });
+    Server? requestedAccount;
+    service = _DownloadService((_) async {
+      return Video(videoId: video.videoId, adaptiveFormats: [
+        AdaptiveFormat(
+            null,
+            '128000',
+            null,
+            'http://127.0.0.1:${mediaServer!.port}/audio?person=${requestedAccount!.profileId}',
+            '251',
+            'audio/webm',
+            '8',
+            '1',
+            '',
+            'webm',
+            'opus',
+            null,
+            null)
+      ]);
+    }, onServer: (server) => requestedAccount = server);
+    await db.upsertDownload(video.copyWith(audioOnly: true));
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.totalProgress > 0).onError<TimeoutException>(
+        (_, __) =>
+            throw StateError('First transfer did not start: ${manager.state}'));
+    await manager.pauseForProfileSwitch().timeout(const Duration(seconds: 2));
+    releaseFirstResponse.complete();
+    final originalLibrary = db.forProfile('default');
+    final partial = File('${await video.downloadPath}.audio.part');
+    expect(await partial.readAsBytes(), originalBytes.take(3).toList());
+
+    final person = await db.createProfile('Other downloader');
+    await db.useProfile(person.id);
+    await db.useServer(Server(
+        profileId: person.id,
+        id: 'other-download-account',
+        url: 'https://instance.invalid'));
+    await manager.reloadForProfile();
+    await manager.addDownload(video.videoId, audioOnly: true);
+    await waitFor((state) => state.videos.single.downloadComplete)
+        .onError<TimeoutException>((_, __) => throw StateError(
+            'Other transfer did not complete: ${manager.state}'));
+    final other = manager.state.videos.single;
+    expect(await File(await other.downloadPath).readAsBytes(), otherBytes);
+    expect(originalLibrary.getAllDownloads().single.downloadComplete, isFalse);
+    expect(await partial.readAsBytes(), originalBytes.take(3).toList());
+
+    await manager.pauseForProfileSwitch();
+    await db.useProfile('default');
+    await manager.reloadForProfile();
+    await manager.close();
+    await openManager();
+    expect(manager.state.pausedVideoIds, contains(video.videoId));
+    await manager.retryDownload(manager.state.videos.single);
+    await waitFor((state) => state.videos.single.downloadComplete)
+        .onError<TimeoutException>((_, __) => throw StateError(
+            'Original resume did not complete: ${manager.state}'));
+    expect(ranges, [null, 'bytes=3-']);
+    expect(await File(await video.downloadPath).readAsBytes(), originalBytes);
+    expect(await File(await other.downloadPath).readAsBytes(), otherBytes);
   });
 
   test('malformed image error bodies cannot fail the media download', () async {

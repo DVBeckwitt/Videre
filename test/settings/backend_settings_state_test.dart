@@ -7,7 +7,9 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/server_settings.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,9 +20,10 @@ import '../test_app_cubit.dart';
 
 class _TokenLoginService extends Service {
   @override
-  Future<String?> logIn(String serverUrl) async {
-    final server = db.getServer(serverUrl)!.copyWith(authToken: 'new-token');
-    await db.upsertServer(server);
+  Future<String?> logIn(String accountId, {String? profileId}) async {
+    final owner = db.forProfile(profileId ?? db.profileId);
+    final server = owner.getServer(accountId)!.copyWith(authToken: 'new-token');
+    await owner.upsertServer(server);
     return server.authToken;
   }
 }
@@ -28,6 +31,10 @@ class _TokenLoginService extends Service {
 class _PendingCookieLoginService extends Service {
   final started = Completer<void>();
   final result = Completer<String>();
+
+  @override
+  Future<void> syncAccountHistory(Server account,
+      {IDbClient? database, bool force = false, bool pull = true}) async {}
 
   @override
   Future<String> loginWithCookies(
@@ -140,6 +147,108 @@ void main() {
       expect(app.state.server!.url, other.url);
     });
 
+    test('settings stay bound to their original person after a profile switch',
+        () async {
+      final originalOwner = db.forProfile('default');
+      final second = await db.createProfile('Second person');
+      await db.useProfile(second.id);
+      final secondAccount = Server(
+          id: 'same-server-second-person',
+          profileId: second.id,
+          url: instance.url,
+          authToken: 'second-person-token');
+      await db.upsertServer(secondAccount);
+      await fileDb.useProfile(second.id);
+      await fileDb.useServer(await db.getCurrentlySelectedServer());
+      app.setServer(await db.getCurrentlySelectedServer());
+
+      await settings.addHeader('X-First-Person', 'first');
+      expect(originalOwner.getServer(instance.accountId)!.customHeaders,
+          {'X-First-Person': 'first'});
+      expect(db.getServer(secondAccount.accountId)!.customHeaders, isEmpty);
+      expect(app.state.server!.profileId, second.id);
+      expect((await fileDb.getCurrentlySelectedServer()).authToken,
+          'second-person-token');
+    });
+
+    test('same-server account edits cannot change the selected account',
+        () async {
+      final secondAccount = instance.copyWith(
+          id: 'second-account', authToken: 'second-token', name: 'Second');
+      await db.upsertServer(secondAccount);
+      await db.useServer(secondAccount);
+      final selected = await db.getCurrentlySelectedServer();
+      await fileDb.useServer(selected);
+      app.setServer(selected);
+
+      await settings.renameAccount('First');
+      expect(db.getServer(instance.accountId)!.name, 'First');
+      expect(db.getServer(secondAccount.accountId)!.name, 'Second');
+      expect(app.state.server!.accountId, secondAccount.accountId);
+      expect((await fileDb.getCurrentlySelectedServer()).accountId,
+          secondAccount.accountId);
+    });
+
+    test('stale legacy settings cannot edit or authenticate a replacement',
+        () async {
+      final replacement = instance.copyWith(
+          id: 'replacement', authToken: 'replacement-token', name: 'Kept');
+      await db.upsertServer(replacement);
+      await db.useServer(replacement);
+      await db.deleteServerById(instance);
+
+      await expectLater(
+          settings.renameAccount('Wrong account'), throwsStateError);
+      await expectLater(
+          settings.addHeader('X-Stale', 'wrong'), throwsStateError);
+      await expectLater(settings.logOut(), throwsStateError);
+      await expectLater(settings.logInWithToken(), throwsStateError);
+      await expectLater(settings.logInProtected(), throwsStateError);
+      await expectLater(settings.discoverBackends(), throwsStateError);
+      final saved = db.getAccount(replacement.accountId)!;
+      expect(saved.name, 'Kept');
+      expect(saved.authToken, 'replacement-token');
+      expect(saved.customHeaders, isEmpty);
+    });
+
+    test('cookie callback cannot log back in after logout', () async {
+      final previousService = service;
+      final login = _PendingCookieLoginService();
+      service = login;
+      addTearDown(() => service = previousService);
+      final pending = settings.logInWithCookie('person', 'password');
+      await login.started.future;
+      await settings.logOut();
+      final rejected =
+          expectLater(pending, throwsA(isA<InvidiousServiceError>()));
+      login.result.complete('SID=late');
+      await rejected;
+      expect(db.getServer(instance.accountId)!.sidCookie, isNull);
+      expect(settings.state.authenticating, isFalse);
+    });
+
+    test(
+        'cookie callback from a closed screen cannot undo logout on a new screen',
+        () async {
+      final previousService = service;
+      final login = _PendingCookieLoginService();
+      service = login;
+      addTearDown(() => service = previousService);
+      final pending = settings.logInWithCookie('person', 'password');
+      await login.started.future;
+      await settings.close();
+      final reopened = ServerSettingsCubit(
+          ServerSettingsState(server: db.getServer(instance.accountId)!), app);
+      addTearDown(reopened.close);
+      await reopened.logOut();
+      final rejected =
+          expectLater(pending, throwsA(isA<InvidiousServiceError>()));
+      login.result.complete('SID=late-from-closed-screen');
+      await rejected;
+      expect(db.getServer(instance.accountId)!.sidCookie, isNull);
+      expect(app.state.server!.sidCookie, isNull);
+    });
+
     test('older screen preserves newly saved credentials and headers',
         () async {
       final latest = db.getServer(instance.url)!.copyWith(
@@ -234,7 +343,7 @@ void main() {
       final saving = settings.logInWithCookie('username', 'password');
       await login.started.future;
       await db.deleteServerById(instance);
-      final failed = expectLater(saving, throwsStateError);
+      final failed = expectLater(saving, throwsA(isA<InvidiousServiceError>()));
       login.result.complete('SID=new-cookie');
       await failed;
 

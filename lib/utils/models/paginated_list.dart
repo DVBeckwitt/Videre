@@ -150,8 +150,7 @@ class SubscriptionVideoList extends PaginatedList<Video> {
   List<Video> visibleItems(List<Video> items) =>
       db.getSettings(hideWatchedSubscriptionsSettingName)?.value == 'true'
           ? items
-              .where((video) =>
-                  db.getVideoProgress(video.videoId) < watchedProgressThreshold)
+              .where((video) => !service.isVideoWatched(video.videoId))
               .toList()
           : items;
 

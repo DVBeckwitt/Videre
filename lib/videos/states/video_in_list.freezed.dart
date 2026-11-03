@@ -15,6 +15,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$VideoInListState {
   double get progress;
+  bool get watched;
   Video? get video;
   DownloadedVideo? get offlineVideo;
 
@@ -33,17 +34,19 @@ mixin _$VideoInListState {
             other is VideoInListState &&
             (identical(other.progress, progress) ||
                 other.progress == progress) &&
+            (identical(other.watched, watched) || other.watched == watched) &&
             (identical(other.video, video) || other.video == video) &&
             (identical(other.offlineVideo, offlineVideo) ||
                 other.offlineVideo == offlineVideo));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, progress, video, offlineVideo);
+  int get hashCode =>
+      Object.hash(runtimeType, progress, watched, video, offlineVideo);
 
   @override
   String toString() {
-    return 'VideoInListState(progress: $progress, video: $video, offlineVideo: $offlineVideo)';
+    return 'VideoInListState(progress: $progress, watched: $watched, video: $video, offlineVideo: $offlineVideo)';
   }
 }
 
@@ -53,7 +56,11 @@ abstract mixin class $VideoInListStateCopyWith<$Res> {
           VideoInListState value, $Res Function(VideoInListState) _then) =
       _$VideoInListStateCopyWithImpl;
   @useResult
-  $Res call({double progress, Video? video, DownloadedVideo? offlineVideo});
+  $Res call(
+      {double progress,
+      bool watched,
+      Video? video,
+      DownloadedVideo? offlineVideo});
 
   $VideoCopyWith<$Res>? get video;
   $DownloadedVideoCopyWith<$Res>? get offlineVideo;
@@ -73,6 +80,7 @@ class _$VideoInListStateCopyWithImpl<$Res>
   @override
   $Res call({
     Object? progress = null,
+    Object? watched = null,
     Object? video = freezed,
     Object? offlineVideo = freezed,
   }) {
@@ -81,6 +89,10 @@ class _$VideoInListStateCopyWithImpl<$Res>
           ? _self.progress
           : progress // ignore: cast_nullable_to_non_nullable
               as double,
+      watched: null == watched
+          ? _self.watched
+          : watched // ignore: cast_nullable_to_non_nullable
+              as bool,
       video: freezed == video
           ? _self.video
           : video // ignore: cast_nullable_to_non_nullable
@@ -212,15 +224,16 @@ extension VideoInListStatePatterns on VideoInListState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(
-            double progress, Video? video, DownloadedVideo? offlineVideo)?
+    TResult Function(double progress, bool watched, Video? video,
+            DownloadedVideo? offlineVideo)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _VideoInListState() when $default != null:
-        return $default(_that.progress, _that.video, _that.offlineVideo);
+        return $default(
+            _that.progress, _that.watched, _that.video, _that.offlineVideo);
       case _:
         return orElse();
     }
@@ -241,14 +254,15 @@ extension VideoInListStatePatterns on VideoInListState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(
-            double progress, Video? video, DownloadedVideo? offlineVideo)
+    TResult Function(double progress, bool watched, Video? video,
+            DownloadedVideo? offlineVideo)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _VideoInListState():
-        return $default(_that.progress, _that.video, _that.offlineVideo);
+        return $default(
+            _that.progress, _that.watched, _that.video, _that.offlineVideo);
     }
   }
 
@@ -266,14 +280,15 @@ extension VideoInListStatePatterns on VideoInListState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(
-            double progress, Video? video, DownloadedVideo? offlineVideo)?
+    TResult? Function(double progress, bool watched, Video? video,
+            DownloadedVideo? offlineVideo)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _VideoInListState() when $default != null:
-        return $default(_that.progress, _that.video, _that.offlineVideo);
+        return $default(
+            _that.progress, _that.watched, _that.video, _that.offlineVideo);
       case _:
         return null;
     }
@@ -283,13 +298,17 @@ extension VideoInListStatePatterns on VideoInListState {
 /// @nodoc
 
 class _VideoInListState implements VideoInListState {
-  const _VideoInListState({this.progress = 0, this.video, this.offlineVideo})
+  const _VideoInListState(
+      {this.progress = 0, this.watched = false, this.video, this.offlineVideo})
       : assert(video == null || offlineVideo == null,
             'cannot provide both video and offline video');
 
   @override
   @JsonKey()
   final double progress;
+  @override
+  @JsonKey()
+  final bool watched;
   @override
   final Video? video;
   @override
@@ -310,17 +329,19 @@ class _VideoInListState implements VideoInListState {
             other is _VideoInListState &&
             (identical(other.progress, progress) ||
                 other.progress == progress) &&
+            (identical(other.watched, watched) || other.watched == watched) &&
             (identical(other.video, video) || other.video == video) &&
             (identical(other.offlineVideo, offlineVideo) ||
                 other.offlineVideo == offlineVideo));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, progress, video, offlineVideo);
+  int get hashCode =>
+      Object.hash(runtimeType, progress, watched, video, offlineVideo);
 
   @override
   String toString() {
-    return 'VideoInListState(progress: $progress, video: $video, offlineVideo: $offlineVideo)';
+    return 'VideoInListState(progress: $progress, watched: $watched, video: $video, offlineVideo: $offlineVideo)';
   }
 }
 
@@ -332,7 +353,11 @@ abstract mixin class _$VideoInListStateCopyWith<$Res>
       __$VideoInListStateCopyWithImpl;
   @override
   @useResult
-  $Res call({double progress, Video? video, DownloadedVideo? offlineVideo});
+  $Res call(
+      {double progress,
+      bool watched,
+      Video? video,
+      DownloadedVideo? offlineVideo});
 
   @override
   $VideoCopyWith<$Res>? get video;
@@ -354,6 +379,7 @@ class __$VideoInListStateCopyWithImpl<$Res>
   @pragma('vm:prefer-inline')
   $Res call({
     Object? progress = null,
+    Object? watched = null,
     Object? video = freezed,
     Object? offlineVideo = freezed,
   }) {
@@ -362,6 +388,10 @@ class __$VideoInListStateCopyWithImpl<$Res>
           ? _self.progress
           : progress // ignore: cast_nullable_to_non_nullable
               as double,
+      watched: null == watched
+          ? _self.watched
+          : watched // ignore: cast_nullable_to_non_nullable
+              as bool,
       video: freezed == video
           ? _self.video
           : video // ignore: cast_nullable_to_non_nullable

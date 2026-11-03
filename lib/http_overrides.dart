@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'network/gateway_http_client.dart';
 import 'network/network_proxy.dart';
 import 'network/reloadable_http_client.dart';
 
@@ -24,7 +25,7 @@ class MyHttpOverrides extends HttpOverrides {
               'true';
         };
       NetworkProxy.instance.configureClient(client, context: context);
-      return client;
+      return GatewayHttpClient(client);
     });
   }
 }

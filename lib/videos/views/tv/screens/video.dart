@@ -26,6 +26,7 @@ import '../../../states/tv_video.dart';
 import '../../../states/video.dart';
 import '../../components/video_thumbnail.dart';
 import '../../components/backend_status.dart';
+import '../../components/watch_status_button.dart';
 
 @RoutePage()
 class TvVideoScreen extends StatelessWidget {
@@ -245,6 +246,14 @@ class TvVideoScreen extends StatelessWidget {
                                                   const NeverScrollableScrollPhysics(),
                                               shrinkWrap: true,
                                               children: [
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          bottom: 12),
+                                                  child: WatchStatusButton(
+                                                      video: videoState.video!,
+                                                      television: true),
+                                                ),
                                                 Row(
                                                   children: [
                                                     TvButton(

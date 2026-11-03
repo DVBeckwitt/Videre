@@ -90,7 +90,7 @@ class TvChannelScreen extends StatelessWidget {
                                     server);
                                 return CachedNetworkImage(
                                   imageUrl: url,
-                                  cacheKey: url,
+                                  cacheKey: invidiousImageCacheKey(url, server),
                                   httpHeaders: server.headersForUrl(url),
                                 );
                               },

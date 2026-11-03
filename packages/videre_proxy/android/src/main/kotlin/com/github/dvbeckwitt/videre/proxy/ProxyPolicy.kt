@@ -107,6 +107,7 @@ internal class PolicyCallFactory : Call.Factory {
                 }
                 chain.proceed(outgoing)
             }
+            .addNetworkInterceptor(GatewayTransportInterceptor())
         if (policy.enabled) {
             builder.proxySelector(SocksOnlySelector(policy))
             // OkHttp passes an unresolved origin address to Java's SOCKS socket.
@@ -139,14 +140,14 @@ internal class PolicyCallFactory : Call.Factory {
 
     override fun newCall(request: Request): Call = synchronized(lock) {
         val active = client ?: throw IOException("SOCKS5 transport settings have not been loaded or are invalid.")
-        trackCall(active.newCall(request))
+        trackCall(active.newCall(prepareGatewayRequest(request)))
     }
 
-    fun forSource(sourceUri: String?, headerNames: Set<String>): Call.Factory {
+    fun forSource(sourceUri: String?, headerNames: Set<String>, gateway: GatewayContext? = null): Call.Factory {
         val scope = SourceHeaderScope(sourceUri?.toHttpUrlOrNull(), headerNames.toSet())
         return object : Call.Factory {
             override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
-                request.newBuilder().tag(SourceHeaderScope::class.java, scope).build(),
+                prepareGatewayRequest(request.newBuilder().tag(SourceHeaderScope::class.java, scope).build(), gateway),
             )
         }
     }
@@ -156,7 +157,7 @@ internal class PolicyCallFactory : Call.Factory {
         // Instance access controls can use arbitrary header names, not only
         // Authorization or Cookie. Anchor all caller-provided headers before
         // OkHttp adds transport headers such as Host and Accept-Encoding.
-        val scopedRequest = request.newBuilder().tag(
+        val scopedRequest = prepareGatewayRequest(request).newBuilder().tag(
             SourceHeaderScope::class.java,
             SourceHeaderScope(request.url, request.headers.names().toSet()),
         ).build()

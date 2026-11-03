@@ -8,6 +8,7 @@ import 'package:gap/gap.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/settings/views/tv/screens/manage_single_server.dart';
@@ -81,6 +82,13 @@ class TvAddServerScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
+                      OutlinedButton.icon(
+                        onPressed: state.loading
+                            ? null
+                            : () => showProfilePicker(context),
+                        icon: const Icon(Icons.account_circle_outlined),
+                        label: Text(locals.profiles),
+                      ),
                       Text(locals.instanceAddressDescription),
                       const Gap(12),
                       OutlinedButton.icon(
@@ -105,6 +113,18 @@ class TvAddServerScreen extends StatelessWidget {
                         ),
                       ),
                       const Gap(10),
+                      Text(locals.accountName),
+                      ExcludeFocus(
+                        excluding: state.loading,
+                        child: TvTextField(controller: cubit.nameController),
+                      ),
+                      SwitchListTile(
+                        title: Text(locals.protectedServer),
+                        subtitle: Text(locals.protectedServerHelp),
+                        value: state.protectedServer,
+                        onChanged:
+                            state.loading ? null : cubit.setProtectedServer,
+                      ),
                       ListTile(
                         leading: AnimatedRotation(
                             duration: AppMotion.duration(context),

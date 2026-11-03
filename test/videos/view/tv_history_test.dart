@@ -36,6 +36,9 @@ class _App extends AppCubit {
 }
 
 class _HistoryService extends Service {
+  @override
+  Future<void> syncHistory() async {}
+
   final serverPages = <int, List<String>>{};
   final historyRequests = <int>[];
   final metadataRequests = <String>[];

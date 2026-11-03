@@ -121,4 +121,28 @@ void main() {
     expect(find.text('${first.url}|updated'), findsOneWidget);
     expect(database.selectedReads, 0);
   });
+
+  testWidgets('deleted legacy selection never exposes replacement headers',
+      (tester) async {
+    final app = _App(first);
+    addTearDown(app.close);
+    late StateSetter rebuild;
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: MaterialApp(home: StatefulBuilder(builder: (context, setState) {
+          rebuild = setState;
+          return serverLabel();
+        }))));
+    await tester.runAsync(() async {
+      await database.upsertServer(first
+          .copyWith(id: 'replacement', customHeaders: {'X-Test': 'private'}));
+      await database.deleteServerById(first);
+    });
+
+    rebuild(() {});
+    await tester.pump();
+    expect(find.text('null|null'), findsOneWidget);
+    expect(find.text('${first.url}|private'), findsNothing);
+    expect(database.selectedReads, 0);
+  });
 }

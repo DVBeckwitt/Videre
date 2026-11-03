@@ -16,10 +16,13 @@ T _$identity<T>(T value) => value;
 mixin _$DownloadedVideo {
   String get videoId;
   String get title;
+  String get profileId;
+  String? get accountId;
   String? get author;
   String? get authorUrl;
   bool get downloadComplete;
   bool get downloadFailed;
+  bool get authenticationRequired;
   bool get storageFailed;
   String? get folderUri;
   String? get storageUri;
@@ -45,6 +48,10 @@ mixin _$DownloadedVideo {
             other is DownloadedVideo &&
             (identical(other.videoId, videoId) || other.videoId == videoId) &&
             (identical(other.title, title) || other.title == title) &&
+            (identical(other.profileId, profileId) ||
+                other.profileId == profileId) &&
+            (identical(other.accountId, accountId) ||
+                other.accountId == accountId) &&
             (identical(other.author, author) || other.author == author) &&
             (identical(other.authorUrl, authorUrl) ||
                 other.authorUrl == authorUrl) &&
@@ -52,6 +59,8 @@ mixin _$DownloadedVideo {
                 other.downloadComplete == downloadComplete) &&
             (identical(other.downloadFailed, downloadFailed) ||
                 other.downloadFailed == downloadFailed) &&
+            (identical(other.authenticationRequired, authenticationRequired) ||
+                other.authenticationRequired == authenticationRequired) &&
             (identical(other.storageFailed, storageFailed) ||
                 other.storageFailed == storageFailed) &&
             (identical(other.folderUri, folderUri) ||
@@ -71,10 +80,13 @@ mixin _$DownloadedVideo {
       runtimeType,
       videoId,
       title,
+      profileId,
+      accountId,
       author,
       authorUrl,
       downloadComplete,
       downloadFailed,
+      authenticationRequired,
       storageFailed,
       folderUri,
       storageUri,
@@ -84,7 +96,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -97,10 +109,13 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
   $Res call(
       {String videoId,
       String title,
+      String profileId,
+      String? accountId,
       String? author,
       String? authorUrl,
       bool downloadComplete,
       bool downloadFailed,
+      bool authenticationRequired,
       bool storageFailed,
       String? folderUri,
       String? storageUri,
@@ -124,10 +139,13 @@ class _$DownloadedVideoCopyWithImpl<$Res>
   $Res call({
     Object? videoId = null,
     Object? title = null,
+    Object? profileId = null,
+    Object? accountId = freezed,
     Object? author = freezed,
     Object? authorUrl = freezed,
     Object? downloadComplete = null,
     Object? downloadFailed = null,
+    Object? authenticationRequired = null,
     Object? storageFailed = null,
     Object? folderUri = freezed,
     Object? storageUri = freezed,
@@ -144,6 +162,14 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.title
           : title // ignore: cast_nullable_to_non_nullable
               as String,
+      profileId: null == profileId
+          ? _self.profileId
+          : profileId // ignore: cast_nullable_to_non_nullable
+              as String,
+      accountId: freezed == accountId
+          ? _self.accountId
+          : accountId // ignore: cast_nullable_to_non_nullable
+              as String?,
       author: freezed == author
           ? _self.author
           : author // ignore: cast_nullable_to_non_nullable
@@ -159,6 +185,10 @@ class _$DownloadedVideoCopyWithImpl<$Res>
       downloadFailed: null == downloadFailed
           ? _self.downloadFailed
           : downloadFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
+      authenticationRequired: null == authenticationRequired
+          ? _self.authenticationRequired
+          : authenticationRequired // ignore: cast_nullable_to_non_nullable
               as bool,
       storageFailed: null == storageFailed
           ? _self.storageFailed
@@ -282,10 +312,13 @@ extension DownloadedVideoPatterns on DownloadedVideo {
     TResult Function(
             String videoId,
             String title,
+            String profileId,
+            String? accountId,
             String? author,
             String? authorUrl,
             bool downloadComplete,
             bool downloadFailed,
+            bool authenticationRequired,
             bool storageFailed,
             String? folderUri,
             String? storageUri,
@@ -301,10 +334,13 @@ extension DownloadedVideoPatterns on DownloadedVideo {
         return $default(
             _that.videoId,
             _that.title,
+            _that.profileId,
+            _that.accountId,
             _that.author,
             _that.authorUrl,
             _that.downloadComplete,
             _that.downloadFailed,
+            _that.authenticationRequired,
             _that.storageFailed,
             _that.folderUri,
             _that.storageUri,
@@ -334,10 +370,13 @@ extension DownloadedVideoPatterns on DownloadedVideo {
     TResult Function(
             String videoId,
             String title,
+            String profileId,
+            String? accountId,
             String? author,
             String? authorUrl,
             bool downloadComplete,
             bool downloadFailed,
+            bool authenticationRequired,
             bool storageFailed,
             String? folderUri,
             String? storageUri,
@@ -352,10 +391,13 @@ extension DownloadedVideoPatterns on DownloadedVideo {
         return $default(
             _that.videoId,
             _that.title,
+            _that.profileId,
+            _that.accountId,
             _that.author,
             _that.authorUrl,
             _that.downloadComplete,
             _that.downloadFailed,
+            _that.authenticationRequired,
             _that.storageFailed,
             _that.folderUri,
             _that.storageUri,
@@ -382,10 +424,13 @@ extension DownloadedVideoPatterns on DownloadedVideo {
     TResult? Function(
             String videoId,
             String title,
+            String profileId,
+            String? accountId,
             String? author,
             String? authorUrl,
             bool downloadComplete,
             bool downloadFailed,
+            bool authenticationRequired,
             bool storageFailed,
             String? folderUri,
             String? storageUri,
@@ -400,10 +445,13 @@ extension DownloadedVideoPatterns on DownloadedVideo {
         return $default(
             _that.videoId,
             _that.title,
+            _that.profileId,
+            _that.accountId,
             _that.author,
             _that.authorUrl,
             _that.downloadComplete,
             _that.downloadFailed,
+            _that.authenticationRequired,
             _that.storageFailed,
             _that.folderUri,
             _that.storageUri,
@@ -422,10 +470,13 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   const _DownloadedVideo(
       {required this.videoId,
       required this.title,
+      this.profileId = 'default',
+      this.accountId,
       this.author,
       this.authorUrl,
       this.downloadComplete = false,
       this.downloadFailed = false,
+      this.authenticationRequired = false,
       this.storageFailed = false,
       this.folderUri,
       this.storageUri,
@@ -441,6 +492,11 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   final String title;
   @override
+  @JsonKey()
+  final String profileId;
+  @override
+  final String? accountId;
+  @override
   final String? author;
   @override
   final String? authorUrl;
@@ -450,6 +506,9 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   @JsonKey()
   final bool downloadFailed;
+  @override
+  @JsonKey()
+  final bool authenticationRequired;
   @override
   @JsonKey()
   final bool storageFailed;
@@ -487,6 +546,10 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
             other is _DownloadedVideo &&
             (identical(other.videoId, videoId) || other.videoId == videoId) &&
             (identical(other.title, title) || other.title == title) &&
+            (identical(other.profileId, profileId) ||
+                other.profileId == profileId) &&
+            (identical(other.accountId, accountId) ||
+                other.accountId == accountId) &&
             (identical(other.author, author) || other.author == author) &&
             (identical(other.authorUrl, authorUrl) ||
                 other.authorUrl == authorUrl) &&
@@ -494,6 +557,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.downloadComplete == downloadComplete) &&
             (identical(other.downloadFailed, downloadFailed) ||
                 other.downloadFailed == downloadFailed) &&
+            (identical(other.authenticationRequired, authenticationRequired) ||
+                other.authenticationRequired == authenticationRequired) &&
             (identical(other.storageFailed, storageFailed) ||
                 other.storageFailed == storageFailed) &&
             (identical(other.folderUri, folderUri) ||
@@ -513,10 +578,13 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       runtimeType,
       videoId,
       title,
+      profileId,
+      accountId,
       author,
       authorUrl,
       downloadComplete,
       downloadFailed,
+      authenticationRequired,
       storageFailed,
       folderUri,
       storageUri,
@@ -526,7 +594,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -541,10 +609,13 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
   $Res call(
       {String videoId,
       String title,
+      String profileId,
+      String? accountId,
       String? author,
       String? authorUrl,
       bool downloadComplete,
       bool downloadFailed,
+      bool authenticationRequired,
       bool storageFailed,
       String? folderUri,
       String? storageUri,
@@ -568,10 +639,13 @@ class __$DownloadedVideoCopyWithImpl<$Res>
   $Res call({
     Object? videoId = null,
     Object? title = null,
+    Object? profileId = null,
+    Object? accountId = freezed,
     Object? author = freezed,
     Object? authorUrl = freezed,
     Object? downloadComplete = null,
     Object? downloadFailed = null,
+    Object? authenticationRequired = null,
     Object? storageFailed = null,
     Object? folderUri = freezed,
     Object? storageUri = freezed,
@@ -588,6 +662,14 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.title
           : title // ignore: cast_nullable_to_non_nullable
               as String,
+      profileId: null == profileId
+          ? _self.profileId
+          : profileId // ignore: cast_nullable_to_non_nullable
+              as String,
+      accountId: freezed == accountId
+          ? _self.accountId
+          : accountId // ignore: cast_nullable_to_non_nullable
+              as String?,
       author: freezed == author
           ? _self.author
           : author // ignore: cast_nullable_to_non_nullable
@@ -603,6 +685,10 @@ class __$DownloadedVideoCopyWithImpl<$Res>
       downloadFailed: null == downloadFailed
           ? _self.downloadFailed
           : downloadFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
+      authenticationRequired: null == authenticationRequired
+          ? _self.authenticationRequired
+          : authenticationRequired // ignore: cast_nullable_to_non_nullable
               as bool,
       storageFailed: null == storageFailed
           ? _self.storageFailed

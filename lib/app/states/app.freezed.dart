@@ -18,6 +18,9 @@ mixin _$AppState {
   Server? get server;
   HomeLayout get homeLayout;
   bool get globalLoading;
+  String get profileId;
+  int get sessionRevision;
+  bool get sessionRecoveryRequired;
 
   /// Create a copy of AppState
   /// with the given fields replaced by the non-null parameter values.
@@ -37,16 +40,23 @@ mixin _$AppState {
             (identical(other.homeLayout, homeLayout) ||
                 other.homeLayout == homeLayout) &&
             (identical(other.globalLoading, globalLoading) ||
-                other.globalLoading == globalLoading));
+                other.globalLoading == globalLoading) &&
+            (identical(other.profileId, profileId) ||
+                other.profileId == profileId) &&
+            (identical(other.sessionRevision, sessionRevision) ||
+                other.sessionRevision == sessionRevision) &&
+            (identical(
+                    other.sessionRecoveryRequired, sessionRecoveryRequired) ||
+                other.sessionRecoveryRequired == sessionRecoveryRequired));
   }
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, firstIndex, server, homeLayout, globalLoading);
+  int get hashCode => Object.hash(runtimeType, firstIndex, server, homeLayout,
+      globalLoading, profileId, sessionRevision, sessionRecoveryRequired);
 
   @override
   String toString() {
-    return 'AppState(firstIndex: $firstIndex, server: $server, homeLayout: $homeLayout, globalLoading: $globalLoading)';
+    return 'AppState(firstIndex: $firstIndex, server: $server, homeLayout: $homeLayout, globalLoading: $globalLoading, profileId: $profileId, sessionRevision: $sessionRevision, sessionRecoveryRequired: $sessionRecoveryRequired)';
   }
 }
 
@@ -59,7 +69,10 @@ abstract mixin class $AppStateCopyWith<$Res> {
       {int firstIndex,
       Server? server,
       HomeLayout homeLayout,
-      bool globalLoading});
+      bool globalLoading,
+      String profileId,
+      int sessionRevision,
+      bool sessionRecoveryRequired});
 
   $ServerCopyWith<$Res>? get server;
 }
@@ -80,6 +93,9 @@ class _$AppStateCopyWithImpl<$Res> implements $AppStateCopyWith<$Res> {
     Object? server = freezed,
     Object? homeLayout = null,
     Object? globalLoading = null,
+    Object? profileId = null,
+    Object? sessionRevision = null,
+    Object? sessionRecoveryRequired = null,
   }) {
     return _then(_self.copyWith(
       firstIndex: null == firstIndex
@@ -97,6 +113,18 @@ class _$AppStateCopyWithImpl<$Res> implements $AppStateCopyWith<$Res> {
       globalLoading: null == globalLoading
           ? _self.globalLoading
           : globalLoading // ignore: cast_nullable_to_non_nullable
+              as bool,
+      profileId: null == profileId
+          ? _self.profileId
+          : profileId // ignore: cast_nullable_to_non_nullable
+              as String,
+      sessionRevision: null == sessionRevision
+          ? _self.sessionRevision
+          : sessionRevision // ignore: cast_nullable_to_non_nullable
+              as int,
+      sessionRecoveryRequired: null == sessionRecoveryRequired
+          ? _self.sessionRecoveryRequired
+          : sessionRecoveryRequired // ignore: cast_nullable_to_non_nullable
               as bool,
     ));
   }
@@ -207,16 +235,28 @@ extension AppStatePatterns on AppState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(int firstIndex, Server? server, HomeLayout homeLayout,
-            bool globalLoading)?
+    TResult Function(
+            int firstIndex,
+            Server? server,
+            HomeLayout homeLayout,
+            bool globalLoading,
+            String profileId,
+            int sessionRevision,
+            bool sessionRecoveryRequired)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _AppState() when $default != null:
-        return $default(_that.firstIndex, _that.server, _that.homeLayout,
-            _that.globalLoading);
+        return $default(
+            _that.firstIndex,
+            _that.server,
+            _that.homeLayout,
+            _that.globalLoading,
+            _that.profileId,
+            _that.sessionRevision,
+            _that.sessionRecoveryRequired);
       case _:
         return orElse();
     }
@@ -237,15 +277,27 @@ extension AppStatePatterns on AppState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(int firstIndex, Server? server, HomeLayout homeLayout,
-            bool globalLoading)
+    TResult Function(
+            int firstIndex,
+            Server? server,
+            HomeLayout homeLayout,
+            bool globalLoading,
+            String profileId,
+            int sessionRevision,
+            bool sessionRecoveryRequired)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _AppState():
-        return $default(_that.firstIndex, _that.server, _that.homeLayout,
-            _that.globalLoading);
+        return $default(
+            _that.firstIndex,
+            _that.server,
+            _that.homeLayout,
+            _that.globalLoading,
+            _that.profileId,
+            _that.sessionRevision,
+            _that.sessionRecoveryRequired);
     }
   }
 
@@ -263,15 +315,27 @@ extension AppStatePatterns on AppState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(int firstIndex, Server? server, HomeLayout homeLayout,
-            bool globalLoading)?
+    TResult? Function(
+            int firstIndex,
+            Server? server,
+            HomeLayout homeLayout,
+            bool globalLoading,
+            String profileId,
+            int sessionRevision,
+            bool sessionRecoveryRequired)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _AppState() when $default != null:
-        return $default(_that.firstIndex, _that.server, _that.homeLayout,
-            _that.globalLoading);
+        return $default(
+            _that.firstIndex,
+            _that.server,
+            _that.homeLayout,
+            _that.globalLoading,
+            _that.profileId,
+            _that.sessionRevision,
+            _that.sessionRecoveryRequired);
       case _:
         return null;
     }
@@ -282,7 +346,10 @@ extension AppStatePatterns on AppState {
 
 class _AppState implements AppState {
   const _AppState(this.firstIndex, this.server, this.homeLayout,
-      {this.globalLoading = false});
+      {this.globalLoading = false,
+      this.profileId = 'default',
+      this.sessionRevision = 0,
+      this.sessionRecoveryRequired = false});
 
   @override
   final int firstIndex;
@@ -293,6 +360,15 @@ class _AppState implements AppState {
   @override
   @JsonKey()
   final bool globalLoading;
+  @override
+  @JsonKey()
+  final String profileId;
+  @override
+  @JsonKey()
+  final int sessionRevision;
+  @override
+  @JsonKey()
+  final bool sessionRecoveryRequired;
 
   /// Create a copy of AppState
   /// with the given fields replaced by the non-null parameter values.
@@ -313,16 +389,23 @@ class _AppState implements AppState {
             (identical(other.homeLayout, homeLayout) ||
                 other.homeLayout == homeLayout) &&
             (identical(other.globalLoading, globalLoading) ||
-                other.globalLoading == globalLoading));
+                other.globalLoading == globalLoading) &&
+            (identical(other.profileId, profileId) ||
+                other.profileId == profileId) &&
+            (identical(other.sessionRevision, sessionRevision) ||
+                other.sessionRevision == sessionRevision) &&
+            (identical(
+                    other.sessionRecoveryRequired, sessionRecoveryRequired) ||
+                other.sessionRecoveryRequired == sessionRecoveryRequired));
   }
 
   @override
-  int get hashCode =>
-      Object.hash(runtimeType, firstIndex, server, homeLayout, globalLoading);
+  int get hashCode => Object.hash(runtimeType, firstIndex, server, homeLayout,
+      globalLoading, profileId, sessionRevision, sessionRecoveryRequired);
 
   @override
   String toString() {
-    return 'AppState(firstIndex: $firstIndex, server: $server, homeLayout: $homeLayout, globalLoading: $globalLoading)';
+    return 'AppState(firstIndex: $firstIndex, server: $server, homeLayout: $homeLayout, globalLoading: $globalLoading, profileId: $profileId, sessionRevision: $sessionRevision, sessionRecoveryRequired: $sessionRecoveryRequired)';
   }
 }
 
@@ -337,7 +420,10 @@ abstract mixin class _$AppStateCopyWith<$Res>
       {int firstIndex,
       Server? server,
       HomeLayout homeLayout,
-      bool globalLoading});
+      bool globalLoading,
+      String profileId,
+      int sessionRevision,
+      bool sessionRecoveryRequired});
 
   @override
   $ServerCopyWith<$Res>? get server;
@@ -359,6 +445,9 @@ class __$AppStateCopyWithImpl<$Res> implements _$AppStateCopyWith<$Res> {
     Object? server = freezed,
     Object? homeLayout = null,
     Object? globalLoading = null,
+    Object? profileId = null,
+    Object? sessionRevision = null,
+    Object? sessionRecoveryRequired = null,
   }) {
     return _then(_AppState(
       null == firstIndex
@@ -376,6 +465,18 @@ class __$AppStateCopyWithImpl<$Res> implements _$AppStateCopyWith<$Res> {
       globalLoading: null == globalLoading
           ? _self.globalLoading
           : globalLoading // ignore: cast_nullable_to_non_nullable
+              as bool,
+      profileId: null == profileId
+          ? _self.profileId
+          : profileId // ignore: cast_nullable_to_non_nullable
+              as String,
+      sessionRevision: null == sessionRevision
+          ? _self.sessionRevision
+          : sessionRevision // ignore: cast_nullable_to_non_nullable
+              as int,
+      sessionRecoveryRequired: null == sessionRecoveryRequired
+          ? _self.sessionRecoveryRequired
+          : sessionRecoveryRequired // ignore: cast_nullable_to_non_nullable
               as bool,
     ));
   }

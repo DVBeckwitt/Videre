@@ -9,8 +9,10 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/utils/states/item_list.dart';
+import 'package:clipious/videos/services/watch_history.dart';
 
 class _OfflineSubscriptionService extends Service {
   final continuations = <String?>[];
@@ -24,7 +26,10 @@ class _OfflineSubscriptionService extends Service {
 
   @override
   Future<UserFeed> getUserFeed(
-      {int? maxResults, int? page, bool saveLastSeen = true}) async {
+      {int? maxResults,
+      int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride}) async {
     final requestedPage = page ?? 1;
     feedPages.add(requestedPage);
     return UserFeed([], [
@@ -38,6 +43,7 @@ class _OfflineSubscriptionService extends Service {
     String channelId,
     String? continuation, {
     bool saveLastSeen = true,
+    Server? serverOverride,
     ChannelSortBy sortBy = ChannelSortBy.newest,
   }) async {
     continuations.add(continuation);
@@ -103,6 +109,25 @@ void main() {
     playbackHistoryRevision.value++;
     expect(cubit.state.items.map((v) => v.videoId), ['video-1', 'video-2']);
     expect(fakeService.continuations, [null, 'next-page']);
+  });
+
+  test(
+      'manual watched filtering changes immediately without changing partial resume',
+      () async {
+    await db.saveSetting(
+        SettingsValue(hideWatchedSubscriptionsSettingName, 'true'));
+    await db.saveProgress(Progress(0.3, 'video-1'));
+    final cubit =
+        ItemListCubit<Video>(ItemListState(itemList: SubscriptionVideoList()));
+    addTearDown(cubit.close);
+    await cubit.stream.firstWhere((state) => !state.loading);
+    final repository = WatchRepository(db as SembastSqfDb);
+    await repository.mark('video-1', true);
+    expect(cubit.state.items, isEmpty);
+    expect(db.getVideoProgress('video-1'), 0.3);
+    await repository.mark('video-1', false);
+    expect(cubit.state.items.map((video) => video.videoId), ['video-1']);
+    expect(fakeService.continuations, [null]);
   });
 
   test('a hidden account page retains its cursor and earlier items on opt-out',

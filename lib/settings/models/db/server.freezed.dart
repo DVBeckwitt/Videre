@@ -15,6 +15,10 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$Server {
   String get url;
+  String get profileId;
+  String? get id;
+  String get name;
+  bool get gatewayEnabled;
   String? get authToken;
   String? get sidCookie;
   Map<String, String>
@@ -42,6 +46,12 @@ mixin _$Server {
         (other.runtimeType == runtimeType &&
             other is Server &&
             (identical(other.url, url) || other.url == url) &&
+            (identical(other.profileId, profileId) ||
+                other.profileId == profileId) &&
+            (identical(other.id, id) || other.id == id) &&
+            (identical(other.name, name) || other.name == name) &&
+            (identical(other.gatewayEnabled, gatewayEnabled) ||
+                other.gatewayEnabled == gatewayEnabled) &&
             (identical(other.authToken, authToken) ||
                 other.authToken == authToken) &&
             (identical(other.sidCookie, sidCookie) ||
@@ -58,6 +68,10 @@ mixin _$Server {
   int get hashCode => Object.hash(
       runtimeType,
       url,
+      profileId,
+      id,
+      name,
+      gatewayEnabled,
       authToken,
       sidCookie,
       const DeepCollectionEquality().hash(customHeaders),
@@ -66,7 +80,7 @@ mixin _$Server {
 
   @override
   String toString() {
-    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
+    return 'Server(url: $url, profileId: $profileId, id: $id, name: $name, gatewayEnabled: $gatewayEnabled, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
   }
 }
 
@@ -77,6 +91,10 @@ abstract mixin class $ServerCopyWith<$Res> {
   @useResult
   $Res call(
       {String url,
+      String profileId,
+      String? id,
+      String name,
+      bool gatewayEnabled,
       String? authToken,
       String? sidCookie,
       Map<String, String> customHeaders,
@@ -100,6 +118,10 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
   @override
   $Res call({
     Object? url = null,
+    Object? profileId = null,
+    Object? id = freezed,
+    Object? name = null,
+    Object? gatewayEnabled = null,
     Object? authToken = freezed,
     Object? sidCookie = freezed,
     Object? customHeaders = null,
@@ -111,6 +133,22 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
           ? _self.url
           : url // ignore: cast_nullable_to_non_nullable
               as String,
+      profileId: null == profileId
+          ? _self.profileId
+          : profileId // ignore: cast_nullable_to_non_nullable
+              as String,
+      id: freezed == id
+          ? _self.id
+          : id // ignore: cast_nullable_to_non_nullable
+              as String?,
+      name: null == name
+          ? _self.name
+          : name // ignore: cast_nullable_to_non_nullable
+              as String,
+      gatewayEnabled: null == gatewayEnabled
+          ? _self.gatewayEnabled
+          : gatewayEnabled // ignore: cast_nullable_to_non_nullable
+              as bool,
       authToken: freezed == authToken
           ? _self.authToken
           : authToken // ignore: cast_nullable_to_non_nullable
@@ -228,6 +266,10 @@ extension ServerPatterns on Server {
   TResult maybeWhen<TResult extends Object?>(
     TResult Function(
             String url,
+            String profileId,
+            String? id,
+            String name,
+            bool gatewayEnabled,
             String? authToken,
             String? sidCookie,
             Map<String, String> customHeaders,
@@ -242,8 +284,17 @@ extension ServerPatterns on Server {
     final _that = this;
     switch (_that) {
       case _Server() when $default != null:
-        return $default(_that.url, _that.authToken, _that.sidCookie,
-            _that.customHeaders, _that.backendSelector, _that.inUse);
+        return $default(
+            _that.url,
+            _that.profileId,
+            _that.id,
+            _that.name,
+            _that.gatewayEnabled,
+            _that.authToken,
+            _that.sidCookie,
+            _that.customHeaders,
+            _that.backendSelector,
+            _that.inUse);
       case _:
         return orElse();
     }
@@ -266,6 +317,10 @@ extension ServerPatterns on Server {
   TResult when<TResult extends Object?>(
     TResult Function(
             String url,
+            String profileId,
+            String? id,
+            String name,
+            bool gatewayEnabled,
             String? authToken,
             String? sidCookie,
             Map<String, String> customHeaders,
@@ -279,8 +334,17 @@ extension ServerPatterns on Server {
     final _that = this;
     switch (_that) {
       case _Server():
-        return $default(_that.url, _that.authToken, _that.sidCookie,
-            _that.customHeaders, _that.backendSelector, _that.inUse);
+        return $default(
+            _that.url,
+            _that.profileId,
+            _that.id,
+            _that.name,
+            _that.gatewayEnabled,
+            _that.authToken,
+            _that.sidCookie,
+            _that.customHeaders,
+            _that.backendSelector,
+            _that.inUse);
     }
   }
 
@@ -300,6 +364,10 @@ extension ServerPatterns on Server {
   TResult? whenOrNull<TResult extends Object?>(
     TResult? Function(
             String url,
+            String profileId,
+            String? id,
+            String name,
+            bool gatewayEnabled,
             String? authToken,
             String? sidCookie,
             Map<String, String> customHeaders,
@@ -313,8 +381,17 @@ extension ServerPatterns on Server {
     final _that = this;
     switch (_that) {
       case _Server() when $default != null:
-        return $default(_that.url, _that.authToken, _that.sidCookie,
-            _that.customHeaders, _that.backendSelector, _that.inUse);
+        return $default(
+            _that.url,
+            _that.profileId,
+            _that.id,
+            _that.name,
+            _that.gatewayEnabled,
+            _that.authToken,
+            _that.sidCookie,
+            _that.customHeaders,
+            _that.backendSelector,
+            _that.inUse);
       case _:
         return null;
     }
@@ -326,6 +403,10 @@ extension ServerPatterns on Server {
 class _Server extends Server {
   const _Server(
       {required this.url,
+      this.profileId = 'default',
+      this.id,
+      this.name = '',
+      this.gatewayEnabled = false,
       this.authToken,
       this.sidCookie,
       final Map<String, String> customHeaders = const {},
@@ -340,6 +421,17 @@ class _Server extends Server {
 
   @override
   final String url;
+  @override
+  @JsonKey()
+  final String profileId;
+  @override
+  final String? id;
+  @override
+  @JsonKey()
+  final String name;
+  @override
+  @JsonKey()
+  final bool gatewayEnabled;
   @override
   final String? authToken;
   @override
@@ -385,6 +477,12 @@ class _Server extends Server {
         (other.runtimeType == runtimeType &&
             other is _Server &&
             (identical(other.url, url) || other.url == url) &&
+            (identical(other.profileId, profileId) ||
+                other.profileId == profileId) &&
+            (identical(other.id, id) || other.id == id) &&
+            (identical(other.name, name) || other.name == name) &&
+            (identical(other.gatewayEnabled, gatewayEnabled) ||
+                other.gatewayEnabled == gatewayEnabled) &&
             (identical(other.authToken, authToken) ||
                 other.authToken == authToken) &&
             (identical(other.sidCookie, sidCookie) ||
@@ -401,6 +499,10 @@ class _Server extends Server {
   int get hashCode => Object.hash(
       runtimeType,
       url,
+      profileId,
+      id,
+      name,
+      gatewayEnabled,
       authToken,
       sidCookie,
       const DeepCollectionEquality().hash(_customHeaders),
@@ -409,7 +511,7 @@ class _Server extends Server {
 
   @override
   String toString() {
-    return 'Server(url: $url, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
+    return 'Server(url: $url, profileId: $profileId, id: $id, name: $name, gatewayEnabled: $gatewayEnabled, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
   }
 }
 
@@ -421,6 +523,10 @@ abstract mixin class _$ServerCopyWith<$Res> implements $ServerCopyWith<$Res> {
   @useResult
   $Res call(
       {String url,
+      String profileId,
+      String? id,
+      String name,
+      bool gatewayEnabled,
       String? authToken,
       String? sidCookie,
       Map<String, String> customHeaders,
@@ -444,6 +550,10 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
   @pragma('vm:prefer-inline')
   $Res call({
     Object? url = null,
+    Object? profileId = null,
+    Object? id = freezed,
+    Object? name = null,
+    Object? gatewayEnabled = null,
     Object? authToken = freezed,
     Object? sidCookie = freezed,
     Object? customHeaders = null,
@@ -455,6 +565,22 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
           ? _self.url
           : url // ignore: cast_nullable_to_non_nullable
               as String,
+      profileId: null == profileId
+          ? _self.profileId
+          : profileId // ignore: cast_nullable_to_non_nullable
+              as String,
+      id: freezed == id
+          ? _self.id
+          : id // ignore: cast_nullable_to_non_nullable
+              as String?,
+      name: null == name
+          ? _self.name
+          : name // ignore: cast_nullable_to_non_nullable
+              as String,
+      gatewayEnabled: null == gatewayEnabled
+          ? _self.gatewayEnabled
+          : gatewayEnabled // ignore: cast_nullable_to_non_nullable
+              as bool,
       authToken: freezed == authToken
           ? _self.authToken
           : authToken // ignore: cast_nullable_to_non_nullable

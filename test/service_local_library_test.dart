@@ -1,13 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/states/playlist.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/app_logs.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/states/item_list.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
@@ -82,6 +87,95 @@ void main() {
     expect(video.title, 'Already watched');
     expect(video.author, 'A channel');
     expect(video.videoThumbnails.single.url, 'https://example.com/image');
+  });
+
+  test('delayed Watch Later metadata saves only to its original person',
+      () async {
+    const account = Server(
+        id: 'original-account',
+        url: 'https://instance.invalid',
+        authToken: 'original-token');
+    await db.useServer(account);
+    final original = db.forProfile(db.profileId);
+    final metadata = _DeferredVideoService(client);
+    service = library = metadata;
+
+    final adding = library.addVideoToPlaylist(localWatchLaterId, 'pending');
+    await metadata.started.future;
+    final person = await db.createProfile('Another person');
+    await db.useProfile(person.id);
+    await db.useServer(account.copyWith(
+        profileId: person.id,
+        id: 'another-account',
+        authToken: 'another-token'));
+    await library.addVideoToPlaylist(localWatchLaterId, 'other',
+        video: const Video(videoId: 'other', title: 'Other person’s video'));
+    metadata.result.complete(const Video(
+        videoId: 'pending', title: 'Original person’s pending video'));
+    await adding;
+
+    expect(metadata.requestedAccount?.profileId, original.profileId);
+    expect(metadata.requestedAccount?.accountId, account.accountId);
+    expect(metadata.requestedAccount?.authToken, account.authToken);
+    final originalWatchLater = library
+        .getLocalPlaylists(database: original)
+        .singleWhere((playlist) => playlist.playlistId == localWatchLaterId);
+    expect(originalWatchLater.videos.single.videoId, 'pending');
+    expect(originalWatchLater.videos.single.title,
+        'Original person’s pending video');
+    final otherWatchLater = await library.getUserPlaylist(localWatchLaterId);
+    expect(otherWatchLater.videos.single.videoId, 'other');
+    expect(otherWatchLater.videos.single.title, 'Other person’s video');
+    expect(db.profileId, person.id);
+  });
+
+  test('queued local playlist mutations retain the person that queued them',
+      () async {
+    final source = db;
+    final original = source.forProfile(source.profileId);
+    final deletedId = (await library.createPlayList('Delete me', 'local'))!;
+    await library.addVideoToPlaylist(localWatchLaterId, 'remove',
+        video: const Video(videoId: 'remove'));
+    final gate = _PlaylistWriteGate();
+    db = _DelayedSettingsDb(source, gate);
+    addTearDown(() {
+      if (!gate.release.isCompleted) gate.release.complete();
+    });
+
+    final first = library.addVideoToPlaylist(localWatchLaterId, 'first',
+        video: const Video(videoId: 'first'));
+    await gate.started.future;
+    final second = library.addVideoToPlaylist(localWatchLaterId, 'second',
+        video: const Video(videoId: 'second'));
+    final remove = library.deleteUserPlaylistVideo(localWatchLaterId, 'remove');
+    final create = library.createPlayList('Original playlist', 'local');
+    final delete = library.deleteUserPlaylist(deletedId);
+
+    final person = await source.createProfile('Another person');
+    await source.useProfile(person.id);
+    final other = library.addVideoToPlaylist(localWatchLaterId, 'other',
+        video: const Video(videoId: 'other'));
+    gate.release.complete();
+    await first;
+    await second;
+    await remove;
+    final createdId = await create;
+    await delete;
+    await other;
+
+    final originalPlaylists = library.getLocalPlaylists(database: original);
+    expect(originalPlaylists.map((playlist) => playlist.playlistId),
+        unorderedEquals([localWatchLaterId, createdId]));
+    expect(
+        originalPlaylists
+            .singleWhere((playlist) => playlist.playlistId == localWatchLaterId)
+            .videos
+            .map((video) => video.videoId),
+        ['first', 'second']);
+    final otherPlaylists = library.getLocalPlaylists();
+    expect(otherPlaylists.single.playlistId, localWatchLaterId);
+    expect(otherPlaylists.single.videos.single.videoId, 'other');
+    expect(db.profileId, person.id);
   });
 
   test(
@@ -261,7 +355,8 @@ class _PagedPlaylists extends Service {
       videos: [Video(videoId: 'first')]);
 
   @override
-  Future<Playlist> getUserPlaylist(String playlistId, {int? page}) async {
+  Future<Playlist> getUserPlaylist(String playlistId,
+      {int? page, Server? serverOverride}) async {
     requests.add(page);
     return page == 2
         ? first.copyWith(videos: [const Video(videoId: 'second')])
@@ -270,8 +365,70 @@ class _PagedPlaylists extends Service {
 
   @override
   Future<Playlist> getPublicPlaylists(String playlistId,
-          {int? page, bool saveLastSeen = true}) async =>
+          {int? page,
+          bool saveLastSeen = true,
+          Server? serverOverride}) async =>
       throw StateError('Private playlists must use the authenticated endpoint');
+}
+
+class _DeferredVideoService extends Service {
+  final started = Completer<void>();
+  final result = Completer<Video>();
+  Server? requestedAccount;
+
+  _DeferredVideoService(http.Client client) : super(httpClient: client);
+
+  @override
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) {
+    requestedAccount = serverOverride;
+    started.complete();
+    return result.future;
+  }
+}
+
+class _PlaylistWriteGate {
+  final started = Completer<void>();
+  final release = Completer<void>();
+  bool used = false;
+}
+
+class _DelayedSettingsDb extends Fake implements IDbClient {
+  final IDbClient source;
+  final _PlaylistWriteGate gate;
+
+  _DelayedSettingsDb(this.source, this.gate);
+
+  @override
+  String get profileId => source.profileId;
+
+  @override
+  IDbClient forProfile(String id) =>
+      _DelayedSettingsDb(source.forProfile(id), gate);
+
+  @override
+  SettingsValue? getSettings(String name) => source.getSettings(name);
+
+  @override
+  Future<void> upsertServer(Server server) async =>
+      await source.upsertServer(server);
+
+  @override
+  Future<void> insertLogs(AppLog log) => source.insertLogs(log);
+
+  @override
+  Future<void> saveSetting(SettingsValue value) async {
+    if (value.name == localPlaylistsSetting && !gate.used) {
+      gate.used = true;
+      gate.started.complete();
+      await gate.release.future;
+    }
+    await source.saveSetting(value);
+  }
+
+  @override
+  Future<void> close() => source.close();
 }
 
 class _UnusedPlayer implements PlayerCubit {

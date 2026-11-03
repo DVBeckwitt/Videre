@@ -151,14 +151,18 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
 }) {
   final sources = <BetterPlayerDataSource>[];
   final seen = <String>{};
-  late final subtitles = video.captions
-      .map((caption) => BetterPlayerSubtitlesSource(
-            type: BetterPlayerSubtitlesSourceType.network,
-            urls: ['${server.url}${caption.url}'],
-            name: caption.label,
-            selectedByDefault: caption.label == lastSubtitle,
-          ))
-      .toList();
+  late final subtitles = video.captions.map((caption) {
+    final base =
+        Uri.parse(server.url.endsWith('/') ? server.url : '${server.url}/');
+    final url = base.resolve(caption.url).toString();
+    return BetterPlayerSubtitlesSource(
+      type: BetterPlayerSubtitlesSourceType.network,
+      urls: [url],
+      headers: server.headersForUrl(url),
+      name: caption.label,
+      selectedByDefault: caption.label == lastSubtitle,
+    );
+  }).toList();
 
   void add(String url, BetterPlayerVideoFormat format,
       {Map<String, String>? resolutions}) {
@@ -303,7 +307,14 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _cancelSetup();
     _controllerSetup = null;
     _controllerSetupAttempt = null;
-    disposeControllers();
+    final controller = videoController;
+    try {
+      // BetterPlayer disposal is synchronous but native pause is asynchronous.
+      // Wait for silence before another person's account can become active.
+      await controller?.videoPlayerController?.pause();
+    } finally {
+      if (identical(videoController, controller)) disposeControllers();
+    }
   }
 
   @override

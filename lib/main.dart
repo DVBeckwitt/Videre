@@ -1,4 +1,5 @@
 import 'package:clipious/utils/motion.dart';
+import 'package:clipious/app/views/components/session_focus_guard.dart';
 import 'package:clipious/utils/motion_binding.dart';
 import 'dart:async';
 import 'dart:io';
@@ -6,8 +7,10 @@ import 'network/network_proxy.dart';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:feedback/feedback.dart';
+import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -127,8 +130,45 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final app = context.read<AppCubit>();
+    final player = context.read<PlayerCubit>();
+    final downloads = context.read<DownloadManagerCubit>();
+    final settings = context.read<SettingsCubit>();
+    NotificationController.canHandleActions = () =>
+        !app.isClosed &&
+        !app.state.globalLoading &&
+        !app.state.sessionRecoveryRequired;
+    app.clearSessionNotifications = () async {
+      await AwesomeNotifications().dismissAllNotifications();
+    };
+    app.beforeAccountSwitch = () async {
+      await downloads.pauseForProfileSwitch();
+      await player.prepareForProfileSwitch();
+      await AwesomeNotifications().dismissAllNotifications();
+    };
+    app.afterAccountSwitch = () async {
+      await settings.reloadForProfile();
+      await player.reloadForProfile();
+      await downloads.reloadForProfile();
+    };
+    app.resetNavigation = (hasServer) async {
+      await appRouter.replaceAll(
+          isTv
+              ? (hasServer
+                  ? [const TvHomeRoute()]
+                  : [const TvWelcomeWizardRoute()])
+              : (hasServer
+                  ? [const MainRoute()]
+                  : [const WelcomeWizardRoute()]),
+          updateExistingRoutes: false);
+    };
     return BlocBuilder<AppCubit, AppState>(
-        buildWhen: (previous, current) => previous.server != current.server,
+        buildWhen: (previous, current) =>
+            previous.server != current.server ||
+            previous.profileId != current.profileId ||
+            previous.sessionRevision != current.sessionRevision ||
+            previous.globalLoading != current.globalLoading ||
+            previous.sessionRecoveryRequired != current.sessionRecoveryRequired,
         // we want to rebuild only when anything other than the navigation index is changed
         builder: (context, state) {
           bool useDynamicTheme = context
@@ -222,8 +262,66 @@ class MyApp extends StatelessWidget {
                 const SliderThemeData(inactiveTrackColor: Colors.blue);
 
             return MaterialApp.router(
-              builder: (context, child) =>
-                  MotionScope(preference: motionPreference, child: child!),
+              builder: (context, child) => MotionScope(
+                  preference: motionPreference,
+                  child: Stack(children: [
+                    SessionFocusGuard(
+                        blocked: state.globalLoading ||
+                            state.sessionRecoveryRequired,
+                        restoreFocus: isTv,
+                        child: KeyedSubtree(
+                            key: ValueKey(state.sessionRevision),
+                            child: child!)),
+                    if (state.sessionRecoveryRequired)
+                      Positioned.fill(
+                        child: Material(
+                            color: Theme.of(context).colorScheme.surface,
+                            child: SafeArea(
+                                child: Center(
+                                    child: Padding(
+                                        padding: const EdgeInsets.all(24),
+                                        child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                  AppLocalizations.of(context)!
+                                                      .profileRecoveryRequired,
+                                                  textAlign: TextAlign.center),
+                                              const SizedBox(height: 16),
+                                              Shortcuts(
+                                                  shortcuts: {
+                                                    LogicalKeySet(
+                                                            LogicalKeyboardKey
+                                                                .select):
+                                                        const ActivateIntent(),
+                                                  },
+                                                  child: FilledButton(
+                                                      autofocus: true,
+                                                      onPressed:
+                                                          state.globalLoading
+                                                              ? null
+                                                              : () async {
+                                                                  try {
+                                                                    await app
+                                                                        .retrySessionRecovery();
+                                                                  } on SessionRecoveryRequired {
+                                                                    // The recovery notice remains visible for another retry.
+                                                                  }
+                                                                },
+                                                      child: Text(
+                                                          AppLocalizations.of(
+                                                                  context)!
+                                                              .retry))),
+                                            ]))))),
+                      ),
+                    if (state.globalLoading)
+                      const Positioned.fill(
+                          child: AbsorbPointer(
+                              child: ColoredBox(
+                                  color: Color(0x33000000),
+                                  child: Center(
+                                      child: CircularProgressIndicator())))),
+                  ])),
               routerConfig: appRouter.config(
                   navigatorObservers: () => [MyRouteObserver()],
                   includePrefixMatches: true),

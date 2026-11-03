@@ -1,4 +1,5 @@
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/request_cookies.dart';
@@ -179,8 +180,14 @@ void main() {
       customHeaders: {'Cookie': 'backend=6'},
     );
 
-    expect(server.headersForUrl('https://instance.example/videoplayback'),
-        {'Cookie': 'backend=6'});
+    expect(
+        server.headersForUrl('https://instance.example/videoplayback'),
+        gatewayContextHeaders(
+            profileId: 'default',
+            accountId: 'https://instance.example',
+            serverUrl: 'https://instance.example',
+            targetUrl: 'https://instance.example/videoplayback',
+            headers: const {'Cookie': 'backend=6'}));
     for (final target in [
       'https://another.example/videoplayback',
       'https://instance.example.evil.test/videoplayback',

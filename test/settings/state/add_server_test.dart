@@ -5,7 +5,6 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
-import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -29,6 +28,38 @@ class _ValidationService extends Service {
       void Function(BackendPlayback request)? onBackendRequest}) async {
     checked.add(serverOverride!);
     return Video(videoId: videoId);
+  }
+}
+
+class _ProtectedValidationService extends Service {
+  final bool cancel;
+  final bool failValidation;
+  Server? signedIn;
+  Server? signedOut;
+  int validations = 0;
+
+  _ProtectedValidationService(
+      {this.cancel = false, this.failValidation = false});
+
+  @override
+  Future<Server?> authenticateProtected(Server server) async {
+    signedIn = server;
+    return cancel ? null : server.copyWith(authToken: 'protected-token');
+  }
+
+  @override
+  Future<void> validateServer(
+      String serverUrl, Map<String, String>? headers) async {
+    expect(signedIn, isNotNull);
+    expect(serverUrl, signedIn!.url);
+    validations++;
+    if (failValidation) throw StateError('validation failed');
+  }
+
+  @override
+  Future<Server?> logOutProtected(Server server) async {
+    signedOut = server;
+    return server;
   }
 }
 
@@ -159,19 +190,27 @@ void main() {
       service = Service();
     });
 
-    test('a copied duplicate never replaces a saved account or makes a request',
+    test(
+        'another account on the same server has a distinct ID and no old login',
         () async {
       const saved =
           Server(url: 'https://inv.example', authToken: 'saved-account');
       await db.upsertServer(saved);
       final before = db.getServer(saved.url);
-      service = Service(
-          httpClient:
-              MockClient((_) async => throw StateError('Unexpected request')));
+      service = Service(httpClient: MockClient((request) async {
+        expect(request.headers.containsKey('Authorization'), isFalse);
+        return http.Response('{"software":{"name":"invidious"}}', 200);
+      }));
       cubit.urlController.text = 'inv.example/';
+      cubit.nameController.text = 'Other account';
 
-      await expectLater(
-          cubit.validateServer(), throwsA(isA<ServerAlreadyExists>()));
+      final added = await cubit.validateServer();
+      expect(added!.accountId, isNot(saved.accountId));
+      expect(added.name, 'Other account');
+      expect(added.authToken, isNull);
+      expect(added.sidCookie, isNull);
+      await db.upsertServer(added);
+      expect((await db.getServers()).length, 2);
       expect(db.getServer(saved.url), before);
       expect(cubit.state.loading, isFalse);
     });
@@ -244,12 +283,13 @@ void main() {
           Server(url: 'https://public.example', authToken: 'saved-account');
       await db.upsertServer(saved);
       final before = db.getServer(saved.url);
-      service = Service(httpClient: MockClient((_) async {
-        fail('A duplicate must not make a request');
-      }));
+      final validator = _ValidationService();
+      validator.response.complete();
+      service = validator;
       cubit.selectPublicInstance(saved.url);
-      await expectLater(
-          cubit.validateServer(), throwsA(isA<ServerAlreadyExists>()));
+      final added = await cubit.validateServer();
+      expect(added!.accountId, isNot(saved.accountId));
+      expect(added.authToken, isNull);
       expect(db.getServer(saved.url), before);
     });
 
@@ -268,8 +308,65 @@ void main() {
       validator.response.complete();
 
       final server = await pending;
-      expect(server, const Server(url: 'https://public.example'));
-      expect(validator.checked, [server, server]);
+      expect(server!.url, 'https://public.example');
+      expect(server.id, isNotNull);
+      expect(server.profileId, 'default');
+      expect(validator.checked.length, 2);
+      expect(validator.checked.first.url, server.url);
+      expect(validator.checked.first.customHeaders,
+          server.headersForUrl(server.url));
+      expect(validator.checked.last, server);
+      expect(await db.getServers(), isEmpty);
+    });
+
+    test('server validation remains owned by the profile that opened the form',
+        () async {
+      final validator = _ValidationService();
+      service = validator;
+      cubit.urlController.text = 'https://profile.example';
+      final pending = cubit.validateServer();
+      final other = await db.createProfile('Other');
+      await db.useProfile(other.id);
+      validator.response.complete();
+      final server = await pending;
+      expect(server!.profileId, 'default');
+      expect(await db.getServers(), isEmpty);
+    });
+
+    test('protected onboarding signs in before testing and returns its account',
+        () async {
+      final protected = _ProtectedValidationService();
+      service = protected;
+      cubit.urlController.text = 'https://protected.example';
+      cubit.setProtectedServer(true);
+      final account = await cubit.validateServer();
+      expect(account!.accountId, protected.signedIn!.accountId);
+      expect(account.profileId, 'default');
+      expect(account.authToken, 'protected-token');
+      expect(protected.validations, 1);
+      expect(protected.signedOut, isNull);
+      expect(await db.getServers(), isEmpty);
+    });
+
+    test('cancelled protected onboarding neither validates nor saves',
+        () async {
+      final protected = _ProtectedValidationService(cancel: true);
+      service = protected;
+      cubit.urlController.text = 'https://protected.example';
+      cubit.setProtectedServer(true);
+      expect(await cubit.validateServer(), isNull);
+      expect(protected.validations, 0);
+      expect(cubit.state.loading, isFalse);
+      expect(await db.getServers(), isEmpty);
+    });
+
+    test('failed protected onboarding revokes its unsaved session', () async {
+      final protected = _ProtectedValidationService(failValidation: true);
+      service = protected;
+      cubit.urlController.text = 'https://protected.example';
+      cubit.setProtectedServer(true);
+      await expectLater(cubit.validateServer(), throwsStateError);
+      expect(protected.signedOut!.accountId, protected.signedIn!.accountId);
       expect(await db.getServers(), isEmpty);
     });
   });
