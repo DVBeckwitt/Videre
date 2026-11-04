@@ -6,6 +6,8 @@
 
 Watch, listen, and download through a public Invidious instance or your own server. No Google account required; Invidious accounts are optional.
 
+Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Videre, ask questions, and share ideas.
+
 **[Download the latest APK](https://github.com/DVBeckwitt/Videre/releases/latest)** · Android 7.0+ · [Report a bug](https://github.com/DVBeckwitt/Videre/issues)
 
 [![Build](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml/badge.svg)](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml)
