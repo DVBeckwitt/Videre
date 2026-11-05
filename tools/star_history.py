@@ -158,16 +158,18 @@ def cumulative_series(snapshot):
 def logo_geometry():
     """Reuse the actual local brand mark without copying SVG metadata/resources."""
     root = ET.parse(ROOT / "assets" / "icon.svg").getroot()
-    path = root.find(".//{http://www.w3.org/2000/svg}path[@id='path1085']")
-    if path is None:
-        raise ValueError("assets/icon.svg no longer contains the Videre logo path")
-    geometry = path.attrib["d"]
-    if not re.fullmatch(r"[MmZzLlHhVvCcSsQqTtAa0-9eE.,+\s-]+", geometry):
-        raise ValueError("logo contains unsupported SVG path data")
-    match = re.search(r"(?:^|;)stroke-width:([0-9.]+)(?:;|$)", path.attrib["style"])
-    if not match:
-        raise ValueError("logo is missing its stroke width")
-    return geometry, float(match[1])
+    paths = root.findall(".//{http://www.w3.org/2000/svg}path")
+    if not paths:
+        raise ValueError("assets/icon.svg no longer contains the Videre logo paths")
+    geometry = []
+    for path in paths:
+        data, fill = path.get("d", ""), path.get("fill", "")
+        if not re.fullmatch(r"[MmZzLlHhVvCcSsQqTtAa0-9eE.,+\s-]+", data):
+            raise ValueError("logo contains unsupported SVG path data")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", fill):
+            raise ValueError("logo contains an unsupported fill color")
+        geometry.append((data, fill))
+    return geometry
 
 
 def axis_ceiling(total):
@@ -188,7 +190,7 @@ def render_svg(snapshot):
     for stamp, count in points[1:]:
         line += f" H {x(stamp):.2f} V {y(count):.2f}"
     area = f"{line} L {right} {bottom} Z"
-    geometry, stroke = logo_geometry()
+    logo = "".join(f'<path d="{data}" fill="{fill}"/>' for data, fill in logo_geometry())
     repository = escape(snapshot["repository"])
     fetched = snapshot["fetched_at"]
     parts = [
@@ -204,12 +206,12 @@ def render_svg(snapshot):
         '<rect x="3" y="3" width="1594" height="794" rx="38" fill="#1c2245"/>',
         '<rect x="4" y="4" width="1592" height="792" rx="37" fill="url(#panel)" stroke="#9c1ef5" stroke-opacity=".65" stroke-width="2"/>',
         '<g font-family="Segoe UI, Helvetica, Arial, sans-serif">',
-        f'<path d="{geometry}" transform="translate(34 -4) scale(.4)" fill="none" stroke="url(#violet)" stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round"/>',
+        f'<g transform="translate(34 -4) scale(.4)">{logo}</g>',
         '<text x="225" y="145" fill="#9c1ef5" font-size="90" font-weight="600" letter-spacing="-2">Videre</text>',
         '<path d="M 1092 68 L 1097 85 L 1114 90 L 1097 95 L 1092 112 L 1087 95 L 1070 90 L 1087 85 Z" fill="#cda4ff" opacity=".8"/>',
         '<text x="1450" y="104" fill="#eee9ff" font-size="31" font-weight="600" letter-spacing="6" text-anchor="end">STAR HISTORY</text>',
         f'<text x="1450" y="146" fill="#aaaac7" font-size="22" text-anchor="end">{repository}</text>',
-        f'<path d="{geometry}" transform="translate(100 60) scale(1.45)" fill="none" stroke="url(#violet)" stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round" opacity=".13"/>',
+        f'<g transform="translate(100 60) scale(1.45)" opacity=".13">{logo}</g>',
     ]
     for index in range(5):
         count = ceiling * index // 4
