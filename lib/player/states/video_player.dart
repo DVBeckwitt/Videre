@@ -17,6 +17,7 @@ import '../../main.dart';
 import '../../settings/models/db/server.dart';
 import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
+import '../adaptive_dash_manifest.dart';
 import '../models/backend_playback.dart';
 import '../models/playback_pitch.dart';
 import '../models/video_quality.dart';
@@ -715,13 +716,16 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final server = _playbackServer;
     final videoId = _playbackVideoId;
     if (source.videoFormat == BetterPlayerVideoFormat.dash &&
+        source.inlineDashManifest == null &&
         server != null &&
         videoId != null) {
       String? resolved;
+      var missingCheck = false;
       try {
         resolved = await Future.any([
           service.dashManifestResolver.resolve(source.url, videoId, server,
-              throwRetryable: state.video?.backendPlayback != null),
+              throwRetryable: state.video?.backendPlayback != null,
+              onMissingCheck: () => missingCheck = true),
           cancelled.then<String?>((_) => null),
         ]);
       } on BackendPlaybackFailure {
@@ -729,12 +733,44 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         _sourceBackendRetryable = true;
       }
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
-      if (resolved == null) {
+      final video = state.video;
+      String? inlineManifest;
+      if (resolved == null &&
+          missingCheck &&
+          !_sourceBackendRetryable &&
+          !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.android &&
+          video != null &&
+          video.liveNow != true) {
+        final manifestUri = Uri.parse(source.url);
+        final local = manifestUri.queryParameters['local'] == 'true';
+        inlineManifest = buildAdaptiveDashManifest(
+          formats: video.adaptiveFormats ?? const [],
+          duration: Duration(seconds: video.lengthSeconds ?? 0),
+          resolveMediaUrl: (value) {
+            final url = _mediaUrl(value);
+            if (url == null) return null;
+            final target =
+                _validMediaUrl(_proxyUrl(url, server, local), server);
+            if (target == null ||
+                (local && !_sameOrigin(Uri.parse(target), manifestUri))) {
+              return null;
+            }
+            return target;
+          },
+        );
+      }
+      if (resolved == null && inlineManifest == null) {
         _sourceFailurePending = true;
         await _handleSourceFailure(generation, sourceIndex);
         return;
       }
-      source = source.copyWith(url: resolved);
+      source = source.copyWith(
+        url: resolved,
+        inlineDashManifest: inlineManifest,
+        // Generated audio groups lack language labels. Media3 selects audio.
+        useAsmsAudioTracks: inlineManifest == null ? null : false,
+      );
       _playbackSources[sourceIndex] = source;
     }
 
@@ -743,8 +779,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (selectedTrack != null) {
       emit(state.copyWith(selectedNonDashTrack: selectedTrack));
     }
-    log.info(
-        'Playing ${source.videoFormat} source from ${Uri.parse(source.url).host}');
+    final format = source.inlineDashManifest == null
+        ? source.videoFormat.toString()
+        : 'DASH assembled from adaptive tracks';
+    log.info('Playing $format source from ${Uri.parse(source.url).host}');
     var setupFailed = false;
     var setup = Future<void>.value();
     try {

@@ -1,0 +1,2 @@
+- Restored adaptive playback on NerdVPN when signed DASH recovery fails.
+- Added higher quality H.264 and AAC MP4 downloads when compatible streams are available.

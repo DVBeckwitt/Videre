@@ -27,6 +27,7 @@ mixin _$DownloadedVideo {
   String? get folderUri;
   String? get storageUri;
   bool get audioOnly;
+  DownloadContainer? get container;
   int get lengthSeconds;
   String get quality;
 
@@ -69,6 +70,8 @@ mixin _$DownloadedVideo {
                 other.storageUri == storageUri) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
+            (identical(other.container, container) ||
+                other.container == container) &&
             (identical(other.lengthSeconds, lengthSeconds) ||
                 other.lengthSeconds == lengthSeconds) &&
             (identical(other.quality, quality) || other.quality == quality));
@@ -91,12 +94,13 @@ mixin _$DownloadedVideo {
       folderUri,
       storageUri,
       audioOnly,
+      container,
       lengthSeconds,
       quality);
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -120,6 +124,7 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       String? folderUri,
       String? storageUri,
       bool audioOnly,
+      DownloadContainer? container,
       int lengthSeconds,
       String quality});
 }
@@ -150,6 +155,7 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? folderUri = freezed,
     Object? storageUri = freezed,
     Object? audioOnly = null,
+    Object? container = freezed,
     Object? lengthSeconds = null,
     Object? quality = null,
   }) {
@@ -206,6 +212,10 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable
               as bool,
+      container: freezed == container
+          ? _self.container
+          : container // ignore: cast_nullable_to_non_nullable
+              as DownloadContainer?,
       lengthSeconds: null == lengthSeconds
           ? _self.lengthSeconds
           : lengthSeconds // ignore: cast_nullable_to_non_nullable
@@ -323,6 +333,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? folderUri,
             String? storageUri,
             bool audioOnly,
+            DownloadContainer? container,
             int lengthSeconds,
             String quality)?
         $default, {
@@ -345,6 +356,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.folderUri,
             _that.storageUri,
             _that.audioOnly,
+            _that.container,
             _that.lengthSeconds,
             _that.quality);
       case _:
@@ -381,6 +393,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? folderUri,
             String? storageUri,
             bool audioOnly,
+            DownloadContainer? container,
             int lengthSeconds,
             String quality)
         $default,
@@ -402,6 +415,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.folderUri,
             _that.storageUri,
             _that.audioOnly,
+            _that.container,
             _that.lengthSeconds,
             _that.quality);
     }
@@ -435,6 +449,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? folderUri,
             String? storageUri,
             bool audioOnly,
+            DownloadContainer? container,
             int lengthSeconds,
             String quality)?
         $default,
@@ -456,6 +471,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.folderUri,
             _that.storageUri,
             _that.audioOnly,
+            _that.container,
             _that.lengthSeconds,
             _that.quality);
       case _:
@@ -481,6 +497,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.folderUri,
       this.storageUri,
       this.audioOnly = false,
+      this.container,
       required this.lengthSeconds,
       required this.quality})
       : super._();
@@ -519,6 +536,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   @JsonKey()
   final bool audioOnly;
+  @override
+  final DownloadContainer? container;
   @override
   final int lengthSeconds;
   @override
@@ -567,6 +586,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.storageUri == storageUri) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
+            (identical(other.container, container) ||
+                other.container == container) &&
             (identical(other.lengthSeconds, lengthSeconds) ||
                 other.lengthSeconds == lengthSeconds) &&
             (identical(other.quality, quality) || other.quality == quality));
@@ -589,12 +610,13 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       folderUri,
       storageUri,
       audioOnly,
+      container,
       lengthSeconds,
       quality);
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -620,6 +642,7 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       String? folderUri,
       String? storageUri,
       bool audioOnly,
+      DownloadContainer? container,
       int lengthSeconds,
       String quality});
 }
@@ -650,6 +673,7 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? folderUri = freezed,
     Object? storageUri = freezed,
     Object? audioOnly = null,
+    Object? container = freezed,
     Object? lengthSeconds = null,
     Object? quality = null,
   }) {
@@ -706,6 +730,10 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable
               as bool,
+      container: freezed == container
+          ? _self.container
+          : container // ignore: cast_nullable_to_non_nullable
+              as DownloadContainer?,
       lengthSeconds: null == lengthSeconds
           ? _self.lengthSeconds
           : lengthSeconds // ignore: cast_nullable_to_non_nullable

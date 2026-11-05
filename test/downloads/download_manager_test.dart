@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
@@ -301,6 +302,91 @@ void main() {
     await manager.deleteVideo(manager.state.videos.single);
     expect(deleted, document);
     expect(manager.state.videos, isEmpty);
+  });
+
+  test('HD MP4 uses AAC and saves a matching external document across reloads',
+      () async {
+    const muxChannel = MethodChannel('flutter.arthenica.com/ffmpeg_kit');
+    const muxEvents = MethodChannel('flutter.arthenica.com/ffmpeg_kit_event');
+    const mp4 = '$folder/document/primary%3AVidere%2Fvideo.mp4';
+    const mediaBytes = [1, 2, 3, 4];
+    final requests = <String>[];
+    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    mediaServer!.listen((request) async {
+      requests.add(request.uri.path);
+      request.response.add(mediaBytes);
+      await request.response.close();
+    });
+    final origin = 'http://127.0.0.1:${mediaServer!.port}';
+    AdaptiveFormat track(String id, String type, String encoding,
+            [String? quality]) =>
+        AdaptiveFormat(null, '128000', null, '$origin/$id', id, type,
+            '${mediaBytes.length}', '1', '', null, encoding, quality, quality);
+    service = _DownloadService((id) async =>
+        Video(videoId: id, title: 'Resolved title', adaptiveFormats: [
+          track('251', 'audio/webm', 'opus'),
+          track('140', 'audio/mp4', 'aac'),
+          track('243', 'video/webm', 'vp9', '360p'),
+          track('137', 'video/mp4', 'h264', '1080p'),
+        ]));
+
+    late List<String> muxArguments;
+    messenger.setMockMethodCallHandler(muxEvents, (_) async => null);
+    messenger.setMockMethodCallHandler(muxChannel, (call) async {
+      switch (call.method) {
+        case 'ffmpegSession':
+          muxArguments = List<String>.from(call.arguments['arguments'] as List);
+          return {'sessionId': 1};
+        case 'ffmpegSessionExecute':
+          await File(muxArguments.last).writeAsBytes(mediaBytes);
+          return null;
+        case 'abstractSessionGetReturnCode':
+          return 0;
+        default:
+          return null;
+      }
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(muxEvents, null);
+      messenger.setMockMethodCallHandler(muxChannel, null);
+    });
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'pickFolder':
+          return {'uri': folder, 'name': 'Videre'};
+        case 'prepareDocument':
+          expect(call.arguments['name'], endsWith('.mp4'));
+          expect(call.arguments['mime'], 'video/mp4');
+          return mp4;
+        case 'writeDocument':
+          expect(call.arguments['uri'], mp4);
+          final saved = db.getDownloadByVideoId(video.videoId)!;
+          expect(saved.container, DownloadContainer.mp4);
+          expect(saved.downloadComplete, isFalse);
+          expect(await File(call.arguments['source'] as String).readAsBytes(),
+              mediaBytes);
+          return null;
+        default:
+          return null;
+      }
+    });
+
+    await manager.deleteVideo(video);
+    await manager.chooseFolder();
+    expect(await manager.addDownload(video.videoId, quality: '1080p'), isTrue);
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete &&
+        state.downloadProgresses.isEmpty);
+
+    expect(requests, ['/140', '/137']);
+    expect(muxArguments.last, endsWith('.mux.mp4'));
+    expect(await File(muxArguments.last).exists(), isFalse);
+    await manager.close();
+    await openManager();
+    final completed = manager.state.videos.single;
+    expect(completed.container, DownloadContainer.mp4);
+    expect(await completed.effectivePath, mp4);
   });
 
   test('failed folder writes retry the same document instead of duplicating it',

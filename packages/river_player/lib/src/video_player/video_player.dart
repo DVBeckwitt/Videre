@@ -351,6 +351,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   Future<void> setNetworkDataSource(
     String dataSource, {
     VideoFormat? formatHint,
+    String? inlineDashManifest,
     Map<String, String?>? headers,
     bool useCache = false,
     int? maxCacheSize,
@@ -374,6 +375,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         sourceType: DataSourceType.network,
         uri: dataSource,
         formatHint: formatHint,
+        inlineDashManifest: inlineDashManifest,
         headers: headers,
         useCache: useCache,
         maxCacheSize: maxCacheSize,

@@ -21,6 +21,8 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
       folderUri: json['folderUri'] as String?,
       storageUri: json['storageUri'] as String?,
       audioOnly: json['audioOnly'] as bool? ?? false,
+      container:
+          $enumDecodeNullable(_$DownloadContainerEnumMap, json['container']),
       lengthSeconds: (json['lengthSeconds'] as num).toInt(),
       quality: json['quality'] as String,
     );
@@ -40,6 +42,12 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
       'folderUri': instance.folderUri,
       'storageUri': instance.storageUri,
       'audioOnly': instance.audioOnly,
+      'container': _$DownloadContainerEnumMap[instance.container],
       'lengthSeconds': instance.lengthSeconds,
       'quality': instance.quality,
     };
+
+const _$DownloadContainerEnumMap = {
+  DownloadContainer.webm: 'webm',
+  DownloadContainer.mp4: 'mp4',
+};

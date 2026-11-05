@@ -59,6 +59,7 @@ const strictValidationTargets = [
   './test/videos/view/tv_history_test.dart',
   './test/downloads/download_manager_test.dart',
   './test/downloads/download_modal_sheet_test.dart',
+  './test/player/adaptive_dash_manifest_test.dart',
   './test/player/playback_session_test.dart',
   './test/player/media_item_artwork_test.dart',
   './test/player/player_queue_lifecycle_test.dart',

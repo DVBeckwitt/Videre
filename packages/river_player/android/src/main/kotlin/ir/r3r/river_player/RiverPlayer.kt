@@ -82,6 +82,7 @@ import androidx.media3.exoplayer.smoothstreaming.DefaultSsChunkSource
 
 //import com.google.android.exoplayer2.source.dash.DashMediaSource
 import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.exoplayer.dash.manifest.DashManifestParser
 
 //import com.google.android.exoplayer2.source.dash.DefaultDashChunkSource
 import androidx.media3.exoplayer.dash.DefaultDashChunkSource
@@ -202,7 +203,8 @@ internal class RiverPlayer(
         licenseUrl: String?,
         drmHeaders: Map<String, String>?,
         cacheKey: String?,
-        clearKey: String?
+        clearKey: String?,
+        inlineDashManifest: String? = null
     ) {
         this.key = key
         isInitialized = false
@@ -267,7 +269,14 @@ internal class RiverPlayer(
         } else {
             dataSourceFactory = DefaultDataSource.Factory(context)
         }
-        val mediaSource = buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context)
+        val mediaSource = try {
+            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest)
+        } catch (error: Exception) {
+            if (inlineDashManifest == null) throw error
+            // Parser errors can contain signed media URLs from the manifest.
+            result.error("InvalidDashManifest", "Could not open the supplied DASH manifest.", null)
+            return
+        }
         if (overriddenDuration != 0L) {
             val clippingMediaSource = ClippingMediaSource(mediaSource, 0, overriddenDuration * 1000)
             exoPlayer?.setMediaSource(clippingMediaSource)
@@ -453,7 +462,8 @@ internal class RiverPlayer(
         mediaDataSourceFactory: DataSource.Factory,
         formatHint: String?,
         cacheKey: String?,
-        context: Context
+        context: Context,
+        inlineDashManifest: String?
     ): MediaSource {
         val type: Int
         if (formatHint == null) {
@@ -505,7 +515,15 @@ internal class RiverPlayer(
             mediaFactory.setDrmSessionManagerProvider(DrmSessionManagerProvider { drmSessionManager })
         }
 
-        return mediaFactory.createMediaSource(mediaItemBuilder.build())
+        val mediaItem = mediaItemBuilder.build()
+        if (inlineDashManifest != null) {
+            require(mediaFactory is DashMediaSource.Factory && isHTTP(uri))
+            val manifest = inlineDashManifest.byteInputStream().use {
+                DashManifestParser().parse(uri, it)
+            }
+            return mediaFactory.createMediaSource(manifest, mediaItem)
+        }
+        return mediaFactory.createMediaSource(mediaItem)
     }
 
     private fun setupVideoPlayer(

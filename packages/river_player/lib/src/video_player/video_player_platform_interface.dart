@@ -217,6 +217,7 @@ class DataSource {
     required this.sourceType,
     this.uri,
     this.formatHint,
+    this.inlineDashManifest,
     this.asset,
     this.package,
     this.headers,
@@ -256,6 +257,9 @@ class DataSource {
   /// **Android only**. Will override the platform's generic file format
   /// detection with whatever is set here.
   final VideoFormat? formatHint;
+
+  /// Optional Android static DASH manifest body. Excluded from diagnostics.
+  final String? inlineDashManifest;
 
   /// **Android only**. String representation of a formatHint.
   String? get rawFormalHint {
@@ -328,6 +332,9 @@ class DataSource {
 
     if (formatHint != null) {
       result = "$result:$rawFormalHint";
+    }
+    if (inlineDashManifest != null) {
+      result = '$result:inline';
     }
 
     return result!;

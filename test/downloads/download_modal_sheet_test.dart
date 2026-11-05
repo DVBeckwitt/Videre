@@ -33,11 +33,12 @@ class _Metadata extends Service {
 
 AdaptiveFormat _format(
         {String type = 'audio/webm',
+        String encoding = 'vp9',
         String? quality,
         String? resolution,
         String size = '100'}) =>
     AdaptiveFormat(null, '128000', null, 'https://media.invalid/stream', '251',
-        type, size, '1', '', 'webm', 'vp9', quality, resolution);
+        type, size, '1', '', null, encoding, quality, resolution);
 
 Video _playable() => Video(videoId: 'video', adaptiveFormats: [
       _format(),
@@ -170,6 +171,27 @@ void main() {
     expect(dropdown.items, hasLength(1));
     expect(dropdown.value, '720p');
     expect(tester.takeException(), isNull);
+  });
+
+  test('HD MP4 is offered alongside a low-resolution WebM track', () async {
+    final webm = _format(type: 'video/webm', quality: '360p');
+    final hd = _format(type: 'video/mp4', encoding: 'h264', quality: '1080p');
+    service = _Metadata(() async => Video(videoId: 'video', adaptiveFormats: [
+          _format(type: 'audio/mp4', encoding: 'aac'),
+          _format(type: 'video/mp4', encoding: 'h264', quality: '360p'),
+          hd,
+          _format(),
+          webm,
+        ]));
+    final cubit = DownloadModalSheetCubit(
+        const DownloadModalSheetState(), const Video(videoId: 'video'));
+    addTearDown(cubit.close);
+
+    await _loaded(cubit);
+
+    expect(cubit.state.availableQualities, [webm, hd]);
+    expect(cubit.state.quality, '1080p');
+    expect(cubit.state.audioOnly, isFalse);
   });
 
   for (final switchPerson in [false, true]) {

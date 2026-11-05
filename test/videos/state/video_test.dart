@@ -7,6 +7,8 @@ import 'package:audio_session/audio_session.dart';
 import 'package:audio_service_platform_interface/audio_service_platform_interface.dart';
 // ignore: depend_on_referenced_packages
 import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +30,7 @@ import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/dislike.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/format_stream.dart';
@@ -750,6 +753,54 @@ void main() {
         'https://inv.example/fallback.mp4'
       ]);
       expect(player.errorEvents, isEmpty);
+    });
+
+    test('uses adaptive tracks when a signed DASH manifest cannot be recovered',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      const dash = 'https://inv.example/api/manifest/dash/id/adaptive';
+      const progressive = 'https://inv.example/fallback.mp4';
+      const hd = 'https://r1.googlevideo.com/videoplayback?itag=137';
+      const audio = 'https://r1.googlevideo.com/videoplayback?itag=140';
+      final requests = <String>[];
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request.url.path);
+        if (request.url.path == '/watch') throw http.ClientException('Closed');
+        return http.Response('No check ID.', 400);
+      }));
+      AdaptiveFormat track(String url, String itag, String type,
+              {String? size}) =>
+          AdaptiveFormat('500-999', '100000', '0-499', url, itag, type,
+              '1000000', '', 'RECTANGULAR', 'mp4', null, null, null,
+              size: size);
+      cubit.switchVideo(Video(
+        videoId: 'adaptive',
+        lengthSeconds: 90,
+        dashUrl: dash,
+        adaptiveFormats: [
+          track(hd, '137', 'video/mp4; codecs="avc1.640028"',
+              size: '1920x1080'),
+          track(audio, '140', 'audio/mp4; codecs="mp4a.40.2"'),
+          track('https://elsewhere.example/video', '136',
+              'video/mp4; codecs="avc1.4d401f"',
+              size: '1280x720'),
+        ],
+        formatStreams: [_stream(progressive, '360p')],
+      ));
+      await Future.any([
+        controller.waitForSource(dash),
+        controller.waitForSource(progressive),
+      ]);
+      final source = controller.sources.last;
+      expect(source.url, dash);
+      expect(source.videoFormat, BetterPlayerVideoFormat.dash);
+      expect(source.useAsmsAudioTracks, isFalse);
+      expect(source.inlineDashManifest, contains(hd));
+      expect(source.inlineDashManifest, contains(audio));
+      expect(source.inlineDashManifest, isNot(contains('elsewhere.example')));
+      expect(controller.sourceUrls, isNot(contains(progressive)));
+      expect(requests, ['/api/manifest/dash/id/adaptive', '/watch']);
     });
 
     test('old native errors cannot skip a pending DASH resolution', () async {

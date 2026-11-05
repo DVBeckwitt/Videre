@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -28,6 +29,7 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       String? folderUri,
       String? storageUri,
       @Default(false) bool audioOnly,
+      DownloadContainer? container,
       required int lengthSeconds,
       required String quality}) = _DownloadedVideo;
 
@@ -56,14 +58,23 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)
-  Future<String> get downloadPath => _privatePath('webm');
+  Future<String> get downloadPath => _privatePath(extension);
 
-  /// Effective path for legacy reasons, old  versions videos would be mp4, now it's all webm
+  // Keep the existing prefix so interrupted jobs can resume after upgrading.
+  Future<String> get stagingPath => _privatePath('webm');
+
+  String get extension =>
+      (container ?? DownloadContainer.webm).extension(audioOnly);
+
+  String get mimeType =>
+      (container ?? DownloadContainer.webm).mimeType(audioOnly);
+
+  /// Older video downloads can have an MP4 file without a saved container.
   @JsonKey(includeFromJson: false, includeToJson: false)
   Future<String> get effectivePath async {
     if (storageUri != null) return storageUri!;
     final path = await downloadPath;
-    if (!audioOnly && !await File(path).exists()) {
+    if (container == null && !audioOnly && !await File(path).exists()) {
       return _privatePath('mp4');
     }
     return path;
@@ -73,7 +84,7 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
     final id = _fileId;
     final name = title.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
     final shortened = String.fromCharCodes(name.runes.take(50));
-    return '${shortened.isEmpty ? id : shortened}_$id.webm';
+    return '${shortened.isEmpty ? id : shortened}_$id.$extension';
   }
 
   @JsonKey(includeFromJson: false, includeToJson: false)

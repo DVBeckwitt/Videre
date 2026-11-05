@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:river_player/river_player.dart';
 import 'package:river_player/src/configuration/better_player_controller_event.dart';
 import 'package:river_player/src/core/better_player_utils.dart';
+import 'package:river_player/src/dash/better_player_dash_utils.dart';
 import 'package:river_player/src/subtitles/better_player_subtitle.dart';
 import 'package:river_player/src/subtitles/better_player_subtitles_factory.dart';
 import 'package:river_player/src/video_player/video_player.dart';
@@ -254,6 +255,8 @@ class BetterPlayerController {
 
     ///Clear asms tracks
     betterPlayerAsmsTracks.clear();
+    _betterPlayerAsmsAudioTracks = null;
+    _betterPlayerAsmsAudioTrack = null;
 
     ///Setup subtitles
     final List<BetterPlayerSubtitlesSource>? betterPlayerSubtitlesSourceList =
@@ -265,7 +268,9 @@ class BetterPlayerController {
 
     if (_isDataSourceAsms(betterPlayerDataSource)) {
       _setupAsmsDataSource(betterPlayerDataSource).then((dynamic value) {
-        _setupSubtitles();
+        if (identical(_betterPlayerDataSource, betterPlayerDataSource)) {
+          _setupSubtitles();
+        }
       });
     } else {
       _setupSubtitles();
@@ -301,23 +306,24 @@ class BetterPlayerController {
   ///This method configures tracks, subtitles and audio tracks from given
   ///master playlist.
   Future _setupAsmsDataSource(BetterPlayerDataSource source) async {
-    final String? data = await BetterPlayerAsmsUtils.getDataFromUrl(
-      betterPlayerDataSource!.url,
-      _getHeaders(),
-    );
+    final manifest = source.inlineDashManifest;
+    final data = manifest ??
+        await BetterPlayerAsmsUtils.getDataFromUrl(source.url, _getHeaders());
     if (data != null) {
-      final BetterPlayerAsmsDataHolder _response =
-          await BetterPlayerAsmsUtils.parse(data, betterPlayerDataSource!.url);
+      final response = manifest != null
+          ? await BetterPlayerDashUtils.parse(data, source.url)
+          : await BetterPlayerAsmsUtils.parse(data, source.url);
+      if (!identical(_betterPlayerDataSource, source)) return;
 
       /// Load tracks
       if (_betterPlayerDataSource?.useAsmsTracks == true) {
-        _betterPlayerAsmsTracks = _response.tracks ?? [];
+        _betterPlayerAsmsTracks = response.tracks ?? [];
       }
 
       /// Load subtitles
       if (betterPlayerDataSource?.useAsmsSubtitles == true) {
         final List<BetterPlayerAsmsSubtitle> asmsSubtitles =
-            _response.subtitles ?? [];
+            response.subtitles ?? [];
         asmsSubtitles.forEach((BetterPlayerAsmsSubtitle asmsSubtitle) {
           _betterPlayerSubtitlesSourceList.add(
             BetterPlayerSubtitlesSource(
@@ -336,7 +342,7 @@ class BetterPlayerController {
       ///Load audio tracks
       if (betterPlayerDataSource?.useAsmsAudioTracks == true &&
           _isDataSourceAsms(betterPlayerDataSource!)) {
-        _betterPlayerAsmsAudioTracks = _response.audios ?? [];
+        _betterPlayerAsmsAudioTracks = response.audios ?? [];
         if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true) {
           setAudioTrack(_betterPlayerAsmsAudioTracks!.first);
         }
@@ -463,6 +469,7 @@ class BetterPlayerController {
               ?.notificationConfiguration?.notificationChannelName,
           overriddenDuration: _betterPlayerDataSource!.overriddenDuration,
           formatHint: _getVideoFormat(_betterPlayerDataSource!.videoFormat),
+          inlineDashManifest: betterPlayerDataSource.inlineDashManifest,
           licenseUrl: _betterPlayerDataSource?.drmConfiguration?.licenseUrl,
           certificateUrl:
               _betterPlayerDataSource?.drmConfiguration?.certificateUrl,

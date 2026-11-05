@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bloc/bloc.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
@@ -54,31 +55,12 @@ class DownloadModalSheetCubit extends Cubit<DownloadModalSheetState> {
           await _client.getVideo(video.videoId, serverOverride: account);
       if (!await _isCurrentAccount(account)) return;
 
-      final formats = vid.adaptiveFormats ?? <AdaptiveFormat>[];
-      // Match the existing downloader's supported streams. Audio-only remains
-      // available when no compatible video stream is present.
-      final hasAudio = formats.any((f) => f.type.contains('audio/webm'));
-      final byQuality = <String, AdaptiveFormat>{};
-      for (final format in formats) {
-        final label = format.qualityLabel;
-        if (format.encoding == 'vp9' &&
-            format.type.contains('video/webm') &&
-            label != null &&
-            label.trim().isNotEmpty) {
-          byQuality.putIfAbsent(label, () => format);
-        }
-      }
-      int height(AdaptiveFormat format) =>
-          int.tryParse(RegExp(r'^\d+').stringMatch(
-                  format.resolution ?? format.qualityLabel ?? '') ??
-              '') ??
-          0;
-      final qualities = byQuality.values.toList()
-        ..sort((a, b) => height(a).compareTo(height(b)));
+      final formats = DownloadFormats(vid.adaptiveFormats);
+      final qualities = formats.videoOptions();
       emit(state.copyWith(
           availableQualities: qualities,
           loading: false,
-          failed: !hasAudio,
+          failed: formats.audioContainer == null,
           audioOnly: qualities.isEmpty || state.audioOnly,
           quality: qualities.lastOrNull?.qualityLabel ?? state.quality));
     } catch (_) {

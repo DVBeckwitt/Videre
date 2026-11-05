@@ -35,12 +35,12 @@ class DownloadStorage {
       _channel.invokeMethod<void>('checkFolder', {'uri': uri});
 
   Future<String> prepareDocument(
-      String folder, String? existing, String name, bool audioOnly) async {
+      String folder, String? existing, String name, String mimeType) async {
     final uri = await _channel.invokeMethod<String>('prepareDocument', {
       'folder': folder,
       'existing': existing,
       'name': name,
-      'mime': audioOnly ? 'audio/webm' : 'video/webm',
+      'mime': mimeType,
     });
     if (uri == null || Uri.tryParse(uri)?.scheme != 'content') {
       throw PlatformException(code: 'DOWNLOAD_STORAGE');

@@ -8,6 +8,7 @@ import 'package:downloadsfolder/downloadsfolder.dart';
 import 'package:ffmpeg_kit_flutter_new_full/ffmpeg_kit.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -367,7 +368,24 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             token.whenCancel.then((error) => throw error),
           ]);
           if (token.isCancelled) throw token.cancelError!;
+          final formats = DownloadFormats(vid.adaptiveFormats);
+          // A saved document already has a container. Old jobs saved WebM.
+          final savedContainer = video.container ??
+              (video.storageUri == null ? null : DownloadContainer.webm);
+          final selectedVideo = video.audioOnly
+              ? null
+              : formats.videoFor(video.quality, container: savedContainer);
+          final container = savedContainer ??
+              (selectedVideo == null
+                  ? formats.audioContainer
+                  : DownloadContainer.forVideo(selectedVideo));
+          final audio = formats.audioFor(container);
+          if (audio == null || (!video.audioOnly && selectedVideo == null)) {
+            throw StateError(
+                'This video has no compatible tracks for the download');
+          }
           video = video.copyWith(
+              container: container,
               title: vid.title ?? video.title,
               author: vid.author,
               authorUrl: vid.authorUrl,
@@ -376,35 +394,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               authenticationRequired: false);
           await library.upsertDownload(video);
           setVideos();
-          final formats = vid.adaptiveFormats ?? <AdaptiveFormat>[];
-          final audios = formats
-              .where((f) => f.type.contains('audio/webm'))
-              .toList()
-            ..sort((a, b) => (int.tryParse(b.bitrate ?? '') ?? 0)
-                .compareTo(int.tryParse(a.bitrate ?? '') ?? 0));
-          int height(String? quality) =>
-              int.tryParse(RegExp(r'^\d+').stringMatch(quality ?? '') ?? '') ??
-              0;
-          final videos = formats
-              .where(
-                  (f) => f.encoding == 'vp9' && f.type.contains('video/webm'))
-              .toList()
-            ..sort((a, b) =>
-                height(b.qualityLabel).compareTo(height(a.qualityLabel)));
-          final selectedVideo = videos
-                  .where((f) => f.qualityLabel == video.quality)
-                  .firstOrNull ??
-              videos
-                  .where((f) => height(f.qualityLabel) <= height(video.quality))
-                  .firstOrNull ??
-              videos.lastOrNull;
-          if (audios.isEmpty || (!video.audioOnly && selectedVideo == null)) {
-            throw StateError(
-                'This video has no downloadable ${video.quality} WebM stream');
-          }
           final mediaPath = await video.downloadPath;
-          final audioPath = '$mediaPath.audio.part';
-          final videoPath = '$mediaPath.video.part';
+          final staging = await video.stagingPath;
+          final audioPath = '$staging.audio.part';
+          final videoPath = '$staging.video.part';
           final steps = video.audioOnly ? 2 : 3;
           Future<void> transfer(AdaptiveFormat format, String path, int step) {
             final size = int.tryParse(format.clen);
@@ -424,10 +417,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             // part of this job so pause, delete and proxy changes can join it.
             artwork = _downloadArtwork(dio, video, thumb, server, artworkToken);
           }
-          await transfer(audios.first, audioPath, 0);
+          await transfer(audio, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
           if (token.isCancelled) throw token.cancelError!;
-          final output = '$mediaPath.mux.webm';
+          final output = '$staging.mux.${video.extension}';
           if (video.audioOnly) {
             await File(audioPath).copy(output);
           } else {
@@ -454,7 +447,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             await File(output).rename(mediaPath);
           } else {
             final uri = await storage.prepareDocument(video.folderUri!,
-                video.storageUri, video.fileName, video.audioOnly);
+                video.storageUri, video.fileName, video.mimeType);
             // Record ownership before writing so retries reuse this document
             // and deletion can clean up an interrupted save after a restart.
             video = video.copyWith(storageUri: uri);
@@ -605,13 +598,15 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       });
 
   Future<void> _deleteParts(DownloadedVideo video) async {
-    final path = await video.downloadPath;
+    final path = await video.stagingPath;
     for (final suffix in [
       '.audio.part',
       '.audio.part.identity',
       '.video.part',
       '.video.part.identity',
-      '.mux.webm'
+      '.mux.webm',
+      '.mux.mp4',
+      '.mux.m4a',
     ]) {
       final file = File('$path$suffix');
       if (await file.exists()) await file.delete();

@@ -32,7 +32,8 @@ class BetterPlayerDashUtils {
         }
       });
     } catch (exception) {
-      BetterPlayerUtils.log("Exception on dash parse: $exception");
+      BetterPlayerUtils.log(
+          "Exception on DASH parse: ${exception.runtimeType}");
     }
     return BetterPlayerAsmsDataHolder(
         tracks: tracks, audios: audios, subtitles: subtitles);

@@ -294,7 +294,8 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 licenseUrl,
                 drmHeaders,
                 cacheKey,
-                clearKey
+                clearKey,
+                dataSource["inlineDashManifest"] as? String
             )
         }
     }

@@ -58,8 +58,9 @@ class DashManifestResolver {
   }
 
   /// Null means this source failed; the caller should use its normal fallback.
+  /// [onMissingCheck] signals that this route requires a signed manifest.
   Future<String?> resolve(String url, String videoId, Server server,
-      {bool throwRetryable = false}) async {
+      {bool throwRetryable = false, void Function()? onMissingCheck}) async {
     void checkRetryable(http.Response response) {
       if (throwRetryable &&
           const [502, 503, 504].contains(response.statusCode)) {
@@ -105,6 +106,7 @@ class DashManifestResolver {
         }
         remember(true);
       }
+      onMissingCheck?.call();
 
       final base = server.url.endsWith('/') ? server.url : '${server.url}/';
       final watch = Uri.parse(base).resolve('watch').replace(queryParameters: {

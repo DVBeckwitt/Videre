@@ -21,6 +21,8 @@ AdaptiveFormat _$AdaptiveFormatFromJson(Map<String, dynamic> json) =>
       json['encoding'] as String?,
       json['qualityLabel'] as String?,
       json['resolution'] as String?,
+      size: _parseSize(json['size']),
+      fps: _parseFps(json['fps']),
     );
 
 Map<String, dynamic> _$AdaptiveFormatToJson(AdaptiveFormat instance) =>
@@ -38,4 +40,6 @@ Map<String, dynamic> _$AdaptiveFormatToJson(AdaptiveFormat instance) =>
       'encoding': instance.encoding,
       'qualityLabel': instance.qualityLabel,
       'resolution': instance.resolution,
+      'size': instance.size,
+      'fps': instance.fps,
     };

@@ -60,6 +60,10 @@ class BetterPlayerDataSource {
   ///Video format hint when data source url has not valid extension.
   final BetterPlayerVideoFormat? videoFormat;
 
+  ///Android static DASH manifest supplied by the caller. The URL still anchors
+  ///relative segments and the origin allowed to receive source headers.
+  final String? inlineDashManifest;
+
   ///Extension of video without dot.
   final String? videoExtension;
 
@@ -95,16 +99,20 @@ class BetterPlayerDataSource {
     ),
     this.overriddenDuration,
     this.videoFormat,
+    this.inlineDashManifest,
     this.videoExtension,
     this.drmConfiguration,
     this.placeholder,
     this.bufferingConfiguration = const BetterPlayerBufferingConfiguration(),
-  }) : assert(
+  })  : assert(
             (type == BetterPlayerDataSourceType.network ||
                     type == BetterPlayerDataSourceType.file) ||
                 (type == BetterPlayerDataSourceType.memory &&
                     bytes?.isNotEmpty == true),
-            "Url can't be null in network or file data source | bytes can't be null when using memory data source");
+            "Url can't be null in network or file data source | bytes can't be null when using memory data source"),
+        assert(inlineDashManifest == null ||
+            (type == BetterPlayerDataSourceType.network &&
+                videoFormat == BetterPlayerVideoFormat.dash));
 
   ///Factory method to build network data source which uses url as data source
   ///Bytes parameter is not used in this data source.
@@ -122,6 +130,7 @@ class BetterPlayerDataSource {
         const BetterPlayerNotificationConfiguration(showNotification: false),
     Duration? overriddenDuration,
     BetterPlayerVideoFormat? videoFormat,
+    String? inlineDashManifest,
     BetterPlayerDrmConfiguration? drmConfiguration,
     Widget? placeholder,
     BetterPlayerBufferingConfiguration bufferingConfiguration =
@@ -141,6 +150,7 @@ class BetterPlayerDataSource {
       notificationConfiguration: notificationConfiguration,
       overriddenDuration: overriddenDuration,
       videoFormat: videoFormat,
+      inlineDashManifest: inlineDashManifest,
       drmConfiguration: drmConfiguration,
       placeholder: placeholder,
       bufferingConfiguration: bufferingConfiguration,
@@ -222,6 +232,7 @@ class BetterPlayerDataSource {
         const BetterPlayerNotificationConfiguration(showNotification: false),
     Duration? overriddenDuration,
     BetterPlayerVideoFormat? videoFormat,
+    String? inlineDashManifest,
     String? videoExtension,
     BetterPlayerDrmConfiguration? drmConfiguration,
     Widget? placeholder,
@@ -244,6 +255,7 @@ class BetterPlayerDataSource {
           notificationConfiguration ?? this.notificationConfiguration,
       overriddenDuration: overriddenDuration ?? this.overriddenDuration,
       videoFormat: videoFormat ?? this.videoFormat,
+      inlineDashManifest: inlineDashManifest ?? this.inlineDashManifest,
       videoExtension: videoExtension ?? this.videoExtension,
       drmConfiguration: drmConfiguration ?? this.drmConfiguration,
       placeholder: placeholder ?? this.placeholder,

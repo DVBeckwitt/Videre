@@ -80,6 +80,8 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
           'key': dataSource.key,
           'uri': dataSource.uri,
           'formatHint': dataSource.rawFormalHint,
+          if (dataSource.inlineDashManifest != null)
+            'inlineDashManifest': dataSource.inlineDashManifest,
           'headers': dataSource.headers,
           'useCache': dataSource.useCache,
           'maxCacheSize': dataSource.maxCacheSize,
