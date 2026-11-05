@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Keep legacy resource names on the same generated adaptive/themed icon. -->
+    <item type="mipmap" name="ic_launcher_round">@mipmap/ic_launcher</item>
+    <item type="mipmap" name="ic_launcher_monochrome">@mipmap/ic_launcher</item>
+    <item type="mipmap" name="ic_launcher_monochrome_round">@mipmap/ic_launcher</item>
+    <item type="mipmap" name="ic_bg_service_small">@drawable/ic_bg_service_small</item>
+</resources>

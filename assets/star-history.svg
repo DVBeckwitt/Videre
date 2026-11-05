@@ -10,12 +10,12 @@
 <rect x="3" y="3" width="1594" height="794" rx="38" fill="#1c2245"/>
 <rect x="4" y="4" width="1592" height="792" rx="37" fill="url(#panel)" stroke="#9c1ef5" stroke-opacity=".65" stroke-width="2"/>
 <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
-<path d="M 409.41605,255.99999 102.58395,102.58253 V 409.41746 L 408.89726,256.37612" transform="translate(34 -4) scale(.4)" fill="none" stroke="url(#violet)" stroke-width="44.1447" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(34 -4) scale(.4)"><path d="M112 116 H164 L282 338 L279 371 C269 392 243 392 233 371 Z" fill="#7C3AED"/><path d="M348 116 H400 L279 371 C273 384 261 389 249 386 L224 338 Z" fill="#B69CFF"/><path d="M222 135 Q222 129 228 132 L291 169 Q297 173 291 177 L228 214 Q222 217 222 211 Z" fill="#9B64F4"/></g>
 <text x="225" y="145" fill="#9c1ef5" font-size="90" font-weight="600" letter-spacing="-2">Videre</text>
 <path d="M 1092 68 L 1097 85 L 1114 90 L 1097 95 L 1092 112 L 1087 95 L 1070 90 L 1087 85 Z" fill="#cda4ff" opacity=".8"/>
 <text x="1450" y="104" fill="#eee9ff" font-size="31" font-weight="600" letter-spacing="6" text-anchor="end">STAR HISTORY</text>
 <text x="1450" y="146" fill="#aaaac7" font-size="22" text-anchor="end">DVBeckwitt/Videre</text>
-<path d="M 409.41605,255.99999 102.58395,102.58253 V 409.41746 L 408.89726,256.37612" transform="translate(100 60) scale(1.45)" fill="none" stroke="url(#violet)" stroke-width="44.1447" stroke-linecap="round" stroke-linejoin="round" opacity=".13"/>
+<g transform="translate(100 60) scale(1.45)" opacity=".13"><path d="M112 116 H164 L282 338 L279 371 C269 392 243 392 233 371 Z" fill="#7C3AED"/><path d="M348 116 H400 L279 371 C273 384 261 389 249 386 L224 338 Z" fill="#B69CFF"/><path d="M222 135 Q222 129 228 132 L291 169 Q297 173 291 177 L228 214 Q222 217 222 211 Z" fill="#9B64F4"/></g>
 <line x1="150" y1="625.00" x2="1440" y2="625.00" stroke="#a7a8d0" stroke-opacity=".14"/>
 <text x="126" y="632.00" fill="#bfc0d8" font-size="23.00" text-anchor="end">0</text>
 <line x1="150" y1="526.25" x2="1440" y2="526.25" stroke="#a7a8d0" stroke-opacity=".14"/>

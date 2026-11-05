@@ -1,0 +1,3 @@
+- Updated the app icon, store graphics, and Android TV banner with distinct Videre artwork.
+- Refreshed phone, tablet, and TV listing screenshots.
+- Removed an obsolete notification-listener permission inherited from a dependency that applied only to Android versions older than Videre supports.

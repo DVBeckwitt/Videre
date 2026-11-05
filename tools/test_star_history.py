@@ -120,6 +120,28 @@ class StarHistoryTests(unittest.TestCase):
         self.assertEqual(history.cumulative_series(snapshot([]))[-1][1], 0)
         ET.fromstring(history.render_svg(snapshot([])))
 
+    def test_chart_preserves_every_path_and_color_of_the_current_mark(self):
+        source = ET.parse(history.ROOT / "assets" / "icon.svg").getroot()
+        expected = [(path.attrib["d"], path.attrib["fill"])
+                    for path in source.iter("{http://www.w3.org/2000/svg}path")]
+        self.assertGreater(len(expected), 1)
+        chart = ET.fromstring(history.render_svg(snapshot()))
+        actual = [(path.attrib["d"], path.get("fill"))
+                  for path in chart.iter("{http://www.w3.org/2000/svg}path")]
+        for path in expected:
+            self.assertEqual(actual.count(path), 2)
+
+    def test_logo_rejects_missing_paths_and_unsafe_geometry_or_fill(self):
+        for attributes in (None, {"d": "M0 0<script>", "fill": "#ffffff"},
+                           {"d": "M0 0", "fill": "url(https://example.com/logo)"}):
+            with self.subTest(attributes=attributes):
+                source = ET.Element("{http://www.w3.org/2000/svg}svg")
+                if attributes is not None:
+                    ET.SubElement(source, "{http://www.w3.org/2000/svg}path", attributes)
+                with patch.object(history.ET, "parse", return_value=ET.ElementTree(source)):
+                    with self.assertRaises(ValueError):
+                        history.logo_geometry()
+
     def test_network_and_validation_errors_preserve_both_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             svg, data = Path(directory) / "chart.svg", Path(directory) / "data.json"
