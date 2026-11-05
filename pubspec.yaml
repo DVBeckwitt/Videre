@@ -1,5 +1,5 @@
 name: clipious
-version: 1.22.34+60896
+version: 1.22.35+60897
 publish_to: none
 description: Client for invidious.
 environment: 
@@ -91,9 +91,10 @@ flutter:
   generate: true
 flutter_launcher_icons: 
   image_path: assets/icon-with-background.png
-  android: 
-    adaptive_icon_background: '#1D1B1E'
-    adaptive_icon_foreground: assets/icon.png
-    generate: true
+  android: true
+  adaptive_icon_background: '#171D36'
+  adaptive_icon_foreground: assets/icon.png
+  adaptive_icon_monochrome: assets/icon_monochrome.png
+  adaptive_icon_foreground_inset: 12
   ios: false
   min_sdk_android: 21
