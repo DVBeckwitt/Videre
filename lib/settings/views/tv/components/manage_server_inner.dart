@@ -7,6 +7,7 @@ import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
 
 import '../../../models/db/server.dart';
+import '../../../../network/nerdvpn_access.dart';
 import '../../../states/server_list_settings.dart';
 import '../screens/settings.dart';
 
@@ -26,6 +27,9 @@ class TvManageServersInner extends StatelessWidget {
     final server = await AutoRouter.of(context).push(const TvAddServerRoute());
     if (server != null && server is Server && context.mounted) {
       await cubit.saveServer(server);
+      if (context.mounted && NerdVpnAccess.supports(server)) {
+        await openServer(context, server);
+      }
     }
   }
 

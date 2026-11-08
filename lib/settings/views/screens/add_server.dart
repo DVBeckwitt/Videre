@@ -19,13 +19,14 @@ import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
-import 'package:clipious/settings/views/screens/manage_single_server.dart';
+import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/conditional_wrap.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../utils/string.dart';
+import '../../../network/nerdvpn_access.dart';
+import '../../services/gateway_auth.dart';
 
 @RoutePage()
 class AddServerScreen extends StatelessWidget {
@@ -67,6 +68,9 @@ class AddServerScreen extends StatelessWidget {
   }
 
   static String connectionAdvice(Object error, AppLocalizations locals) {
+    if (error is GatewaySignInFailed || error is NerdVpnAccessRequired) {
+      return error.toString();
+    }
     if (error is InvidiousServiceError) {
       if (error.isRateLimited) {
         final delay = error.retryAfter;
@@ -154,8 +158,8 @@ class AddServerScreen extends StatelessWidget {
                                   });
                                   try {
                                     await service
-                                        .validateServer(
-                                            server.url, server.customHeaders)
+                                        .validateServer(server.url,
+                                            server.headersForUrl(server.url))
                                         .timeout(const Duration(seconds: 15));
                                     if (!context.mounted) return;
                                     await service
@@ -199,7 +203,7 @@ class AddServerScreen extends StatelessWidget {
 
   void showAddHeaderDialog(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
-    ManageSingleServerScreen.showKeyValueDialog(context,
+    showServerKeyValueDialog(context,
         field1Title: locals.name,
         field2Title: locals.value,
         field2Secret: false,
@@ -212,27 +216,9 @@ class AddServerScreen extends StatelessWidget {
     });
   }
 
-  void showBasicAuthDialog(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    ManageSingleServerScreen.showKeyValueDialog(context,
-        field1Title: locals.username,
-        field2Title: locals.password,
-        field1AutofillHints: const [
-          AutofillHints.username,
-          AutofillHints.email
-        ],
-        field2AutofillHints: const [AutofillHints.password],
-        field2Secret: true,
-        okText: locals.add, onOk: (username, password) async {
-      var cubit = context.read<AddServerCubit>();
-
-      await cubit.addHeader(
-          "Authorization", 'Basic ${encodeBase64('$username:$password')}');
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
-    });
-  }
+  void showBasicAuthDialog(BuildContext context) => showServerBasicAuthDialog(
+      context,
+      (key, value) => context.read<AddServerCubit>().addHeader(key, value));
 
   static void handleError(BuildContext context, dynamic e) {
     var locals = AppLocalizations.of(context)!;
@@ -312,7 +298,12 @@ class AddServerScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: <Widget>[
-                      Text(locals.instanceAddressDescription),
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => Text(cubit.usesNerdVpn
+                            ? locals.nerdVpnAccessSignIn
+                            : locals.instanceAddressDescription),
+                      ),
                       const Gap(12),
                       const PublicInstancesButton(
                           openDirectory: openInstanceDirectory),
@@ -376,7 +367,8 @@ class AddServerScreen extends StatelessWidget {
                               const Gap(10),
                               ...state.headers.keys.map((k) {
                                 String display = state.headers[k] ?? '';
-                                if (k == 'Authorization') {
+                                if (k.toLowerCase() == 'authorization' ||
+                                    k.toLowerCase() == 'x-invidious-token') {
                                   display = "········";
                                 }
 
@@ -436,7 +428,16 @@ class AddServerScreen extends StatelessWidget {
                                       child: CircularProgressIndicator(
                                     strokeWidth: 1,
                                   )))
-                              : Text(locals.testAndAddServer)),
+                              : ValueListenableBuilder(
+                                  valueListenable: cubit.urlController,
+                                  builder: (context, _, __) => Text(cubit
+                                              .usesNerdVpn &&
+                                          (state.protectedServer ||
+                                              !state.headers.keys.any(
+                                                  NerdVpnAccess.isKeyHeader))
+                                      ? locals.nerdVpnSignInAndAdd
+                                      : locals.testAndAddServer),
+                                )),
                       CheckboxListTile(
                         title: Text(
                           locals.alsoTestServerConfig,

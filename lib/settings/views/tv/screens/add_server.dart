@@ -11,10 +11,10 @@ import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
-import 'package:clipious/settings/views/tv/screens/manage_single_server.dart';
+import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 
-import '../../../../utils/string.dart';
+import '../../../../network/nerdvpn_access.dart';
 import '../../../../utils/views/tv/components/tv_text_field.dart';
 
 @RoutePage()
@@ -23,7 +23,8 @@ class TvAddServerScreen extends StatelessWidget {
 
   void showAddHeaderDialog(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
-    TvManageSingleServerScreen.showKeyValueDialog(context,
+    showServerKeyValueDialog(context,
+        television: true,
         field1Title: locals.name,
         field2Title: locals.value,
         field2Secret: false,
@@ -36,27 +37,10 @@ class TvAddServerScreen extends StatelessWidget {
     });
   }
 
-  void showBasicAuthDialog(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    TvManageSingleServerScreen.showKeyValueDialog(context,
-        field1Title: locals.username,
-        field2Title: locals.password,
-        field1AutofillHints: const [
-          AutofillHints.username,
-          AutofillHints.email
-        ],
-        field2AutofillHints: const [AutofillHints.password],
-        field2Secret: true,
-        okText: locals.add, onOk: (username, password) async {
-      var cubit = context.read<AddServerCubit>();
-
-      await cubit.addHeader(
-          "Authorization", 'Basic ${encodeBase64('$username:$password')}');
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
-    });
-  }
+  void showBasicAuthDialog(BuildContext context) => showServerBasicAuthDialog(
+      context,
+      (key, value) => context.read<AddServerCubit>().addHeader(key, value),
+      television: true);
 
   @override
   Widget build(BuildContext context) {
@@ -89,7 +73,12 @@ class TvAddServerScreen extends StatelessWidget {
                         icon: const Icon(Icons.account_circle_outlined),
                         label: Text(locals.profiles),
                       ),
-                      Text(locals.instanceAddressDescription),
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => Text(cubit.usesNerdVpn
+                            ? locals.nerdVpnAccessSignIn
+                            : locals.instanceAddressDescription),
+                      ),
                       const Gap(12),
                       OutlinedButton.icon(
                         onPressed: state.loading
@@ -151,7 +140,8 @@ class TvAddServerScreen extends StatelessWidget {
                               const Gap(10),
                               ...state.headers.keys.map((k) {
                                 String display = state.headers[k] ?? '';
-                                if (k == 'Authorization') {
+                                if (k.toLowerCase() == 'authorization' ||
+                                    k.toLowerCase() == 'x-invidious-token') {
                                   display = "········";
                                 }
 
@@ -211,7 +201,16 @@ class TvAddServerScreen extends StatelessWidget {
                                       child: CircularProgressIndicator(
                                     strokeWidth: 1,
                                   )))
-                              : Text(locals.testAndAddServer)),
+                              : ValueListenableBuilder(
+                                  valueListenable: cubit.urlController,
+                                  builder: (context, _, __) => Text(cubit
+                                              .usesNerdVpn &&
+                                          (state.protectedServer ||
+                                              !state.headers.keys.any(
+                                                  NerdVpnAccess.isKeyHeader))
+                                      ? locals.nerdVpnSignInAndAdd
+                                      : locals.testAndAddServer),
+                                )),
                       CheckboxListTile(
                         title: Text(
                           locals.alsoTestServerConfig,

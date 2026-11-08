@@ -3,6 +3,7 @@ package ir.r3r.river_player;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.ExoPlaybackException;
+import com.github.dvbeckwitt.videre.proxy.NerdVpnAccessRequired;
 import java.io.InterruptedIOException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -39,7 +40,8 @@ final class BackendRetryability {
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause()) {
             // Inspect the full chain before accepting an outer network wrapper.
-            if (cause instanceof SSLException
+            if (cause instanceof NerdVpnAccessRequired
+                    || cause instanceof SSLException
                     || cause instanceof GeneralSecurityException
                     || cause instanceof CancellationException
                     || cause instanceof InterruptedException

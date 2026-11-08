@@ -91,6 +91,7 @@ internal class PolicyCallFactory : Call.Factory {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
+            .addInterceptor(NerdVpnRecoveryInterceptor())
             .addNetworkInterceptor { chain ->
                 var outgoing = chain.request()
                 val scope = outgoing.tag(SourceHeaderScope::class.java)
@@ -100,7 +101,7 @@ internal class PolicyCallFactory : Call.Factory {
                     // Scope instance credentials to their original origin for
                     // media segments and API requests, including redirects.
                     outgoing = outgoing.newBuilder().apply {
-                        (listOf("Authorization", "Proxy-Authorization", "Cookie", "Cookie2", "WWW-Authenticate") +
+                        (listOf("Authorization", "Proxy-Authorization", "Cookie", "Cookie2", "WWW-Authenticate", NERDVPN_KEY_HEADER) +
                             (scope?.names ?: emptySet()))
                             .forEach { removeHeader(it) }
                     }.build()

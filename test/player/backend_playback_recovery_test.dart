@@ -7,6 +7,7 @@ import 'package:clipious/media_handler.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -453,6 +454,28 @@ void main() {
       expect(
           sources.single['uri'], 'https://instance.example/dash-video-b-1.mp4');
       expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('gateway manifest rejection ends playback without retrying sources',
+      () async {
+    retryService.httpClient.close();
+    service = retryService = _RetryService(httpClient: MockClient((_) async {
+      throw const NerdVpnAccessRequired('unavailable');
+    }));
+    final video = cubit();
+    try {
+      video.switchVideo(_video('dash-video', BackendPlayback(preferred))
+          .copyWith(
+              formatStreams: [],
+              dashUrl: 'https://instance.example/manifest.mpd'));
+      await _flush();
+      expect(retryService.visited, isEmpty);
+      expect(retryService.retriedVideos, isEmpty);
+      expect(sources, isEmpty);
+      expect(player.state.mediaEvent.state, MediaState.error);
     } finally {
       await video.close();
     }

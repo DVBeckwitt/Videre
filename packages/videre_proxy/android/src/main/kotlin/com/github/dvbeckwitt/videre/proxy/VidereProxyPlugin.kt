@@ -31,6 +31,7 @@ object ProxyDataSource {
         val store = context.applicationContext.getSharedPreferences("videre_network_proxy", Context.MODE_PRIVATE)
         preferences = store
         GatewaySessions.initialize(context)
+        NerdVpnAccess.initialize(context)
         try {
             val saved = store.getString("configuration", null)
             val loaded = if (saved == null) ProxyPolicy() else {
@@ -65,6 +66,12 @@ object ProxyDataSource {
 
     internal fun newApiCall(request: Request, options: ApiRedirectOptions): Call = calls.newApiCall(request, options)
 
+    /** PKCE requests use the same persisted proxy policy and never follow a redirect. */
+    fun newTokenExchangeCall(request: Request): Call =
+        calls.newApiCall(request, ApiRedirectOptions(followRedirects = false, maxRedirects = 0)).also {
+            it.timeout().timeout(30, TimeUnit.SECONDS)
+        }
+
     @JvmStatic
     fun factory(userAgent: String?, headers: Map<String, String>?, sourceUri: String?): HttpDataSource.Factory {
         // Plugin registration loads persisted policy before player creation.
@@ -82,6 +89,7 @@ object ProxyDataSource {
 class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private var channel: MethodChannel? = null
     private var gatewayChannel: MethodChannel? = null
+    private var accessChannel: MethodChannel? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingLock = Any()
     private val pending = mutableSetOf<Call>()
@@ -115,8 +123,11 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                             val url = (call.argument<String>("url") ?: "").toHttpUrlOrNull()
                                 ?: throw IllegalArgumentException()
                             val session = GatewaySessions.resolve(context, url)
+                            val access = NerdVpnAccess.resolve(context, url, call.argument("manualKey"))
                             result.success(mapOf("enabled" to session.enabled, "needsSignIn" to session.needsSignIn,
-                                "cookies" to session.cookies, "revision" to session.revision))
+                                "cookies" to session.cookies, "revision" to session.revision,
+                                "apiKey" to access.apiKey, "apiKeyRevision" to access.revision, "accessError" to access.error,
+                                "apiKeyIntent" to access.intent))
                         }
                         "ingest" -> {
                             val url = (call.argument<String>("url") ?: "").toHttpUrlOrNull()
@@ -137,6 +148,33 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 }
             }
         }
+        accessChannel = MethodChannel(binding.binaryMessenger, "videre/nerdvpn_access",
+            StandardMethodCodec.INSTANCE, binding.binaryMessenger.makeBackgroundTaskQueue()).also {
+            it.setMethodCallHandler { call, result ->
+                try {
+                    val context = GatewayContext.parse(call.argument<String>("context") ?: "")
+                    val value = when (call.method) {
+                        "status" -> NerdVpnAccess.status(context)
+                        "beginAuth" -> NerdVpnAccess.beginAuth(context)
+                        "authorize" -> NerdVpnAccess.authorize(context, call.argument<String>("token") ?: "",
+                            call.argument<Number>("intent")?.toLong() ?: throw IllegalArgumentException())
+                        "check" -> NerdVpnAccess.check(context)
+                        "setKey" -> NerdVpnAccess.setKey(context, call.argument<String>("key") ?: "",
+                            call.argument<Number>("expectedRevision")?.toLong())
+                        "clear" -> NerdVpnAccess.clear(context)
+                        "recover" -> NerdVpnAccess.recover(context, call.argument("error"),
+                            call.argument<Int>("statusCode") ?: 0,
+                            call.argument<Any>("retryAfter")?.toString()?.toLongOrNull(), call.argument("failedKey"),
+                            call.argument<Number>("revision")?.toLong(), call.argument<Boolean>("retry") ?: true,
+                            call.argument<Number>("failedIntent")?.toLong())
+                        else -> { result.notImplemented(); return@setMethodCallHandler }
+                    }
+                    result.success(value)
+                } catch (_: Exception) {
+                    result.error("NERDVPN_ACCESS_UNAVAILABLE", "NerdVPN API access is unavailable.", null)
+                }
+            }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -148,6 +186,8 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         staleCalls.forEach(Call::cancel)
         channel?.setMethodCallHandler(null)
         gatewayChannel?.setMethodCallHandler(null)
+        accessChannel?.setMethodCallHandler(null)
+        accessChannel = null
         gatewayChannel = null
         channel = null
     }
@@ -195,7 +235,9 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         httpCall.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 finish(httpCall, epoch) {
-                    if (error is GatewayAuthenticationRequired) {
+                    if (error is NerdVpnAccessRequired) {
+                        result.error("NERDVPN_ACCESS", "NerdVPN API access requires attention.", mapOf("state" to error.state))
+                    } else if (error is GatewayAuthenticationRequired) {
                         result.error("GATEWAY_AUTH_REQUIRED", "Sign in again to the protected server.", null)
                     } else result.error("NATIVE_HTTP_ERROR", "The network request failed or was cancelled.", null)
                 }

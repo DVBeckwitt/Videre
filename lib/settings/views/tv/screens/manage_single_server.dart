@@ -1,4 +1,4 @@
-import 'package:clipious/utils/motion.dart';
+import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -8,8 +8,8 @@ import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/settings/views/components/backend_picker.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/components/watch_sync_status.dart';
-import 'package:clipious/settings/services/gateway_auth.dart';
-import 'package:clipious/utils/string.dart';
+import 'package:clipious/settings/views/components/nerdvpn_access_settings.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 
@@ -25,111 +25,13 @@ class TvManageSingleServerScreen extends StatelessWidget {
 
   const TvManageSingleServerScreen({super.key, required this.server});
 
-  static void showKeyValueDialog(
-    BuildContext context, {
-    required String field1Title,
-    required String field2Title,
-    bool field1Secret = false,
-    bool field2Secret = false,
-    List<String>? field1AutofillHints,
-    List<String>? field2AutofillHints,
-    required String okText,
-    required Function(String field1, String field2) onOk,
-  }) {
-    var locals = AppLocalizations.of(context)!;
-    TextEditingController field1Controller = TextEditingController();
-    TextEditingController field2Controller = TextEditingController();
+  void showAddHeaderDialog(BuildContext context) =>
+      showServerHeaderDialog(context, television: true);
 
-    showDialog(
-      animationStyle: AppMotion.dialogStyle(context),
-      context: context,
-      useRootNavigator: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TvTextField(
-                  controller: field1Controller,
-                  autocorrect: false,
-                  autofillHints: field1AutofillHints,
-                  obscureText: field1Secret,
-                  decoration: InputDecoration(label: Text(field1Title))),
-              TvTextField(
-                obscureText: field2Secret,
-                autocorrect: false,
-                controller: field2Controller,
-                autofillHints: field2AutofillHints,
-                decoration: InputDecoration(label: Text(field2Title)),
-              ),
-            ],
-          ),
-          actions: <Widget>[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TvButton(
-                  unfocusedColor: Colors.transparent,
-                  onPressed: (context) {
-                    //Put your code here which you want to execute on Cancel button click.
-                    Navigator.of(context).pop();
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Text(locals.cancel),
-                  ),
-                ),
-                TvButton(
-                    unfocusedColor: Colors.transparent,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Text(okText),
-                    ),
-                    onPressed: (context) =>
-                        onOk(field1Controller.text, field2Controller.text)),
-              ],
-            )
-          ],
-        );
-      },
-    );
-  }
-
-  void showAddHeaderDialog(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    showKeyValueDialog(context,
-        field1Title: locals.name,
-        field2Title: locals.value,
-        okText: locals.add, onOk: (key, value) async {
-      var cubit = context.read<ServerSettingsCubit>();
-      await cubit.addHeader(key, value);
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
-    });
-  }
-
-  void showBasicAuthDialog(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    showKeyValueDialog(context,
-        field1Title: locals.username,
-        field2Title: locals.password,
-        field1AutofillHints: const [
-          AutofillHints.username,
-          AutofillHints.email
-        ],
-        field2AutofillHints: const [AutofillHints.password],
-        field2Secret: true,
-        okText: locals.add, onOk: (username, password) async {
-      var cubit = context.read<ServerSettingsCubit>();
-
-      await cubit.addHeader(
-          "Authorization", 'Basic ${encodeBase64('$username:$password')}');
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
-    });
-  }
+  void showBasicAuthDialog(BuildContext context) => showServerBasicAuthDialog(
+      context,
+      (key, value) => context.read<ServerSettingsCubit>().addHeader(key, value),
+      television: true);
 
   void showLogInWithCookiesDialog(BuildContext context) async {
     var locals = AppLocalizations.of(context)!;
@@ -232,20 +134,8 @@ class TvManageSingleServerScreen extends StatelessWidget {
   }
 
   Future<void> _accountAction(
-      BuildContext context, Future<void> Function() action) async {
-    try {
-      await action();
-    } catch (error) {
-      if (context.mounted) {
-        final locals = AppLocalizations.of(context)!;
-        showTvAlertdialog(context, locals.error, [
-          Text(error is GatewayUnsupported
-              ? error.toString()
-              : locals.accountActionFailed)
-        ]);
-      }
-    }
-  }
+          BuildContext context, Future<void> Function() action) =>
+      runServerAccountAction(context, action, television: true);
 
   @override
   Widget build(BuildContext context) {
@@ -310,6 +200,13 @@ class TvManageSingleServerScreen extends StatelessWidget {
                 ),
                 SettingsTitle(title: locals.authentication),
                 WatchSyncStatus(account: server),
+                if (NerdVpnAccess.supports(server))
+                  NerdVpnAccessSettings(
+                    account: server,
+                    authenticating: state.authenticating,
+                    onCheck: cubit.checkApiAccess,
+                    onSaveKey: cubit.setApiKey,
+                  ),
                 SettingsTile(
                   title: locals.protectedServerSignIn,
                   enabled: !state.authenticating,
@@ -320,19 +217,22 @@ class TvManageSingleServerScreen extends StatelessWidget {
                 ),
                 SettingsTile(
                   title: locals.cookieLogin,
-                  enabled: !state.authenticating && !isLoggedIn,
+                  enabled: !state.authenticating &&
+                      !isLoggedIn &&
+                      !NerdVpnAccess.supports(server),
                   onSelected: (context) => showLogInWithCookiesDialog(context),
                 ),
                 SettingsTile(
                   title: locals.logout,
-                  enabled: isLoggedIn,
+                  enabled: isLoggedIn || NerdVpnAccess.supports(server),
                   onSelected: (context) =>
                       _accountAction(context, cubit.logOut),
                 ),
                 SettingsTitle(title: locals.customHeaders),
                 ...state.server.customHeaders.keys.map((k) {
                   String value = state.server.customHeaders[k] ?? '';
-                  if (k == 'Authorization') {
+                  if (k.toLowerCase() == 'authorization' ||
+                      k.toLowerCase() == 'x-invidious-token') {
                     value = "········";
                   }
 

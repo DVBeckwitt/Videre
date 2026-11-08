@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/network/native_proxy_http_client.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -108,6 +109,22 @@ void main() {
         client.get(Uri.parse('https://never-resolved.invalid/')),
         throwsA(isA<http.ClientException>().having((error) => error.message,
             'message', 'Native proxy transport is unavailable.')));
+  });
+
+  test('native NerdVPN access failure keeps its state and redacts details',
+      () async {
+    messenger.setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(
+          code: 'NERDVPN_ACCESS',
+          message: 'Authorization: secret',
+          details: {'state': 'waiting', 'token': 'secret'});
+    });
+    await expectLater(
+        client.get(Uri.parse('https://invidious.nerdvpn.de/api/v1/videos/a')),
+        throwsA(isA<NerdVpnAccessRequired>()
+            .having((e) => e.state, 'state', 'waiting')
+            .having((e) => e.toString(), 'safe message',
+                isNot(contains('secret')))));
   });
 
   test('rejects an oversized request before invoking the platform', () async {

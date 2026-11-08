@@ -4,4 +4,5 @@
     <exclude domain="root" path="app_webview_videre_verification/" />
     <exclude domain="root" path="app_webview/" />
     <exclude domain="sharedpref" path="videre_gateway_sessions.xml" />
+    <exclude domain="sharedpref" path="videre_nerdvpn_access.xml" />
 </full-backup-content>

@@ -12,6 +12,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const sessions = MethodChannel('videre/gateway_sessions');
   const browser = MethodChannel('videre/gateway_auth');
+  const access = MethodChannel('videre/nerdvpn_access');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
@@ -34,6 +35,7 @@ void main() {
   tearDown(() {
     messenger.setMockMethodCallHandler(sessions, null);
     messenger.setMockMethodCallHandler(browser, null);
+    messenger.setMockMethodCallHandler(access, null);
     debugDefaultTargetPlatformOverride = null;
   });
 
@@ -190,5 +192,67 @@ void main() {
     await GatewayAuth.signOut(account);
     expect(calls.map((call) => call.method), ['status', 'signOut']);
     expect((calls.last.arguments as Map)['revision'], 13);
+  });
+
+  test('an expired PKCE exchange provides a safe sign-in action', () async {
+    const account = Server(
+        url: 'https://invidious.nerdvpn.de', id: 'expired-pkce-exchange');
+    messenger.setMockMethodCallHandler(
+        access, (call) async => {'state': 'missing'});
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      if (call.method == 'signIn') {
+        throw PlatformException(
+            code: 'GATEWAY_TOKEN_EXPIRED', message: 'secret-response-body');
+      }
+      return null;
+    });
+    await expectLater(
+        GatewayAuth.signIn(account),
+        throwsA(isA<GatewaySignInFailed>().having(
+            (error) => error.toString(),
+            'message',
+            'The sign-in code expired or was already used. Sign in again.')));
+  });
+
+  test('protected sign-in observes the persisted Retry-After before opening',
+      () async {
+    const account = Server(
+        url: 'https://invidious.nerdvpn.de', id: 'rate-limited-pkce-exchange');
+    final accessCalls = <MethodCall>[];
+    Map<String, dynamic> status = {'state': 'missing', 'revision': 7};
+    messenger.setMockMethodCallHandler(access, (call) async {
+      accessCalls.add(call);
+      if (call.method == 'recover') {
+        status = {
+          'state': 'unavailable',
+          'revision': 8,
+          'retryAt': DateTime.now()
+              .add(const Duration(hours: 1))
+              .toUtc()
+              .toIso8601String(),
+        };
+      }
+      return status;
+    });
+    var opened = 0;
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      if (call.method == 'signIn') {
+        opened++;
+        throw PlatformException(code: 'GATEWAY_TOKEN_UNAVAILABLE', details: {
+          'statusCode': 429,
+          'retryAfter': '3600',
+        });
+      }
+      return null;
+    });
+    await expectLater(
+        GatewayAuth.signIn(account), throwsA(isA<GatewaySignInFailed>()));
+    expect(accessCalls.map((call) => call.method), ['status', 'recover']);
+    expect((accessCalls.last.arguments as Map)['retryAfter'], '3600');
+    expect((accessCalls.last.arguments as Map)['revision'], 7);
+    expect((accessCalls.last.arguments as Map)['retry'], isFalse);
+    await expectLater(
+        GatewayAuth.signIn(account), throwsA(isA<GatewaySignInFailed>()));
+    expect(opened, 1);
   });
 }

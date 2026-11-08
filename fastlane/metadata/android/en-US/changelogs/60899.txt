@@ -1,0 +1,5 @@
+- Added NerdVPN browser sign-in with automatic API-key retrieval and encrypted key storage.
+- Show the instance's eligibility date and disabled-access state while keeping accounts saved.
+- Recover API keys safely and pause restricted downloads without losing partial files.
+- Fixed manual-key logout and key-entry errors; simplified phone and TV account dialogs.
+- Includes the artwork, adaptive playback, and MP4/M4A download improvements from 1.22.36.

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'gateway_session_bridge.dart';
+import 'nerdvpn_access.dart';
 
 /// Bounded JSON/API transport for background engines. Android owns its routing
 /// policy, so a stale worker cannot reset or bypass the foreground proxy.
@@ -51,6 +52,12 @@ class NativeProxyHttpClient extends http.BaseClient {
     } on PlatformException catch (error) {
       if (error.code == 'GATEWAY_AUTH_REQUIRED') {
         throw const GatewayAuthenticationRequired();
+      }
+      if (error.code == 'NERDVPN_ACCESS') {
+        final details = error.details;
+        throw NerdVpnAccessRequired(details is Map && details['state'] is String
+            ? details['state'] as String
+            : 'unavailable');
       }
       // Platform messages may include URLs or request headers. Keep them out of
       // exceptions logged by service callers and never retry through Dart IO.

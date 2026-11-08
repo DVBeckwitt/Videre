@@ -1,7 +1,11 @@
+import 'dart:convert';
+
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 
+import '../network/nerdvpn_access.dart';
 import '../settings/models/db/server.dart';
+import '../settings/models/errors/invidious_service_error.dart';
 import 'models/backend_playback.dart';
 
 /// Checks instance DASH manifests before the native player can retry a known
@@ -62,6 +66,22 @@ class DashManifestResolver {
   Future<String?> resolve(String url, String videoId, Server server,
       {bool throwRetryable = false, void Function()? onMissingCheck}) async {
     void checkRetryable(http.Response response) {
+      if (NerdVpnAccess.supports(server) && response.statusCode >= 400) {
+        dynamic body;
+        try {
+          body = jsonDecode(response.body);
+        } on FormatException {
+          // An upstream error page still follows the existing fallback policy.
+        }
+        final code = body is Map ? body['error'] : null;
+        if (code is String) {
+          final failure = InvidiousServiceError(code,
+              statusCode: response.statusCode,
+              errorCode: code,
+              isGatewayResponse: true);
+          if (failure.isGatewayAccessFailure) throw failure;
+        }
+      }
       if (throwRetryable &&
           const [502, 503, 504].contains(response.statusCode)) {
         throw const BackendPlaybackFailure();
@@ -140,6 +160,10 @@ class DashManifestResolver {
         return retry.statusCode == 200 ? recovered.toString() : null;
       }
     } catch (error) {
+      if (error is NerdVpnAccessRequired ||
+          (error is InvidiousServiceError && error.isGatewayAccessFailure)) {
+        rethrow;
+      }
       if (throwRetryable && isBackendRetryable(error)) {
         throw const BackendPlaybackFailure();
       }

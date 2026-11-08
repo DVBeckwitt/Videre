@@ -30,6 +30,7 @@ Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Vid
 - **People and Accounts.** Keep separate local libraries for each person, with multiple saved accounts on the same instance.
 - **Watched Status.** Mark videos watched or unwatched on phone and TV; signed-in accounts retry pending changes to server history.
 - **Protected Servers.** Sign in through an Authentik gateway with an isolated browser session for each account.
+- **NerdVPN API access.** Browser sign-in retrieves your API key when eligible, keeps it encrypted on Android, and shows the instance's waiting or disabled-access status.
 - **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
 - **Watch Offline.** Video, audio, and playlist downloads on phones and tablets, with pause, resume, retry, and Wi-Fi-only mode.
 - **Saved Playback.** Remember playback positions when reopening videos on phone or TV.
@@ -50,6 +51,8 @@ Open **Profiles** from the home screen or Settings to add, rename, or switch peo
 
 For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
 
+For `invidious.nerdvpn.de`, adding the instance opens browser sign-in. Your account stays saved if API access is not yet available, and settings show the eligibility date returned by the instance. Existing accounts can sign in again to grant API-key access or enter a manual key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**.
+
 For playback problems, **Connection help** checks the video API and lets you switch instances or open the video in a browser.
 
 This README describes the current source. Check release notes for your APK's features.
@@ -62,11 +65,13 @@ Suggested hosts from the [official Invidious directory](https://docs.invidious.i
 |---|---|---|---|
 | [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
 | [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* | 9 October 2026 |
-| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | ✅ Working* | 22 October 2026 |
+| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Sign-in verified; API key required† | 8 November 2026 |
 
 Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
 
-\* Source checks cover search, video data, and a media sample. NerdVPN also passed server stats, direct audio, and instance-proxied video sample checks. Full Android playback is unverified; availability may change.
+\* Source checks cover search, video data, and a media sample. Full Android playback is unverified; availability may change.
+
+† NerdVPN browser sign-in, saved login after restart, and eligibility checks passed on Android. Successful key issuance and playback remain unverified with the new test account while its waiting period is active.
 
 For self-hosting, see the [Invidious project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
 

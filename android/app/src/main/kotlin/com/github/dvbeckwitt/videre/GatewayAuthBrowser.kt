@@ -20,16 +20,26 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
+import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.github.dvbeckwitt.videre.proxy.GatewayContext
 import com.github.dvbeckwitt.videre.proxy.GatewaySessions
+import com.github.dvbeckwitt.videre.proxy.NerdVpnPkce
+import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.util.UUID
 import java.util.concurrent.Executor
+import java.io.IOException
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request as HttpRequest
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONObject
 
 /** A dedicated, isolated gateway login; it never exports the browser cookie jar. */
@@ -39,13 +49,15 @@ class GatewayAuthBrowser(private val activity: Activity) {
     }
     private class Request(val result: MethodChannel.Result, val context: GatewayContext,
         val revision: Long, val policy: Policy, val loginUrl: String,
-        val nonce: String, val title: String, val help: String, val cancel: String) {
+        val nonce: String, val pkce: NerdVpnPkce?, val title: String, val help: String, val cancel: String) {
         var finishing = false
         var applying = false
         var overridden = false
         var clearing = false
         var token: String? = null
         var error: String? = null
+        var errorDetails: Map<String, Any>? = null
+        var exchange: Call? = null
         val allowed = mutableSetOf(context.origin.toString())
         val closeResults = mutableListOf<MethodChannel.Result>()
     }
@@ -98,10 +110,11 @@ class GatewayAuthBrowser(private val activity: Activity) {
             result.error("GATEWAY_UNAVAILABLE", null, null); return
         }
         val nonce = UUID.randomUUID().toString()
-        val login = server.newBuilder().encodedPath(server.encodedPath.trimEnd('/') + "/authorize_token")
+        val pkce = NerdVpnPkce.forServer(server, nonce)
+        val login = pkce?.authorizationUrl(server) ?: server.newBuilder().encodedPath(server.encodedPath.trimEnd('/') + "/authorize_token")
             .addQueryParameter("scopes", ":feed,:subscriptions*,:playlists*,:history*")
             .addQueryParameter("callback_url", "videre-gateway://callback/$nonce").build().toString()
-        val request = Request(result, context, revision, policy, login, nonce,
+        val request = Request(result, context, revision, policy, login, nonce, pkce,
             call.argument<String>("title") ?: "Sign in to protected server",
             call.argument<String>("help") ?: "Sign in to your gateway, then authorize Invidious.",
             call.argument<String>("cancel") ?: "Cancel")
@@ -192,9 +205,16 @@ class GatewayAuthBrowser(private val activity: Activity) {
     }
 
     private fun navigate(request: Request, web: WebView, uri: Uri): Boolean {
-        if (current !== request || request.finishing) return true
+        if (current !== request || request.finishing || request.exchange != null) return true
         if (uri.scheme == "videre-gateway") {
             val previous = web.url?.toHttpUrlOrNull()
+            if (request.pkce != null) {
+                val code = request.pkce.codeFromCallback(uri.toString())
+                if (previous != null && request.context.allows(previous) && code != null) {
+                    exchangeCode(request, web, code)
+                }
+                return true
+            }
             val token = uri.getQueryParameter("token")
             if (uri.host == "callback" && uri.path == "/${request.nonce}" &&
                 previous != null && request.context.allows(previous) &&
@@ -223,14 +243,89 @@ class GatewayAuthBrowser(private val activity: Activity) {
         return true
     }
 
+    private fun exchangeCode(request: Request, web: WebView, code: String) {
+        val pkce = request.pkce ?: return
+        try {
+            // Keep the old session intact until the new code is exchanged. The
+            // pending profile supplies cookies only to this exact HTTPS URL.
+            val profileName = GatewaySessions.signInProfileName(request.context, request.revision)
+            val manager = ProfileStore.getInstance().getOrCreateProfile(profileName).cookieManager
+            val url = request.context.origin.newBuilder().encodedPath("/api/v1/token").build()
+            val cookie = manager.getCookie(url.toString())
+            val json = JSONObject().put("code", code).put("code_verifier", pkce.verifier)
+                .put("callback_url", pkce.callbackUrl)
+            val outgoing = HttpRequest.Builder().url(url)
+                .post(json.toString().toRequestBody("application/json".toMediaType()))
+                .header("Accept", "application/json")
+                .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
+            val call = ProxyDataSource.newTokenExchangeCall(outgoing)
+            request.exchange = call
+            web.stopLoading()
+            web.settings.blockNetworkLoads = true
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, error: IOException) {
+                    handler.post {
+                        if (current === request && !request.finishing) finish(error = "GATEWAY_TOKEN_UNAVAILABLE")
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    var token: String? = null
+                    var error = "GATEWAY_TOKEN_EXCHANGE_FAILED"
+                    var errorDetails: Map<String, Any>? = null
+                    var cookies: List<String> = emptyList()
+                    response.use {
+                        if (it.code == 429 || it.code == 503) {
+                            error = "GATEWAY_TOKEN_UNAVAILABLE"
+                            errorDetails = mapOf("statusCode" to it.code, "retryAfter" to (it.header("Retry-After") ?: ""))
+                        }
+                        try {
+                            val bytes = it.peekBody(65537).bytes()
+                            val json = if (bytes.size <= 65536) JSONObject(String(bytes, Charsets.UTF_8)) else null
+                            if (it.code == 200) {
+                                token = (json?.opt("token") as? String)?.takeIf { value ->
+                                    value.isNotBlank() && value.length <= 65536
+                                }
+                                cookies = it.headers("Set-Cookie")
+                                if (cookies.size > 100 || cookies.any { value -> value.length > 16384 }) token = null
+                            } else if (it.code == 400 && json?.optString("error") == "invalid_grant") {
+                                error = "GATEWAY_TOKEN_EXPIRED"
+                            }
+                        } catch (_: Exception) {
+                            // Server response bodies can contain credentials.
+                        }
+                    }
+                    val exchanged = token
+                    val returnedCookies = cookies
+                    val failure = error
+                    val failureDetails = errorDetails
+                    handler.post {
+                        if (current !== request || request.finishing) return@post
+                        if (readPolicy() != request.policy) { finish(error = "GATEWAY_PROXY_CHANGED"); return@post }
+                        if (exchanged == null) { finish(error = failure, details = failureDetails); return@post }
+                        try {
+                            val pendingName = GatewaySessions.signInProfileName(request.context, request.revision)
+                            val pendingCookies = ProfileStore.getInstance().getOrCreateProfile(pendingName).cookieManager
+                            returnedCookies.forEach { value -> pendingCookies.setCookie(url.toString(), value) }
+                            if (GatewaySessions.completeSignIn(request.context, request.revision)) finish(token = exchanged)
+                            else finish(error = "GATEWAY_LOGIN_CANCELLED")
+                        } catch (_: Exception) { finish(error = "GATEWAY_TOKEN_EXCHANGE_FAILED") }
+                    }
+                }
+            })
+        } catch (_: Exception) { finish(error = "GATEWAY_TOKEN_EXCHANGE_FAILED") }
+    }
+
     fun close() { closed = true; finish() }
 
-    private fun finish(token: String? = null, error: String? = null) {
+    private fun finish(token: String? = null, error: String? = null, details: Map<String, Any>? = null) {
         val request = current ?: return
         if (request.finishing) return
         request.finishing = true
         request.token = token
         request.error = error
+        request.errorDetails = details
+        request.exchange?.cancel()
         handler.removeCallbacks(timeout)
         preferences.unregisterOnSharedPreferenceChangeListener(proxyChanged)
         approval?.setOnCancelListener(null)
@@ -271,7 +366,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
         if (current !== request) return
         current = null
         WebViewBrowserLease.release(this)
-        if (request.error != null) request.result.error(request.error!!, null, null)
+        if (request.error != null) request.result.error(request.error!!, null, request.errorDetails)
         else request.result.success(request.token)
         request.closeResults.forEach { it.success(null) }
         request.closeResults.clear()

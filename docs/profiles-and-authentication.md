@@ -86,6 +86,26 @@ gateway. Live deployment acceptance remains a separate check.
 For Authentik, review [header authentication](https://docs.goauthentik.io/add-secure-apps/providers/proxy/header_authentication):
 its optional interception of `Authorization` must not consume the Invidious token.
 
+## NerdVPN API access
+
+The canonical `https://invidious.nerdvpn.de` instance uses PKCE browser sign-in
+and the `:api_key` scope. Both token sign-in and protected sign-in fetch the
+account's API key after the code exchange. Existing accounts can sign in again
+to grant this scope, or enter a manual key in account settings.
+
+API keys and the native recovery credential are encrypted with Android Keystore
+and scoped to the local profile, account, and HTTPS origin. Transports resolve
+the key for each API, image, media, download, and worker request. Legacy custom
+header keys migrate into this store. The store is excluded from Android backup.
+
+Settings retain the server's eligibility date and disabled-access state. The
+account remains saved while its requests are paused. Users can check eligibility,
+enable access in NerdVPN preferences, or choose another instance. Concurrent key
+failures share one recovery attempt. Reads can retry once after recovery, while
+writes require an explicit retry. Gateway rate limits and temporary outages keep
+credentials and honor `Retry-After`. Ambiguous token errors prompt reauthorization
+while preserving the saved login.
+
 ## Verification
 
 The canonical offline helper includes profile migration/isolation, account

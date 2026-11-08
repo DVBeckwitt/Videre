@@ -8,7 +8,9 @@ import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
 
 import '../../globals.dart';
+import '../../network/nerdvpn_access.dart';
 import '../models/db/server.dart';
+import '../models/errors/invidious_service_error.dart';
 
 part 'add_server.freezed.dart';
 
@@ -85,11 +87,50 @@ class AddServerCubit extends Cubit<AddServerState> {
               : accountName,
           url: serverUrl,
           customHeaders: headers);
-      if (protectedServer) {
-        final authenticated = await service.authenticateProtected(server);
-        if (authenticated == null) return null;
+      final nerdVpn = NerdVpnAccess.supports(server);
+      final manualKeys = headers.entries
+          .where((entry) => entry.key.toLowerCase() == 'x-invidious-token');
+      if (nerdVpn && manualKeys.isNotEmpty) {
+        if (manualKeys.length != 1) {
+          throw const FormatException('Enter one API key for this account.');
+        }
+        await NerdVpnAccess.instance.setKey(server, manualKeys.single.value);
+        server = server.copyWith(
+            customHeaders: Map<String, String>.from(headers)
+              ..removeWhere(
+                  (name, _) => name.toLowerCase() == 'x-invidious-token'));
+        protectedSession = server;
+      }
+      if (protectedServer || (nerdVpn && manualKeys.isEmpty)) {
+        final authenticated = protectedServer
+            ? await service.authenticateProtected(server)
+            : await service.authenticateNerdVpn(server);
+        if (authenticated == null) {
+          if (protectedSession != null) {
+            await service.logOutProtected(protectedSession);
+            protectedSession = null;
+          }
+          return null;
+        }
         server = authenticated;
         protectedSession = server;
+        if (isClosed) {
+          await service.logOutProtected(server);
+          protectedSession = null;
+          return null;
+        }
+      }
+
+      // Eligibility and disabled access are saved account states. The gateway
+      // can reject the API probes until the account receives a working key.
+      if (nerdVpn) {
+        final access = await NerdVpnAccess.instance.status(server);
+        if (isClosed) {
+          await service.logOutProtected(server);
+          protectedSession = null;
+          return null;
+        }
+        if (!access.ready) return server;
       }
 
       await service
@@ -112,8 +153,20 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
 
+      if (isClosed && protectedSession != null) {
+        await service.logOutProtected(protectedSession);
+        protectedSession = null;
+        return null;
+      }
       return server;
-    } catch (_) {
+    } catch (error) {
+      if (!isClosed &&
+          protectedSession != null &&
+          NerdVpnAccess.supports(protectedSession) &&
+          (error is NerdVpnAccessRequired ||
+              error is InvidiousServiceError && error.isGatewayAccessFailure)) {
+        return protectedSession;
+      }
       if (protectedSession != null) {
         await service.logOutProtected(protectedSession);
       }
@@ -148,6 +201,9 @@ class AddServerCubit extends Cubit<AddServerState> {
   }
 
   bool get validUrl => normalizeUrl(urlController.text) != null;
+
+  bool get usesNerdVpn =>
+      NerdVpnAccess.supportsUrl(normalizeUrl(urlController.text) ?? '');
 
   void selectPublicInstance(String url) {
     if (isClosed || state.loading) return;

@@ -17,6 +17,7 @@ bool isBackendRetryable(Object error) =>
     error is TimeoutException ||
     error is SocketException ||
     (error is InvidiousServiceError &&
+        !error.isGatewayAccessFailure &&
         const [502, 503, 504].contains(error.statusCode));
 
 class _BackendRetryBudget {

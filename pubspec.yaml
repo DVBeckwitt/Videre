@@ -1,5 +1,5 @@
 name: clipious
-version: 1.22.36+60898
+version: 1.22.37+60899
 publish_to: none
 description: Client for invidious.
 environment: 
@@ -15,6 +15,7 @@ dependencies:
   cached_network_image: 3.4.1
   carousel_slider: 5.1.1
   copy_with_extension: 9.1.0
+  crypto: 3.0.6
   device_info_plus: 11.5.0
   dio: 5.9.0
   downloadsfolder: 1.2.0

@@ -14,7 +14,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../globals.dart';
 import '../../main.dart';
+import '../../network/nerdvpn_access.dart';
 import '../../settings/models/db/server.dart';
+import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
 import '../adaptive_dash_manifest.dart';
@@ -586,15 +588,18 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return;
     }
     _terminalErrorSent = true;
-    videoController?.pause();
+    if (videoController?.betterPlayerDataSource != null) {
+      videoController!.pause();
+    }
     WakelockPlus.disable();
     player.setEvent(const MediaEvent(state: MediaState.error));
     final generation = _playbackGeneration;
     void pauseAfterSetup() {
       if (!isClosed &&
           generation == _playbackGeneration &&
-          _terminalErrorSent) {
-        videoController?.pause();
+          _terminalErrorSent &&
+          videoController?.betterPlayerDataSource != null) {
+        videoController!.pause();
       }
     }
 
@@ -731,6 +736,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       } on BackendPlaybackFailure {
         if (!_isCurrentAttempt(generation, sourceIndex)) return;
         _sourceBackendRetryable = true;
+      } catch (error) {
+        if (error is! NerdVpnAccessRequired &&
+            !(error is InvidiousServiceError && error.isGatewayAccessFailure)) {
+          rethrow;
+        }
+        if (_isCurrentAttempt(generation, sourceIndex)) {
+          _emitTerminalPlaybackError();
+        }
+        return;
       }
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
       final video = state.video;

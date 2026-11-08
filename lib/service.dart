@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
@@ -46,6 +47,7 @@ import 'notifications/models/db/subscription_notifications.dart';
 import 'network/native_proxy_http_client.dart';
 import 'network/origin_scoped_http_client.dart';
 import 'network/gateway_context.dart';
+import 'network/nerdvpn_access.dart';
 import 'settings/services/gateway_auth.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
@@ -96,13 +98,17 @@ class Service {
   final _browseCache = <String, ({DateTime expires, Response response})>{};
   Future<void> _localPlaylistWrite = Future.value();
   final Map<String, int> _authenticationAttempts = {};
+  final Map<String, Future<Server>> _keyMigrations = {};
   String _accountKey(Server server) =>
       jsonEncode([server.profileId, server.accountId]);
   int _beginAuthentication(Server server) => _authenticationAttempts
       .update(_accountKey(server), (value) => value + 1, ifAbsent: () => 1);
 
   Future<Server?> _storeCredentials(Server original, int generation,
-      {String? authToken, String? sidCookie, bool? gatewayEnabled}) async {
+      {String? authToken,
+      String? sidCookie,
+      bool? gatewayEnabled,
+      bool clearApiKeyHeader = false}) async {
     final owner = db.forProfile(original.profileId);
     bool unchanged(Server? saved) =>
         saved != null &&
@@ -113,7 +119,11 @@ class Service {
     Server updated(Server saved) => saved.copyWith(
         authToken: authToken,
         sidCookie: sidCookie,
-        gatewayEnabled: gatewayEnabled ?? saved.gatewayEnabled);
+        gatewayEnabled: gatewayEnabled ?? saved.gatewayEnabled,
+        customHeaders: clearApiKeyHeader
+            ? (Map<String, String>.from(saved.customHeaders)
+              ..removeWhere((name, _) => NerdVpnAccess.isKeyHeader(name)))
+            : saved.customHeaders);
     if (owner is SembastSqfDb) {
       return owner.db.transaction((txn) async {
         final record = owner.serversStore.record(original.accountId);
@@ -275,6 +285,16 @@ class Service {
     log.info(
         "Response from ${response.request?.method} ${urlFormatForLog(response.request?.url)}, status: ${response.statusCode}");
 
+    final json = _decodeJsonResponse(
+      body,
+      contentType,
+      response.statusCode,
+    );
+    final errorCode =
+        json is Map && json['error'] is String ? json['error'] as String : null;
+    final isGatewayResponse = response.request != null &&
+        isNerdVpnUrl(response.request!.url.toString());
+
     if (response.statusCode == 429) {
       final delay = _retryAfter(response);
       final seconds =
@@ -286,14 +306,10 @@ class Service {
         statusCode: 429,
         responseWasHtml: isHtml,
         retryAfter: delay,
+        errorCode: errorCode,
+        isGatewayResponse: isGatewayResponse,
       );
     }
-
-    final json = _decodeJsonResponse(
-      body,
-      contentType,
-      response.statusCode,
-    );
 
     if (!isSuccessful) {
       final message = _errorMessage(json, isHtml, response.statusCode);
@@ -303,6 +319,9 @@ class Service {
         message,
         statusCode: response.statusCode,
         responseWasHtml: isHtml,
+        retryAfter: _retryAfter(response),
+        errorCode: errorCode,
+        isGatewayResponse: isGatewayResponse,
       );
     }
 
@@ -336,7 +355,8 @@ class Service {
       bool forceJson = false,
       Server? serverOverride}) async {
     try {
-      final server = serverOverride ?? (await db.getCurrentlySelectedServer());
+      final server = await _migrateNerdVpnKey(
+          serverOverride ?? (await db.getCurrentlySelectedServer()));
       String url = '${(server).url}$baseUrl';
 
       pathParams?.forEach((key, value) {
@@ -623,6 +643,123 @@ class Service {
     }
   }
 
+  Future<String?> _browserToken(Server original) async {
+    final access = NerdVpnAccess.supports(original)
+        ? await NerdVpnAccess.instance.status(original)
+        : null;
+    if (access?.retryAt?.isAfter(_now().toUtc()) == true) {
+      throw const NerdVpnAccessRequired('unavailable');
+    }
+    final nonce = const Uuid().v4();
+    final serverUrl = NerdVpnAccess.supports(original)
+        ? Uri.parse(original.url).origin
+        : original.url;
+    final pkce = NerdVpnAccess.supports(original) ? NerdVpnPkce.create() : null;
+    final callback = Uri(
+        scheme: 'videre-auth',
+        host: 'callback',
+        queryParameters: {'state': nonce});
+    final url =
+        Uri.parse('$serverUrl/authorize_token').replace(queryParameters: {
+      'scopes': ':feed,:subscriptions*,:playlists*,:history*'
+          '${pkce == null ? '' : ',:api_key'}',
+      'callback_url': callback.toString(),
+      if (pkce != null) ...{
+        'code_challenge': pkce.challenge,
+        'code_challenge_method': 'S256',
+      },
+    }).toString();
+    String result;
+    try {
+      result = await FlutterWebAuth2.authenticate(
+          url: url, callbackUrlScheme: 'videre-auth');
+    } on PlatformException catch (error) {
+      if (error.code == 'CANCELED') return null;
+      rethrow;
+    }
+
+    final returned = Uri.parse(result);
+    if (returned.scheme != callback.scheme ||
+        returned.host != callback.host ||
+        returned.path != callback.path ||
+        returned.userInfo.isNotEmpty ||
+        returned.hasPort ||
+        returned.hasFragment ||
+        returned.queryParametersAll['state']?.length != 1 ||
+        returned.queryParameters['state'] != nonce) {
+      throw InvidiousServiceError('Sign-in returned an unexpected callback');
+    }
+    if (pkce == null) return returned.queryParameters['token'];
+    final code = returned.queryParameters['code'];
+    if (code == null ||
+        code.isEmpty ||
+        code.length > 65536 ||
+        returned.queryParametersAll['code']?.length != 1) {
+      throw InvidiousServiceError(
+          'Sign-in did not return an authorization code');
+    }
+    final request = http.Request('POST', Uri.parse('$serverUrl/api/v1/token'))
+      ..followRedirects = false
+      ..headers.addAll({
+        ...?original.headersForUrl('$serverUrl/api/v1/token'),
+        'Content-Type': 'application/json',
+      })
+      ..body = jsonEncode({
+        'code': code,
+        'code_verifier': pkce.verifier,
+        'callback_url': callback.toString(),
+      });
+    final exchange = await httpClient
+        .send(request)
+        .then(http.Response.fromStream)
+        .timeout(const Duration(seconds: 30));
+    // Never log the authorization code, verifier, callback or token body.
+    if (exchange.statusCode != 200) {
+      if (const {429, 503}.contains(exchange.statusCode)) {
+        final context = GatewayRequestContext.forAccount(
+            original.profileId, original.accountId, original.url)!;
+        await NerdVpnAccess.instance.recover(context.encoded,
+            error: exchange.statusCode == 429 ? 'rate_limited' : 'unavailable',
+            statusCode: exchange.statusCode,
+            retryAfter: exchange.headers['retry-after'],
+            failedIntent: access?.apiKeyIntent,
+            revision: access?.revision,
+            retry: false);
+      }
+      throw InvidiousServiceError(
+          'NerdVPN sign-in could not be completed. Please sign in again.',
+          statusCode: exchange.statusCode,
+          retryAfter: _retryAfter(exchange));
+    }
+    dynamic value;
+    try {
+      value = jsonDecode(utf8.decode(exchange.bodyBytes));
+    } on FormatException {
+      throw InvidiousServiceError(
+          'NerdVPN returned an invalid sign-in response');
+    }
+    final token = value is Map ? value['token'] : null;
+    if (token is! String || token.isEmpty || token.length > 65536) {
+      throw InvidiousServiceError('NerdVPN did not return an account token');
+    }
+    return token;
+  }
+
+  /// Used before a newly added account has a database record. Pending access is
+  /// saved in the native account store, and the caller saves the returned token.
+  Future<Server?> authenticateNerdVpn(Server original) async {
+    if (!NerdVpnAccess.supports(original)) {
+      throw ArgumentError('This server does not support NerdVPN sign-in');
+    }
+    final intent = await NerdVpnAccess.instance.beginAuth(original);
+    final token = await _browserToken(original);
+    if (token == null) return null;
+    final authenticated = original.copyWith(authToken: token, sidCookie: null);
+    await NerdVpnAccess.instance
+        .authorize(authenticated, token, intent: intent);
+    return authenticated;
+  }
+
   Future<String?> logIn(String accountId, {String? profileId}) async {
     final owner = db.forProfile(profileId ?? db.profileId);
     final original = owner.getAccount(accountId);
@@ -630,27 +767,12 @@ class Service {
       throw InvidiousServiceError('Account no longer exists');
     }
     final generation = _beginAuthentication(original);
-    final nonce = const Uuid().v4();
-    final serverUrl = original.url;
-    final callback = Uri(
-        scheme: 'videre-auth',
-        host: 'callback',
-        queryParameters: {'state': nonce});
-    final url =
-        Uri.parse('$serverUrl/authorize_token').replace(queryParameters: {
-      'scopes': ':feed,:subscriptions*,:playlists*,:history*',
-      'callback_url': callback.toString(),
-    }).toString();
-    final result = await FlutterWebAuth2.authenticate(
-        url: url, callbackUrlScheme: 'videre-auth');
+    final intent = NerdVpnAccess.supports(original)
+        ? await NerdVpnAccess.instance.beginAuth(original)
+        : null;
+    final token = await _browserToken(original);
 
-    final returned = Uri.parse(result);
-    if (returned.scheme != callback.scheme ||
-        returned.host != callback.host ||
-        returned.queryParameters['state'] != nonce) {
-      throw InvidiousServiceError('Sign-in returned an unexpected callback');
-    }
-    final token = returned.queryParameters['token'];
+    if (token == null) return null;
 
     Server? server = owner.getAccount(original.accountId);
 
@@ -660,8 +782,11 @@ class Service {
           server.sidCookie != original.sidCookie) {
         throw InvidiousServiceError('This sign-in was superseded');
       }
-      if (token == null || token.isEmpty) {
+      if (token.isEmpty) {
         throw InvidiousServiceError('Sign-in did not return an account token');
+      }
+      if (intent != null) {
+        await NerdVpnAccess.instance.authorize(server, token, intent: intent);
       }
       // queryParameters has already decoded the callback value.
       server = await _storeCredentials(original, generation, authToken: token);
@@ -680,21 +805,31 @@ class Service {
   }
 
   Future<Server?> authenticateProtected(Server server) async {
+    final intent = NerdVpnAccess.supports(server)
+        ? await NerdVpnAccess.instance.beginAuth(server)
+        : null;
     final token = await GatewayAuth.signIn(server);
     if (token == null) return null;
     if (token.isEmpty) {
       throw InvidiousServiceError(
           'Protected sign-in did not return an account token');
     }
-    return server.copyWith(
+    final authenticated = server.copyWith(
         authToken: token, sidCookie: null, gatewayEnabled: true);
+    if (intent != null) {
+      await NerdVpnAccess.instance
+          .authorize(authenticated, token, intent: intent);
+    }
+    return authenticated;
   }
 
   Future<Server?> logOutProtected(Server server) async {
     final generation = _beginAuthentication(server);
+    await NerdVpnAccess.instance.clear(server);
     await GatewayAuth.signOut(server);
-    final saved =
-        await _storeCredentials(server, generation, gatewayEnabled: false);
+    final saved = await _storeCredentials(server, generation,
+        gatewayEnabled: false,
+        clearApiKeyHeader: NerdVpnAccess.supports(server));
     if (saved != null && saved.inUse) {
       await fileDb.refreshAccount(saved);
     }
@@ -703,6 +838,10 @@ class Service {
 
   Future<Server?> logInAccountWithCookie(
       Server original, String username, String password) async {
+    if (NerdVpnAccess.supports(original)) {
+      throw InvidiousServiceError(
+          'Use browser sign-in for this NerdVPN account');
+    }
     final generation = _beginAuthentication(original);
     final cookie = await loginWithCookies(original.url, username, password,
         headers: original.headersForUrl(original.url));
@@ -951,7 +1090,9 @@ class Service {
         throw MissingSoftwareKeyError(jsonEncode(json));
       }
     } catch (err) {
-      if (err is InvidiousServiceError || err is CannotAddServerError) {
+      if (err is InvidiousServiceError ||
+          err is CannotAddServerError ||
+          err is NerdVpnAccessRequired) {
         rethrow;
       } else {
         throw CannotAddServerError(error: err.toString());
@@ -987,6 +1128,9 @@ class Service {
       }
       return true;
     } on InvidiousServiceError catch (error, stackTrace) {
+      // Legacy scope failures and unknown gateway responses do not establish
+      // that NerdVPN rejected the stored account token.
+      if (NerdVpnAccess.supports(server)) rethrow;
       if (!error.isAuthenticationFailure) rethrow;
 
       await _clearAuthentication(server, generation);
@@ -1027,6 +1171,80 @@ class Service {
         error,
         stackTrace,
       );
+    }
+  }
+
+  Future<NerdVpnAccessStatus> checkNerdVpnAccess(Server server) async {
+    server = await _migrateNerdVpnKey(server);
+    final status = await NerdVpnAccess.instance.check(server);
+    if (status.ready) await syncAccountHistory(server, force: true);
+    return status;
+  }
+
+  Future<Server> _migrateNerdVpnKey(Server original) async {
+    if (!NerdVpnAccess.supports(original)) return original;
+    final legacyKeys = original.customHeaders.entries
+        .where((entry) => NerdVpnAccess.isKeyHeader(entry.key))
+        .toList();
+    if (legacyKeys.isEmpty) return original;
+    final key = jsonEncode([
+      original.profileId,
+      original.accountId,
+      Uri.parse(original.url).origin
+    ]);
+    final active = _keyMigrations[key];
+    if (active != null) {
+      final migrated = await active;
+      if (migrated.customHeaders.keys.any(NerdVpnAccess.isKeyHeader)) {
+        return original;
+      }
+      return original.copyWith(
+          customHeaders: Map<String, String>.from(original.customHeaders)
+            ..removeWhere((name, _) => NerdVpnAccess.isKeyHeader(name)));
+    }
+    final pending = () async {
+      final status = await NerdVpnAccess.instance.status(original);
+      if (status.state == 'missing' && (status.revision ?? 0) == 0) {
+        final imported = await NerdVpnAccess.instance
+            .setKey(original, legacyKeys.last.value, expectedRevision: 0);
+        if (!imported.ready) return original;
+      } else if (!status.ready) {
+        // Preserve an existing manual credential until secure storage has
+        // accepted it or already holds a working replacement.
+        return original;
+      }
+      final owner = db.forProfile(original.profileId);
+      Server strip(Server saved) => saved.copyWith(
+          customHeaders: Map<String, String>.from(saved.customHeaders)
+            ..removeWhere((name, value) => legacyKeys
+                .any((entry) => entry.key == name && entry.value == value)));
+      if (owner is SembastSqfDb) {
+        await owner.db.transaction((txn) async {
+          final record = owner.serversStore.record(original.accountId);
+          final data = await record.get(txn);
+          if (data == null) return;
+          final saved = Server.fromJson(data);
+          if (saved.url == original.url) {
+            await record.put(txn, strip(saved).toJson());
+          }
+        });
+      } else {
+        final saved = owner.getAccount(original.accountId);
+        if (saved != null && saved.url == original.url) {
+          await owner.upsertServer(strip(saved));
+        }
+      }
+      final saved = owner.getAccount(original.accountId);
+      if (saved != null && saved.inUse && saved.url == original.url) {
+        await fileDb.refreshAccount(saved);
+      }
+      return strip(original);
+    }();
+    _keyMigrations[key] = pending;
+    try {
+      return await pending;
+    } finally {
+      if (identical(_keyMigrations[key], pending)) _keyMigrations.remove(key);
     }
   }
 
@@ -1420,6 +1638,14 @@ class Service {
 
   Future<void> syncAccountHistory(Server account,
       {IDbClient? database, bool force = false, bool pull = true}) async {
+    if (NerdVpnAccess.supports(account)) {
+      try {
+        account = await _migrateNerdVpnKey(account);
+        if (!(await NerdVpnAccess.instance.status(account)).ready) return;
+      } on NerdVpnAccessRequired {
+        return;
+      }
+    }
     final worker = _watchSynchronizer(account, database: database);
     await worker?.run(account, force: force, pull: pull);
   }

@@ -22,12 +22,20 @@ class GatewayResolvedSession {
   final bool needsSignIn;
   final String? cookies;
   final int? revision;
+  final String? apiKey;
+  final String? accessError;
+  final int? apiKeyRevision;
+  final int? apiKeyIntent;
 
   const GatewayResolvedSession(
       {required this.enabled,
       required this.needsSignIn,
       this.cookies,
-      this.revision});
+      this.revision,
+      this.apiKey,
+      this.accessError,
+      this.apiKeyRevision,
+      this.apiKeyIntent});
 }
 
 /// Cookies are request-scoped copies. The native profile store is authoritative.
@@ -51,18 +59,20 @@ class GatewaySessionBridge {
         'context': encodedContext,
         'url': url.toString(),
       });
-      if (value == null ||
-          value['enabled'] is! bool ||
-          value['needsSignIn'] is! bool ||
-          (value['cookies'] != null && value['cookies'] is! String) ||
-          (value['revision'] != null && value['revision'] is! int)) {
+      if (value == null) throw const GatewayTransportUnavailable();
+      try {
+        return GatewayResolvedSession(
+            enabled: value['enabled'] as bool,
+            needsSignIn: value['needsSignIn'] as bool,
+            cookies: value['cookies'] as String?,
+            revision: value['revision'] as int?,
+            apiKey: value['apiKey'] as String?,
+            accessError: value['accessError'] as String?,
+            apiKeyRevision: value['apiKeyRevision'] as int?,
+            apiKeyIntent: value['apiKeyIntent'] as int?);
+      } on TypeError {
         throw const GatewayTransportUnavailable();
       }
-      return GatewayResolvedSession(
-          enabled: value['enabled'],
-          needsSignIn: value['needsSignIn'],
-          cookies: value['cookies'],
-          revision: value['revision'] as int?);
     } on PlatformException {
       throw const GatewayTransportUnavailable();
     } on MissingPluginException {

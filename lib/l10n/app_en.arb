@@ -1598,5 +1598,21 @@
   "animationsOff": "Off",
   "animationsDescription": "Reduced removes movement and pulsing while keeping brief fades. Off stops interface animations. The Android Remove animations setting is always respected.",
   "autoplayQueue": "Autoplay next in queue",
-  "autoplayQueueDescription": "Automatically continue through the queue. When off, stop when a video ends, including in repeat mode. Your queue stays available for manual playback."
+  "autoplayQueueDescription": "Automatically continue through the queue. When off, stop when a video ends, including in repeat mode. Your queue stays available for manual playback.",
+  "nerdVpnAccessTitle": "NerdVPN API access",
+  "nerdVpnAccessReady": "An API key is saved securely for this account.",
+  "nerdVpnAccessWaiting": "API access can be requested on {date}. Background requests are paused until a key is available.",
+  "@nerdVpnAccessWaiting": {"placeholders": {"date": {"type": "String"}}},
+  "nerdVpnAccessDisabled": "API access is turned off in your NerdVPN preferences. Turn it on there, then check again.",
+  "nerdVpnAccessDenied": "NerdVPN has restricted access. Open your instance preferences for more information.",
+  "nerdVpnAccessSignIn": "Sign in to NerdVPN to obtain an API key. Existing accounts may need to sign in again to grant access.",
+  "nerdVpnAccessUnavailable": "API access is temporarily unavailable. Your saved sign-in is retained.",
+  "nerdVpnAccessRetryAt": "Try again after {date}.",
+  "@nerdVpnAccessRetryAt": {"placeholders": {"date": {"type": "String"}}},
+  "nerdVpnCheckAccess": "Check again",
+  "nerdVpnCheckEligibility": "Check eligibility",
+  "nerdVpnPreferences": "Open NerdVPN preferences",
+  "nerdVpnManualKey": "Enter API key",
+  "nerdVpnKeyInvalid": "Enter a key beginning with nvpn_ followed by 32 letters or digits.",
+  "nerdVpnSignInAndAdd": "Sign in and add NerdVPN"
 }

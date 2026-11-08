@@ -6,6 +6,8 @@ import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 
+import '../../network/gateway_context.dart';
+import '../../network/nerdvpn_access.dart';
 import '../models/backend_selector.dart';
 import '../models/db/server.dart';
 
@@ -60,7 +62,9 @@ class BackendDiscovery {
       }
       var pageUri = origin.path.isEmpty ? origin.replace(path: '/') : origin;
       late _DiscoveryResponse page;
-      final headers = Map<String, String>.from(server.customHeaders)
+      final headers = Map<String, String>.from(NerdVpnAccess.supports(server)
+          ? server.headersForUrl(pageUri.toString()) ?? const {}
+          : server.customHeaders)
         ..removeWhere((key, _) => key.toLowerCase() == 'accept')
         ..['Accept'] = 'text/html';
       for (var redirects = 0;; redirects++) {
@@ -238,7 +242,15 @@ class BackendDiscovery {
         'backend_id': choice.option.value,
         'referer': '/',
       });
-      final response = await _read(target, headers, _remaining(elapsed));
+      final requestHeaders = NerdVpnAccess.supports(server)
+          ? gatewayContextHeaders(
+              profileId: server.profileId,
+              accountId: server.accountId,
+              serverUrl: server.url,
+              targetUrl: target.toString(),
+              headers: headers)
+          : headers;
+      final response = await _read(target, requestHeaders, _remaining(elapsed));
       if (response.status < 200 || response.status >= 400) {
         throw const BackendDiscoveryException(
             'The server could not verify its backend cookie.');

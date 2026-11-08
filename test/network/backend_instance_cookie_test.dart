@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/gateway_context.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -198,11 +199,26 @@ void main() {
           fixture.usesPreferences ? 'current_companion' : null);
       expect(discovered.automaticFallback, isTrue);
       expect(requests, hasLength(1));
+      final expectedContext = NerdVpnAccess.supports(original)
+          ? GatewayRequestContext.forAccount(
+              original.profileId, original.accountId, original.url)
+          : null;
       expect(_normalizedHeaders(requests.single.headers), {
         'cookie': _expectedCookie(fixture, null),
         'x-instance': 'custom-${fixture.name}',
         'accept': 'text/html',
+        if (expectedContext != null)
+          gatewayContextHeader.toLowerCase(): expectedContext.encoded,
       });
+      if (expectedContext != null) {
+        final marker = _normalizedHeaders(
+            requests.single.headers)[gatewayContextHeader.toLowerCase()]!;
+        final context = GatewayRequestContext.tryParse(marker);
+        expect(context?.key, expectedContext.key);
+        expect(context?.origin, Uri.parse(fixture.origin));
+        expect(context?.allows(requests.single.url), isTrue);
+        expect(context?.allows(Uri.parse('${foreign.origin}/')), isFalse);
+      }
       expect(requests.single.followRedirects, isFalse);
 
       final selector = discovered;

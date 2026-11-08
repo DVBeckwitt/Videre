@@ -21,6 +21,8 @@ import 'package:clipious/network/network_proxy.dart';
 
 import '../../player/states/player.dart';
 import '../../network/gateway_session_bridge.dart';
+import '../../network/nerdvpn_access.dart';
+import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
 import 'resumable_download.dart';
@@ -472,7 +474,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         } catch (error) {
           if (token.isCancelled || _closing) return;
           if (attempt == 2 ||
-              _requiresSignIn(error) ||
+              _accessPauseNeedsSignIn(error) != null ||
               (error is PlatformException &&
                   error.code == 'DOWNLOAD_STORAGE') ||
               error is StateError ||
@@ -490,11 +492,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       }
     } catch (error, stack) {
       if (!token.isCancelled && !_closing) {
-        if (_requiresSignIn(error)) {
+        final signInRequired = _accessPauseNeedsSignIn(error);
+        if (signInRequired != null) {
           final paused = {...state.pausedVideoIds, video.videoId};
           await library.upsertDownload(video.copyWith(
               downloadFailed: false,
-              authenticationRequired: true,
+              authenticationRequired: signInRequired,
               downloadComplete: false));
           await library.saveSetting(
               SettingsValue(_pausedSetting, jsonEncode(paused.toList())));
@@ -520,9 +523,22 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
   }
 
-  static bool _requiresSignIn(Object error) =>
-      error is GatewayAuthenticationRequired ||
-      (error is DioException && error.error is GatewayAuthenticationRequired);
+  /// Access failures need an explicit resume after account settings recover.
+  /// Waiting, disabled access and cooldowns do not require another sign-in.
+  static bool? _accessPauseNeedsSignIn(Object error) {
+    if (error is DioException && error.error != null) {
+      return _accessPauseNeedsSignIn(error.error!);
+    }
+    if (error is GatewayAuthenticationRequired) return true;
+    if (error is NerdVpnAccessRequired) {
+      return const {'missing', 'signInRequired'}.contains(error.state);
+    }
+    if (error is InvidiousServiceError && error.isGatewayAccessFailure) {
+      return const {'credentials_required', 'invalid_credentials'}
+          .contains(error.errorCode);
+    }
+    return null;
+  }
 
   Future<void> _downloadArtwork(Dio dio, DownloadedVideo video, String thumb,
       Server server, CancelToken token) async {

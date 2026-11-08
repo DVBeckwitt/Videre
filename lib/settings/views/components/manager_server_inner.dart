@@ -9,6 +9,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../models/db/server.dart';
+import '../../../network/nerdvpn_access.dart';
 import '../screens/settings.dart';
 
 class ManagerServersView extends StatelessWidget {
@@ -27,6 +28,9 @@ class ManagerServersView extends StatelessWidget {
     final server = await AutoRouter.of(context).push(const AddServerRoute());
     if (server != null && server is Server && context.mounted) {
       await cubit.saveServer(server);
+      if (context.mounted && NerdVpnAccess.supports(server)) {
+        await openServer(context, server);
+      }
     }
   }
 

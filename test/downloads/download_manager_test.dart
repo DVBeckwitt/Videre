@@ -8,12 +8,14 @@ import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -825,6 +827,81 @@ void main() {
       await manager.close();
       await openManager();
       expect(manager.state.videos.single.authenticationRequired, isTrue);
+      expect(requests, 1);
+
+      final remote = await audioVideo(video.videoId);
+      service = _DownloadService((_) async => remote);
+      await manager.retryDownload(manager.state.videos.single);
+      await waitFor((state) => state.videos.single.downloadComplete);
+      expect(manager.state.videos.single.authenticationRequired, isFalse);
+      expect(manager.state.pausedVideoIds, isEmpty);
+    });
+  }
+
+  for (final (label, failure, signInRequired) in <(String, Object, bool)>[
+    ('missing key', const NerdVpnAccessRequired('missing'), true),
+    ('expired key', const NerdVpnAccessRequired('signInRequired'), true),
+    ('waiting', const NerdVpnAccessRequired('waiting'), false),
+    ('disabled', const NerdVpnAccessRequired('disabled'), false),
+    ('denied', const NerdVpnAccessRequired('denied'), false),
+    ('cooldown', const NerdVpnAccessRequired('unavailable'), false),
+    (
+      'Dio disabled',
+      DioException(
+          requestOptions: RequestOptions(path: '/audio'),
+          error: const NerdVpnAccessRequired('disabled')),
+      false
+    ),
+    (
+      'gateway disabled',
+      InvidiousServiceError('API access disabled',
+          statusCode: 403,
+          errorCode: 'access_disabled',
+          isGatewayResponse: true),
+      false
+    ),
+    (
+      'gateway expired key',
+      InvidiousServiceError('Invalid API key',
+          statusCode: 401,
+          errorCode: 'invalid_credentials',
+          isGatewayResponse: true),
+      true
+    ),
+    (
+      'gateway cooldown',
+      InvidiousServiceError('Try later',
+          statusCode: 429, errorCode: 'rate_limited', isGatewayResponse: true),
+      false
+    ),
+  ]) {
+    test('NerdVPN $label pauses without download retries across restart',
+        () async {
+      await db.upsertDownload(video.copyWith(audioOnly: true));
+      final partial = File('${await video.downloadPath}.audio.part');
+      await partial.writeAsBytes([0, 1, 2]);
+      var requests = 0;
+      service = _DownloadService((_) async {
+        requests++;
+        throw failure;
+      });
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.downloadProgresses.isEmpty &&
+          (state.videos.single.downloadFailed ||
+              state.pausedVideoIds.contains(video.videoId)));
+      expect(requests, 1);
+      expect(manager.state.videos.single.downloadFailed, isFalse);
+      expect(
+          manager.state.videos.single.authenticationRequired, signInRequired);
+      expect(manager.state.pausedVideoIds, contains(video.videoId));
+      expect(await partial.readAsBytes(), [0, 1, 2]);
+      await manager.close();
+      await openManager();
+      expect(
+          manager.state.videos.single.authenticationRequired, signInRequired);
+      expect(manager.state.pausedVideoIds, contains(video.videoId));
       expect(requests, 1);
 
       final remote = await audioVideo(video.videoId);

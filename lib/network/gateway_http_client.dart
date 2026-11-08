@@ -5,6 +5,7 @@ import 'dart:io';
 import '../utils/request_cookies.dart';
 import 'gateway_context.dart';
 import 'gateway_session_bridge.dart';
+import 'nerdvpn_access.dart';
 
 typedef GatewaySessionResolver = Future<GatewayResolvedSession> Function(
     String context, Uri url);
@@ -14,6 +15,14 @@ typedef GatewaySessionIngest = Future<void> Function(
     String? contentType,
     String? location,
     int? revision});
+typedef NerdVpnRecovery = Future<NerdVpnAccessStatus> Function(String context,
+    {required String error,
+    required int statusCode,
+    String? retryAfter,
+    String? failedKey,
+    int? revision,
+    int? failedIntent,
+    bool retry});
 
 /// Keeps gateway cookies in the native account jar, including for image caches
 /// and streaming downloads that use dart:io rather than the API client.
@@ -22,11 +31,15 @@ class GatewayHttpClient implements HttpClient {
   final HttpClient _delegate;
   final GatewaySessionResolver _resolve;
   final GatewaySessionIngest _ingest;
+  final NerdVpnRecovery _recover;
 
   GatewayHttpClient(this._delegate,
-      {GatewaySessionResolver? resolve, GatewaySessionIngest? ingest})
+      {GatewaySessionResolver? resolve,
+      GatewaySessionIngest? ingest,
+      NerdVpnRecovery? recover})
       : _resolve = resolve ?? GatewaySessionBridge.instance.resolve,
-        _ingest = ingest ?? GatewaySessionBridge.instance.ingest;
+        _ingest = ingest ?? GatewaySessionBridge.instance.ingest,
+        _recover = recover ?? NerdVpnAccess.instance.recover;
 
   Future<HttpClientRequest> _wrap(Future<HttpClientRequest> pending) async =>
       _GatewayRequest(this, await pending);
@@ -334,6 +347,12 @@ class _GatewayExchange {
   final bool persistentConnection;
   final redirects = <RedirectInfo>[];
   final visited = <Uri>{};
+  String? _apiKey;
+  int? _apiKeyRevision;
+  int? _apiKeyIntent;
+  bool _recoveredKey = false;
+
+  bool get _isNerdVpn => isNerdVpnUrl(context.origin.toString());
 
   _GatewayExchange(this.client, this.context, this.originalHeaders,
       this.followRedirects, this.maxRedirects, this.persistentConnection);
@@ -343,6 +362,26 @@ class _GatewayExchange {
     if (!context.allows(request.uri)) return null;
     final session = await client._resolve(context.encoded, request.uri);
     if (session.needsSignIn) throw const GatewayAuthenticationRequired();
+    if (_isNerdVpn) {
+      if (_recoveredKey &&
+          (session.apiKeyIntent == null ||
+              session.apiKeyIntent != _apiKeyIntent)) {
+        throw const NerdVpnAccessRequired('superseded');
+      }
+      final manualKey = request.headers.value('X-Invidious-Token');
+      final manualAccess = manualKey?.isNotEmpty == true &&
+          session.apiKeyRevision == 0 &&
+          const {'missing', 'signInRequired'}.contains(session.accessError);
+      if (session.accessError != null && !manualAccess) {
+        throw NerdVpnAccessRequired(session.accessError!);
+      }
+      _apiKey = session.apiKey ?? manualKey;
+      _apiKeyRevision = session.apiKeyRevision;
+      _apiKeyIntent = session.apiKeyIntent;
+      if (session.apiKey != null) {
+        request.headers.set('X-Invidious-Token', session.apiKey!);
+      }
+    }
     final explicitCookies = originalHeaders.entries
         .where((entry) => entry.key.toLowerCase() == HttpHeaders.cookieHeader)
         .expand((entry) => entry.value)
@@ -374,6 +413,53 @@ class _GatewayExchange {
       }
     }
     final status = response.statusCode;
+    if (_isNerdVpn &&
+        context.allows(uri) &&
+        !const {'/api/v1/token', '/api/v1/auth/api_key'}.contains(uri.path) &&
+        const {401, 403, 429, 503}.contains(status) &&
+        (response.headers.value(HttpHeaders.contentTypeHeader) ?? '')
+            .toLowerCase()
+            .contains('json')) {
+      final inspected = await _inspectBody(response);
+      final bytes = inspected.bytes;
+      String? error;
+      if (bytes != null) {
+        try {
+          final value = jsonDecode(utf8.decode(bytes));
+          if (value is Map && value['error'] is String) {
+            error = value['error'] as String;
+          }
+        } on FormatException {
+          // Preserve malformed or oversized responses for the original caller.
+        }
+      }
+      if (const {
+        'credentials_required',
+        'invalid_credentials',
+        'access_denied',
+        'rate_limited',
+        'unavailable'
+      }.contains(error)) {
+        final recovered = await client._recover(context.encoded,
+            error: error!,
+            statusCode: status,
+            retryAfter: response.headers.value(HttpHeaders.retryAfterHeader),
+            failedKey: _apiKey,
+            revision: _apiKeyRevision,
+            failedIntent: _apiKeyIntent,
+            retry: !_recoveredKey);
+        if (!_recoveredKey &&
+            recovered.retryAllowed &&
+            const {'credentials_required', 'invalid_credentials'}
+                .contains(error) &&
+            (method == 'GET' || method == 'HEAD')) {
+          _recoveredKey = true;
+          return _send(uri, method);
+        }
+      }
+      return _GatewayResponse(response, this, uri, method,
+          body: inspected.stream);
+    }
     final canRedirect = method == 'GET' ||
         method == 'HEAD' ||
         (method == 'POST' && status == HttpStatus.seeOther);
@@ -405,7 +491,14 @@ class _GatewayExchange {
     }
     final nextMethod = method == 'POST' && status == 303 ? 'GET' : method;
     redirects.add(_GatewayRedirect(status, nextMethod, target));
-    final request = await client._delegate.openUrl(nextMethod, target);
+    return _send(target, nextMethod);
+  }
+
+  Future<HttpClientResponse> _send(Uri target, String method) async {
+    final request = await client._delegate.openUrl(method, target);
+    // Authentication can abort before close() observes the request's error.
+    unawaited(
+        request.done.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
     request.followRedirects = false;
     request.persistentConnection = persistentConnection;
     // No supplied headers leave the protected origin. Fresh transport defaults
@@ -425,12 +518,46 @@ class _GatewayExchange {
     }
     try {
       final revision = await authenticate(request);
-      return process(await request.close(), target, nextMethod,
-          revision: revision);
+      return process(await request.close(), target, method, revision: revision);
     } catch (error, stack) {
       request.abort(error, stack);
       rethrow;
     }
+  }
+}
+
+/// Inspect at most 64 KiB, preserving every consumed chunk for callers when the
+/// response is oversized. Error responses can use chunked transfer encoding.
+Future<({List<int>? bytes, Stream<List<int>> stream})> _inspectBody(
+    HttpClientResponse response) async {
+  final iterator = StreamIterator(response);
+  final chunks = <List<int>>[];
+  var length = 0;
+  try {
+    while (await iterator.moveNext()) {
+      final chunk = iterator.current;
+      chunks.add(chunk);
+      length += chunk.length;
+      if (length > 65536) {
+        Stream<List<int>> remaining() async* {
+          try {
+            yield* Stream.fromIterable(chunks);
+            while (await iterator.moveNext()) {
+              yield iterator.current;
+            }
+          } finally {
+            await iterator.cancel();
+          }
+        }
+
+        return (bytes: null, stream: remaining());
+      }
+    }
+    final bytes = chunks.expand((chunk) => chunk).toList(growable: false);
+    return (bytes: bytes, stream: Stream.value(bytes));
+  } catch (_) {
+    await iterator.cancel();
+    rethrow;
   }
 }
 
@@ -439,11 +566,14 @@ class _GatewayResponse extends Stream<List<int>> implements HttpClientResponse {
   final _GatewayExchange _exchange;
   final Uri _uri;
   final String _method;
-  _GatewayResponse(this._delegate, this._exchange, this._uri, this._method);
+  final Stream<List<int>>? _body;
+  _GatewayResponse(this._delegate, this._exchange, this._uri, this._method,
+      {Stream<List<int>>? body})
+      : _body = body;
   @override
   StreamSubscription<List<int>> listen(void Function(List<int>)? onData,
           {Function? onError, void Function()? onDone, bool? cancelOnError}) =>
-      _delegate.listen(onData,
+      (_body ?? _delegate).listen(onData,
           onError: onError, onDone: onDone, cancelOnError: cancelOnError);
   @override
   Future<HttpClientResponse> redirect(

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/services/backend_discovery.dart';
@@ -333,13 +334,27 @@ void main() {
     test('official legacy NerdVPN host uses its known cookie without probing',
         () async {
       var requests = 0;
-      final client = MockClient((_) async {
+      const server = Server(
+          url: 'https://invidious.nerdvpn.de',
+          profileId: 'person',
+          id: 'nerdvpn-account');
+      final client = MockClient((request) async {
         requests++;
+        final context = GatewayRequestContext.tryParse(
+            _header(request, gatewayContextHeader)!);
+        expect(
+            context?.key,
+            GatewayRequestContext.forAccount(
+                    'person', 'nerdvpn-account', server.url)!
+                .key);
+        expect(context?.allows(request.url), isTrue);
+        expect(_header(request, 'X-Invidious-Token'), isNull);
+        expect(_header(request, 'Authorization'), isNull);
+        expect(_header(request, 'Cookie'), isNull);
         return _html(_choices('backend_id'));
       });
       addTearDown(client.close);
-      final selector = await BackendDiscovery(client)
-          .discover(const Server(url: 'https://invidious.nerdvpn.de'));
+      final selector = await BackendDiscovery(client).discover(server);
       expect(selector.cookieName, 'COMPANION_ID');
       expect(requests, 1);
     });
@@ -371,6 +386,7 @@ void main() {
         var requests = 0;
         final client = MockClient((request) async {
           requests++;
+          expect(_header(request, gatewayContextHeader), isNull);
           if (request.url.path != '/switchbackend') {
             return _html(_choices('backend_id'));
           }

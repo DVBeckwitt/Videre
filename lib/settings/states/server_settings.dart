@@ -3,6 +3,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
+import '../../network/nerdvpn_access.dart';
 import '../../utils/interfaces/db.dart';
 import '../models/db/server.dart';
 import '../models/backend_selector.dart';
@@ -101,11 +102,33 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> addHeader(String key, String value) async {
+    if (NerdVpnAccess.supports(state.server) &&
+        key.toLowerCase() == 'x-invidious-token') {
+      await setApiKey(value);
+      return;
+    }
     await _updateServer((saved) => saved.copyWith(customHeaders: {
           ...saved.customHeaders,
           key: value,
         }));
   }
+
+  Future<void> setApiKey(String value) => _authenticate(() async {
+        final server = _savedServer();
+        await NerdVpnAccess.instance.setKey(server, value.trim());
+        await _updateServer((saved) => saved.copyWith(
+            customHeaders: Map<String, String>.from(saved.customHeaders)
+              ..removeWhere(
+                  (name, _) => name.toLowerCase() == 'x-invidious-token')));
+        service.clearSessionCaches();
+      });
+
+  Future<void> checkApiAccess() => _authenticate(() async {
+        await service.checkNerdVpnAccess(_savedServer());
+        final saved = _savedServer();
+        if (!isClosed) emit(state.copyWith(server: saved));
+        if (!app.isClosed && _isActive(saved)) app.setServer(saved);
+      });
 
   Future<void> removeHeader(String key) async {
     await _updateServer((saved) => saved.copyWith(
@@ -114,10 +137,20 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   }
 
   Future<void> logOut() async {
-    await service.logOutProtected(_savedServer());
-    final latest = _savedServer();
-    if (!isClosed) emit(state.copyWith(server: latest));
-    if (!app.isClosed && _isActive(latest)) app.setServer(latest);
+    // Logout must also invalidate an in-progress sign-in. Do not use the
+    // authentication guard, which would ignore logout while that flow is busy.
+    if (isClosed) return;
+    emit(state.copyWith(authenticating: true));
+    try {
+      await service.logOutProtected(_savedServer());
+      final latest = _savedServer();
+      if (!isClosed) emit(state.copyWith(server: latest));
+      if (!app.isClosed && _isActive(latest)) app.setServer(latest);
+    } finally {
+      // A manual-key-only logout leaves the server record equal; this state
+      // transition still refreshes the separately stored API-access status.
+      if (!isClosed) emit(state.copyWith(authenticating: false));
+    }
   }
 
   Future<void> _authenticate(Future<void> Function() action) async {
