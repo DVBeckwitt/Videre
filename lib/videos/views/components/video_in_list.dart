@@ -14,9 +14,9 @@ import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:logging/logging.dart';
 
 import '../../../downloads/models/downloaded_video.dart';
-import '../../../utils.dart';
 import '../../../utils/models/image_object.dart';
 import 'video_metrics.dart';
+import 'video_duration_badge.dart';
 
 final log = Logger('VideoInList');
 
@@ -266,48 +266,15 @@ class VideoListItem extends StatelessWidget {
                                                             .shrink(),
                                               ),
                                             ),
-                                            if (!small)
-                                              Visibility(
-                                                visible: (video
-                                                            ?.lengthSeconds ??
-                                                        offlineVideo
-                                                            ?.lengthSeconds ??
-                                                        0) >
-                                                    0,
-                                                child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.all(8.0),
-                                                  child: Container(
-                                                    alignment: Alignment.center,
-                                                    height: 25,
-                                                    decoration: BoxDecoration(
-                                                        color: Colors.black
-                                                            .withValues(
-                                                                alpha: 0.75),
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(5)),
-                                                    child: Padding(
-                                                      padding:
-                                                          const EdgeInsets.all(
-                                                              4.0),
-                                                      child: Text(
-                                                        prettyDurationCustom(Duration(
-                                                            seconds: video
-                                                                    ?.lengthSeconds ??
-                                                                offlineVideo
-                                                                    ?.lengthSeconds ??
-                                                                0)),
-                                                        style: textTheme
-                                                            .bodySmall
-                                                            ?.copyWith(
-                                                                color: Colors
-                                                                    .white),
-                                                      ),
-                                                    ),
-                                                  ),
+                                            if ((video!.lengthSeconds ?? 0) > 0)
+                                              Flexible(
+                                                flex: small ? 1 : 0,
+                                                child: VideoDurationBadge(
+                                                  lengthSeconds:
+                                                      video!.lengthSeconds,
+                                                  compact: small,
                                                 ),
-                                              )
+                                              ),
                                           ],
                                         ),
                                       ],

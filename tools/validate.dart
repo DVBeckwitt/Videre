@@ -54,6 +54,7 @@ const strictValidationTargets = [
   './test/videos/watch_history_test.dart',
   './test/videos/models/history_video_cache_profile_test.dart',
   './test/videos/view/watch_status_button_test.dart',
+  './test/videos/view/video_duration_test.dart',
   './test/videos/view/video_dislikes_test.dart',
   './test/settings/profile_picker_test.dart',
   './test/utils/invidious_image_test.dart',
