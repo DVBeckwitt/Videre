@@ -240,28 +240,37 @@ class Player extends StatelessWidget {
                                                       : CrossAxisAlignment
                                                           .center,
                                                   children: [
-                                                    Container(
-                                                        constraints: BoxConstraints(
-                                                            maxHeight: isMini
-                                                                ? targetHeight
-                                                                : MediaQuery.sizeOf(
-                                                                        context)
-                                                                    .height),
-                                                        child:
-                                                            MinimizeOnSwipeDown(
-                                                          enabled:
-                                                              canSwipeDownToMinimize,
-                                                          onSwipeDown: cubit
-                                                              .showMiniPlayer,
-                                                          // Keep the audio decoder at the same location
-                                                          // while the artwork view expands or minimizes.
-                                                          child: Offstage(
-                                                            offstage: isMusic &&
-                                                                !isMini &&
-                                                                !isFullScreen,
-                                                            child: videoPlayer,
-                                                          ),
-                                                        )),
+                                                    Flexible(
+                                                      flex:
+                                                          isFullScreen ? 1 : 0,
+                                                      fit: FlexFit.tight,
+                                                      child: Container(
+                                                          width: isFullScreen
+                                                              ? double.infinity
+                                                              : null,
+                                                          constraints: BoxConstraints(
+                                                              maxHeight: isMini
+                                                                  ? targetHeight
+                                                                  : MediaQuery.sizeOf(
+                                                                          context)
+                                                                      .height),
+                                                          child:
+                                                              MinimizeOnSwipeDown(
+                                                            enabled:
+                                                                canSwipeDownToMinimize,
+                                                            onSwipeDown: cubit
+                                                                .showMiniPlayer,
+                                                            // Keep the audio decoder at the same location
+                                                            // while the artwork view expands or minimizes.
+                                                            child: Offstage(
+                                                              offstage: isMusic &&
+                                                                  !isMini &&
+                                                                  !isFullScreen,
+                                                              child:
+                                                                  videoPlayer,
+                                                            ),
+                                                          )),
+                                                    ),
                                                     if (!isFullScreen)
                                                       ConditionalWrap(
                                                           wrapIf: !isMini,

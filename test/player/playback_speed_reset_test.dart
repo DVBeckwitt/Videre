@@ -244,6 +244,84 @@ void main() {
     });
   }
 
+  test('video speed boost restores the latest chosen rate without saving 2x',
+      () async {
+    await settings.setRememberPlayBackSpeed(true);
+    final video = videoCubit();
+    try {
+      expect(video.startSpeedBoost(), isNull);
+      await video.playVideo(false);
+      video.setSpeed(1.25);
+      await _flush();
+      videoSpeedCalls.clear();
+
+      final release = video.startSpeedBoost();
+      expect(release, isNotNull);
+      await _flush();
+      expect(nativeVideoSpeed, 2);
+      expect(video.getSpeed(), 1.25);
+      expect(player.state.speed, 1.25);
+      expect(settings.state.lastSpeed, 1.25);
+
+      video.setSpeed(1.5);
+      await _flush();
+      expect(videoSpeedCalls, everyElement(2));
+      expect(nativeVideoSpeed, 2);
+      expect(video.getSpeed(), 1.5);
+      expect(player.state.speed, 1.5);
+      expect(settings.state.lastSpeed, 1.5);
+
+      videoSpeedCalls.clear();
+      release!();
+      await _flush();
+      expect(videoSpeedCalls, [1.5]);
+      expect(nativeVideoSpeed, 1.5);
+
+      await video.videoController!.pause();
+      expect(video.startSpeedBoost(), isNull);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('switching videos clears a speed boost and invalidates its release',
+      () async {
+    await settings.setRememberPlayBackSpeed(false);
+    final video = videoCubit();
+    try {
+      await video.playVideo(false);
+      video.setSpeed(1.75);
+      await _flush();
+
+      final releaseFirst = video.startSpeedBoost();
+      expect(releaseFirst, isNotNull);
+      await _flush();
+      expect(nativeVideoSpeed, 2);
+
+      video.switchVideo(_video('second'));
+      await _flush();
+      expect(videoSources.last, contains('second'));
+      expect(nativeVideoSpeed, 1);
+      expect(player.state.speed, 1);
+
+      final releaseSecond = video.startSpeedBoost();
+      expect(releaseSecond, isNotNull);
+      await _flush();
+      videoSpeedCalls.clear();
+      releaseFirst!();
+      await _flush();
+      expect(videoSpeedCalls, isEmpty);
+      expect(nativeVideoSpeed, 2);
+
+      releaseSecond!();
+      await _flush();
+      expect(videoSpeedCalls, [1]);
+      expect(nativeVideoSpeed, 1);
+    } finally {
+      await video.close();
+    }
+  });
+
   test('offline audio uses the persisted document URI', () async {
     const uri = 'content://documents/tree/folder/document/audio.webm';
     await player.close();

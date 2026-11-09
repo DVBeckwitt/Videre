@@ -462,7 +462,12 @@ void main() {
     final request = BackendPlayback(longSelector.withSelection(
         backendServer.copyWith(backendSelector: longSelector), 'one'));
     player.showRecovery(request, BackendRecoveryPhase.trying, manual: true);
-    await tester.pumpWidget(host(const PlayerControls()));
+    // The inline player supplies the 16:9 bounds to its controls.
+    await tester.pumpWidget(host(const SizedBox(
+      width: 360,
+      height: 202.5,
+      child: PlayerControls(),
+    )));
     await tester.pump();
     await tester.pump(const Duration(seconds: 5));
     final requested = tester.getRect(find.text('Requested backend: $name'));

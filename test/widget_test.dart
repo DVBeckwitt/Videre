@@ -29,6 +29,7 @@ import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -2423,6 +2424,48 @@ void main() {
         expect(player.state.isMini, isFalse);
       });
     }
+  }
+
+  for (final sourceAspectRatio in [9 / 16, 21 / 9]) {
+    testWidgets(
+        'fullscreen fills the viewport for source aspect $sourceAspectRatio and restores inline sizing',
+        (tester) async {
+      const viewport = Size(390, 844);
+      await _pumpExpandedPlayer(tester, viewport, selectedIndex: 0);
+      final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+      final videoWidget = find.byKey(const ValueKey('player'));
+      final videoState = tester.state(videoWidget);
+      final videoSurface = find.ancestor(
+        of: videoWidget,
+        matching: find.byType(AspectRatio),
+      );
+      final inlineSize = tester.getSize(videoSurface);
+      expect(inlineSize.aspectRatio, closeTo(16 / 9, 0.001));
+
+      player.setEvent(MediaEvent<double>(
+        state: MediaState.ready,
+        type: MediaEventType.aspectRatioChanged,
+        value: sourceAspectRatio,
+      ));
+      player.setFullScreen(FullScreenState.fullScreen);
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(videoSurface), Offset.zero & viewport);
+      expect(tester.state(videoWidget), same(videoState));
+
+      player.setFullScreen(FullScreenState.notFullScreen);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(videoSurface), inlineSize);
+      expect(tester.state(videoWidget), same(videoState));
+
+      player.showMiniPlayer();
+      await tester.pumpAndSettle();
+      final miniSize = tester.getSize(videoSurface);
+      expect(miniSize.width, lessThan(inlineSize.width));
+      expect(miniSize.aspectRatio, closeTo(16 / 9, 0.001));
+      expect(tester.state(videoWidget), same(videoState));
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('PiP fills the window and restores the mini player layout',

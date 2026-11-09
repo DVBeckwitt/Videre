@@ -209,6 +209,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   bool _playbackOffline = false;
   bool _requestedPlaying = true;
   double _playbackSpeed = 1;
+  VoidCallback? _endSpeedBoost;
   int _playbackPitchSemitones = 0;
   String? _qualityVideoId;
   int? _videoQuality;
@@ -253,6 +254,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void disposeControllers() {
+    _endSpeedBoost?.call();
     WakelockPlus.disable();
     log.fine("Disposing video controller");
     final newState = state.copyWith();
@@ -841,6 +843,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (player.state.isAudio) {
       return;
     }
+    _endSpeedBoost?.call();
     dismissSubtitleFailure();
     _backendRecoveryPending = false;
     _pendingSeek = null;
@@ -974,6 +977,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
               DeviceOrientation.portraitUp
             ],
             handleLifecycle: false,
+            // The app bounds the viewport; keep controls across letterboxing.
+            expandToFill: false,
             startAt: startAt,
             // The cubit restores play/pause intent after each source is ready.
             autoPlay: false,
@@ -1015,6 +1020,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void pause() {
+    _endSpeedBoost?.call();
     _requestedPlaying = false;
     videoController?.pause();
   }
@@ -1247,6 +1253,38 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   @override
   void toggleVolume(bool soundOn) {
     videoController?.setVolume(soundOn ? 1 : 0);
+  }
+
+  /// Plays at 2× until the returned callback is called or playback changes.
+  VoidCallback? startSpeedBoost() {
+    final decoder = videoController?.videoPlayerController;
+    if (decoder == null ||
+        !_playbackInitialized ||
+        !isPlaying() ||
+        _endSpeedBoost != null ||
+        _terminalErrorSent ||
+        _backendRecoveryPending ||
+        !_isCurrentAttempt(_playbackGeneration, _playbackSourceIndex)) {
+      return null;
+    }
+
+    Future<void> apply(double? speed) async {
+      try {
+        await decoder.setTemporarySpeed(speed);
+      } on PlatformException catch (error) {
+        log.fine('Could not apply temporary playback speed (${error.code})');
+      }
+    }
+
+    void end() {
+      if (!identical(_endSpeedBoost, end)) return;
+      _endSpeedBoost = null;
+      unawaited(apply(null));
+    }
+
+    _endSpeedBoost = end;
+    unawaited(apply(2));
+    return end;
   }
 
   @override
