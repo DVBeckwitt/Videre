@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../globals.dart';
 import '../../network/nerdvpn_access.dart';
+import '../../utils/invidious_image.dart';
 import '../models/db/server.dart';
 import '../models/errors/invidious_service_error.dart';
 
@@ -142,13 +143,18 @@ class AddServerCubit extends Cubit<AddServerState> {
             .getVideo('dQw4w9WgXcQ', serverOverride: server)
             .timeout(const Duration(seconds: 15));
 
-        final invalidThumbnailUrls = video.videoThumbnails
-            .map(
-              (e) => e.url,
-            )
-            .any((u) => u.startsWith("/"));
-
-        if (invalidThumbnailUrls) {
+        final thumbnails = video.videoThumbnails;
+        // Validate the resolved URLs that the image loader uses. One usable
+        // candidate is enough because the loader tries the available sizes.
+        if (thumbnails.isNotEmpty &&
+            !thumbnails.any((thumbnail) {
+              if (thumbnail.url.trim().isEmpty) return false;
+              final url =
+                  Uri.tryParse(invidiousImageUrl(thumbnail.url, server));
+              return url != null &&
+                  const {'http', 'https'}.contains(url.scheme) &&
+                  url.host.isNotEmpty;
+            })) {
           throw WrongThumbnailUrl();
         }
       }

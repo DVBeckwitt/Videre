@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/network/reloadable_http_client.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -11,6 +12,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/app_logs.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/interfaces/db.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,11 +21,12 @@ class _DirectHttpOverrides extends HttpOverrides {}
 class _StatsSocksProxy {
   final ServerSocket server;
   final bool redirect;
+  final String? response;
   final destinations = <String>[];
   final receivedAccessHeaders = <bool>[];
   final sockets = <Socket>[];
 
-  _StatsSocksProxy._(this.server, {required this.redirect}) {
+  _StatsSocksProxy._(this.server, {required this.redirect, this.response}) {
     server.listen((socket) {
       sockets.add(socket);
       var phase = 0;
@@ -60,7 +63,7 @@ class _StatsSocksProxy {
               : 'HTTP/1.1 200 OK\r\n'
                   'Content-Type: application/json\r\n'
                   'Content-Length: 2\r\n';
-          socket.add(ascii.encode(
+          socket.add(ascii.encode(response ??
               '$headers' 'Connection: close\r\n\r\n${redirect ? '' : '{}'}'));
           unawaited(socket.flush().then((_) => socket.close()));
         }
@@ -68,10 +71,12 @@ class _StatsSocksProxy {
     });
   }
 
-  static Future<_StatsSocksProxy> start({required bool redirect}) async =>
+  static Future<_StatsSocksProxy> start(
+          {required bool redirect, String? response}) async =>
       _StatsSocksProxy._(
           await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
-          redirect: redirect);
+          redirect: redirect,
+          response: response);
 
   Future<void> close() async {
     for (final socket in sockets) {
@@ -169,6 +174,58 @@ void main() {
       expect(db.getSettings(networkSocksProxySettingName), isNull);
     });
   }
+
+  test('unsaved SOCKS probe cannot deny access on the selected account',
+      () async {
+    const server = Server(
+        url: 'http://$nerdVpnOnionHost',
+        gatewayEnabled: true,
+        customHeaders: {'X-Instance-Access': 'synthetic-test-value'});
+    await db.upsertServer(server);
+    await db.useServer(server);
+
+    const sessions = MethodChannel('videre/gateway_sessions');
+    const access = MethodChannel('videre/nerdvpn_access');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(sessions, null);
+      messenger.setMockMethodCallHandler(access, null);
+      debugDefaultTargetPlatformOverride = null;
+    });
+    final sessionCalls = <String>[];
+    var denied = false;
+    messenger.setMockMethodCallHandler(sessions, (call) async {
+      sessionCalls.add(call.method);
+      return call.method == 'resolve'
+          ? {'enabled': true, 'needsSignIn': false, 'revision': 1}
+          : false;
+    });
+    messenger.setMockMethodCallHandler(access, (call) async {
+      if (call.method == 'recover') denied = true;
+      return {'state': denied ? 'denied' : 'ready'};
+    });
+
+    const body = '{"error":"access_denied"}';
+    final socks = await _StatsSocksProxy.start(
+        redirect: false,
+        response: 'HTTP/1.1 403 Forbidden\r\n'
+            'Content-Type: application/json\r\n'
+            'Set-Cookie: SID=fixture-probe\r\n'
+            'Content-Length: ${body.length}\r\n'
+            'Connection: close\r\n\r\n$body');
+    addTearDown(socks.close);
+    final unsaved = SocksProxyConfig(enabled: true, port: socks.server.port);
+
+    await expectLater(proxy.test(unsaved), throwsA(isA<HttpException>()));
+
+    expect(socks.destinations, [nerdVpnOnionHost]);
+    expect(socks.receivedAccessHeaders, [true]);
+    expect(sessionCalls, ['resolve']);
+    expect(denied, isFalse);
+    expect(proxy.config.enabled, isFalse);
+  });
 
   test('apply persists the policy and foreground startup restores it',
       () async {

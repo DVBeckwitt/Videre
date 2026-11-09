@@ -32,14 +32,17 @@ class GatewayHttpClient implements HttpClient {
   final GatewaySessionResolver _resolve;
   final GatewaySessionIngest _ingest;
   final NerdVpnRecovery _recover;
+  final bool _updateSessionFromResponse;
 
   GatewayHttpClient(this._delegate,
       {GatewaySessionResolver? resolve,
       GatewaySessionIngest? ingest,
-      NerdVpnRecovery? recover})
+      NerdVpnRecovery? recover,
+      bool updateSessionFromResponse = true})
       : _resolve = resolve ?? GatewaySessionBridge.instance.resolve,
         _ingest = ingest ?? GatewaySessionBridge.instance.ingest,
-        _recover = recover ?? NerdVpnAccess.instance.recover;
+        _recover = recover ?? NerdVpnAccess.instance.recover,
+        _updateSessionFromResponse = updateSessionFromResponse;
 
   Future<HttpClientRequest> _wrap(Future<HttpClientRequest> pending) async =>
       _GatewayRequest(this, await pending);
@@ -399,7 +402,7 @@ class _GatewayExchange {
       HttpClientResponse response, Uri uri, String method,
       {bool? follow, int? revision}) async {
     visited.add(uri);
-    if (context.allows(uri)) {
+    if (client._updateSessionFromResponse && context.allows(uri)) {
       try {
         await client._ingest(context.encoded, uri,
             response.headers[HttpHeaders.setCookieHeader] ?? const [],
@@ -413,7 +416,8 @@ class _GatewayExchange {
       }
     }
     final status = response.statusCode;
-    if (_isNerdVpn &&
+    if (client._updateSessionFromResponse &&
+        _isNerdVpn &&
         context.allows(uri) &&
         !const {'/api/v1/token', '/api/v1/auth/api_key'}.contains(uri.path) &&
         const {401, 403, 429, 503}.contains(status) &&

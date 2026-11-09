@@ -7,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../../app/states/app.dart';
 import '../../../../globals.dart';
 import '../../../../l10n/generated/app_localizations.dart';
+import '../../../../music/views/screens/music.dart';
 import '../../../../router.dart';
 import '../../../../utils/models/paginated_list.dart';
 import '../../../../utils/motion.dart';
@@ -128,6 +129,18 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                                 final rowHeight = cardContext.size?.height;
                                 if (widget.onOpenVideo != null) {
                                   await widget.onOpenVideo!(cardContext, video);
+                                } else if (video.musicMetadata != null) {
+                                  try {
+                                    await MusicScreen.playTracks(
+                                        cardContext, [video]);
+                                  } catch (_) {
+                                    if (cardContext.mounted) {
+                                      ScaffoldMessenger.of(cardContext)
+                                          .showSnackBar(SnackBar(
+                                              content: Text(
+                                                  locals.musicPlaybackError)));
+                                    }
+                                  }
                                 } else {
                                   await AutoRouter.of(cardContext).push(
                                       TvVideoRoute(videoId: video.videoId));

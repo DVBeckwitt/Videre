@@ -14,6 +14,10 @@ HistoryVideoCache _$HistoryVideoCacheFromJson(Map<String, dynamic> json) =>
       json['thumbnail'] as String,
       authorId: json['authorId'] as String?,
       lengthSeconds: (json['lengthSeconds'] as num?)?.toInt(),
+      musicMetadata: json['musicMetadata'] == null
+          ? null
+          : MusicMetadata.fromJson(
+              json['musicMetadata'] as Map<String, dynamic>),
     )..created = DateTime.parse(json['created'] as String);
 
 Map<String, dynamic> _$HistoryVideoCacheToJson(HistoryVideoCache instance) =>
@@ -22,6 +26,7 @@ Map<String, dynamic> _$HistoryVideoCacheToJson(HistoryVideoCache instance) =>
       'author': instance.author,
       'authorId': instance.authorId,
       'lengthSeconds': instance.lengthSeconds,
+      'musicMetadata': instance.musicMetadata?.toJson(),
       'videoId': instance.videoId,
       'created': instance.created.toIso8601String(),
       'thumbnail': instance.thumbnail,

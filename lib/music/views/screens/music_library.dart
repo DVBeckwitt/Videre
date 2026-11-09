@@ -103,7 +103,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     };
     return ListTile(
         key: ValueKey('music-saved-${entry.kind.name}-${entry.id}'),
-        leading: _artwork(entry.thumbnails),
+        leading: _artwork(entry.thumbnails,
+            useInvidiousProxy: entry.usesVideoThumbnails),
         title: Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis),
         subtitle: entry.subtitle.isEmpty
             ? null

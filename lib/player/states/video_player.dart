@@ -1256,7 +1256,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   /// Plays at 2× until the returned callback is called or playback changes.
-  VoidCallback? startSpeedBoost() {
+  VoidCallback? startSpeedBoost({VoidCallback? onEnded}) {
     final decoder = videoController?.videoPlayerController;
     if (decoder == null ||
         !_playbackInitialized ||
@@ -1268,11 +1268,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return null;
     }
 
-    Future<void> apply(double? speed) async {
+    Future<void> apply(double? speed, {VoidCallback? onRejected}) async {
       try {
         await decoder.setTemporarySpeed(speed);
       } on PlatformException catch (error) {
         log.fine('Could not apply temporary playback speed (${error.code})');
+        onRejected?.call();
       }
     }
 
@@ -1280,10 +1281,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       if (!identical(_endSpeedBoost, end)) return;
       _endSpeedBoost = null;
       unawaited(apply(null));
+      onEnded?.call();
     }
 
     _endSpeedBoost = end;
-    unawaited(apply(2));
+    unawaited(apply(2, onRejected: end));
     return end;
   }
 
@@ -1339,11 +1341,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   double getAspectRatio() {
-    double width =
-        videoController?.videoPlayerController?.value.size?.width ?? 16;
-    double height =
-        videoController?.videoPlayerController?.value.size?.height ?? 9;
-    return width / height;
+    final size = videoController?.videoPlayerController?.value.size;
+    if (size == null || size.isEmpty) return 16 / 9;
+    final ratio = size.aspectRatio;
+    return ratio.isFinite && ratio > 0 ? ratio : 16 / 9;
   }
 
   @override

@@ -257,4 +257,63 @@ void main() {
     expect(() => MusicLibraryEntry.song(const Video(videoId: 'abcdefghijk')),
         throwsArgumentError);
   });
+
+  for (final url in [
+    'https://private.example/vi/abcdefghijk/default.jpg',
+    'https://private.example/invidious/vi/abcdefghijk/default.jpg',
+    'http://private.example/vi/abcdefghijk/default.jpg',
+    '/vi/abcdefghijk/default.jpg',
+    'https://i.ytimg.com/vi/abcdefghijk/default.jpg',
+  ]) {
+    test('saving fallback artwork keeps video routing for $url', () async {
+      final video = Video(
+          videoId: song.id,
+          videoThumbnails: [ImageObject(null, url, 320, 180)],
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      await library.save(MusicLibraryEntry.song(video));
+      final restored = library.entries.single.toVideo();
+      expect(library.entries.single.usesVideoThumbnails, isTrue);
+      expect(restored.videoThumbnails.single.url, url);
+      expect(restored.musicMetadata!.thumbnails, isEmpty);
+    });
+  }
+
+  test('legacy protected covers retain video routing without losing labels',
+      () async {
+    const url = 'https://private.example/vi/abcdefghijk/default.jpg';
+    final legacy = {
+      ...song.toJson(),
+      'thumbnails': [ImageObject(null, url, 320, 180).toJson()],
+    }..remove('usesVideoThumbnails');
+    await database.saveSetting(SettingsValue(
+        musicLibrarySettingName,
+        jsonEncode({
+          'version': 1,
+          'entries': [legacy],
+          'playlists': []
+        })));
+    final restored = library.entries.single.toVideo();
+    expect(restored.videoThumbnails.single.url, url);
+    expect(restored.musicMetadata!.thumbnails, isEmpty);
+    expect(restored.musicMetadata!.title, song.title);
+    expect(restored.musicMetadata!.album, song.album);
+  });
+
+  for (final url in [
+    'https://lh3.googleusercontent.com/cover',
+    'https://yt3.googleusercontent.com/cover',
+    'https://yt3.ggpht.com/cover',
+    'https://i.ytimg.com/vi/abcdefghijk/default.jpg',
+  ]) {
+    test('legacy catalog artwork keeps its original source for $url', () {
+      final legacy = {
+        ...song.toJson(),
+        'thumbnails': [ImageObject(null, url, 320, 180).toJson()],
+      }..remove('usesVideoThumbnails');
+      final saved = MusicLibraryEntry.tryParse(legacy)!;
+      final restored = Video.fromJson(jsonDecode(jsonEncode(saved.toVideo())));
+      expect(saved.usesVideoThumbnails, isFalse);
+      expect(restored.musicMetadata!.thumbnails.single.url, url);
+    });
+  }
 }

@@ -25,7 +25,6 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.github.dvbeckwitt.videre.proxy.GatewayContext
 import com.github.dvbeckwitt.videre.proxy.GatewaySessions
-import com.github.dvbeckwitt.videre.proxy.isSupportedGatewayOrigin
 import com.github.dvbeckwitt.videre.proxy.NerdVpnPkce
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 import io.flutter.plugin.common.MethodCall
@@ -229,8 +228,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
             return true
         }
         val target = uri.toString().toHttpUrlOrNull()
-        if (target == null || !isSupportedGatewayOrigin(target) ||
-            (!target.isHttps && !request.policy.enabled)) return true
+        if (target == null || !request.context.canNavigateDuringSignIn(target, request.policy.enabled)) return true
         val origin = target.newBuilder().encodedPath("/").query(null).fragment(null).build().toString()
         if (origin in request.allowed) return false
         if (approval != null) return true

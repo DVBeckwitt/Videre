@@ -1196,7 +1196,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                     ?.url ??
                 '',
             authorId: currentlyPlaying.authorId,
-            lengthSeconds: currentlyPlaying.lengthSeconds));
+            lengthSeconds: currentlyPlaying.lengthSeconds,
+            musicMetadata: currentlyPlaying.musicMetadata));
         if (!active()) return;
         playbackHistoryRevision.value++;
       }

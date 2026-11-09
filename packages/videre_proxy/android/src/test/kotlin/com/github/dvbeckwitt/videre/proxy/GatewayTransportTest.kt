@@ -79,6 +79,21 @@ class GatewayTransportTest {
         assertTrue(cookies.resolved.isEmpty())
     }
 
+    @Test fun `sign-in permits cleartext onion navigation only in that account through SOCKS`() {
+        val onionOrigin = "http://$onionHost"
+        val onion = GatewayContext.parse("v1.$key.${onionOrigin.encodeUtf8().base64Url()}")
+        val onionLogin = "$onionOrigin/login".toHttpUrl()
+        val externalHttps = "https://login.example/authorize".toHttpUrl()
+
+        assertFalse(context.canNavigateDuringSignIn(onionLogin, proxyEnabled = true))
+        assertFalse(onion.canNavigateDuringSignIn(onionLogin, proxyEnabled = false))
+        assertFalse(onion.canNavigateDuringSignIn("http://other.onion/login".toHttpUrl(), proxyEnabled = true))
+        assertFalse(onion.canNavigateDuringSignIn("http://user@$onionHost/login".toHttpUrl(), proxyEnabled = true))
+        assertTrue(onion.canNavigateDuringSignIn(onionLogin, proxyEnabled = true))
+        assertTrue(onion.canNavigateDuringSignIn(externalHttps, proxyEnabled = true))
+        assertTrue(context.canNavigateDuringSignIn(externalHttps, proxyEnabled = false))
+    }
+
     @Test fun `marker never reaches wire and explicit Invidious cookie wins`() {
         val cookies = FakeSessions()
         GatewayCookieAccessRegistry.provider = cookies

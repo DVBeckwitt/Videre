@@ -2431,6 +2431,8 @@ void main() {
         'fullscreen fills the viewport for source aspect $sourceAspectRatio and restores inline sizing',
         (tester) async {
       const viewport = Size(390, 844);
+      tester.view.padding = const FakeViewPadding(bottom: 24);
+      addTearDown(tester.view.resetPadding);
       await _pumpExpandedPlayer(tester, viewport, selectedIndex: 0);
       final player = tester.element(find.byType(Player)).read<PlayerCubit>();
       final videoWidget = find.byKey(const ValueKey('player'));

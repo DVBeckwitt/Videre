@@ -10,6 +10,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/backup.dart';
+import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
@@ -282,6 +283,115 @@ void main() {
     expect((await target.exportBackup()).encode(), isNot(contains('private')));
   });
 
+  test('Music history backup keeps safe covers and strips unsafe URLs',
+      () async {
+    const cover = 'https://catalog.example/covers/%E2%99%AB%20cover.jpg';
+    await source.upsertHistoryVideo(HistoryVideoCache(
+        id, 'Song', 'Artist', cover,
+        musicMetadata:
+            MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+          ImageObject(null, '$cover?token=private-cover#hidden', 120, 120),
+          ImageObject(null, 'file:///data/cover.jpg', 120, 120),
+          ImageObject(
+              null, 'https://user:secret@catalog.example/cover.jpg', 120, 120),
+        ])));
+
+    final backup = (await source.exportBackup()).encode();
+    expect(backup, isNot(contains('private-cover')));
+    expect(backup, isNot(contains('#hidden')));
+    await target.restoreBackup(UserBackup.parse(backup));
+
+    final restored = target.getHistoryVideoByVideoId(id)!.musicMetadata!;
+    expect(restored.title, 'Song');
+    expect(restored.thumbnails.map((image) => image.url), [cover]);
+  });
+
+  test('portable video artwork resolves against the restored profile server',
+      () async {
+    const fallback = '/vi/$id/default.jpg';
+    const rawFallback = '$fallback?token=private-art#hidden';
+    const server = Server(url: 'https://target.example/invidious');
+    await source.upsertHistoryVideo(HistoryVideoCache(
+      id,
+      'Saved song',
+      'Artist',
+      rawFallback,
+      musicMetadata: const MusicMetadata(title: 'Saved song', artist: 'Artist'),
+    ));
+    final playlist = Playlist(
+      playlistId: 'local:artwork',
+      title: 'Artwork',
+      author: '',
+      videoCount: 1,
+      videos: [
+        Video(
+          videoId: id,
+          videoThumbnails: [
+            ImageObject('default', rawFallback, 120, 90),
+            ImageObject(null, '//other.example$fallback', 120, 90),
+            ImageObject(null, '/api/v1/private$fallback', 120, 90),
+            ImageObject(null, '/ggpht/%2Fapi%2Fv1%2Fprivate', 120, 90),
+          ],
+        ),
+      ],
+    );
+    await source.saveSetting(
+        SettingsValue(localPlaylistsSetting, jsonEncode([playlist.toJson()])));
+
+    final backup = (await source.exportBackup()).encode();
+    expect(backup, isNot(contains('private')));
+    expect(backup, isNot(contains('other.example')));
+    await target.restoreBackup(UserBackup.parse(backup));
+
+    final history = target.getHistoryVideoByVideoId(id)!;
+    final restored = Playlist.fromJson(
+        (jsonDecode(target.getSettings(localPlaylistsSetting)!.value) as List)
+            .single as Map<String, dynamic>);
+    expect(history.musicMetadata?.thumbnails, isEmpty);
+    expect(history.thumbnail, fallback);
+    expect(restored.videos.single.videoThumbnails.single.url, fallback);
+    expect(invidiousImageUrl(history.thumbnail, server),
+        'https://target.example/invidious$fallback');
+    expect((await target.exportBackup()).encode(), backup);
+  });
+
+  test('old Music backups restore songs with instance artwork', () async {
+    // A v1 backup created before artwork source was saved.
+    final setting = SettingsValue(
+        musicLibrarySettingName,
+        jsonEncode({
+          'version': 1,
+          'entries': [
+            {
+              'kind': 'song',
+              'id': id,
+              'title': 'Saved song',
+              'subtitle': 'Artist',
+              'thumbnails': [
+                ImageObject(null, 'https://instance.example/vi/$id/default.jpg',
+                        120, 90)
+                    .toJson()
+              ],
+            },
+          ],
+          'playlists': [],
+        }));
+    final backup = jsonDecode((await source.exportBackup()).encode()) as Map;
+
+    await target.restoreBackup(UserBackup.parse(jsonEncode({
+      ...backup,
+      'settings': [setting.toJson()],
+    })));
+
+    final restored =
+        MusicLibraryService.forProfile(target, target.profileId).entries.single;
+    expect(restored.id, id);
+    expect(restored.usesVideoThumbnails, isTrue);
+    expect(restored.toVideo().musicMetadata!.thumbnails, isEmpty);
+    expect(restored.toVideo().videoThumbnails.single.url,
+        'https://instance.example/vi/$id/default.jpg');
+  });
+
   test('Music backup rejects unknown fields, invalid IDs and unsafe artwork',
       () async {
     const entry = MusicLibraryEntry(
@@ -293,6 +403,7 @@ void main() {
       'playlists': ['local:music'],
     };
     final invalidRows = [
+      {...row, 'usesVideoThumbnails': 'true'},
       {...row, 'dashUrl': 'https://stream.example/private'},
       {...row, 'authToken': 'private'},
       {...row, 'id': '../file'},

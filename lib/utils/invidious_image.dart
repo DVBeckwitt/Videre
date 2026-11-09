@@ -4,6 +4,28 @@ import 'package:uuid/uuid.dart';
 
 import '../settings/models/db/server.dart';
 
+/// Older saved Music songs sometimes put an instance's video fallback into
+/// their catalog artwork. Recognize only actual Invidious image routes; public
+/// YouTube image URLs are still valid original catalog artwork.
+bool isInvidiousThumbnailUrl(String url) {
+  final image = Uri.tryParse(url);
+  if (image == null ||
+      image.userInfo.isNotEmpty ||
+      (image.hasScheme && !const {'http', 'https'}.contains(image.scheme))) {
+    return false;
+  }
+  if (image.host == 'yt3.ggpht.com' ||
+      image.host == 'yt3.googleusercontent.com' ||
+      image.host == 'lh3.googleusercontent.com' ||
+      RegExp(r'^i[0-9]?\.ytimg\.com$').hasMatch(image.host)) {
+    return false;
+  }
+  return RegExp(r'(^|/)(vi|vi_webp|s_p|pl_c|tvfilm_banner)/[^/]+/[^/]+$')
+          .hasMatch(image.path) ||
+      RegExp(r'(^|/)ggpht/.+$').hasMatch(image.path) ||
+      RegExp(r'(^|/)sb/i[0-9]?/[^/]+/.+$').hasMatch(image.path);
+}
+
 /// Private instance images must not reuse another person's cached response.
 String invidiousImageCacheKey(String url, Server server) {
   final target = Uri.tryParse(url);

@@ -91,16 +91,11 @@ class BetterPlayerSubtitlesFactory {
       components = value.split('\n\n');
     }
 
-    // Skip parsing files with no cues
-    if (components.length == 1) {
-      return [];
-    }
-
     final List<BetterPlayerSubtitle> subtitlesObj = [];
 
     final bool isWebVTT = components.contains("WEBVTT");
     for (final component in components) {
-      if (component.isEmpty) {
+      if (!component.contains(BetterPlayerSubtitle.timerSeparator)) {
         continue;
       }
       final subtitle = BetterPlayerSubtitle(component, isWebVTT);

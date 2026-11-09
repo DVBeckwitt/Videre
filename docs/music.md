@@ -103,7 +103,9 @@ the media-proxy setting. Music catalog artwork loads from its original public
 image URLs through the same configured network transport, without Invidious
 credentials or Google login cookies. Album, artist, playlist, player, download,
 and notification covers therefore do not depend on the Invidious image proxy.
-Fallback video thumbnails still use the selected instance's image routing.
+Fallback video thumbnails still use the selected instance's image routing,
+including saved songs without a catalog cover. New Music history entries retain
+their catalog artwork and song metadata.
 
 YouTube Music catalog endpoints are unofficial. Their response formats are
 isolated in `MusicCatalogService` and its parsers, with offline fixtures and an

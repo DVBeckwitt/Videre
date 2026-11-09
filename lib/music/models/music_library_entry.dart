@@ -1,6 +1,7 @@
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 
@@ -18,6 +19,7 @@ class MusicLibraryEntry {
   final String? album;
   final int? durationSeconds;
   final List<ImageObject> thumbnails;
+  final bool usesVideoThumbnails;
 
   const MusicLibraryEntry({
     required this.kind,
@@ -27,6 +29,7 @@ class MusicLibraryEntry {
     this.album,
     this.durationSeconds,
     this.thumbnails = const [],
+    this.usesVideoThumbnails = false,
   });
 
   factory MusicLibraryEntry.song(Video video) {
@@ -39,6 +42,7 @@ class MusicLibraryEntry {
         subtitle: metadata.artist,
         album: metadata.album,
         durationSeconds: video.lengthSeconds,
+        usesVideoThumbnails: metadata.thumbnails.isEmpty,
         thumbnails: metadata.thumbnails.isEmpty
             ? video.videoThumbnails
             : metadata.thumbnails);
@@ -73,7 +77,7 @@ class MusicLibraryEntry {
             title: title,
             artist: subtitle,
             album: album,
-            thumbnails: thumbnails));
+            thumbnails: usesVideoThumbnails ? const [] : thumbnails));
   }
 
   Map<String, dynamic> toJson() => {
@@ -84,6 +88,7 @@ class MusicLibraryEntry {
         if (album != null) 'album': album,
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
         'thumbnails': thumbnails.map((image) => image.toJson()).toList(),
+        if (usesVideoThumbnails) 'usesVideoThumbnails': true,
       };
 
   static final _id = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
@@ -105,6 +110,13 @@ class MusicLibraryEntry {
     }
     final duration = value['durationSeconds'];
     final images = value['thumbnails'];
+    final usesVideoThumbnails = kind == MusicLibraryKind.song &&
+        (value['usesVideoThumbnails'] is bool
+            ? value['usesVideoThumbnails'] as bool
+            : images is List &&
+                images.take(8).whereType<Map>().any((image) =>
+                    image['url'] is String &&
+                    isInvidiousThumbnailUrl(image['url'] as String)));
     return MusicLibraryEntry(
         kind: kind,
         id: id,
@@ -114,10 +126,13 @@ class MusicLibraryEntry {
         durationSeconds: duration is int && duration >= 0 && duration <= 604800
             ? duration
             : null,
+        usesVideoThumbnails: usesVideoThumbnails,
         thumbnails: [
           if (images is List)
             for (final image in images.take(8))
-              if (_image(image) case final image?) image,
+              if (_image(image, usesVideoThumbnails: usesVideoThumbnails)
+                  case final image?)
+                image,
         ]);
   }
 
@@ -127,21 +142,26 @@ class MusicLibraryEntry {
     return clean.isEmpty ? null : String.fromCharCodes(clean.runes.take(1024));
   }
 
-  static ImageObject? _image(Object? value) {
+  static ImageObject? _image(Object? value,
+      {required bool usesVideoThumbnails}) {
     if (value is! Map || value['url'] is! String) return null;
     final url = value['url'] as String;
     final uri = Uri.tryParse(url);
+    final instanceFallback = usesVideoThumbnails &&
+        isInvidiousThumbnailUrl(url) &&
+        uri != null &&
+        ((!uri.hasScheme && !uri.hasAuthority) ||
+            (uri.scheme == 'http' && uri.host.isNotEmpty));
     if (url.length > 2048 ||
         uri == null ||
-        uri.scheme != 'https' ||
-        uri.host.isEmpty ||
+        (!instanceFallback && (uri.scheme != 'https' || uri.host.isEmpty)) ||
         uri.userInfo.isNotEmpty) {
       return null;
     }
     // Art does not need request credentials, signed query strings, or fragments.
     final clean = Uri(
-            scheme: uri.scheme,
-            host: uri.host,
+            scheme: uri.hasScheme ? uri.scheme : null,
+            host: uri.hasAuthority ? uri.host : null,
             port: uri.hasPort ? uri.port : null,
             path: uri.path)
         .toString();

@@ -1453,6 +1453,43 @@ void main() {
     expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
   });
 
+  for (final relative in [false, true]) {
+    test('old queued Music fallback retains cover access (relative=$relative)',
+        () async {
+      final headers = <String?>[];
+      final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+        headers.add(request.headers.value('X-Instance-Key'));
+        if (headers.last != 'artwork-instance') {
+          request.response.statusCode = HttpStatus.unauthorized;
+        } else {
+          request.response.add([10, 11, 12]);
+        }
+        await request.response.close();
+      });
+      final cover = relative
+          ? '/vi/${video.videoId}/default.jpg'
+          : 'http://127.0.0.1:${mediaServer!.port}/vi/${video.videoId}/default.jpg';
+      final fallback = ImageObject(null, cover, 320, 180);
+      final audio = video.copyWith(
+          audioOnly: true,
+          musicMetadata: MusicMetadata(
+              title: 'Song', artist: 'Artist', thumbnails: [fallback]));
+      // Model a queued download saved by older bookmarks, which copied the
+      // backend fallback into MusicMetadata without its source information.
+      await db.upsertDownload(audio);
+      manager.setVideos();
+      service = _DownloadService(
+          (_) async => remote.copyWith(videoThumbnails: [fallback]));
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) => state.videos.single.downloadComplete);
+
+      expect(headers, ['artwork-instance']);
+      expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+      expect(manager.state.videos.single.musicMetadata!.thumbnails, isEmpty);
+    });
+  }
+
   test('media starts while artwork is pending and artwork is committed whole',
       () async {
     final audio = video.copyWith(audioOnly: true);

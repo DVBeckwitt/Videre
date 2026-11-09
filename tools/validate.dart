@@ -57,6 +57,8 @@ const strictValidationTargets = [
   './test/videos/view/video_duration_test.dart',
   './test/videos/view/video_dislikes_test.dart',
   './test/settings/profile_picker_test.dart',
+  './test/settings/state/add_server_test.dart',
+  './test/settings/connection_help_test.dart',
   './test/utils/invidious_image_test.dart',
   './test/utils/image_object_test.dart',
   './test/utils/selected_server_test.dart',

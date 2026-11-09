@@ -35,9 +35,12 @@ class _SpeedBoostVideo extends VideoPlayerCubit {
   void disposeControllers() {}
 
   @override
-  VoidCallback? startSpeedBoost() {
+  VoidCallback? startSpeedBoost({VoidCallback? onEnded}) {
     speedChanges.add(2);
-    return () => speedChanges.add(1.37);
+    return () {
+      speedChanges.add(1.37);
+      onEnded?.call();
+    };
   }
 }
 

@@ -272,13 +272,21 @@ class BetterPlayerController {
           .addAll(betterPlayerDataSource.subtitles!);
     }
 
-    if (_isDataSourceAsms(betterPlayerDataSource)) {
-      _setupAsmsDataSource(betterPlayerDataSource).then((dynamic value) {
-        if (identical(_betterPlayerDataSource, betterPlayerDataSource)) {
-          _setupSubtitles();
+    final isAdaptive = _isDataSourceAsms(betterPlayerDataSource);
+    final waitForEmbeddedSubtitles =
+        isAdaptive && betterPlayerDataSource.useAsmsSubtitles == true;
+    if (isAdaptive) {
+      final generation = _subtitleLoadGeneration;
+      unawaited(_setupAsmsDataSource(betterPlayerDataSource).then<void>((_) {
+        if (waitForEmbeddedSubtitles &&
+            !_disposed &&
+            identical(_betterPlayerDataSource, betterPlayerDataSource)) {
+          // Keep a track chosen while the manifest was loading.
+          _setupSubtitles(selectDefault: generation == _subtitleLoadGeneration);
         }
-      });
-    } else {
+      }));
+    }
+    if (!waitForEmbeddedSubtitles) {
       _setupSubtitles();
     }
 
@@ -288,10 +296,11 @@ class BetterPlayerController {
   }
 
   ///Configure subtitles based on subtitles source.
-  void _setupSubtitles() {
+  void _setupSubtitles({bool selectDefault = true}) {
     _betterPlayerSubtitlesSourceList.add(
       BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
     );
+    if (!selectDefault) return;
     final defaultSubtitle = _betterPlayerSubtitlesSourceList
         .firstWhereOrNull((element) => element.selectedByDefault == true);
 
@@ -319,7 +328,7 @@ class BetterPlayerController {
       final response = manifest != null
           ? await BetterPlayerDashUtils.parse(data, source.url)
           : await BetterPlayerAsmsUtils.parse(data, source.url);
-      if (!identical(_betterPlayerDataSource, source)) return;
+      if (_disposed || !identical(_betterPlayerDataSource, source)) return;
 
       /// Load tracks
       if (_betterPlayerDataSource?.useAsmsTracks == true) {

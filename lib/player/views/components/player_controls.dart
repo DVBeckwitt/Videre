@@ -967,13 +967,18 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
     final x = details.localPosition.dx;
     if (x >= width / 3 && x <= width * 2 / 3) return;
 
-    final restore = widget.speedBoostPlayer?.startSpeedBoost();
+    final restore = widget.speedBoostPlayer?.startSpeedBoost(onEnded: () {
+      if (mounted && _restoreSpeed != null) {
+        setState(() => _restoreSpeed = null);
+      }
+    });
     if (restore != null) setState(() => _restoreSpeed = restore);
   }
 
   void _restorePlaybackSpeed() {
-    _restoreSpeed?.call();
+    final restore = _restoreSpeed;
     _restoreSpeed = null;
+    restore?.call();
   }
 
   void _endSpeedBoost() {

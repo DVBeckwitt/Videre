@@ -137,7 +137,7 @@ class Player extends StatelessWidget {
                     ? GestureDetector(
                         onTap: isMini ? cubit.showBigPlayer : null,
                         child: SafeArea(
-                          bottom: !isDragging,
+                          bottom: !isFullScreen && !isDragging,
                           top: false,
                           left: !isFullScreen,
                           right: !isFullScreen,

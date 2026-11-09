@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:river_player/river_player.dart';
+
+class _LoopbackHttpOverrides extends HttpOverrides {}
 
 class _VideoPlatform extends VideoPlayerPlatform {
   final streams = <int, StreamController<VideoEvent>>{};
@@ -108,6 +111,61 @@ void main() {
       await Future<void>.delayed(Duration.zero);
     }
   });
+
+  for (final embeddedSubtitles in [false, true]) {
+    test(
+        'delayed HLS metadata preserves selected captions ($embeddedSubtitles)',
+        () => HttpOverrides.runWithHttpOverrides(() async {
+              final server =
+                  await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+              final pendingManifest = Completer<HttpRequest>();
+              server.listen(pendingManifest.complete);
+              final controller =
+                  BetterPlayerController(const BetterPlayerConfiguration(
+                autoPlay: false,
+                handleLifecycle: false,
+                allowedScreenSleep: true,
+              ));
+              addTearDown(() async {
+                controller.dispose();
+                await server.close(force: true);
+              });
+              final external = BetterPlayerSubtitlesSource(
+                type: BetterPlayerSubtitlesSourceType.memory,
+                content:
+                    'WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nExternal cue\n\n',
+              );
+              await controller.setupDataSource(BetterPlayerDataSource(
+                BetterPlayerDataSourceType.network,
+                'http://127.0.0.1:${server.port}/manifest.m3u8',
+                videoFormat: BetterPlayerVideoFormat.hls,
+                subtitles: [external],
+                useAsmsSubtitles: embeddedSubtitles,
+              ));
+              final request = await pendingManifest.future
+                  .timeout(const Duration(seconds: 3));
+              await controller.setupSubtitleSource(external);
+              expect(controller.betterPlayerSubtitlesSource, same(external));
+
+              request.response.write('#EXTM3U\n'
+                  '#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360\n'
+                  'video.m3u8\n');
+              await request.response.close();
+              final deadline = Stopwatch()..start();
+              while (controller.betterPlayerAsmsTracks.isEmpty &&
+                  deadline.elapsed < const Duration(seconds: 3)) {
+                await Future<void>.delayed(const Duration(milliseconds: 10));
+              }
+
+              expect(controller.betterPlayerAsmsTracks.last.height, 360);
+              expect(
+                  controller.betterPlayerSubtitlesSourceList.where((track) =>
+                      track.type == BetterPlayerSubtitlesSourceType.none),
+                  hasLength(1));
+              expect(controller.betterPlayerSubtitlesSource, same(external));
+              expect(controller.subtitlesLines.single.texts, ['External cue']);
+            }, _LoopbackHttpOverrides()));
+  }
 
   test('retryability defaults false and copyWith preserves explicit changes',
       () {

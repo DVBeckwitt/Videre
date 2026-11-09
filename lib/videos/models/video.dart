@@ -135,7 +135,18 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
 
   const Video._();
 
-  factory Video.fromJson(Map<String, Object?> json) => _$VideoFromJson(json);
+  factory Video.fromJson(Map<String, Object?> json) =>
+      _restoreMusicArtwork(_$VideoFromJson(json));
+
+  static Video _restoreMusicArtwork(Video video) {
+    final music = video.musicMetadata;
+    if (music == null) return video;
+    final restored =
+        music.withoutVideoThumbnailFallbacks(video.videoThumbnails);
+    return identical(music, restored)
+        ? video
+        : video.copyWith(musicMetadata: restored);
+  }
 
   /// Playback responses describe the upload; retain its queue occurrence and
   /// the song's catalog identity when fetching fresh stream URLs.

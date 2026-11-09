@@ -5,7 +5,9 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +15,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 class _ValidationService extends Service {
+  _ValidationService({this.thumbnails = const []});
+
+  final List<ImageObject> thumbnails;
   final checked = <Server>[];
   final response = Completer<void>();
 
@@ -27,7 +32,7 @@ class _ValidationService extends Service {
       {Server? serverOverride,
       void Function(BackendPlayback request)? onBackendRequest}) async {
     checked.add(serverOverride!);
-    return Video(videoId: videoId);
+    return Video(videoId: videoId, videoThumbnails: thumbnails);
   }
 }
 
@@ -188,6 +193,36 @@ void main() {
       if (!cubit.isClosed) await cubit.close();
       await db.close();
       service = Service();
+    });
+
+    test('advanced validation accepts usable relative thumbnails', () async {
+      service = _ValidationService(thumbnails: [
+        ImageObject('maxres', 'file:///cache/default.jpg', 800, 450),
+        ImageObject('default', '/vi/test-id/default.jpg', 120, 90),
+        ImageObject(
+            'medium', '//i.ytimg.com/vi/test-id/mqdefault.jpg', 320, 180),
+      ])
+        ..response.complete();
+      cubit.urlController.text = 'https://inv.example/invidious';
+      cubit.setAdvancedTest(true);
+
+      final server = await cubit.validateServer();
+
+      expect(server?.url, 'https://inv.example/invidious');
+      expect(cubit.state.loading, isFalse);
+    });
+
+    test('advanced validation rejects unusable thumbnail URLs', () async {
+      service = _ValidationService(thumbnails: [
+        ImageObject('default', 'file:///cache/default.jpg', 120, 90),
+      ])
+        ..response.complete();
+      cubit.urlController.text = 'https://inv.example';
+      cubit.setAdvancedTest(true);
+
+      await expectLater(
+          cubit.validateServer(), throwsA(isA<WrongThumbnailUrl>()));
+      expect(cubit.state.loading, isFalse);
     });
 
     test(

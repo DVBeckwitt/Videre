@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../main.dart';
+import '../../../utils/views/tv/components/tv_overscan.dart';
+import '../../states/interfaces/media_player.dart';
+import '../../states/player.dart';
 import '../../states/video_player.dart';
 
 class SubtitleFailureOverlay extends StatelessWidget {
@@ -19,6 +23,8 @@ class SubtitleFailureOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final fullscreen = context.select((PlayerCubit? cubit) =>
+        cubit?.state.fullScreenState == FullScreenState.fullScreen);
     return LayoutBuilder(builder: (context, constraints) {
       // Keep the failure available when the user expands the mini player.
       if (constraints.maxWidth < 280 || constraints.maxHeight < 100) {
@@ -34,12 +40,15 @@ class SubtitleFailureOverlay extends StatelessWidget {
                 previous.subtitleFailed != current.subtitleFailed,
             builder: (context, state) {
               if (!state.subtitleFailed) return const SizedBox.shrink();
-              return FocusScope(
+              // The fullscreen and TV controls use the bottom of the viewport
+              // for seeking and playback buttons.
+              final bottomClearance = isTv ? 120.0 : (fullscreen ? 64.0 : 0.0);
+              final notice = FocusScope(
                 autofocus: autofocus,
                 child: Align(
                   alignment: Alignment.bottomCenter,
                   child: Padding(
-                    padding: const EdgeInsets.all(8),
+                    padding: EdgeInsets.fromLTRB(8, 8, 8, 8 + bottomClearance),
                     child: Material(
                       color: Colors.black.withValues(alpha: 0.9),
                       borderRadius: BorderRadius.circular(8),
@@ -83,6 +92,8 @@ class SubtitleFailureOverlay extends StatelessWidget {
                   ),
                 ),
               );
+              if (isTv) return SafeArea(child: TvOverscan(child: notice));
+              return fullscreen ? SafeArea(child: notice) : notice;
             },
           ),
         ],

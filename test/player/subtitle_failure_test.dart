@@ -4,16 +4,20 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/player/views/components/subtitle_failure_notice.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:river_player/river_player.dart';
 
@@ -182,6 +186,47 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(host());
     expect(find.byKey(const ValueKey('subtitle-retry')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fullscreen caption retry leaves the seek bar reachable',
+      (tester) async {
+    const viewport = Size(1000, 400);
+    const padding = FakeViewPadding(left: 32, right: 48, bottom: 30);
+    tester.view.physicalSize = viewport;
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = padding;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPadding);
+    app_main.darkColorScheme = const ColorScheme.dark();
+    player.showBigPlayer();
+    player.setFullScreen(FullScreenState.fullScreen);
+    await controller.setupSubtitleSource(japanese);
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<PlayerCubit>.value(value: player),
+        BlocProvider<SettingsCubit>.value(value: settings),
+      ],
+      child: host(
+        width: viewport.width,
+        height: viewport.height,
+        child: PlayerControls(mediaPlayerCubit: video),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final retry = find.byKey(const ValueKey('subtitle-retry'));
+    final dismiss = find.byKey(const ValueKey('subtitle-dismiss'));
+    final seekBar = find.byType(Slider);
+    expect(
+        tester.getRect(dismiss).bottom, lessThan(tester.getRect(seekBar).top));
+    expect(seekBar.hitTestable(), findsOneWidget);
+    expect(retry.hitTestable(), findsOneWidget);
+    expect(dismiss.hitTestable(), findsOneWidget);
+    await tester.tap(dismiss);
+    await tester.pumpAndSettle();
+    expect(retry, findsNothing);
     expect(tester.takeException(), isNull);
   });
 

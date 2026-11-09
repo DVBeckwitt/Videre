@@ -397,7 +397,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             throw StateError(
                 'This video has no compatible tracks for the download');
           }
-          final music = video.musicMetadata ?? vid.musicMetadata;
+          final music = (video.musicMetadata ?? vid.musicMetadata)
+              ?.withoutVideoThumbnailFallbacks(vid.videoThumbnails);
           video = video.copyWith(
               container: container,
               title: music?.title ?? vid.title ?? video.title,

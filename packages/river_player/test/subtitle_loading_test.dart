@@ -45,6 +45,9 @@ void main() {
           delayedRequest.complete(request);
         case '/empty':
           await _respond(request, body: '');
+        case '/malformed':
+          await _respond(request,
+              body: 'WEBVTT\n\nbad --> worse\nBroken cue\n\n');
         case '/denied':
           await _respond(request, status: 403);
         default:
@@ -69,6 +72,21 @@ void main() {
         BetterPlayerEventType.changedSubtitles);
   });
 
+  test('loads a single SRT cue without a trailing blank line', () async {
+    final selected = BetterPlayerSubtitlesSource(
+      type: BetterPlayerSubtitlesSourceType.memory,
+      content: '1\r\n00:00:00,000 --> 00:00:05,000\r\nWorking captions',
+    );
+
+    await controller.setupSubtitleSource(selected);
+
+    expect(controller.betterPlayerSubtitlesSource, same(selected));
+    expect(controller.subtitlesLines.single.start, Duration.zero);
+    expect(controller.subtitlesLines.single.texts, ['Working captions']);
+    expect(events.single.betterPlayerEventType,
+        BetterPlayerEventType.changedSubtitles);
+  });
+
   test('rejects non-success HTTP responses even if their body has cues',
       () async {
     await expectLater(
@@ -76,7 +94,7 @@ void main() {
         throwsA(isA<HttpException>()));
   });
 
-  for (final failure in ['empty', 'denied']) {
+  for (final failure in ['empty', 'denied', 'malformed']) {
     test('$failure captions report failure and preserve confirmed selection',
         () async {
       final working = source('valid');
