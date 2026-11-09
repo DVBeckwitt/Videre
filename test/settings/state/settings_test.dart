@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/main.dart' as app;
@@ -13,6 +14,7 @@ import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/workmanager.dart';
@@ -28,7 +30,7 @@ Future<void> main() async {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late Directory documents;
-  late TestAppCubit appCubit;
+  late _SessionAppCubit appCubit;
   late SettingsCubit settingsCubit;
   late WorkmanagerPlatform originalWorkmanager;
   late _Workmanager workmanager;
@@ -43,7 +45,7 @@ Future<void> main() async {
     messenger.setMockMethodCallHandler(
         pathProvider, (_) async => documents.path);
     db = await SembastSqfDb.createInMemory();
-    appCubit = TestAppCubit(AppState(0, null, HomeLayout()));
+    appCubit = _SessionAppCubit(AppState(0, null, HomeLayout()));
     appCubit.intentDataStreamSubscription = const Stream.empty().listen((_) {});
     await appCubit.initState();
     settingsCubit = TestSettingsCubit(SettingsState.init(), appCubit);
@@ -69,6 +71,146 @@ Future<void> main() async {
     await settingsCubit
         .saveSetting(SettingsValue(motionPreferenceSettingName, 'invalid'));
     expect(settingsCubit.state.motionPreference, MotionPreference.system);
+  });
+
+  test('home experience defaults to both and restores each saved choice',
+      () async {
+    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
+    expect(
+        settingsCubit.state.effectiveHomeContentMode, HomeContentMode.videos);
+    expect(settingsCubit.state.showContentModeSelector, isTrue);
+
+    await settingsCubit.setHomeContentMode(HomeContentMode.music);
+    for (final experience in HomeExperience.values) {
+      await settingsCubit.setHomeExperience(experience);
+      final restored = SettingsState.init();
+      expect(restored.homeExperience, experience);
+      expect(restored.homeContentMode, HomeContentMode.music);
+      expect(
+          restored.effectiveHomeContentMode,
+          experience == HomeExperience.videosOnly
+              ? HomeContentMode.videos
+              : HomeContentMode.music);
+      expect(restored.showContentModeSelector,
+          experience == HomeExperience.videosAndMusic);
+    }
+    await settingsCubit.setHomeContentMode(HomeContentMode.videos);
+    expect(settingsCubit.state.effectiveHomeContentMode, HomeContentMode.music);
+    await settingsCubit.setHomeExperience(HomeExperience.videosAndMusic);
+    expect(
+        settingsCubit.state.effectiveHomeContentMode, HomeContentMode.videos);
+  });
+
+  test('unknown home experience values safely keep both experiences available',
+      () async {
+    for (final value in ['', 'unknown', 'MusicOnly', 'null']) {
+      await settingsCubit
+          .saveSetting(SettingsValue(homeExperienceSettingName, value));
+      expect(
+          SettingsState.init().homeExperience, HomeExperience.videosAndMusic);
+      expect(SettingsState.init().showContentModeSelector, isTrue);
+    }
+  });
+
+  test('single experiences preserve saved video layouts and the music library',
+      () async {
+    final navigation = PhoneNavigation.defaults()
+        .move(PhoneNavigationItem.playlist, NavigationArea.bottom)!
+        .startAt(PhoneNavigationItem.history);
+    await settingsCubit.setPhoneNavigation(navigation);
+    await settingsCubit
+        .setAppLayout([HomeDataSource.history, HomeDataSource.home]);
+    await settingsCubit.setHomeContentMode(HomeContentMode.music);
+    const library = '{"likedSongs":[{"videoId":"abcdefghijk"}]}';
+    await settingsCubit.saveSetting(SettingsValue('music-library-v1', library));
+    final original = SettingsState.init();
+
+    for (final experience in [
+      HomeExperience.videosOnly,
+      HomeExperience.musicOnly,
+      HomeExperience.videosAndMusic,
+    ]) {
+      await settingsCubit.setHomeExperience(experience);
+      final restored = SettingsState.init();
+      expect(restored.phoneNavigation.encode(), navigation.encode());
+      expect(restored.appLayout, original.appLayout);
+      expect(restored.homeContentMode, HomeContentMode.music);
+      expect(db.getSettings('music-library-v1')?.value, library);
+    }
+  });
+
+  test('each profile restores its own experience and last selected mode',
+      () async {
+    await settingsCubit.setHomeContentMode(HomeContentMode.music);
+    await settingsCubit.setHomeExperience(HomeExperience.videosOnly);
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
+    await settingsCubit.setHomeExperience(HomeExperience.musicOnly);
+
+    await db.useProfile('default');
+    await fileDb.useProfile('default');
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.homeExperience, HomeExperience.videosOnly);
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.music);
+    expect(
+        settingsCubit.state.effectiveHomeContentMode, HomeContentMode.videos);
+
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.homeExperience, HomeExperience.musicOnly);
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
+    expect(settingsCubit.state.effectiveHomeContentMode, HomeContentMode.music);
+  });
+
+  test('pending experience saves remain with their owner after profile switch',
+      () async {
+    final database = db;
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final saving = settingsCubit.setHomeExperience(HomeExperience.musicOnly);
+    await started.future;
+    db = database;
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    pending.complete();
+    await saving;
+
+    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
+    expect(db.getSettings(homeExperienceSettingName), isNull);
+    expect(
+        database
+            .forProfile('default')
+            .getSettings(homeExperienceSettingName)
+            ?.value,
+        HomeExperience.musicOnly.name);
+  });
+
+  test(
+      'pending experience saves cannot emit into a later session for the same profile',
+      () async {
+    final database = db;
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final saving = settingsCubit.setHomeExperience(HomeExperience.musicOnly);
+    await started.future;
+    db = database;
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    pending.complete();
+    await saving;
+
+    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
+    expect(SettingsState.init().homeExperience, HomeExperience.musicOnly);
   });
 
   test('disabling notifications cancels a pending frequency restart', () async {
@@ -398,11 +540,13 @@ Future<void> main() async {
     expect(SettingsState.init().skipStep, 30);
   });
 
-  test('sponsor skipping and dislike counts are on without saved settings', () {
+  test('sponsor and non-music skipping default on alongside dislike counts',
+      () {
     expect(settingsCubit.state.useReturnYoutubeDislike, isTrue);
     final enabled = SponsorSegmentType.values.where((type) => type
         .isEnabled(settingsCubit.state.settings[type.settingsName()]?.value));
-    expect(enabled, [SponsorSegmentType.sponsor]);
+    expect(enabled,
+        [SponsorSegmentType.sponsor, SponsorSegmentType.musicOffTopic]);
   });
 
   test('saved choices override defaults after settings reload', () async {
@@ -427,6 +571,40 @@ Future<void> main() async {
         SponsorSegmentType.intro.isEnabled(
             restored.settings[SponsorSegmentType.intro.settingsName()]?.value),
         isTrue);
+  });
+
+  test('SponsorBlock defaults and explicit opt-outs stay with each profile',
+      () async {
+    List<SponsorSegmentType> enabled() => SponsorSegmentType.values
+        .where((type) => type.isEnabled(
+            settingsCubit.state.settings[type.settingsName()]?.value))
+        .toList();
+
+    await settingsCubit.saveSetting(SettingsValue(
+        SponsorSegmentType.musicOffTopic.settingsName(), 'false'));
+    await settingsCubit.reloadForProfile();
+    expect(enabled(), [SponsorSegmentType.sponsor]);
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(enabled(),
+        [SponsorSegmentType.sponsor, SponsorSegmentType.musicOffTopic]);
+
+    await settingsCubit.saveSetting(
+        SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+    await settingsCubit.reloadForProfile();
+    expect(enabled(), [SponsorSegmentType.musicOffTopic]);
+
+    await db.useProfile('default');
+    await fileDb.useProfile('default');
+    await settingsCubit.reloadForProfile();
+    expect(enabled(), [SponsorSegmentType.sponsor]);
+    expect(
+        db.getSettings(SponsorSegmentType.musicOffTopic.settingsName())?.value,
+        'false');
+    expect(db.getSettings(SponsorSegmentType.sponsor.settingsName()), isNull);
   });
 
   test('setting and reading settings', () async {
@@ -471,6 +649,38 @@ Future<void> main() async {
     await settingsCubit.saveSetting(s);
     expect(db.getSettings('test')?.value, 'yo');
   });
+}
+
+class _SessionAppCubit extends TestAppCubit {
+  _SessionAppCubit(super.initialState);
+
+  void advanceSession() =>
+      emit(state.copyWith(sessionRevision: state.sessionRevision + 1));
+}
+
+class _DelayedSettingsDb implements IDbClient {
+  final IDbClient delegate;
+  final Completer<void> pending;
+  final Completer<void> started;
+
+  _DelayedSettingsDb(this.delegate, this.pending, this.started);
+
+  @override
+  String get profileId => delegate.profileId;
+
+  @override
+  IDbClient forProfile(String id) =>
+      _DelayedSettingsDb(delegate.forProfile(id), pending, started);
+
+  @override
+  Future<void> saveSetting(SettingsValue setting) async {
+    started.complete();
+    await pending.future;
+    await delegate.saveSetting(setting);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _Workmanager extends WorkmanagerPlatform {

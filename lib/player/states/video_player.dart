@@ -20,10 +20,12 @@ import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/pretty_bytes.dart';
 import '../../videos/models/video.dart';
 import '../adaptive_dash_manifest.dart';
+import '../media_source.dart';
 import '../models/backend_playback.dart';
 import '../models/playback_pitch.dart';
 import '../models/video_quality.dart';
 import '../views/components/player_controls.dart';
+import '../views/components/subtitle_failure_notice.dart';
 import '../views/tv/components/player_controls.dart';
 import 'interfaces/media_player.dart';
 
@@ -31,45 +33,6 @@ part 'video_player.freezed.dart';
 
 final log = Logger('VideoPlayer');
 const _maxPlaybackSources = 10;
-
-bool _sameOrigin(Uri left, Uri right) =>
-    left.scheme.toLowerCase() == right.scheme.toLowerCase() &&
-    left.host.toLowerCase() == right.host.toLowerCase() &&
-    left.port == right.port;
-
-String? _mediaUrl(String? value) {
-  final url = value?.trim();
-  final uri = url == null ? null : Uri.tryParse(url);
-  if (uri == null ||
-      uri.userInfo.isNotEmpty ||
-      (uri.scheme != 'http' && uri.scheme != 'https') ||
-      uri.host.isEmpty) {
-    return null;
-  }
-  return uri.toString();
-}
-
-String? _validMediaUrl(String? value, Server server) {
-  final url = _mediaUrl(value);
-  final uri = url == null ? null : Uri.parse(url);
-  final serverUri = Uri.tryParse(server.url);
-  if (uri == null || serverUri == null) return null;
-  if (_sameOrigin(uri, serverUri)) return uri.toString();
-
-  final host = uri.host.toLowerCase();
-  final trustedVideoHost = host == 'googlevideo.com' ||
-      host.endsWith('.googlevideo.com') ||
-      host == 'youtube.com' ||
-      host.endsWith('.youtube.com');
-  return uri.scheme == 'https' && uri.port == 443 && trustedVideoHost
-      ? uri.toString()
-      : null;
-}
-
-Map<String, String>? _mediaHeaders(Server server, String url) {
-  final headers = server.headersForUrl(url);
-  return headers == null || headers.isEmpty ? null : headers;
-}
 
 Map<String, String>? _compatibleResolutions(
   Server server,
@@ -80,7 +43,7 @@ Map<String, String>? _compatibleResolutions(
 
   final compatible = Map.fromEntries(
     resolutions.entries.where((entry) {
-      final resolutionHeaders = _mediaHeaders(server, entry.value);
+      final resolutionHeaders = mediaHeaders(server, entry.value);
       return mapEquals(resolutionHeaders, sourceHeaders);
     }),
   );
@@ -107,41 +70,6 @@ String _sourceKey(String url) {
         fragment: '',
       )
       .toString();
-}
-
-String _proxyUrl(String url, Server server, bool useProxy,
-    {bool adaptive = false}) {
-  if (!useProxy) return url;
-  if (adaptive) {
-    final uri = Uri.parse(url);
-    return uri.replace(queryParameters: {
-      ...uri.queryParametersAll,
-      'local': ['true']
-    }).toString();
-  }
-  final source = Uri.parse(url);
-  final host = source.host.toLowerCase();
-  if (host != 'googlevideo.com' && !host.endsWith('.googlevideo.com')) {
-    return url;
-  }
-  final target = Uri.tryParse(server.url);
-  if (target == null ||
-      (target.scheme != 'http' && target.scheme != 'https') ||
-      target.host.isEmpty) {
-    return url;
-  }
-  final prefix = target.path.endsWith('/')
-      ? target.path.substring(0, target.path.length - 1)
-      : target.path;
-  return Uri(
-    scheme: target.scheme,
-    userInfo: target.userInfo,
-    host: target.host,
-    port: target.hasPort ? target.port : null,
-    path: '$prefix${source.path}',
-    query: source.hasQuery ? source.query : null,
-    fragment: source.hasFragment ? source.fragment : null,
-  ).toString();
 }
 
 List<BetterPlayerDataSource> _buildPlaybackDataSources(
@@ -172,7 +100,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     if (sources.length >= _maxPlaybackSources || !seen.add(_sourceKey(url))) {
       return;
     }
-    final headers = _mediaHeaders(server, url);
+    final headers = mediaHeaders(server, url);
     sources.add(BetterPlayerDataSource(
       BetterPlayerDataSourceType.network,
       url,
@@ -186,11 +114,11 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   }
 
   String? adaptiveUrl(String? value) {
-    final url = _mediaUrl(value);
+    final url = parseMediaUrl(value);
     return url == null
         ? null
-        : _validMediaUrl(
-            _proxyUrl(url, server, useProxy, adaptive: true), server);
+        : validatedMediaUrl(
+            proxyMediaUrl(url, server, useProxy, adaptive: true), server);
   }
 
   final hls = adaptiveUrl(video.hlsUrl);
@@ -209,9 +137,10 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   final streamUrls = <String>{};
   for (final stream in (video.formatStreams ?? []).reversed) {
     if (stream.isLegacyHd720) continue;
-    final url = _mediaUrl(stream.url);
+    final url = parseMediaUrl(stream.url);
     if (url == null) continue;
-    final safeUrl = _validMediaUrl(_proxyUrl(url, server, useProxy), server);
+    final safeUrl =
+        validatedMediaUrl(proxyMediaUrl(url, server, useProxy), server);
     if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
     final resolution = _streamLabel([
       stream.resolution,
@@ -280,9 +209,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   bool _playbackOffline = false;
   bool _requestedPlaying = true;
   double _playbackSpeed = 1;
+  VoidCallback? _endSpeedBoost;
   int _playbackPitchSemitones = 0;
   String? _qualityVideoId;
   int? _videoQuality;
+  BetterPlayerSubtitlesSource? _failedSubtitle;
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
@@ -301,6 +232,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> stopForProxyChange() async {
+    dismissSubtitleFailure();
     _playbackGeneration++;
     _playbackSources = const [];
     _playbackServer = null;
@@ -322,6 +254,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void disposeControllers() {
+    _endSpeedBoost?.call();
     WakelockPlus.disable();
     log.fine("Disposing video controller");
     final newState = state.copyWith();
@@ -431,7 +364,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       case BetterPlayerEventType.changedTrack:
         break;
       case BetterPlayerEventType.changedSubtitles:
-        break;
+        return;
       case BetterPlayerEventType.changedResolution:
         break;
       default:
@@ -443,6 +376,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   void onVideoListener(BetterPlayerEvent event) {
     if (isClosed || _backendRecoveryPending || _terminalErrorSent) return;
+    if (event.betterPlayerEventType ==
+        BetterPlayerEventType.subtitleLoadFailed) {
+      _failedSubtitle =
+          event.parameters?['source'] as BetterPlayerSubtitlesSource?;
+      emit(state.copyWith(subtitleFailed: _failedSubtitle != null));
+      return;
+    }
     if (event.betterPlayerEventType == BetterPlayerEventType.progress ||
         event.betterPlayerEventType == BetterPlayerEventType.seekTo) {
       if (!_playbackInitialized) return;
@@ -543,8 +483,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         break;
 
       case BetterPlayerEventType.changedSubtitles:
+        dismissSubtitleFailure();
         settings.setLastSubtitle(
             videoController?.betterPlayerSubtitlesSource?.name ?? '');
+        break;
+      case BetterPlayerEventType.setupDataSource:
+        dismissSubtitleFailure();
         break;
       case BetterPlayerEventType.setPitch:
         final semitones = semitonesForPitchFactor(event.parameters?['pitch']);
@@ -762,12 +706,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           formats: video.adaptiveFormats ?? const [],
           duration: Duration(seconds: video.lengthSeconds ?? 0),
           resolveMediaUrl: (value) {
-            final url = _mediaUrl(value);
+            final url = parseMediaUrl(value);
             if (url == null) return null;
             final target =
-                _validMediaUrl(_proxyUrl(url, server, local), server);
+                validatedMediaUrl(proxyMediaUrl(url, server, local), server);
             if (target == null ||
-                (local && !_sameOrigin(Uri.parse(target), manifestUri))) {
+                (local && !sameMediaOrigin(Uri.parse(target), manifestUri))) {
               return null;
             }
             return target;
@@ -899,6 +843,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (player.state.isAudio) {
       return;
     }
+    _endSpeedBoost?.call();
+    dismissSubtitleFailure();
     _backendRecoveryPending = false;
     _pendingSeek = null;
     _playbackOffline = offline;
@@ -921,7 +867,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackInitialized = false;
     _terminalErrorSent = false;
     _sourceFailurePending = false;
-    var newState = state.copyWith(startAt: startAt);
+    _failedSubtitle = null;
+    var newState = state.copyWith(startAt: startAt, subtitleFailed: false);
     _playbackServer = null;
     _playbackVideoId = null;
     if (newState.video != null || newState.offlineVideo != null) {
@@ -1010,9 +957,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       final reusedController = videoController != null;
       if (!reusedController) {
         videoController = BetterPlayerController(BetterPlayerConfiguration(
-            overlay: isTv
-                ? const TvPlayerControls()
-                : PlayerControls(mediaPlayerCubit: this),
+            overlay: SubtitleFailureOverlay(
+              player: this,
+              autofocus: isTv,
+              child: isTv
+                  ? const TvPlayerControls()
+                  : PlayerControls(mediaPlayerCubit: this),
+            ),
             deviceOrientationsOnFullScreen: [
               DeviceOrientation.landscapeLeft,
               DeviceOrientation.landscapeRight,
@@ -1026,6 +977,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
               DeviceOrientation.portraitUp
             ],
             handleLifecycle: false,
+            // The app bounds the viewport; keep controls across letterboxing.
+            expandToFill: false,
             startAt: startAt,
             // The cubit restores play/pause intent after each source is ready.
             autoPlay: false,
@@ -1067,6 +1020,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void pause() {
+    _endSpeedBoost?.call();
     _requestedPlaying = false;
     videoController?.pause();
   }
@@ -1226,10 +1180,21 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   selectSubtitle(int index) {
-    var sub = videoController?.betterPlayerSubtitlesSourceList[index];
-    if (sub != null) {
-      videoController?.setupSubtitleSource(sub, sourceInitialize: true);
-    }
+    final tracks = videoController?.betterPlayerSubtitlesSourceList;
+    if (tracks == null || index < 0 || index >= tracks.length) return;
+    dismissSubtitleFailure();
+    videoController?.setupSubtitleSource(tracks[index]);
+  }
+
+  void dismissSubtitleFailure() {
+    _failedSubtitle = null;
+    if (!isClosed) emit(state.copyWith(subtitleFailed: false));
+  }
+
+  Future<void> retrySubtitles() async {
+    final source = _failedSubtitle;
+    dismissSubtitleFailure();
+    if (source != null) await videoController?.setupSubtitleSource(source);
   }
 
   @override
@@ -1290,6 +1255,40 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     videoController?.setVolume(soundOn ? 1 : 0);
   }
 
+  /// Plays at 2× until the returned callback is called or playback changes.
+  VoidCallback? startSpeedBoost({VoidCallback? onEnded}) {
+    final decoder = videoController?.videoPlayerController;
+    if (decoder == null ||
+        !_playbackInitialized ||
+        !isPlaying() ||
+        _endSpeedBoost != null ||
+        _terminalErrorSent ||
+        _backendRecoveryPending ||
+        !_isCurrentAttempt(_playbackGeneration, _playbackSourceIndex)) {
+      return null;
+    }
+
+    Future<void> apply(double? speed, {VoidCallback? onRejected}) async {
+      try {
+        await decoder.setTemporarySpeed(speed);
+      } on PlatformException catch (error) {
+        log.fine('Could not apply temporary playback speed (${error.code})');
+        onRejected?.call();
+      }
+    }
+
+    void end() {
+      if (!identical(_endSpeedBoost, end)) return;
+      _endSpeedBoost = null;
+      unawaited(apply(null));
+      onEnded?.call();
+    }
+
+    _endSpeedBoost = end;
+    unawaited(apply(2, onRejected: end));
+    return end;
+  }
+
   @override
   void setSpeed(double d) {
     super.setSpeed(d);
@@ -1342,11 +1341,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   double getAspectRatio() {
-    double width =
-        videoController?.videoPlayerController?.value.size?.width ?? 16;
-    double height =
-        videoController?.videoPlayerController?.value.size?.height ?? 9;
-    return width / height;
+    final size = videoController?.videoPlayerController?.value.size;
+    if (size == null || size.isEmpty) return 16 / 9;
+    final ratio = size.aspectRatio;
+    return ratio.isFinite && ratio > 0 ? ratio : 16 / 9;
   }
 
   @override
@@ -1369,6 +1367,7 @@ sealed class VideoPlayerState extends MediaPlayerState with _$VideoPlayerState {
       Duration? startAt,
       @Default("") String selectedNonDashTrack,
       @Default(Duration.zero) Duration? bufferPosition,
+      @Default(false) bool subtitleFailed,
       Video? video,
       DownloadedVideo? offlineVideo,
       bool? playNow,

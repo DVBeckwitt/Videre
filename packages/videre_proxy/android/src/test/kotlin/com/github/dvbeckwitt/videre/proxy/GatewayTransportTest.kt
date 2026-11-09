@@ -15,6 +15,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GatewayTransportTest {
+    private val onionHost = "nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion"
     private val key = "8c9502ae-b933-5fa1-a75d-c6d85c2ec021"
     private val marker = "v1.$key.${"https://instance.example".encodeUtf8().base64Url()}"
     private val context = GatewayContext.parse(marker)
@@ -31,6 +32,66 @@ class GatewayTransportTest {
         assertTrue(context.allows("https://instance.example/api/v1/videos/video".toHttpUrl()))
         assertFalse(context.allows("https://instance.example:8443/api/v1/videos/video".toHttpUrl()))
         assertFalse(context.allows("https://other.example/api/v1/videos/video".toHttpUrl()))
+    }
+
+    @Test fun `official onion context allows only its exact scheme host and port`() {
+        for (scheme in listOf("http", "https")) {
+            val origin = "$scheme://$onionHost"
+            val onion = GatewayContext.parse("v1.$key.${origin.encodeUtf8().base64Url()}")
+            assertTrue(onion.allows("$origin/api/v1/videos/video".toHttpUrl()))
+            for (target in listOf("https://invidious.nerdvpn.de/api/v1/videos/video",
+                "$scheme://other.onion/api/v1/videos/video", "$scheme://sub.$onionHost/api/v1/videos/video",
+                "$scheme://$onionHost:8443/api/v1/videos/video", "$scheme://user@$onionHost/api/v1/videos/video",
+                "${if (scheme == "http") "https" else "http"}://$onionHost/api/v1/videos/video")) {
+                assertFalse(target, onion.allows(target.toHttpUrl()))
+            }
+        }
+        for (origin in listOf("http://other.onion", "http://sub.$onionHost", "http://$onionHost.attacker.example",
+            "http://$onionHost:81", "http://user:secret@$onionHost", "http://$onionHost/path")) {
+            assertThrows(origin, IllegalArgumentException::class.java) {
+                GatewayContext.parse("v1.$key.${origin.encodeUtf8().base64Url()}")
+            }
+        }
+    }
+
+    @Test fun `onion token bootstrap keeps account scope and strips internal marker`() {
+        val origin = "http://$onionHost"
+        val onionMarker = "v1.$key.${origin.encodeUtf8().base64Url()}"
+        val cookies = FakeSessions()
+        GatewayCookieAccessRegistry.provider = cookies
+        val chain = Chain(Request.Builder().url("$origin/api/v1/token")
+            .header(GATEWAY_CONTEXT_HEADER, onionMarker)
+            .header("Authorization", "Bearer fixture-token").build())
+        GatewayTransportInterceptor().intercept(chain).close()
+        assertEquals("Bearer fixture-token", chain.sent!!.header("Authorization"))
+        assertNull(chain.sent!!.header(GATEWAY_CONTEXT_HEADER))
+        assertEquals(listOf(key), cookies.resolved)
+
+        cookies.resolved.clear()
+        val onion = GatewayContext.parse(onionMarker)
+        for (url in listOf("https://invidious.nerdvpn.de/api/v1/token", "https://$onionHost/api/v1/token",
+            "http://other.onion/api/v1/token")) {
+            val other = Chain(prepareGatewayRequest(Request.Builder().url(url).build(), onion))
+            GatewayTransportInterceptor().intercept(other).close()
+            assertNull(other.sent!!.header("Cookie"))
+            assertNull(other.sent!!.header(NERDVPN_KEY_HEADER))
+        }
+        assertTrue(cookies.resolved.isEmpty())
+    }
+
+    @Test fun `sign-in permits cleartext onion navigation only in that account through SOCKS`() {
+        val onionOrigin = "http://$onionHost"
+        val onion = GatewayContext.parse("v1.$key.${onionOrigin.encodeUtf8().base64Url()}")
+        val onionLogin = "$onionOrigin/login".toHttpUrl()
+        val externalHttps = "https://login.example/authorize".toHttpUrl()
+
+        assertFalse(context.canNavigateDuringSignIn(onionLogin, proxyEnabled = true))
+        assertFalse(onion.canNavigateDuringSignIn(onionLogin, proxyEnabled = false))
+        assertFalse(onion.canNavigateDuringSignIn("http://other.onion/login".toHttpUrl(), proxyEnabled = true))
+        assertFalse(onion.canNavigateDuringSignIn("http://user@$onionHost/login".toHttpUrl(), proxyEnabled = true))
+        assertTrue(onion.canNavigateDuringSignIn(onionLogin, proxyEnabled = true))
+        assertTrue(onion.canNavigateDuringSignIn(externalHttps, proxyEnabled = true))
+        assertTrue(context.canNavigateDuringSignIn(externalHttps, proxyEnabled = false))
     }
 
     @Test fun `marker never reaches wire and explicit Invidious cookie wins`() {

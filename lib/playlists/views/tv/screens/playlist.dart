@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:auto_route/auto_route.dart';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:clipious/app/views/tv/screens/tv_home.dart';
+import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/playlists/states/playlist.dart';
 import 'package:clipious/playlists/views/screens/playlist.dart';
 import 'package:clipious/router.dart';
@@ -55,6 +56,7 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                           Video video =
                               playlistState.playlist.videos[itemIndex];
                           return VideoThumbnailView(
+                              musicThumbnails: video.musicMetadata?.thumbnails,
                               images: video.deArrowThumbnailUrl == null
                                   ? video.videoThumbnails
                                   : null,
@@ -206,6 +208,14 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                                                       !element.filterHide)
                                                   .map((e) => TvVideoItem(
                                                       video: e,
+                                                      onSelect: e.musicMetadata ==
+                                                              null
+                                                          ? null
+                                                          : (context, video) =>
+                                                              MusicScreen
+                                                                  .playTracks(
+                                                                      context,
+                                                                      [video]),
                                                       autoFocus: false)),
                                               if (playlistState.loading)
                                                 ...repeatWidget(

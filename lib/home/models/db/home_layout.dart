@@ -104,9 +104,10 @@ enum HomeDataSource {
   }
 
   Widget build(BuildContext context, bool small) {
+    final compactHeight = small ? smallVideoListHeight(context) : null;
     return switch (this) {
       (HomeDataSource.trending) => SizedBox(
-          height: small ? smallVideoViewHeight : null,
+          height: compactHeight,
           child: VideoList(
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
@@ -114,7 +115,7 @@ enum HomeDataSource {
             paginatedVideoList: SingleEndpointList(service.getTrending),
           )),
       (HomeDataSource.subscription) => SizedBox(
-          height: small ? smallVideoViewHeight : null,
+          height: compactHeight,
           child: VideoList(
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
@@ -122,7 +123,7 @@ enum HomeDataSource {
             paginatedVideoList: SubscriptionVideoList(),
           )),
       (HomeDataSource.popular) => SizedBox(
-          height: small ? smallVideoViewHeight : null,
+          height: compactHeight,
           child: VideoList(
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
@@ -130,14 +131,14 @@ enum HomeDataSource {
             paginatedVideoList: SingleEndpointList(service.getPopular),
           )),
       (HomeDataSource.playlist) => SizedBox(
-          height: small ? smallVideoViewHeight : null,
+          height: compactHeight,
           child: PlaylistList(
             canDeleteVideos: true,
             small: small,
             paginatedList: SingleEndpointList(service.getUserPlaylists),
           )),
       (HomeDataSource.downloads) => SizedBox(
-          height: small ? smallVideoViewHeight : null,
+          height: compactHeight,
           child: BlocBuilder<DownloadManagerCubit, DownloadManagerState>(
               buildWhen: (previous, current) =>
                   previous.videos != current.videos,
@@ -169,7 +170,7 @@ enum HomeDataSource {
                 .toList(),
           )),
       (HomeDataSource.history) => SizedBox(
-          height: small ? smallVideoViewHeight : null,
+          height: compactHeight,
           child: small
               ? VideoList(
                   scrollDirection: small ? Axis.horizontal : Axis.vertical,

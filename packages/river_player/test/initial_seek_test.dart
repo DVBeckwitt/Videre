@@ -84,6 +84,32 @@ void main() {
   VideoPlayerPlatform.instance = platform;
   setUp(platform.reset);
 
+  test('changing videos discards a pending subtitle selection', () async {
+    final controller = BetterPlayerController(const BetterPlayerConfiguration(
+      handleLifecycle: false,
+      allowedScreenSleep: true,
+    ));
+    try {
+      final pending =
+          controller.setupSubtitleSource(BetterPlayerSubtitlesSource(
+        type: BetterPlayerSubtitlesSourceType.memory,
+        content: 'WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nOld video\n\n',
+      ));
+      await controller.setupDataSource(BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/new-video.mp4',
+        videoFormat: BetterPlayerVideoFormat.other,
+      ));
+      await pending;
+
+      expect(controller.betterPlayerSubtitlesSource?.type,
+          BetterPlayerSubtitlesSourceType.none);
+      expect(controller.subtitlesLines, isEmpty);
+    } finally {
+      controller.dispose();
+    }
+  });
+
   for (final autoPlay in [false, true]) {
     test('source setup awaits initial seek with autoPlay=$autoPlay', () async {
       final controller = BetterPlayerController(BetterPlayerConfiguration(

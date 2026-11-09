@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -44,6 +45,65 @@ void main() {
     ]) {
       expect(isProxyLoopback(host), isFalse, reason: host);
     }
+  });
+
+  test('official HTTP onion fails before connecting when SOCKS is disabled',
+      () async {
+    var connections = 0;
+    final client = HttpClient()
+      ..connectionFactory = (_, __, ___) {
+        connections++;
+        throw const SocketException('Unexpected connection in test.');
+      };
+    addTearDown(() => client.close(force: true));
+    configureSocksHttpClient(client, SocksProxyConfig());
+
+    await expectLater(
+        client.getUrl(Uri.parse('http://$nerdVpnOnionHost/api/v1/stats')),
+        throwsA(isA<SocketException>().having(
+            (error) => error.message, 'message', contains('Enable SOCKS5'))));
+    expect(connections, 0);
+  });
+
+  test('a local redirect cannot bypass the HTTP onion SOCKS requirement',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) {
+      request.response
+        ..statusCode = HttpStatus.found
+        ..headers.set(HttpHeaders.locationHeader,
+            'http://$nerdVpnOnionHost/api/v1/stats');
+      unawaited(request.response.close());
+    });
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    configureSocksHttpClient(client, SocksProxyConfig());
+    final request = await client
+        .getUrl(Uri.parse('http://127.0.0.1:${server.port}/redirect'));
+    await expectLater(
+        request.close(),
+        throwsA(isA<SocketException>().having(
+            (error) => error.message, 'message', contains('Enable SOCKS5'))));
+  });
+
+  test('official HTTP onion uses the client-specific SOCKS configuration',
+      () async {
+    final proxy = await _FakeSocks.start();
+    addTearDown(proxy.close);
+    final client = _client(proxy);
+    addTearDown(() => client.close(force: true));
+    final request =
+        await client.getUrl(Uri.parse('http://$nerdVpnOnionHost/api/v1/stats'));
+    expect(await utf8.decodeStream(await request.close()), 'proxied');
+    expect(await proxy.destination.future, (nerdVpnOnionHost, 80, 3));
+
+    configureSocksHttpClient(client, SocksProxyConfig());
+    await expectLater(
+        client.getUrl(Uri.parse('http://$nerdVpnOnionHost/api/v1/stats')),
+        throwsA(isA<SocketException>().having(
+            (error) => error.message, 'message', contains('Enable SOCKS5'))));
+    expect(proxy.connections, 1);
   });
 
   test('fragmented SOCKS negotiation sends destination hostname to proxy',
@@ -205,6 +265,36 @@ void main() {
         } else {
           await expectLater(request, throwsA(isA<HandshakeException>()));
         }
+      } finally {
+        client.close(force: true);
+        await proxy.close();
+      }
+    }
+  });
+
+  test('managed HTTPS origins reject invalid certificates despite an override',
+      () async {
+    const fixture =
+        'submodules/flutter/packages/flutter_tools/test/data/asset_test/tls_cert';
+    final context = SecurityContext()
+      ..useCertificateChain('$fixture/dummy-cert.pem')
+      ..usePrivateKey('$fixture/dummy-key.pem');
+    for (final host in ['invidious.nerdvpn.de', nerdVpnOnionHost]) {
+      final proxy = await _FakeSocks.start(tlsContext: context);
+      final client = HttpClient();
+      var overrideCalls = 0;
+      configureSocksHttpClient(
+        client,
+        SocksProxyConfig(enabled: true, port: proxy.server.port),
+        badCertificateCallback: (_, __, ___) {
+          overrideCalls++;
+          return true;
+        },
+      );
+      try {
+        await expectLater(
+            client.getUrl(Uri.https(host)), throwsA(isA<HandshakeException>()));
+        expect(overrideCalls, 0, reason: host);
       } finally {
         client.close(force: true);
         await proxy.close();

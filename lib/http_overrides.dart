@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'network/gateway_http_client.dart';
+import 'network/nerdvpn_origin.dart';
 import 'network/network_proxy.dart';
 import 'network/reloadable_http_client.dart';
 
@@ -20,9 +21,10 @@ class MyHttpOverrides extends HttpOverrides {
             : 'Videre/${packageInfo?.version ?? '0.0.0'} (${packageInfo?.packageName ?? ''})'
         ..badCertificateCallback =
             (X509Certificate cert, String host, int port) {
-          // Managed NerdVPN credentials require the public instance's valid
-          // certificate, including when a self-hosted server allows an override.
-          if (host.toLowerCase() == 'invidious.nerdvpn.de' && port == 443) {
+          // Managed credentials require a valid certificate on both public
+          // and onion HTTPS origins, regardless of other servers' overrides.
+          if (isNerdVpnUrl(
+              Uri(scheme: 'https', host: host, port: port).toString())) {
             return false;
           }
           // if true, it will allow all certs, if false it will throw error on a bad cert

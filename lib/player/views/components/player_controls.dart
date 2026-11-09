@@ -273,6 +273,7 @@ class PlayerControls extends StatelessWidget {
                     value.state.playerRepeatMode == PlayerRepeat.noRepeat);
 
             var cubit = context.read<PlayerControlsCubit>();
+            final videoPlayer = mediaPlayerCubit;
             final indicatorStyle = Theme.of(context).textTheme.bodySmall;
             final indicatorLineHeight = MediaQuery.textScalerOf(context)
                     .scale(indicatorStyle?.fontSize ?? 12) *
@@ -303,8 +304,14 @@ class PlayerControls extends StatelessWidget {
               listener: (BuildContext context, state) {
                 cubit.onStreamEvent(state.mediaEvent);
               },
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
+              child: _PlayerSurface(
+                speedBoostPlayer: !isMini &&
+                        !isPip &&
+                        isPlaying &&
+                        !playerState.errored &&
+                        videoPlayer is VideoPlayerCubit
+                    ? videoPlayer
+                    : null,
                 onVerticalDragEnd:
                     playerState.fullScreenState == FullScreenState.fullScreen ||
                             playerState.displayControls
@@ -320,9 +327,17 @@ class PlayerControls extends StatelessWidget {
                             playerState.displayControls
                         ? null
                         : player.videoDragStarted,
-                child: AspectRatio(
-                  aspectRatio: 16 / 9,
+                child: SafeArea(
+                  top:
+                      playerState.fullScreenState == FullScreenState.fullScreen,
+                  bottom:
+                      playerState.fullScreenState == FullScreenState.fullScreen,
+                  left:
+                      playerState.fullScreenState == FullScreenState.fullScreen,
+                  right:
+                      playerState.fullScreenState == FullScreenState.fullScreen,
                   child: Stack(
+                    fit: StackFit.expand,
                     alignment: Alignment.topCenter,
                     children: [
                       if (!isMini && playerState.showSponsorBlocked)
@@ -920,6 +935,106 @@ class PlayerControls extends StatelessWidget {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _PlayerSurface extends StatefulWidget {
+  const _PlayerSurface({
+    required this.speedBoostPlayer,
+    required this.onVerticalDragStart,
+    required this.onVerticalDragUpdate,
+    required this.onVerticalDragEnd,
+    required this.child,
+  });
+
+  final VideoPlayerCubit? speedBoostPlayer;
+  final GestureDragStartCallback? onVerticalDragStart;
+  final GestureDragUpdateCallback? onVerticalDragUpdate;
+  final GestureDragEndCallback? onVerticalDragEnd;
+  final Widget child;
+
+  @override
+  State<_PlayerSurface> createState() => _PlayerSurfaceState();
+}
+
+class _PlayerSurfaceState extends State<_PlayerSurface> {
+  VoidCallback? _restoreSpeed;
+
+  void _startSpeedBoost(LongPressStartDetails details) {
+    final width = context.size!.width;
+    final x = details.localPosition.dx;
+    if (x >= width / 3 && x <= width * 2 / 3) return;
+
+    final restore = widget.speedBoostPlayer?.startSpeedBoost(onEnded: () {
+      if (mounted && _restoreSpeed != null) {
+        setState(() => _restoreSpeed = null);
+      }
+    });
+    if (restore != null) setState(() => _restoreSpeed = restore);
+  }
+
+  void _restorePlaybackSpeed() {
+    final restore = _restoreSpeed;
+    _restoreSpeed = null;
+    restore?.call();
+  }
+
+  void _endSpeedBoost() {
+    if (_restoreSpeed != null) setState(_restorePlaybackSpeed);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlayerSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.speedBoostPlayer != oldWidget.speedBoostPlayer) {
+      _restorePlaybackSpeed();
+    }
+  }
+
+  @override
+  void dispose() {
+    _restorePlaybackSpeed();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Keep the recognizer above the overlays so auto-hide cannot end the hold.
+    final canBoost = widget.speedBoostPlayer != null;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart: widget.onVerticalDragStart,
+      onVerticalDragUpdate: widget.onVerticalDragUpdate,
+      onVerticalDragEnd: widget.onVerticalDragEnd,
+      onLongPressStart: canBoost ? _startSpeedBoost : null,
+      onLongPressEnd: canBoost ? (_) => _endSpeedBoost() : null,
+      onLongPressCancel: canBoost ? _endSpeedBoost : null,
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          widget.child,
+          if (_restoreSpeed != null)
+            const Positioned.fill(
+              child: IgnorePointer(
+                child: Align(
+                  alignment: Alignment(0, -0.55),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.all(Radius.circular(20)),
+                    ),
+                    child: Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      child: Text('2×', style: TextStyle(color: Colors.white)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

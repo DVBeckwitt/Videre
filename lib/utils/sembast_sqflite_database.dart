@@ -515,6 +515,19 @@ class SembastSqfDb extends IDbClient {
           if (entry.key == 'settings' && _deviceSettings.contains(key)) {
             continue;
           }
+          if (!replace &&
+              entry.key == 'settings' &&
+              key == 'music-library-v1') {
+            final existing = await settingsStore.record(key).get(txn);
+            if (existing != null) {
+              final merged = UserBackup.mergeMusicLibrary(
+                  existing['value'] as String, row['value'] as String);
+              await settingsStore
+                  .record(key)
+                  .put(txn, SettingsValue(key, merged).toJson());
+              continue;
+            }
+          }
           if (!replace && await entry.value.record(key).exists(txn)) continue;
           await entry.value.record(key).put(txn, row);
         }

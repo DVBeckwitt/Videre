@@ -7,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_swipe_action_cell/core/cell.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 
 import '../../../globals.dart';
@@ -41,13 +42,10 @@ class _VideoQueueState extends State<VideoQueue> {
     var controller = context.read<PlayerCubit>();
     var state = controller.state;
     final offline = video is DownloadedVideo ? video : null;
-    final isPlaying = video.videoId ==
-        (offline == null
-            ? state.currentlyPlaying?.videoId
-            : state.offlineCurrentlyPlaying?.videoId);
+    final isPlaying = playbackQueueId(video) == state.currentQueueId;
 
     return SwipeActionCell(
-      key: ValueKey('$index-${video.videoId}'),
+      key: ValueKey(playbackQueueId(video)),
       trailingActions: isPlaying
           ? []
           : [
@@ -55,7 +53,8 @@ class _VideoQueueState extends State<VideoQueue> {
                   performsFirstActionWithFullSwipe: true,
                   onTap: (handler) async {
                     await handler(true);
-                    return controller.removeVideoFromQueue(video.videoId);
+                    return controller
+                        .removeVideoFromQueue(playbackQueueId(video));
                   },
                   color: Colors.red.shade400,
                   icon: const Icon(
@@ -86,10 +85,7 @@ class _VideoQueueState extends State<VideoQueue> {
     return hasVideos
         ? BlocConsumer<PlayerCubit, PlayerState>(
             listenWhen: (previous, current) =>
-                (previous.currentlyPlaying?.videoId ??
-                    previous.offlineCurrentlyPlaying?.videoId) !=
-                (current.currentlyPlaying?.videoId ??
-                    current.offlineCurrentlyPlaying?.videoId),
+                previous.currentQueueId != current.currentQueueId,
             listener: (context, state) {
               List<IdedVideo> videos = (state.videos.isNotEmpty
                   ? state.videos
@@ -97,9 +93,7 @@ class _VideoQueueState extends State<VideoQueue> {
               if (!_scrollController.hasClients || videos.isEmpty) return;
 
               final index = videos.indexWhere((element) =>
-                  element.videoId ==
-                  (state.currentlyPlaying?.videoId ??
-                      state.offlineCurrentlyPlaying?.videoId));
+                  playbackQueueId(element) == state.currentQueueId);
               if (index < 0) return;
               final offset =
                   ((index - 1) * (compactVideoHeight + innerHorizontalPadding))

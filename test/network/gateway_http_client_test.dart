@@ -458,262 +458,92 @@ void main() {
     expect(raw.requests, hasLength(2));
   });
 
-  group('NerdVPN access', () {
-    final nerdOrigin = Uri.parse('https://invidious.nerdvpn.de');
-    final nerdContext = GatewayRequestContext.forAccount(
-        'person-a', 'account-a', nerdOrigin.toString())!;
-    const oldKey = 'nvpn_0123456789abcdefghijklmnopqrstuv';
-    const newKey = 'nvpn_123456789abcdefghijklmnopqrstuv0';
+  for (final originUrl in [
+    'https://invidious.nerdvpn.de',
+    'http://$nerdVpnOnionHost',
+    'https://$nerdVpnOnionHost',
+  ]) {
+    group('NerdVPN access $originUrl', () {
+      final nerdOrigin = Uri.parse(originUrl);
+      final nerdContext = GatewayRequestContext.forAccount(
+          'person-a', 'account-a', nerdOrigin.toString())!;
+      const oldKey = 'nvpn_0123456789abcdefghijklmnopqrstuv';
+      const newKey = 'nvpn_123456789abcdefghijklmnopqrstuv0';
 
-    Future<HttpClientRequest> nerdRequest(GatewayHttpClient client,
-        {String method = 'GET', String path = '/api/v1/videos/example'}) async {
-      final pending = await client.openUrl(method, nerdOrigin.resolve(path));
-      pending.headers.set(gatewayContextHeader, nerdContext.encoded);
-      return pending;
-    }
-
-    _Response failure(String error, int status, {String? retryAfter}) =>
-        _Response(status,
-            headers: {
-              'content-type': 'application/json',
-              if (retryAfter != null) 'retry-after': retryAfter,
-            },
-            body: jsonEncode({'error': error}));
-
-    test('recovers a key once and sends a fresh header on its read retry',
-        () async {
-      for (final secondFailure in [false, true]) {
-        var currentKey = oldKey;
-        var currentRevision = 5;
-        final retries = <bool>[];
-        final raw = _Client([
-          failure('invalid_credentials', 401),
-          secondFailure
-              ? failure('invalid_credentials', 401)
-              : _Response(200, body: 'accepted'),
-        ]);
-        final client = GatewayHttpClient(raw,
-            resolve: (_, __) async => GatewayResolvedSession(
-                enabled: false,
-                needsSignIn: false,
-                apiKey: currentKey,
-                apiKeyRevision: currentRevision,
-                apiKeyIntent: 3),
-            ingest: ingest,
-            recover: (encoded,
-                {required error,
-                required statusCode,
-                retryAfter,
-                failedKey,
-                revision,
-                failedIntent,
-                retry = true}) async {
-              expect(encoded, nerdContext.encoded);
-              expect(error, 'invalid_credentials');
-              expect(statusCode, 401);
-              expect(failedKey, currentKey);
-              expect(revision, currentRevision);
-              expect(failedIntent, 3);
-              retries.add(retry);
-              currentKey = newKey;
-              currentRevision = 6;
-              return NerdVpnAccessStatus(retry ? 'ready' : 'signInRequired',
-                  retryAllowed: retry);
-            });
-        final response = await (await nerdRequest(client)).close();
-        expect(await response.transform(utf8.decoder).join(),
-            secondFailure ? '{"error":"invalid_credentials"}' : 'accepted');
-        expect(raw.requests, hasLength(2));
-        expect(raw.requests.first.headers.value(nerdVpnKeyHeader), oldKey);
-        expect(raw.requests.last.headers.value(nerdVpnKeyHeader), newKey);
-        expect(raw.requests.last.uri, raw.requests.first.uri);
-        expect(response.redirects, isEmpty);
-        expect(retries, secondFailure ? [true, false] : [true]);
+      Future<HttpClientRequest> nerdRequest(GatewayHttpClient client,
+          {String method = 'GET',
+          String path = '/api/v1/videos/example'}) async {
+        final pending = await client.openUrl(method, nerdOrigin.resolve(path));
+        pending.headers.set(gatewayContextHeader, nerdContext.encoded);
+        return pending;
       }
-    });
 
-    test('recovers failed writes without replaying their bodies', () async {
-      final raw = _Client([failure('credentials_required', 401)]);
-      var recoveries = 0;
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async => const GatewayResolvedSession(
-              enabled: false, needsSignIn: false, apiKeyRevision: 1),
-          ingest: ingest,
-          recover: (_,
-              {required error,
-              required statusCode,
-              retryAfter,
-              failedKey,
-              revision,
-              failedIntent,
-              retry = true}) async {
-            recoveries++;
-            return const NerdVpnAccessStatus('ready', retryAllowed: true);
-          });
-      final pending = await nerdRequest(client, method: 'POST');
-      pending.write('{"videoId":"example"}');
-      final response = await pending.close();
-      expect(response.statusCode, 401);
-      expect(await response.transform(utf8.decoder).join(),
-          '{"error":"credentials_required"}');
-      expect(recoveries, 1);
-      expect(raw.requests, hasLength(1));
-      expect(utf8.decode(raw.requests.single.body), '{"videoId":"example"}');
-    });
+      _Response failure(String error, int status, {String? retryAfter}) =>
+          _Response(status,
+              headers: {
+                'content-type': 'application/json',
+                if (retryAfter != null) 'retry-after': retryAfter,
+              },
+              body: jsonEncode({'error': error}));
 
-    test('an older request is not replayed after a different sign-in',
-        () async {
-      final raw = _Client([failure('invalid_credentials', 401)]);
-      var resolveCalls = 0;
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async {
-            resolveCalls++;
-            return const GatewayResolvedSession(
-                enabled: false,
-                needsSignIn: false,
-                apiKey: oldKey,
-                apiKeyRevision: 4,
-                apiKeyIntent: 2);
-          },
-          ingest: ingest,
-          recover: (_,
-              {required error,
-              required statusCode,
-              retryAfter,
-              failedKey,
-              revision,
-              failedIntent,
-              retry = true}) async {
-            expect(failedIntent, 2);
-            expect(revision, 4);
-            // Native has a ready key for a newer sign-in, but rejects this
-            // request's previous intent so its bearer token is never replayed.
-            return const NerdVpnAccessStatus('ready', retryAllowed: false);
-          });
-      final pending = await nerdRequest(client);
-      pending.headers.set('Authorization', 'Bearer previous-account');
-      final response = await pending.close();
-      expect(response.statusCode, 401);
-      expect(await response.transform(utf8.decoder).join(),
-          '{"error":"invalid_credentials"}');
-      expect(raw.requests, hasLength(1));
-      expect(resolveCalls, 1);
-    });
+      test('recovers a key once and sends a fresh header on its read retry',
+          () async {
+        for (final secondFailure in [false, true]) {
+          var currentKey = oldKey;
+          var currentRevision = 5;
+          final retries = <bool>[];
+          final raw = _Client([
+            failure('invalid_credentials', 401),
+            secondFailure
+                ? failure('invalid_credentials', 401)
+                : _Response(200, body: 'accepted'),
+          ]);
+          final client = GatewayHttpClient(raw,
+              resolve: (_, __) async => GatewayResolvedSession(
+                  enabled: false,
+                  needsSignIn: false,
+                  apiKey: currentKey,
+                  apiKeyRevision: currentRevision,
+                  apiKeyIntent: 3),
+              ingest: ingest,
+              recover: (encoded,
+                  {required error,
+                  required statusCode,
+                  retryAfter,
+                  failedKey,
+                  revision,
+                  failedIntent,
+                  retry = true}) async {
+                expect(encoded, nerdContext.encoded);
+                expect(error, 'invalid_credentials');
+                expect(statusCode, 401);
+                expect(failedKey, currentKey);
+                expect(revision, currentRevision);
+                expect(failedIntent, 3);
+                retries.add(retry);
+                currentKey = newKey;
+                currentRevision = 6;
+                return NerdVpnAccessStatus(retry ? 'ready' : 'signInRequired',
+                    retryAllowed: retry);
+              });
+          final response = await (await nerdRequest(client)).close();
+          expect(await response.transform(utf8.decoder).join(),
+              secondFailure ? '{"error":"invalid_credentials"}' : 'accepted');
+          expect(raw.requests, hasLength(2));
+          expect(raw.requests.first.headers.value(nerdVpnKeyHeader), oldKey);
+          expect(raw.requests.last.headers.value(nerdVpnKeyHeader), newKey);
+          expect(raw.requests.last.uri, raw.requests.first.uri);
+          expect(response.redirects, isEmpty);
+          expect(retries, secondFailure ? [true, false] : [true]);
+        }
+      });
 
-    test('keeps the managed key on its approved origin across redirects',
-        () async {
-      final raw = _Client([
-        _Response(302, headers: {'location': '/media'}),
-        _Response(302, headers: {'location': 'https://media.example/video'}),
-        _Response(200),
-      ]);
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async => const GatewayResolvedSession(
-              enabled: false, needsSignIn: false, apiKey: newKey),
-          ingest: ingest);
-      await (await (await nerdRequest(client)).close()).drain<void>();
-      expect(raw.requests.take(2).map((r) => r.headers.value(nerdVpnKeyHeader)),
-          [newKey, newKey]);
-      expect(raw.requests.last.headers.values, isEmpty);
-    });
-
-    test('a sign-in completed after recovery prevents the pending retry',
-        () async {
-      final raw = _Client([
-        failure('invalid_credentials', 401),
-        _Response(200),
-      ]);
-      var resolveCalls = 0;
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async {
-            final firstRequest = resolveCalls++ == 0;
-            return GatewayResolvedSession(
-                enabled: false,
-                needsSignIn: false,
-                apiKey: firstRequest ? oldKey : newKey,
-                apiKeyRevision: firstRequest ? 4 : 6,
-                apiKeyIntent: firstRequest ? 2 : 3);
-          },
-          ingest: ingest,
-          recover: (_,
-              {required error,
-              required statusCode,
-              retryAfter,
-              failedKey,
-              revision,
-              failedIntent,
-              retry = true}) async {
-            expect(failedIntent, 2);
-            return const NerdVpnAccessStatus('ready',
-                retryAllowed: true, apiKeyIntent: 2);
-          });
-      final pending = await nerdRequest(client);
-      pending.headers.set('Authorization', 'Bearer previous-account');
-      await expectLater(
-          pending.close(),
-          throwsA(isA<NerdVpnAccessRequired>()
-              .having((e) => e.state, 'state', 'superseded')));
-      expect(raw.requests, hasLength(2));
-      expect(raw.requests.first.sent, isTrue);
-      expect(raw.requests.last.sent, isFalse);
-      expect(raw.requests.last.headers.value(nerdVpnKeyHeader), isNull);
-    });
-
-    test('pauses blocked access before sending and permits a legacy manual key',
-        () async {
-      for (final state in ['waiting', 'disabled', 'denied', 'unavailable']) {
-        final raw = _Client([_Response(200)]);
-        final client = GatewayHttpClient(raw,
-            resolve: (_, __) async => GatewayResolvedSession(
-                enabled: false, needsSignIn: false, accessError: state),
-            ingest: ingest);
-        final pending = await nerdRequest(client);
-        await expectLater(
-            pending.close(),
-            throwsA(isA<NerdVpnAccessRequired>()
-                .having((e) => e.state, 'state', state)));
-        expect(raw.requests.single.sent, isFalse);
-      }
-      final raw = _Client([_Response(200)]);
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async => const GatewayResolvedSession(
-              enabled: false,
-              needsSignIn: false,
-              accessError: 'missing',
-              apiKeyRevision: 0),
-          ingest: ingest);
-      final pending = await nerdRequest(client);
-      pending.headers.set(nerdVpnKeyHeader, oldKey);
-      await (await pending.close()).drain<void>();
-      expect(raw.requests.single.headers.value(nerdVpnKeyHeader), oldKey);
-    });
-
-    test('a legacy header cannot revive access after logout', () async {
-      final raw = _Client([_Response(200)]);
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async => const GatewayResolvedSession(
-              enabled: false,
-              needsSignIn: false,
-              accessError: 'missing',
-              apiKeyRevision: 4),
-          ingest: ingest);
-      final pending = await nerdRequest(client);
-      pending.headers.set(nerdVpnKeyHeader, oldKey);
-      await expectLater(
-          pending.close(),
-          throwsA(isA<NerdVpnAccessRequired>()
-              .having((e) => e.state, 'state', 'missing')));
-      expect(raw.requests.single.sent, isFalse);
-    });
-
-    test('records gateway cooldowns and returns the original response',
-        () async {
-      for (final entry in [(429, 'rate_limited'), (503, 'unavailable')]) {
-        final raw = _Client([failure(entry.$2, entry.$1, retryAfter: '12')]);
-        var observed = false;
+      test('recovers failed writes without replaying their bodies', () async {
+        final raw = _Client([failure('credentials_required', 401)]);
+        var recoveries = 0;
         final client = GatewayHttpClient(raw,
             resolve: (_, __) async => const GatewayResolvedSession(
-                enabled: false, needsSignIn: false, apiKey: oldKey),
+                enabled: false, needsSignIn: false, apiKeyRevision: 1),
             ingest: ingest,
             recover: (_,
                 {required error,
@@ -723,31 +553,265 @@ void main() {
                 revision,
                 failedIntent,
                 retry = true}) async {
-              observed = true;
-              expect(error, entry.$2);
-              expect(statusCode, entry.$1);
-              expect(retryAfter, '12');
-              return const NerdVpnAccessStatus('unavailable');
+              recoveries++;
+              return const NerdVpnAccessStatus('ready', retryAllowed: true);
             });
-        final response = await (await nerdRequest(client)).close();
+        final pending = await nerdRequest(client, method: 'POST');
+        pending.write('{"videoId":"example"}');
+        final response = await pending.close();
+        expect(response.statusCode, 401);
         expect(await response.transform(utf8.decoder).join(),
-            jsonEncode({'error': entry.$2}));
-        expect(response.statusCode, entry.$1);
-        expect(observed, isTrue);
+            '{"error":"credentials_required"}');
+        expect(recoveries, 1);
         expect(raw.requests, hasLength(1));
-      }
-    });
+        expect(utf8.decode(raw.requests.single.body), '{"videoId":"example"}');
+      });
 
-    test('preserves malformed and oversized JSON errors without recovery',
-        () async {
-      for (final body in ['{broken', 'x' * 70000]) {
+      test('an older request is not replayed after a different sign-in',
+          () async {
+        final raw = _Client([failure('invalid_credentials', 401)]);
+        var resolveCalls = 0;
+        final client = GatewayHttpClient(raw,
+            resolve: (_, __) async {
+              resolveCalls++;
+              return const GatewayResolvedSession(
+                  enabled: false,
+                  needsSignIn: false,
+                  apiKey: oldKey,
+                  apiKeyRevision: 4,
+                  apiKeyIntent: 2);
+            },
+            ingest: ingest,
+            recover: (_,
+                {required error,
+                required statusCode,
+                retryAfter,
+                failedKey,
+                revision,
+                failedIntent,
+                retry = true}) async {
+              expect(failedIntent, 2);
+              expect(revision, 4);
+              // Native has a ready key for a newer sign-in, but rejects this
+              // request's previous intent so its bearer token is never replayed.
+              return const NerdVpnAccessStatus('ready', retryAllowed: false);
+            });
+        final pending = await nerdRequest(client);
+        pending.headers.set('Authorization', 'Bearer previous-account');
+        final response = await pending.close();
+        expect(response.statusCode, 401);
+        expect(await response.transform(utf8.decoder).join(),
+            '{"error":"invalid_credentials"}');
+        expect(raw.requests, hasLength(1));
+        expect(resolveCalls, 1);
+      });
+
+      test('keeps the managed key on its approved origin across redirects',
+          () async {
         final raw = _Client([
-          _Response(401,
-              headers: {'content-type': 'application/json'}, body: body),
+          _Response(302, headers: {'location': '/media'}),
+          _Response(302, headers: {'location': 'https://media.example/video'}),
+          _Response(200),
         ]);
         final client = GatewayHttpClient(raw,
             resolve: (_, __) async => const GatewayResolvedSession(
-                enabled: false, needsSignIn: false, apiKey: oldKey),
+                enabled: false, needsSignIn: false, apiKey: newKey),
+            ingest: ingest);
+        await (await (await nerdRequest(client)).close()).drain<void>();
+        expect(
+            raw.requests.take(2).map((r) => r.headers.value(nerdVpnKeyHeader)),
+            [newKey, newKey]);
+        expect(raw.requests.last.headers.values, isEmpty);
+      });
+
+      test('does not share credentials with another managed origin', () async {
+        for (final destination in [
+          'https://invidious.nerdvpn.de',
+          'http://$nerdVpnOnionHost',
+          'https://$nerdVpnOnionHost',
+        ].where((value) => value != originUrl)) {
+          final raw = _Client([
+            _Response(302, headers: {'location': '$destination/media'}),
+            _Response(200),
+          ]);
+          var lookups = 0;
+          final client = GatewayHttpClient(raw, resolve: (_, url) async {
+            expect(url.origin, nerdOrigin.origin);
+            lookups++;
+            return const GatewayResolvedSession(
+                enabled: true,
+                needsSignIn: false,
+                cookies: 'session=synthetic',
+                apiKey: newKey);
+          }, ingest: ingest);
+          final pending = await nerdRequest(client);
+          pending.headers.set('Authorization', 'Bearer synthetic');
+          await (await pending.close()).drain<void>();
+          expect(lookups, 1);
+          expect(raw.requests.first.headers.value(nerdVpnKeyHeader), newKey);
+          expect(raw.requests.last.headers.values, isEmpty);
+        }
+      });
+
+      test('a sign-in completed after recovery prevents the pending retry',
+          () async {
+        final raw = _Client([
+          failure('invalid_credentials', 401),
+          _Response(200),
+        ]);
+        var resolveCalls = 0;
+        final client = GatewayHttpClient(raw,
+            resolve: (_, __) async {
+              final firstRequest = resolveCalls++ == 0;
+              return GatewayResolvedSession(
+                  enabled: false,
+                  needsSignIn: false,
+                  apiKey: firstRequest ? oldKey : newKey,
+                  apiKeyRevision: firstRequest ? 4 : 6,
+                  apiKeyIntent: firstRequest ? 2 : 3);
+            },
+            ingest: ingest,
+            recover: (_,
+                {required error,
+                required statusCode,
+                retryAfter,
+                failedKey,
+                revision,
+                failedIntent,
+                retry = true}) async {
+              expect(failedIntent, 2);
+              return const NerdVpnAccessStatus('ready',
+                  retryAllowed: true, apiKeyIntent: 2);
+            });
+        final pending = await nerdRequest(client);
+        pending.headers.set('Authorization', 'Bearer previous-account');
+        await expectLater(
+            pending.close(),
+            throwsA(isA<NerdVpnAccessRequired>()
+                .having((e) => e.state, 'state', 'superseded')));
+        expect(raw.requests, hasLength(2));
+        expect(raw.requests.first.sent, isTrue);
+        expect(raw.requests.last.sent, isFalse);
+        expect(raw.requests.last.headers.value(nerdVpnKeyHeader), isNull);
+      });
+
+      test(
+          'pauses blocked access before sending and permits a legacy manual key',
+          () async {
+        for (final state in [
+          'waiting',
+          'disabled',
+          'denied',
+          'unavailable',
+          'proxyRequired'
+        ]) {
+          final raw = _Client([_Response(200)]);
+          final client = GatewayHttpClient(raw,
+              resolve: (_, __) async => GatewayResolvedSession(
+                  enabled: false, needsSignIn: false, accessError: state),
+              ingest: ingest);
+          final pending = await nerdRequest(client);
+          await expectLater(
+              pending.close(),
+              throwsA(isA<NerdVpnAccessRequired>()
+                  .having((e) => e.state, 'state', state)));
+          expect(raw.requests.single.sent, isFalse);
+        }
+        final raw = _Client([_Response(200)]);
+        final client = GatewayHttpClient(raw,
+            resolve: (_, __) async => const GatewayResolvedSession(
+                enabled: false,
+                needsSignIn: false,
+                accessError: 'missing',
+                apiKeyRevision: 0),
+            ingest: ingest);
+        final pending = await nerdRequest(client);
+        pending.headers.set(nerdVpnKeyHeader, oldKey);
+        await (await pending.close()).drain<void>();
+        expect(raw.requests.single.headers.value(nerdVpnKeyHeader), oldKey);
+      });
+
+      test('a legacy header cannot revive access after logout', () async {
+        final raw = _Client([_Response(200)]);
+        final client = GatewayHttpClient(raw,
+            resolve: (_, __) async => const GatewayResolvedSession(
+                enabled: false,
+                needsSignIn: false,
+                accessError: 'missing',
+                apiKeyRevision: 4),
+            ingest: ingest);
+        final pending = await nerdRequest(client);
+        pending.headers.set(nerdVpnKeyHeader, oldKey);
+        await expectLater(
+            pending.close(),
+            throwsA(isA<NerdVpnAccessRequired>()
+                .having((e) => e.state, 'state', 'missing')));
+        expect(raw.requests.single.sent, isFalse);
+      });
+
+      test('records gateway cooldowns and returns the original response',
+          () async {
+        for (final entry in [(429, 'rate_limited'), (503, 'unavailable')]) {
+          final raw = _Client([failure(entry.$2, entry.$1, retryAfter: '12')]);
+          var observed = false;
+          final client = GatewayHttpClient(raw,
+              resolve: (_, __) async => const GatewayResolvedSession(
+                  enabled: false, needsSignIn: false, apiKey: oldKey),
+              ingest: ingest,
+              recover: (_,
+                  {required error,
+                  required statusCode,
+                  retryAfter,
+                  failedKey,
+                  revision,
+                  failedIntent,
+                  retry = true}) async {
+                observed = true;
+                expect(error, entry.$2);
+                expect(statusCode, entry.$1);
+                expect(retryAfter, '12');
+                return const NerdVpnAccessStatus('unavailable');
+              });
+          final response = await (await nerdRequest(client)).close();
+          expect(await response.transform(utf8.decoder).join(),
+              jsonEncode({'error': entry.$2}));
+          expect(response.statusCode, entry.$1);
+          expect(observed, isTrue);
+          expect(raw.requests, hasLength(1));
+        }
+      });
+
+      test('preserves malformed and oversized JSON errors without recovery',
+          () async {
+        for (final body in ['{broken', 'x' * 70000]) {
+          final raw = _Client([
+            _Response(401,
+                headers: {'content-type': 'application/json'}, body: body),
+          ]);
+          final client = GatewayHttpClient(raw,
+              resolve: (_, __) async => const GatewayResolvedSession(
+                  enabled: false, needsSignIn: false, apiKey: oldKey),
+              ingest: ingest,
+              recover: (_,
+                      {required error,
+                      required statusCode,
+                      retryAfter,
+                      failedKey,
+                      revision,
+                      failedIntent,
+                      retry = true}) =>
+                  throw StateError('Unexpected recovery'));
+          final response = await (await nerdRequest(client)).close();
+          expect(await response.transform(utf8.decoder).join(), body);
+        }
+      });
+
+      test('bootstrap endpoint errors do not trigger recursive recovery',
+          () async {
+        final raw = _Client([failure('rate_limited', 429)]);
+        final client = GatewayHttpClient(raw,
+            resolve: (_, __) async => const GatewayResolvedSession(
+                enabled: false, needsSignIn: false),
             ingest: ingest,
             recover: (_,
                     {required error,
@@ -757,34 +821,14 @@ void main() {
                     revision,
                     failedIntent,
                     retry = true}) =>
-                throw StateError('Unexpected recovery'));
-        final response = await (await nerdRequest(client)).close();
-        expect(await response.transform(utf8.decoder).join(), body);
-      }
+                throw StateError('Bootstrap must not recover itself'));
+        final response = await (await nerdRequest(client,
+                method: 'POST', path: '/api/v1/token'))
+            .close();
+        expect(response.statusCode, 429);
+        expect(await response.transform(utf8.decoder).join(),
+            '{"error":"rate_limited"}');
+      });
     });
-
-    test('bootstrap endpoint errors do not trigger recursive recovery',
-        () async {
-      final raw = _Client([failure('rate_limited', 429)]);
-      final client = GatewayHttpClient(raw,
-          resolve: (_, __) async =>
-              const GatewayResolvedSession(enabled: false, needsSignIn: false),
-          ingest: ingest,
-          recover: (_,
-                  {required error,
-                  required statusCode,
-                  retryAfter,
-                  failedKey,
-                  revision,
-                  failedIntent,
-                  retry = true}) =>
-              throw StateError('Bootstrap must not recover itself'));
-      final response = await (await nerdRequest(client,
-              method: 'POST', path: '/api/v1/token'))
-          .close();
-      expect(response.statusCode, 429);
-      expect(await response.transform(utf8.decoder).join(),
-          '{"error":"rate_limited"}');
-    });
-  });
+  }
 }

@@ -68,23 +68,30 @@ class GatewayAuth {
           'Sign in to your gateway, then authorize this Invidious account.'}) async {
     final context = _context(server);
     final intent = _beginIntent(context.key);
-    int? accessRevision;
+    final proxy = NetworkProxy.instance;
+    var proxyChanged = false;
+    bool isCurrent() =>
+        _intents[context.key] == intent && !proxyChanged && !proxy.isChanging;
+    NerdVpnAccessStatus? access;
     await _revocations[context.key];
-    if (_intents[context.key] != intent) return null;
-    Future<void> close() => _browser.invokeMethod<void>('close');
-    NetworkProxy.instance.addBeforeApply(close);
+    if (!isCurrent()) return null;
+    Future<void> close() {
+      proxyChanged = true;
+      return _browser.invokeMethod<void>('close', {'context': context.encoded});
+    }
+
+    proxy.addBeforeApply(close);
     try {
       if (NerdVpnAccess.supports(server)) {
-        final access = await NerdVpnAccess.instance.status(server);
-        accessRevision = access.revision;
+        access = await NerdVpnAccess.instance.status(server);
+        if (!isCurrent()) return null;
         if (access.retryAt?.isAfter(DateTime.now()) ?? false) {
           throw const GatewaySignInFailed(
               'NerdVPN has asked Videre to wait. Try signing in again later.');
         }
-        if (_intents[context.key] != intent) return null;
       }
       await _browser.invokeMethod<void>('close', {'context': context.encoded});
-      if (_intents[context.key] != intent) return null;
+      if (!isCurrent()) return null;
       final token = await _browser.invokeMethod<String>('signIn', {
         'context': context.encoded,
         'serverUrl': server.url,
@@ -92,11 +99,15 @@ class GatewayAuth {
         'cancel': cancel,
         'help': help,
       });
-      return _intents[context.key] == intent ? token : null;
+      return isCurrent() ? token : null;
     } on PlatformException catch (error) {
-      if (_intents[context.key] != intent) return null;
+      if (!isCurrent()) return null;
       if (error.code == 'GATEWAY_UNSUPPORTED') {
         throw const GatewayUnsupported();
+      }
+      if (error.code == 'GATEWAY_ONION_PROXY_REQUIRED') {
+        throw const GatewaySignInFailed(
+            'Enable SOCKS5/Orbot in Network proxy to use this onion server.');
       }
       if (error.code == 'GATEWAY_TOKEN_EXPIRED') {
         throw const GatewaySignInFailed(
@@ -112,7 +123,8 @@ class GatewayAuth {
               error: code == 429 ? 'rate_limited' : 'unavailable',
               statusCode: code,
               retryAfter: details['retryAfter'] as String?,
-              revision: accessRevision,
+              failedIntent: access?.apiKeyIntent,
+              revision: access?.revision,
               retry: false);
         }
         throw const GatewaySignInFailed(
@@ -126,7 +138,7 @@ class GatewayAuth {
     } on MissingPluginException {
       throw const GatewayUnsupported();
     } finally {
-      NetworkProxy.instance.removeBeforeApply(close);
+      proxy.removeBeforeApply(close);
     }
   }
 

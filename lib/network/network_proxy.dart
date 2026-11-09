@@ -35,6 +35,7 @@ class NetworkProxy {
   Object? _blocked;
 
   SocksProxyConfig get config => _config;
+  bool get isChanging => _changing;
 
   void addBeforeApply(Future<void> Function() listener) =>
       _beforeApply.add(listener);
@@ -148,9 +149,12 @@ class NetworkProxy {
     try {
       configureSocksHttpClient(client, config,
           badCertificateCallback: _allowCertificate);
-      final request = await GatewayHttpClient(client)
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 20));
+      // A different exit may be blocked even when the saved route works.
+      // Use the account to test the route without applying that response to it.
+      final request =
+          await GatewayHttpClient(client, updateSessionFromResponse: false)
+              .getUrl(uri)
+              .timeout(const Duration(seconds: 20));
       // This check must validate the selected instance itself. Automatic
       // redirects would forward arbitrary instance access headers off-origin.
       request.followRedirects = false;

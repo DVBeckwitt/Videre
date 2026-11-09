@@ -81,6 +81,7 @@ import 'home/views/screens/search_history_tab.dart';
 import 'home/views/screens/subscription_tab.dart';
 import 'home/views/screens/trending_tab.dart';
 import 'main.dart';
+import 'music/views/screens/music.dart';
 
 part 'router.gr.dart';
 
@@ -129,6 +130,7 @@ class AppRouter extends RootStackRouter {
             AutoRoute(page: TvGridRoute.page),
             AutoRoute(page: TvVideoRoute.page),
             AutoRoute(page: TvSearchRoute.page),
+            AutoRoute(page: MusicRoute.page),
             AutoRoute(page: TvPlayerRoute.page),
             AutoRoute(page: TvPlaylistGridRoute.page),
             AutoRoute(page: TvPlaylistRoute.page),
@@ -190,6 +192,7 @@ class AppRouter extends RootStackRouter {
                     ]),
                 AutoRoute(page: DownloadManagerRoute.page),
                 AutoRoute(page: VideoQueueRoute.page),
+                AutoRoute(page: MusicRoute.page),
                 AutoRoute(page: NavigationSectionRoute.page),
                 AutoRoute(page: PlaylistLibraryRoute.page),
                 AutoRoute(page: SearchRoute.page, path: searchPath, children: [

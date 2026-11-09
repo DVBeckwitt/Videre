@@ -19,6 +19,8 @@ void main() {
   test('Google avatar hosts use the instance image proxy', () {
     for (final url in [
       'https://yt3.googleusercontent.com/a%2Fb=s176-c-k-c0x00ffffff-no-rj',
+      'https://lh3.googleusercontent.com/a%2Fb=s176-c-k-c0x00ffffff-no-rj',
+      '//LH3.GOOGLEUSERCONTENT.COM/a%2Fb=s176-c-k-c0x00ffffff-no-rj',
       'https://yt3.ggpht.com/a%2Fb=s176-c-k-c0x00ffffff-no-rj',
       '//yt3.ggpht.com/a%2Fb=s176-c-k-c0x00ffffff-no-rj',
       'http://YT3.GOOGLEUSERCONTENT.COM/a%2Fb=s176-c-k-c0x00ffffff-no-rj',
@@ -81,6 +83,7 @@ void main() {
     for (final url in [
       'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=id',
       'https://yt3.ggpht.com.evil.example/avatar',
+      'https://lh3.googleusercontent.com.evil.example/avatar',
       'https://evil.example/yt3.googleusercontent.com/avatar',
       'https://i.ytimg.com.evil.example/vi/id/default.jpg',
       'https://other-instance.example/ggpht/avatar',
@@ -99,16 +102,22 @@ void main() {
       url: 'https://instance.example',
       customHeaders: {'Authorization': 'Basic test'},
     );
-    final proxied = invidiousImageUrl(
-        'https://yt3.googleusercontent.com/avatar', authenticated);
-    expect(authenticated.headersForUrl(proxied), {
-      ...authenticated.customHeaders,
-      gatewayContextHeader: GatewayRequestContext.forAccount(
-              authenticated.profileId,
-              authenticated.accountId,
-              authenticated.url)!
-          .encoded,
-    });
+    for (final host in [
+      'yt3.googleusercontent.com',
+      'lh3.googleusercontent.com'
+    ]) {
+      final direct = 'https://$host/avatar';
+      final proxied = invidiousImageUrl(direct, authenticated);
+      expect(authenticated.headersForUrl(direct), isNull);
+      expect(authenticated.headersForUrl(proxied), {
+        ...authenticated.customHeaders,
+        gatewayContextHeader: GatewayRequestContext.forAccount(
+                authenticated.profileId,
+                authenticated.accountId,
+                authenticated.url)!
+            .encoded,
+      });
+    }
     final external =
         invidiousImageUrl('https://cdn.example/image.jpg', authenticated);
     expect(authenticated.headersForUrl(external), isNull);

@@ -11,6 +11,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NerdVpnAccessManagerTest {
+    private val onionHost = "nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion"
     private val origin = "https://invidious.nerdvpn.de".toHttpUrl()
     private val account = GatewayContext("0247ed8b-e84e-5b9e-9ab6-aa534f64c031", origin)
     private val secondAccount = GatewayContext("0247ed8b-e84e-5b9e-9ab6-aa534f64c032", origin)
@@ -42,6 +43,63 @@ class NerdVpnAccessManagerTest {
         assertThrows(IllegalArgumentException::class.java) {
             manager.setKey(account.copy(origin = "https://other.example".toHttpUrl()), originalKey)
         }
+    }
+
+    @Test fun `onion manual keys stay isolated from other origins and accounts`() {
+        for (scheme in listOf("http", "https")) {
+            val onionOrigin = "$scheme://$onionHost".toHttpUrl()
+            val onionAccount = GatewayContext("0247ed8b-e84e-5b9e-9ab6-aa534f64c033", onionOrigin)
+            val otherOnionAccount = onionAccount.copy(key = "0247ed8b-e84e-5b9e-9ab6-aa534f64c034")
+            val manager = manager(MemoryStore())
+            manager.setKey(account, originalKey)
+            manager.setKey(onionAccount, replacementKey)
+            val onionVideo = onionOrigin.resolve("/api/v1/videos/fixture")!!
+            assertEquals(replacementKey, manager.resolve(onionAccount, onionVideo).apiKey)
+            assertEquals("ready", manager.check(onionAccount)["state"])
+            assertEquals("missing", manager.resolve(otherOnionAccount, onionVideo).error)
+            assertNull(manager.resolve(onionAccount, video).apiKey)
+            assertNull(manager.resolve(account, onionVideo).apiKey)
+            for (url in listOf("$scheme://sub.$onionHost/api/v1/stats", "$scheme://$onionHost:8443/api/v1/stats",
+                "$scheme://user@$onionHost/api/v1/stats", "$scheme://$onionHost.attacker.example/api/v1/stats",
+                "${if (scheme == "http") "https" else "http"}://$onionHost/api/v1/stats")) {
+                assertNull(url, manager.resolve(onionAccount, url.toHttpUrl()).apiKey)
+            }
+            manager.clear(onionAccount)
+            assertEquals("missing", manager.resolve(onionAccount, onionVideo).error)
+            assertEquals(originalKey, manager.resolve(account, video).apiKey)
+        }
+    }
+
+    @Test fun `onion managed access bootstraps and recovers using its own origin`() {
+        val onionOrigin = "http://$onionHost".toHttpUrl()
+        val onionAccount = GatewayContext("0247ed8b-e84e-5b9e-9ab6-aa534f64c033", onionOrigin)
+        val store = MemoryStore()
+        var fetches = 0
+        val manager = manager(store) { context, suppliedToken ->
+            assertEquals(onionOrigin, context.origin)
+            assertEquals(token, suppliedToken)
+            fetches++
+            NerdVpnKeyResult(200, key = if (fetches == 1) originalKey else replacementKey)
+        }
+        val intent = manager.beginAuth(onionAccount)["intent"] as Long
+        assertEquals("ready", manager.authorize(onionAccount, token, intent)["state"])
+        val onionVideo = onionOrigin.resolve("/api/v1/videos/fixture")!!
+        val first = manager.resolve(onionAccount, onionVideo)
+        assertEquals(originalKey, first.apiKey)
+        for (path in listOf("/api/v1/token", "/api/v1/auth/api_key")) {
+            val bootstrap = manager.resolve(onionAccount, onionOrigin.resolve(path)!!)
+            assertNull(bootstrap.apiKey)
+            assertNull(bootstrap.error)
+        }
+        assertEquals(true, manager.recover(onionAccount, "invalid_credentials", 401, null,
+            first.apiKey, first.revision, failedIntent = first.intent)["retryAllowed"])
+        assertEquals(replacementKey, manager.resolve(onionAccount, onionVideo).apiKey)
+        assertEquals(token, store.read(onionAccount)?.token)
+        assertEquals(2, fetches)
+        manager.recover(onionAccount, "access_denied", 403, null,
+            replacementKey, store.read(onionAccount)?.revision, failedIntent = first.intent)
+        assertEquals("denied", manager.resolve(onionAccount, onionVideo).error)
+        assertEquals(2, fetches)
     }
 
     @Test fun `bootstrap endpoints remain available while API access is waiting`() {
@@ -228,6 +286,83 @@ class NerdVpnAccessManagerTest {
         val manager = manager(store) { _, _ -> throw IOException("Fixture connection failure") }
         assertEquals("unavailable", manager.authorize(account, token)["state"])
         assertEquals(token, store.read(account)?.token)
+        assertEquals(initialTime + 30_000, store.read(account)?.retryAt)
+    }
+
+    @Test fun `onion authorization reports missing proxy and retries immediately after configuration`() {
+        val onionAccount = account.copy(origin = "http://$onionHost".toHttpUrl())
+        val onionVideo = onionAccount.origin.resolve("/api/v1/videos/fixture")!!
+        val store = MemoryStore()
+        var proxyEnabled = false
+        var fetches = 0
+        val manager = manager(store) { context, suppliedToken ->
+            assertEquals(onionAccount, context)
+            assertEquals(token, suppliedToken)
+            fetches++
+            if (!proxyEnabled) throw NerdVpnAccessRequired("proxyRequired")
+            NerdVpnKeyResult(200, key = originalKey)
+        }
+        val blocked = manager.authorize(onionAccount, token)
+        assertEquals("proxyRequired", blocked["state"])
+        assertNull(blocked["retryAt"])
+        assertEquals(token, store.read(onionAccount)?.token)
+        assertNull(store.read(onionAccount)?.key)
+        assertEquals("proxyRequired", manager.resolve(onionAccount, onionVideo).error)
+        proxyEnabled = true
+        assertEquals(originalKey, manager.resolve(onionAccount, onionVideo).apiKey)
+        assertEquals(3, fetches)
+        assertEquals("ready", manager.status(onionAccount)["state"])
+    }
+
+    @Test fun `onion check and recovery retain credentials while proxy configuration is missing`() {
+        for (recover in listOf(false, true)) {
+            val onionAccount = account.copy(origin = "http://$onionHost".toHttpUrl())
+            val onionVideo = onionAccount.origin.resolve("/api/v1/videos/fixture")!!
+            val store = MemoryStore()
+            store.write(onionAccount, NerdVpnRecord(token = token, key = originalKey,
+                state = "ready", revision = 7, credentialIntent = 3))
+            var proxyEnabled = false
+            val manager = manager(store) { _, suppliedToken ->
+                assertEquals(token, suppliedToken)
+                if (!proxyEnabled) throw NerdVpnAccessRequired("proxyRequired")
+                NerdVpnKeyResult(200, key = replacementKey)
+            }
+            val blocked = if (recover) manager.recover(onionAccount, "invalid_credentials", 401,
+                null, originalKey, 7, failedIntent = 3) else manager.check(onionAccount)
+            assertEquals("proxyRequired", blocked["state"])
+            assertNull(blocked["retryAt"])
+            if (recover) assertEquals(false, blocked["retryAllowed"])
+            assertEquals(token, store.read(onionAccount)?.token)
+            assertEquals(originalKey, store.read(onionAccount)?.key)
+            assertEquals(3L, store.read(onionAccount)?.credentialIntent)
+            proxyEnabled = true
+            assertEquals(replacementKey, manager.resolve(onionAccount, onionVideo).apiKey)
+            assertEquals("ready", manager.status(onionAccount)["state"])
+        }
+    }
+
+    @Test fun `automatic onion key retrieval exposes proxy configuration failure without cooldown`() {
+        for (state in listOf("waiting", "unavailable")) {
+            val onionAccount = account.copy(origin = "http://$onionHost".toHttpUrl())
+            val onionVideo = onionAccount.origin.resolve("/api/v1/videos/fixture")!!
+            val store = MemoryStore()
+            store.write(onionAccount, NerdVpnRecord(token = token, state = state,
+                availableAt = initialTime, retryAt = initialTime, revision = 5))
+            var proxyEnabled = false
+            val manager = manager(store) { _, _ ->
+                if (!proxyEnabled) throw NerdVpnAccessRequired("proxyRequired")
+                NerdVpnKeyResult(200, key = replacementKey)
+            }
+            val blocked = manager.resolve(onionAccount, onionVideo)
+            assertEquals("proxyRequired", blocked.error)
+            assertNull(blocked.apiKey)
+            assertNull(store.read(onionAccount)?.retryAt)
+            assertNull(store.read(onionAccount)?.availableAt)
+            assertEquals(token, store.read(onionAccount)?.token)
+            proxyEnabled = true
+            assertEquals("ready", manager.check(onionAccount)["state"])
+            assertEquals(replacementKey, manager.resolve(onionAccount, onionVideo).apiKey)
+        }
     }
 
     @Test fun `authentication intents reject callbacks superseded by logout or newer sign-in`() {

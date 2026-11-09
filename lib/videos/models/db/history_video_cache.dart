@@ -1,3 +1,4 @@
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:json_annotation/json_annotation.dart';
 
@@ -6,12 +7,14 @@ import '../../../utils/models/image_object.dart';
 
 part 'history_video_cache.g.dart';
 
-@JsonSerializable()
+@JsonSerializable(explicitToJson: true)
 class HistoryVideoCache {
   String title;
   String? author;
   String? authorId;
   int? lengthSeconds;
+  // Preserve catalog artwork routing and reopen listened songs as Music.
+  MusicMetadata? musicMetadata;
 
   String videoId;
   DateTime created = DateTime.now();
@@ -19,7 +22,7 @@ class HistoryVideoCache {
   String thumbnail;
 
   HistoryVideoCache(this.videoId, this.title, this.author, this.thumbnail,
-      {this.authorId, this.lengthSeconds});
+      {this.authorId, this.lengthSeconds, this.musicMetadata});
 
   factory HistoryVideoCache.fromJson(Map<String, dynamic> json) =>
       _$HistoryVideoCacheFromJson(json);
@@ -33,6 +36,7 @@ class HistoryVideoCache {
         author: author,
         authorId: authorId,
         lengthSeconds: lengthSeconds,
+        musicMetadata: musicMetadata,
         videoThumbnails: [ImageObject("high", thumbnail, 1280, 720)]);
   }
 
@@ -44,7 +48,9 @@ class HistoryVideoCache {
       final vid = await service.getVideo(e, serverOverride: account);
       cachedVideo = HistoryVideoCache(vid.videoId, vid.title ?? '', vid.author,
           ImageObject.getBestThumbnail(vid.videoThumbnails)?.url ?? '',
-          authorId: vid.authorId, lengthSeconds: vid.lengthSeconds);
+          authorId: vid.authorId,
+          lengthSeconds: vid.lengthSeconds,
+          musicMetadata: vid.musicMetadata);
       await owner.upsertHistoryVideo(cachedVideo);
     }
     return cachedVideo;

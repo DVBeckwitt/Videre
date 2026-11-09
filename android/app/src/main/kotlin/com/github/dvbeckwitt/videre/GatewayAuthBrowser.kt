@@ -96,6 +96,9 @@ class GatewayAuthBrowser(private val activity: Activity) {
             server.query != null || server.fragment != null || policy == null) {
             result.error("GATEWAY_INVALID_ARGUMENT", null, null); return
         }
+        if (!server.isHttps && !policy.enabled) {
+            result.error("GATEWAY_ONION_PROXY_REQUIRED", null, null); return
+        }
         if (!GatewaySessions.supported()) {
             result.error("GATEWAY_UNSUPPORTED", null, null); return
         }
@@ -225,7 +228,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
             return true
         }
         val target = uri.toString().toHttpUrlOrNull()
-        if (target == null || !target.isHttps || target.username.isNotEmpty() || target.password.isNotEmpty()) return true
+        if (target == null || !request.context.canNavigateDuringSignIn(target, request.policy.enabled)) return true
         val origin = target.newBuilder().encodedPath("/").query(null).fragment(null).build().toString()
         if (origin in request.allowed) return false
         if (approval != null) return true
@@ -247,7 +250,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
         val pkce = request.pkce ?: return
         try {
             // Keep the old session intact until the new code is exchanged. The
-            // pending profile supplies cookies only to this exact HTTPS URL.
+            // pending profile supplies cookies only to this exact origin.
             val profileName = GatewaySessions.signInProfileName(request.context, request.revision)
             val manager = ProfileStore.getInstance().getOrCreateProfile(profileName).cookieManager
             val url = request.context.origin.newBuilder().encodedPath("/api/v1/token").build()

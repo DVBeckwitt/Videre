@@ -13,6 +13,7 @@ import 'package:logging/logging.dart';
 
 import '../../settings/states/settings.dart';
 import '../../videos/models/adaptive_format.dart';
+import '../media_source.dart';
 import '../models/media_event.dart';
 import '../models/playback_pitch.dart';
 
@@ -162,6 +163,14 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
               playing: state.playing);
         }
         player.setEvent(const MediaEvent(state: MediaState.ready));
+        if (_loadingGeneration == null) {
+          // Audio focus changes can pause/resume the native decoder without a
+          // UI command. Keep transport controls and notifications in sync.
+          player.setEvent(MediaEvent(
+              state: MediaState.playing,
+              type:
+                  state.playing ? MediaEventType.play : MediaEventType.pause));
+        }
         break;
       case ProcessingState.completed:
         player.setEvent(const MediaEvent(state: MediaState.completed));
@@ -184,7 +193,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   void onPositionChanged(Duration position) {
-    if (!_ownsParentPlayback || _awaitingBackendMetadata) return;
+    if (!_ownsParentPlayback ||
+        _awaitingBackendMetadata ||
+        _loadingGeneration != null) return;
     final current = audioPlayer;
     final video = state.video;
     if (current != null &&
@@ -299,6 +310,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           }
           if (!active()) return false;
           if (next == null) throw failure;
+          next = next.preservingMusicMetadataFrom(video);
           video = next;
           player.reportBackendVideoLoaded(next);
           emit(state.copyWith(
@@ -325,24 +337,30 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
             }
             final server = playback?.server ?? selectedServer;
             player.setRequestedBackend(video!.videoId, playback);
-            if (service.useProxy()) {
-              // Proxy audio uses a supported combined stream.
-              final streams = (video.formatStreams ?? [])
-                  .where((stream) => !stream.isLegacyHd720);
-              if (streams.isNotEmpty) {
-                final stream = streams.last;
-                source = AudioSource.uri(Uri.parse(stream.url),
-                    headers: server.headersForUrl(stream.url));
-              }
-            } else {
-              final AdaptiveFormat? audio = (video.adaptiveFormats ?? [])
-                  .where((element) => element.type.contains("audio"))
-                  .sortByReversed((e) => int.tryParse(e.bitrate ?? "0") ?? 0)
-                  .firstOrNull;
-              if (audio != null) {
-                source = AudioSource.uri(Uri.parse(audio.url),
-                    headers: server.headersForUrl(audio.url));
-              }
+            final proxy = service.useProxy();
+            final combined = (video.formatStreams ?? [])
+                .where((stream) => !stream.isLegacyHd720)
+                .toList()
+                .reversed
+                .map((stream) => stream.url);
+            final adaptive = (video.adaptiveFormats ?? <AdaptiveFormat>[])
+                .where((format) => format.type.startsWith('audio/'))
+                .sortByReversed(
+                    (format) => int.tryParse(format.bitrate ?? '') ?? 0)
+                .map((format) => format.url);
+            // Keep the combined proxy source preference, but audio-only
+            // responses must use the same instance route as video playback.
+            final candidates =
+                proxy ? [...combined, ...adaptive] : [...adaptive, ...combined];
+            for (final candidate in candidates) {
+              final parsed = parseMediaUrl(candidate);
+              if (parsed == null) continue;
+              final url = validatedMediaUrl(
+                  proxyMediaUrl(parsed, server, proxy), server);
+              if (url == null) continue;
+              source = AudioSource.uri(Uri.parse(url),
+                  headers: mediaHeaders(server, url));
+              break;
             }
           }
           if (source == null) {
@@ -350,6 +368,15 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           }
           await current.setAudioSource(source, initialPosition: startAt);
           if (!active()) return false;
+          // Source initialization may briefly report zero before its initial
+          // seek. Publish the admitted position before any play/rate event:
+          // MediaSession extrapolates progress from those events.
+          final position = current.position;
+          emit(state.copyWith(audioPosition: position));
+          player.setEvent(MediaEvent<Duration>(
+              state: MediaState.ready,
+              type: MediaEventType.progress,
+              value: position));
           // A speed or pause selection made during recovery wins over the
           // values that were active when the request began.
           await current.setSpeed(_playbackSpeed);
@@ -442,7 +469,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   @override
   void switchToOfflineVideo(DownloadedVideo v) {
     emit(state.copyWith(video: null, offlineVideo: v));
-    playVideo(true);
+    playVideo(true, startAt: player.state.startAt);
   }
 
   @override

@@ -18,6 +18,7 @@ import 'package:clipious/utils/states/item_list.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/states/add_to_playlist.dart';
 import 'package:clipious/videos/states/history.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -87,6 +88,22 @@ void main() {
     expect(video.title, 'Already watched');
     expect(video.author, 'A channel');
     expect(video.videoThumbnails.single.url, 'https://example.com/image');
+  });
+
+  test('saved music retains catalog metadata and omits expiring playback URLs',
+      () async {
+    const music =
+        MusicMetadata(title: 'Song', artist: 'Artist', album: 'Album');
+    const track = Video(
+        videoId: 'song',
+        title: 'Song',
+        musicMetadata: music,
+        dashUrl: 'https://expired');
+    final id = (await library.createPlayList('Music', 'local'))!;
+    await library.addVideoToPlaylist(id, track.videoId, video: track);
+    final restored = (await library.getUserPlaylist(id)).videos.single;
+    expect(restored.musicMetadata!.toJson(), music.toJson());
+    expect(restored.dashUrl, isNull);
   });
 
   test('delayed Watch Later metadata saves only to its original person',

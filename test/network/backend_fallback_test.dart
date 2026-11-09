@@ -12,6 +12,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -191,6 +192,19 @@ void main() {
     expect(choices, hasLength(3));
     expect((await db.getCurrentlySelectedServer()).customHeaders,
         instance.customHeaders);
+  });
+
+  test('backend recovery retains music metadata from the catalog', () async {
+    respond((_) async => ok());
+    const music =
+        MusicMetadata(title: 'Song', artist: 'Artist', album: 'Album');
+    final video =
+        (await api.getVideo('test-video')).copyWith(musicMetadata: music);
+    final recovered = await api.retryVideoBackend(video, isCurrent: () => true);
+    expect(recovered!.musicMetadata, music);
+    expect(recovered.title, 'Song');
+    expect(recovered.author, 'Artist');
+    expect(recovered.backendPlayback!.retryIndex, 1);
   });
 
   test('a server change during failed metadata stops retries', () async {

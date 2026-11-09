@@ -6,6 +6,7 @@ import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/utils.dart';
 
 import '../../models/video.dart';
+import '../../states/video.dart';
 import '../components/info.dart';
 
 @RoutePage()
@@ -19,6 +20,10 @@ class VideoInfoTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final currentDislikes = context.select((VideoCubit cubit) =>
+        cubit.state.video?.videoId == video?.videoId
+            ? cubit.state.dislikes
+            : dislikes);
     return video == null
         ? const SizedBox.shrink()
         : MinimizeOnSwipeDown(
@@ -30,7 +35,7 @@ class VideoInfoTab extends StatelessWidget {
             },
             child: VideoInfo(
               video: video!,
-              dislikes: dislikes,
+              dislikes: currentDislikes,
               titleAndChannelInfo: titleAndChannelInfo,
             ),
           );

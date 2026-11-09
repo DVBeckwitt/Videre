@@ -1,7 +1,9 @@
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:json_annotation/json_annotation.dart';
 
 import '../../settings/models/db/settings.dart';
 
+@JsonEnum(valueField: 'segmentName')
 enum SponsorSegmentType {
   sponsor('sponsor'),
   selfpromo('selfpromo'),
@@ -17,9 +19,10 @@ enum SponsorSegmentType {
   const SponsorSegmentType(this.segmentName);
   String settingsName() => '$sponsorBlockPrefix$name';
 
-  // Skip sponsors by default; leave the other categories up to the user.
+  // Skip sponsors and non-music sections unless the user has opted out.
   bool isEnabled(String? savedValue) => savedValue == null
-      ? this == SponsorSegmentType.sponsor
+      ? this == SponsorSegmentType.sponsor ||
+          this == SponsorSegmentType.musicOffTopic
       : savedValue == 'true';
 
   static String getLabel(SponsorSegmentType type, AppLocalizations locals) {

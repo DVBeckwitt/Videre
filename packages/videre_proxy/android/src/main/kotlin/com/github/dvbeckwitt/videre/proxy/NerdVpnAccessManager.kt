@@ -9,10 +9,14 @@ import java.util.concurrent.ConcurrentHashMap
 import okhttp3.HttpUrl
 
 const val NERDVPN_KEY_HEADER = "X-Invidious-Token"
+const val NERDVPN_ONION_HOST = "nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion"
 
-fun isNerdVpnOrigin(url: HttpUrl): Boolean = url.isHttps &&
-    url.host == "invidious.nerdvpn.de" && url.port == 443 &&
-    url.username.isEmpty() && url.password.isEmpty()
+fun isNerdVpnOrigin(url: HttpUrl): Boolean = url.username.isEmpty() && url.password.isEmpty() &&
+    when (url.host) {
+        "invidious.nerdvpn.de" -> url.isHttps && url.port == 443
+        NERDVPN_ONION_HOST -> (url.isHttps && url.port == 443) || (url.scheme == "http" && url.port == 80)
+        else -> false
+    }
 
 internal fun isNerdVpnBootstrap(url: HttpUrl): Boolean =
     url.encodedPath in setOf("/api/v1/token", "/api/v1/auth/api_key")
@@ -149,7 +153,9 @@ internal class NerdVpnAccessManager(
                 record = record.copy(key = manualKey, state = "ready", revision = record.revision + 1)
                 store.write(context, record)
             }
-            if (record.state == "unavailable" && (record.retryAt ?: 0) <= now()) {
+            if (record.state == "proxyRequired") {
+                record = requestKey(context, record)
+            } else if (record.state == "unavailable" && (record.retryAt ?: 0) <= now()) {
                 record = if (record.key != null) record.copy(state = "ready", retryAt = null)
                     else requestKey(context, record)
                 store.write(context, record)
@@ -204,9 +210,14 @@ internal class NerdVpnAccessManager(
         val token = current.token
         val record = if (token == null) current.copy(state = "signInRequired", revision = current.revision + 1)
         else {
-            val response = try { fetch(context, token) } catch (_: IOException) { NerdVpnKeyResult(0) }
+            val response = try { fetch(context, token) } catch (error: IOException) {
+                NerdVpnKeyResult(0, error = if (error is NerdVpnAccessRequired && error.state == "proxyRequired")
+                    error.state else null)
+            }
             val next = current.copy(revision = current.revision + 1, availableAt = null, retryAt = null)
             when {
+                // Local configuration can be fixed immediately; keep credentials and avoid a server cooldown.
+                response.statusCode == 0 && response.error == "proxyRequired" -> next.copy(state = "proxyRequired")
                 response.statusCode == 200 && response.key != null && validNerdVpnKey(response.key) ->
                     next.copy(key = response.key, state = "ready")
                 response.statusCode == 403 && response.error == "not_yet_eligible" && response.availableAt != null ->

@@ -81,6 +81,7 @@ class BetterPlayerController {
   List<BetterPlayerSubtitlesSource> get betterPlayerSubtitlesSourceList =>
       _betterPlayerSubtitlesSourceList;
   BetterPlayerSubtitlesSource? _betterPlayerSubtitlesSource;
+  int _subtitleLoadGeneration = 0;
 
   ///Currently used subtitles source.
   BetterPlayerSubtitlesSource? get betterPlayerSubtitlesSource =>
@@ -235,6 +236,11 @@ class BetterPlayerController {
 
   ///Setup new data source in Better Player.
   Future setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+    ++_subtitleLoadGeneration;
+    _betterPlayerSubtitlesSource = null;
+    subtitlesLines.clear();
+    _asmsSegmentsLoaded.clear();
+    _asmsSegmentsLoading = false;
     postEvent(BetterPlayerEvent(BetterPlayerEventType.setupDataSource,
         parameters: <String, dynamic>{
           _dataSourceParameter: betterPlayerDataSource,
@@ -266,13 +272,21 @@ class BetterPlayerController {
           .addAll(betterPlayerDataSource.subtitles!);
     }
 
-    if (_isDataSourceAsms(betterPlayerDataSource)) {
-      _setupAsmsDataSource(betterPlayerDataSource).then((dynamic value) {
-        if (identical(_betterPlayerDataSource, betterPlayerDataSource)) {
-          _setupSubtitles();
+    final isAdaptive = _isDataSourceAsms(betterPlayerDataSource);
+    final waitForEmbeddedSubtitles =
+        isAdaptive && betterPlayerDataSource.useAsmsSubtitles == true;
+    if (isAdaptive) {
+      final generation = _subtitleLoadGeneration;
+      unawaited(_setupAsmsDataSource(betterPlayerDataSource).then<void>((_) {
+        if (waitForEmbeddedSubtitles &&
+            !_disposed &&
+            identical(_betterPlayerDataSource, betterPlayerDataSource)) {
+          // Keep a track chosen while the manifest was loading.
+          _setupSubtitles(selectDefault: generation == _subtitleLoadGeneration);
         }
-      });
-    } else {
+      }));
+    }
+    if (!waitForEmbeddedSubtitles) {
       _setupSubtitles();
     }
 
@@ -282,10 +296,11 @@ class BetterPlayerController {
   }
 
   ///Configure subtitles based on subtitles source.
-  void _setupSubtitles() {
+  void _setupSubtitles({bool selectDefault = true}) {
     _betterPlayerSubtitlesSourceList.add(
       BetterPlayerSubtitlesSource(type: BetterPlayerSubtitlesSourceType.none),
     );
+    if (!selectDefault) return;
     final defaultSubtitle = _betterPlayerSubtitlesSourceList
         .firstWhereOrNull((element) => element.selectedByDefault == true);
 
@@ -313,7 +328,7 @@ class BetterPlayerController {
       final response = manifest != null
           ? await BetterPlayerDashUtils.parse(data, source.url)
           : await BetterPlayerAsmsUtils.parse(data, source.url);
-      if (!identical(_betterPlayerDataSource, source)) return;
+      if (_disposed || !identical(_betterPlayerDataSource, source)) return;
 
       /// Load tracks
       if (_betterPlayerDataSource?.useAsmsTracks == true) {
@@ -355,22 +370,37 @@ class BetterPlayerController {
   ///will load with just in time policy.
   Future<void> setupSubtitleSource(BetterPlayerSubtitlesSource subtitlesSource,
       {bool sourceInitialize = false}) async {
+    if (_disposed) return;
+    final generation = ++_subtitleLoadGeneration;
+    _asmsSegmentsLoading = false;
+    final subtitlesParsed = <BetterPlayerSubtitle>[];
+    try {
+      if (subtitlesSource.type != BetterPlayerSubtitlesSourceType.none &&
+          subtitlesSource.asmsIsSegmented != true) {
+        subtitlesParsed.addAll(
+            await BetterPlayerSubtitlesFactory.parseSubtitles(subtitlesSource));
+        if (subtitlesParsed.isEmpty) {
+          throw const FormatException('The subtitle track contains no cues.');
+        }
+      }
+    } catch (error) {
+      if (!_disposed && generation == _subtitleLoadGeneration) {
+        _postEvent(BetterPlayerEvent(BetterPlayerEventType.subtitleLoadFailed,
+            parameters: {'source': subtitlesSource, 'exception': error}));
+      }
+      return;
+    }
+    if (_disposed || generation != _subtitleLoadGeneration) return;
+
     _betterPlayerSubtitlesSource = subtitlesSource;
-    subtitlesLines.clear();
+    subtitlesLines
+      ..clear()
+      ..addAll(subtitlesParsed);
     _asmsSegmentsLoaded.clear();
     _asmsSegmentsLoading = false;
 
-    if (subtitlesSource.type != BetterPlayerSubtitlesSourceType.none) {
-      if (subtitlesSource.asmsIsSegmented == true) {
-        return;
-      }
-      final subtitlesParsed =
-          await BetterPlayerSubtitlesFactory.parseSubtitles(subtitlesSource);
-      subtitlesLines.addAll(subtitlesParsed);
-    }
-
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.changedSubtitles));
-    if (!_disposed && !sourceInitialize) {
+    if (!sourceInitialize) {
       _postControllerEvent(BetterPlayerControllerEvent.changeSubtitles);
     }
   }
@@ -383,10 +413,9 @@ class BetterPlayerController {
   ///Segments are also cached, so same segment won't load twice. Only one
   ///pack of segments can be load at given time.
   Future _loadAsmsSubtitlesSegments(Duration position) async {
+    if (_asmsSegmentsLoading) return;
+    final generation = _subtitleLoadGeneration;
     try {
-      if (_asmsSegmentsLoading) {
-        return;
-      }
       _asmsSegmentsLoading = true;
       final BetterPlayerSubtitlesSource? source = _betterPlayerSubtitlesSource;
       final Duration loadDurationEnd = Duration(
@@ -414,14 +443,19 @@ class BetterPlayerController {
         ///Additional check if current source of subtitles is same as source
         ///used to start loading subtitles. It can be different when user
         ///changes subtitles and there was already pending load.
-        if (source == _betterPlayerSubtitlesSource) {
+        if (!_disposed &&
+            generation == _subtitleLoadGeneration &&
+            source == _betterPlayerSubtitlesSource) {
           subtitlesLines.addAll(subtitlesParsed);
           _asmsSegmentsLoaded.addAll(segmentsToLoad);
         }
       }
-      _asmsSegmentsLoading = false;
     } catch (exception) {
       BetterPlayerUtils.log("Load ASMS subtitle segments failed: $exception");
+    } finally {
+      if (generation == _subtitleLoadGeneration) {
+        _asmsSegmentsLoading = false;
+      }
     }
   }
 

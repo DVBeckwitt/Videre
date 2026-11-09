@@ -16,6 +16,7 @@ enum BetterPlayerEventType {
   setSpeed,
   setPitch,
   changedSubtitles,
+  subtitleLoadFailed,
   changedTrack,
   changedPlayerVisibility,
   changedResolution,

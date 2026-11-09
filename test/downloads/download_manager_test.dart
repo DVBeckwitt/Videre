@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
@@ -21,14 +22,25 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/sponsor_segment.dart';
+import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/states/video.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 class _Player extends Fake implements PlayerCubit {}
 
-class _Settings extends Fake implements SettingsCubit {}
+class _Settings extends Fake implements SettingsCubit {
+  @override
+  SettingsState get state => SettingsState.init();
+
+  @override
+  Stream<SettingsState> get stream => const Stream.empty();
+}
 
 class _DownloadTestBinding extends AutomatedTestWidgetsFlutterBinding {
   @override
@@ -38,8 +50,10 @@ class _DownloadTestBinding extends AutomatedTestWidgetsFlutterBinding {
 class _DownloadService extends Service {
   final Future<Video> Function(String) fetch;
   final void Function(Server?)? onServer;
+  final Future<List<SponsorSegment>> Function(String, List<SponsorSegmentType>)?
+      sponsors;
 
-  _DownloadService(this.fetch, {this.onServer});
+  _DownloadService(this.fetch, {this.onServer, this.sponsors});
 
   @override
   Future<Video> getVideo(String videoId,
@@ -48,6 +62,11 @@ class _DownloadService extends Service {
     onServer?.call(serverOverride);
     return fetch(videoId);
   }
+
+  @override
+  Future<List<SponsorSegment>> getSponsorSegments(
+          String videoId, List<SponsorSegmentType> categories) =>
+      sponsors?.call(videoId, categories) ?? Future.value([]);
 }
 
 class _VideoCubit extends VideoCubit {
@@ -510,6 +529,7 @@ void main() {
     });
     expect(legacy.storageUri, isNull);
     expect(legacy.folderUri, isNull);
+    expect(legacy.toJson()['sponsorSegments'], isEmpty);
     expect(await legacy.effectivePath, endsWith('${video.videoId}.mp4'));
     await File(await legacy.downloadPath).writeAsBytes([1]);
     expect(await legacy.effectivePath, await legacy.downloadPath);
@@ -606,6 +626,312 @@ void main() {
     expect(added, 2);
     expect(manager.state.videos, hasLength(3));
     expect(manager.state.videos.where((v) => v.audioOnly), hasLength(2));
+  });
+
+  test(
+      'music audio download keeps catalog metadata through restart and hydration',
+      () async {
+    await manager.deleteVideo(video);
+    const music = MusicMetadata(
+        title: 'Catalog song',
+        artist: 'Catalog artist',
+        album: 'Catalog album');
+    const song = Video(
+        videoId: '12345678901',
+        title: 'Catalog song',
+        lengthSeconds: 180,
+        musicMetadata: music);
+    final remote = await audioVideo(song.videoId);
+    service = _DownloadService((_) async => remote);
+    expect(
+        await manager.addDownload(song.videoId, audioOnly: true, video: song),
+        isTrue);
+    final queued = db.getDownloadByVideoId(song.videoId)!;
+    expect(queued.audioOnly, isTrue);
+    expect(queued.title, music.title);
+    expect(queued.author, music.artist);
+    expect(DownloadedVideo.fromJson(queued.toJson()).musicMetadata?.toJson(),
+        music.toJson());
+
+    await manager.close();
+    await openManager();
+    expect(manager.state.videos.single.musicMetadata?.toJson(), music.toJson());
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    final downloaded = db.getDownloadByVideoId(song.videoId)!;
+    expect(downloaded.musicMetadata?.toJson(), music.toJson());
+    expect(downloaded.title, music.title);
+    expect(downloaded.author, music.artist);
+    expect(downloaded.lengthSeconds, song.lengthSeconds);
+    expect(downloaded.audioOnly, isTrue);
+  });
+
+  test('music download caches enabled SponsorBlock data across restart',
+      () async {
+    final music = video.copyWith(
+        audioOnly: true,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    await db.upsertDownload(music);
+    await db.saveSetting(
+        SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+    await db.saveSetting(
+        SettingsValue(SponsorSegmentType.musicOffTopic.settingsName(), 'true'));
+    await db.saveSetting(
+        SettingsValue(SponsorSegmentType.intro.settingsName(), 'true'));
+    final segments = [
+      SponsorSegment('skip', [1.25, 2.75], SponsorSegmentType.musicOffTopic),
+      SponsorSegment('mute', [3, 4], SponsorSegmentType.intro),
+    ];
+    final calls = <String>[];
+    List<SponsorSegmentType>? requestedCategories;
+    service = _DownloadService((_) => audioVideo(music.videoId),
+        sponsors: (id, categories) async {
+      calls.add(id);
+      requestedCategories = categories;
+      return [
+        ...segments,
+        SponsorSegment('skip', [double.nan, 7], SponsorSegmentType.intro),
+      ];
+    });
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    expect(calls, [music.videoId]);
+    expect(requestedCategories,
+        [SponsorSegmentType.intro, SponsorSegmentType.musicOffTopic]);
+    final downloaded = db.getDownloadByVideoId(music.videoId)!;
+    final expected = segments.map((segment) => segment.toJson()).toList();
+    expect(downloaded.toJson()['sponsorSegments'], expected);
+    final roundTrip = DownloadedVideo.fromJson(
+        jsonDecode(jsonEncode(downloaded.toJson())) as Map<String, dynamic>);
+    expect(roundTrip.toJson()['sponsorSegments'], expected);
+    await manager.close();
+    await openManager();
+    expect(manager.state.videos.single.toJson()['sponsorSegments'], expected);
+    expect(calls, [music.videoId]);
+  });
+
+  for (final nonMusicOptOut in [false, true]) {
+    test(
+        'Music download caches default categories (non-music opt-out: $nonMusicOptOut)',
+        () async {
+      final music = video.copyWith(
+          audioOnly: true,
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      await db.upsertDownload(music);
+      if (nonMusicOptOut) {
+        await db.saveSetting(SettingsValue(
+            SponsorSegmentType.musicOffTopic.settingsName(), 'false'));
+      }
+      final segments = [
+        SponsorSegment('skip', [1, 2], SponsorSegmentType.sponsor),
+        if (!nonMusicOptOut)
+          SponsorSegment('skip', [3, 4], SponsorSegmentType.musicOffTopic),
+      ];
+      List<SponsorSegmentType>? requestedCategories;
+      service = _DownloadService((_) => audioVideo(music.videoId),
+          sponsors: (_, categories) async {
+        requestedCategories = categories;
+        return segments;
+      });
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) => state.videos.single.downloadComplete);
+
+      expect(requestedCategories, [
+        SponsorSegmentType.sponsor,
+        if (!nonMusicOptOut) SponsorSegmentType.musicOffTopic,
+      ]);
+      expect(
+          db.getDownloadByVideoId(music.videoId)!.toJson()['sponsorSegments'],
+          segments.map((segment) => segment.toJson()).toList());
+    });
+  }
+
+  for (final musicEnabled in [true, false]) {
+    test(
+        musicEnabled
+            ? 'music download does not fetch disabled SponsorBlock categories'
+            : 'ordinary download does not fetch Music SponsorBlock cache',
+        () async {
+      final audio = video.copyWith(
+          audioOnly: true,
+          musicMetadata: musicEnabled
+              ? const MusicMetadata(title: 'Song', artist: 'Artist')
+              : null);
+      await db.upsertDownload(audio);
+      if (musicEnabled) {
+        await db.saveSetting(
+            SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+        await db.saveSetting(SettingsValue(
+            SponsorSegmentType.musicOffTopic.settingsName(), 'false'));
+      }
+      var calls = 0;
+      service = _DownloadService((_) => audioVideo(audio.videoId),
+          sponsors: (_, __) async {
+        calls++;
+        return [];
+      });
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) => state.videos.single.downloadComplete);
+
+      expect(calls, 0);
+      expect(db.getDownloadByVideoId(audio.videoId)!.sponsorSegments, isEmpty);
+    });
+  }
+
+  for (final timeout in [false, true]) {
+    test(
+        'SponsorBlock ${timeout ? 'timeout' : 'failure'} does not fail Music download',
+        () async {
+      final previous = timeout
+          ? <SponsorSegment>[]
+          : [
+              SponsorSegment('skip', [1, 2], SponsorSegmentType.sponsor)
+            ];
+      final music = video.copyWith(
+          audioOnly: true,
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+          sponsorSegments: previous);
+      await db.upsertDownload(music);
+      final response = Completer<List<SponsorSegment>>();
+      var calls = 0;
+      String? requestedId;
+      List<SponsorSegmentType>? requestedCategories;
+      service = _DownloadService((_) => audioVideo(music.videoId),
+          sponsors: (id, categories) {
+        calls++;
+        requestedId = id;
+        requestedCategories = categories;
+        if (!timeout) throw StateError('Optional SponsorBlock unavailable');
+        return response.future;
+      });
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) => state.videos.single.downloadComplete);
+
+      expect(calls, 1);
+      expect(requestedId, music.videoId);
+      expect(requestedCategories,
+          [SponsorSegmentType.sponsor, SponsorSegmentType.musicOffTopic]);
+      final expected = previous.map((segment) => segment.toJson()).toList();
+      expect(
+          db.getDownloadByVideoId(music.videoId)!.toJson()['sponsorSegments'],
+          expected);
+      expect(manager.state.videos.single.downloadFailed, isFalse);
+      if (timeout) {
+        response.complete([
+          SponsorSegment('skip', [5, 6], SponsorSegmentType.sponsor),
+        ]);
+        await Future<void>.delayed(Duration.zero);
+        expect(
+            db.getDownloadByVideoId(music.videoId)!.sponsorSegments, isEmpty);
+      }
+    });
+  }
+
+  test('SponsorBlock HTTP failure preserves previously cached Music segments',
+      () async {
+    final previous =
+        SponsorSegment('skip', [1.25, 2.75], SponsorSegmentType.sponsor);
+    final music = video.copyWith(
+        audioOnly: true,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        sponsorSegments: [previous]);
+    await db.upsertDownload(music);
+    final requests = <Uri>[];
+    final client = MockClient((request) async {
+      requests.add(request.url);
+      return http.Response('temporarily unavailable', 503);
+    });
+    addTearDown(client.close);
+    final sponsorService = Service(httpClient: client);
+    service = _DownloadService((_) => audioVideo(music.videoId),
+        sponsors: sponsorService.getSponsorSegments);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    expect(requests, hasLength(1));
+    expect(requests.single.host, 'sponsor.ajay.app');
+    expect(requests.single.queryParameters['videoID'], music.videoId);
+    expect(requests.single.queryParameters['categories'],
+        '["sponsor","music_offtopic"]');
+    final downloaded = db.getDownloadByVideoId(music.videoId)!;
+    expect(downloaded.downloadFailed, isFalse);
+    expect(downloaded.toJson()['sponsorSegments'], [previous.toJson()]);
+  });
+
+  for (final action in ['delete', 'profile switch', 'close']) {
+    test('pending Music SponsorBlock lookup does not block $action', () async {
+      final music = video.copyWith(
+          audioOnly: true,
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      await db.upsertDownload(music);
+      final ownerLibrary = db.forProfile(db.profileId);
+      final response = Completer<List<SponsorSegment>>();
+      final started = Completer<void>(), mediaReceived = Completer<void>();
+      List<SponsorSegmentType>? requestedCategories;
+      final remote = await audioVideo(music.videoId,
+          onRequest: (_) => mediaReceived.complete());
+      service =
+          _DownloadService((_) async => remote, sponsors: (_, categories) {
+        requestedCategories = categories;
+        started.complete();
+        return response.future;
+      });
+
+      await manager.setWifiOnly(false);
+      await started.future;
+      await mediaReceived.future;
+      expect(requestedCategories,
+          [SponsorSegmentType.sponsor, SponsorSegmentType.musicOffTopic]);
+      switch (action) {
+        case 'delete':
+          await manager.deleteVideo(music).timeout(const Duration(seconds: 2));
+        case 'profile switch':
+          await manager
+              .pauseForProfileSwitch()
+              .timeout(const Duration(seconds: 2));
+          final person = await db.createProfile('Another person');
+          await db.useProfile(person.id);
+          await db.saveSetting(SettingsValue(
+              SponsorSegmentType.musicOffTopic.settingsName(), 'true'));
+          await manager.reloadForProfile();
+        case 'close':
+          await manager.close().timeout(const Duration(seconds: 2));
+      }
+      response.complete([
+        SponsorSegment('skip', [5, 6], SponsorSegmentType.sponsor),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      final saved = ownerLibrary.getDownloadByVideoId(music.videoId);
+      if (action == 'delete') {
+        expect(saved, isNull);
+      } else {
+        expect(saved!.downloadComplete, isFalse);
+        expect(saved.downloadFailed, isFalse);
+        expect(saved.sponsorSegments, isEmpty);
+      }
+      if (action == 'profile switch') {
+        expect(manager.state.videos, isEmpty);
+        expect(db.getAllDownloads(), isEmpty);
+      }
+      expect(await File(await music.downloadPath).exists(), isFalse);
+    });
+  }
+
+  test('download metadata cannot be attached to a different video ID',
+      () async {
+    expect(
+        await manager.addDownload('12345678901',
+            audioOnly: true, video: const Video(videoId: 'different01')),
+        isFalse);
+    expect(db.getDownloadByVideoId('12345678901'), isNull);
   });
 
   test('concurrent duplicate requests create just one job', () async {
@@ -1096,6 +1422,73 @@ void main() {
     expect(await File(cover).exists(), isFalse);
     expect(await File('$cover.part').exists(), isFalse);
   });
+
+  test('music audio download saves its catalog cover without instance headers',
+      () async {
+    const coverPath = '/vi/music-cover/cover.jpg';
+    final requests = <(String, String?)>[];
+    final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+      requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
+      request.response.add([10, 11, 12]);
+      await request.response.close();
+    }, onAudio: (request) {
+      requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
+    });
+    final cover = 'http://127.0.0.1:${mediaServer!.port}$coverPath';
+    final audio = video.copyWith(
+        audioOnly: true,
+        musicMetadata: MusicMetadata(
+            title: 'Song',
+            artist: 'Artist',
+            thumbnails: [ImageObject(null, cover, 500, 500)]));
+    await db.upsertDownload(audio);
+    manager.setVideos();
+    service = _DownloadService((_) async => remote);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    expect(requests,
+        unorderedEquals([(coverPath, null), ('/audio', 'artwork-instance')]));
+    expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+  });
+
+  for (final relative in [false, true]) {
+    test('old queued Music fallback retains cover access (relative=$relative)',
+        () async {
+      final headers = <String?>[];
+      final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+        headers.add(request.headers.value('X-Instance-Key'));
+        if (headers.last != 'artwork-instance') {
+          request.response.statusCode = HttpStatus.unauthorized;
+        } else {
+          request.response.add([10, 11, 12]);
+        }
+        await request.response.close();
+      });
+      final cover = relative
+          ? '/vi/${video.videoId}/default.jpg'
+          : 'http://127.0.0.1:${mediaServer!.port}/vi/${video.videoId}/default.jpg';
+      final fallback = ImageObject(null, cover, 320, 180);
+      final audio = video.copyWith(
+          audioOnly: true,
+          musicMetadata: MusicMetadata(
+              title: 'Song', artist: 'Artist', thumbnails: [fallback]));
+      // Model a queued download saved by older bookmarks, which copied the
+      // backend fallback into MusicMetadata without its source information.
+      await db.upsertDownload(audio);
+      manager.setVideos();
+      service = _DownloadService(
+          (_) async => remote.copyWith(videoThumbnails: [fallback]));
+
+      await manager.setWifiOnly(false);
+      await waitFor((state) => state.videos.single.downloadComplete);
+
+      expect(headers, ['artwork-instance']);
+      expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+      expect(manager.state.videos.single.musicMetadata!.thumbnails, isEmpty);
+    });
+  }
 
   test('media starts while artwork is pending and artwork is committed whole',
       () async {

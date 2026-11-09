@@ -590,6 +590,73 @@ class ManageSubscriptionsRoute extends PageRouteInfo<void> {
 }
 
 /// generated route for
+/// [MusicScreen]
+class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
+  MusicRoute({
+    Key? key,
+    String? videoId,
+    String? albumId,
+    String? playlistId,
+    String? artistId,
+    List<PageRouteInfo>? children,
+  }) : super(
+          MusicRoute.name,
+          args: MusicRouteArgs(
+            key: key,
+            videoId: videoId,
+            albumId: albumId,
+            playlistId: playlistId,
+            artistId: artistId,
+          ),
+          initialChildren: children,
+          argsEquality: false,
+        );
+
+  static const String name = 'MusicRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      final args = data.argsAs<MusicRouteArgs>(
+        orElse: () => const MusicRouteArgs(),
+      );
+      return MusicScreen(
+        key: args.key,
+        videoId: args.videoId,
+        albumId: args.albumId,
+        playlistId: args.playlistId,
+        artistId: args.artistId,
+      );
+    },
+  );
+}
+
+class MusicRouteArgs {
+  const MusicRouteArgs({
+    this.key,
+    this.videoId,
+    this.albumId,
+    this.playlistId,
+    this.artistId,
+  });
+
+  final Key? key;
+
+  final String? videoId;
+
+  final String? albumId;
+
+  final String? playlistId;
+
+  final String? artistId;
+
+  @override
+  String toString() {
+    return 'MusicRouteArgs{key: $key, videoId: $videoId, albumId: $albumId, playlistId: $playlistId, artistId: $artistId}';
+  }
+}
+
+/// generated route for
 /// [NavigationSectionScreen]
 class NavigationSectionRoute extends PageRouteInfo<NavigationSectionRouteArgs> {
   NavigationSectionRoute({

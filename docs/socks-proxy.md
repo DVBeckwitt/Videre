@@ -19,6 +19,15 @@ literal LAN addresses and refuses redirects, and remains local. External browser
 authentication and links opened in another app use that app's networking.
 Proxy endpoints are device-specific and are excluded from exported backups.
 
+The official NerdVPN onion uses Videre's native sign-in browser, so its login,
+PKCE exchange, API-key retrieval, and recovery follow this SOCKS setting. HTTP
+requests to that managed onion require the app's explicit SOCKS policy, including
+redirects and the unsaved **Test connection** configuration. With SOCKS off,
+Videre reports the required setting before attempting destination DNS. HTTPS
+NerdVPN origins retain certificate verification even when **Skip SSL
+verification** is enabled for another server. See the supported address and
+credential boundaries in [NerdVPN API access](./profiles-and-authentication.md#nerdvpn-api-access).
+
 Applying changed settings aborts existing Dart connections and native media requests,
 stops playback, and pauses incomplete downloads. Resume playback or downloads
 explicitly after saving. Saving an unchanged, healthy configuration leaves active

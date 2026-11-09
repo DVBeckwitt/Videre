@@ -127,6 +127,8 @@ class TvVideoItem extends StatelessWidget {
                                         ),
                                       )
                                     : VideoThumbnailView(
+                                        musicThumbnails:
+                                            video.musicMetadata?.thumbnails,
                                         videoId: video.videoId,
                                         images:
                                             video.deArrowThumbnailUrl == null

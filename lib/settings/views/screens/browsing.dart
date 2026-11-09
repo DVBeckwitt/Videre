@@ -13,6 +13,7 @@ import 'package:settings_ui/settings_ui.dart';
 import '../../../utils/views/components/select_list_dialog.dart';
 import '../../../utils.dart';
 import '../components/app_customizer.dart';
+import '../components/home_experience_setting.dart';
 
 @RoutePage()
 class BrowsingSettingsScreen extends StatelessWidget {
@@ -222,6 +223,13 @@ class BrowsingSettingsScreen extends StatelessWidget {
                     title: Text(locals.country),
                     value: Text(state.country.name),
                     onPressed: (ctx) => searchCountry(ctx, state),
+                  ),
+                  SettingsTile(
+                    leading: const Icon(Icons.home_outlined),
+                    title: Text(locals.homeExperience),
+                    value:
+                        Text(homeExperienceLabel(state.homeExperience, locals)),
+                    onPressed: showHomeExperiencePicker,
                   ),
                   SettingsTile(
                     leading: const Icon(Icons.app_settings_alt),

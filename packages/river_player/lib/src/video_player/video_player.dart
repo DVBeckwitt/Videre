@@ -207,6 +207,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
 
   Timer? _timer;
   bool _isDisposed = false;
+  double? _temporarySpeed;
   int _playPauseGeneration = 0;
   late Completer<void> _initializingCompleter;
   StreamSubscription<dynamic>? _eventSubscription;
@@ -542,7 +543,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     if (!_created || _isDisposed) {
       return;
     }
-    await _videoPlayerPlatform.setSpeed(_textureId, value.speed);
+    await _videoPlayerPlatform.setSpeed(
+      _textureId,
+      _temporarySpeed ?? value.speed,
+    );
   }
 
   /// The position in the current video.
@@ -620,6 +624,15 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       value = value.copyWith(speed: previousSpeed);
       rethrow;
     }
+  }
+
+  /// Overrides the decoder rate until cleared without changing [value].
+  Future<void> setTemporarySpeed(double? speed) async {
+    if (speed != null && (!speed.isFinite || speed <= 0)) {
+      throw ArgumentError.value(speed, 'speed', 'Must be positive and finite');
+    }
+    _temporarySpeed = speed;
+    await _applySpeed();
   }
 
   /// Changes audio pitch independently of playback speed. Android supports

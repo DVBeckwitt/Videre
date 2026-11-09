@@ -549,10 +549,82 @@ void main() {
     });
   }
 
-  test('automatic key access is limited to the canonical HTTPS root', () {
+  for (final scheme in ['http', 'https']) {
+    test('$scheme onion setup uses the proxied protected browser', () async {
+      final onion = Server(url: '$scheme://$nerdVpnOnionHost', id: 'onion');
+      messenger.setMockMethodCallHandler(_webAuth, (_) async {
+        fail('Onion sign-in must not open the external browser');
+      });
+      var browserOpens = 0;
+      messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+        if (call.method == 'close') return null;
+        expect(call.method, 'signIn');
+        final arguments = Map<String, dynamic>.from(call.arguments as Map);
+        expect(arguments['serverUrl'], onion.url);
+        expect(GatewayRequestContext.tryParse(arguments['context'])!.origin,
+            Uri.parse(onion.url));
+        browserOpens++;
+        return 'onion-account-token';
+      });
+
+      final authenticated = await api.authenticateNerdVpn(onion);
+
+      expect(browserOpens, 1);
+      expect(authenticated!.authToken, 'onion-account-token');
+      expect(authenticated.gatewayEnabled, isTrue);
+      expect(authorizations.single['token'], 'onion-account-token');
+      expect(requests, isEmpty);
+    });
+
+    test('$scheme onion account login keeps the protected session', () async {
+      final onion = Server(url: '$scheme://$nerdVpnOnionHost', id: 'onion');
+      await database.upsertServer(onion);
+      messenger.setMockMethodCallHandler(_webAuth, (_) async {
+        fail('Onion sign-in must not open the external browser');
+      });
+      messenger.setMockMethodCallHandler(_gatewayBrowser,
+          (call) async => call.method == 'signIn' ? 'onion-token' : null);
+
+      expect(await api.logIn(onion.accountId), 'onion-token');
+
+      final saved = database.getAccount(onion.accountId)!;
+      expect(saved.authToken, 'onion-token');
+      expect(saved.gatewayEnabled, isTrue);
+      expect(database.getAccount(_account.accountId)!.authToken, isNull);
+      expect(authorizations, hasLength(1));
+    });
+  }
+
+  test('cancelled onion browser sign-in preserves the previous login',
+      () async {
+    const onion = Server(
+        url: 'http://$nerdVpnOnionHost',
+        id: 'onion',
+        authToken: 'previous-onion-token');
+    await database.upsertServer(onion);
+    messenger.setMockMethodCallHandler(_webAuth, (_) async {
+      fail('Onion sign-in must not open the external browser');
+    });
+
+    expect(await api.logIn(onion.accountId), isNull);
+
+    expect(database.getAccount(onion.accountId)!.authToken,
+        'previous-onion-token');
+    expect(authorizations, isEmpty);
+  });
+
+  test('automatic key access is limited to the official NerdVPN roots', () {
     expect(NerdVpnAccess.supportsUrl('https://invidious.nerdvpn.de'), isTrue);
     expect(
         NerdVpnAccess.supportsUrl('https://invidious.nerdvpn.de:443/'), isTrue);
+    for (final origin in [
+      'http://$nerdVpnOnionHost',
+      'http://$nerdVpnOnionHost:80/',
+      'https://$nerdVpnOnionHost',
+      'https://$nerdVpnOnionHost:443/',
+    ]) {
+      expect(NerdVpnAccess.supportsUrl(origin), isTrue, reason: origin);
+    }
     for (final url in [
       'http://invidious.nerdvpn.de',
       'https://www.invidious.nerdvpn.de',
@@ -563,6 +635,15 @@ void main() {
       'https://user@invidious.nerdvpn.de',
       'https://invidious.nerdvpn.de.attacker.example',
       'https://other.example',
+      'http://other.onion',
+      'http://sub.$nerdVpnOnionHost',
+      'http://$nerdVpnOnionHost.attacker.example',
+      'http://$nerdVpnOnionHost:81',
+      'https://$nerdVpnOnionHost:8443',
+      'http://user@$nerdVpnOnionHost',
+      'http://$nerdVpnOnionHost/another-instance',
+      'http://$nerdVpnOnionHost?query=true',
+      'http://$nerdVpnOnionHost#fragment',
     ]) {
       expect(NerdVpnAccess.supportsUrl(url), isFalse, reason: url);
     }

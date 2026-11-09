@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'nerdvpn_origin.dart';
+
 /// An application proxy, independent of Invidious's media proxy setting.
 class SocksProxyConfig {
   final bool enabled;
@@ -65,7 +67,19 @@ void configureSocksHttpClient(
       badCertificateCallback,
   Duration timeout = const Duration(seconds: 15),
 }) {
-  if (!config.enabled) return;
+  if (!config.enabled) {
+    client.findProxy = (uri) {
+      // This runs before connection reuse, DNS, or a system HTTP proxy and is
+      // repeated for redirects. Use this client's policy, including unsaved
+      // proxy tests, rather than the global application configuration.
+      if (uri.scheme == 'http' && isNerdVpnOnionUrl(uri.toString())) {
+        throw const SocketException(
+            'Enable SOCKS5/Orbot in Network proxy to use this onion server.');
+      }
+      return HttpClient.findProxyFromEnvironment(uri);
+    };
+    return;
+  }
   // Environment HTTP_PROXY/NO_PROXY settings must not add a direct fallback or
   // an HTTP CONNECT exchange inside the SOCKS tunnel.
   client.findProxy = (_) => 'DIRECT';
@@ -151,10 +165,13 @@ ConnectionTask<Socket> _startConnection(
           subscription: handshake.subscription,
           host: uri.host,
           context: context,
-          onBadCertificate: badCertificateCallback == null
-              ? null
-              : (certificate) =>
-                  badCertificateCallback(certificate, uri.host, uri.port),
+          // Account/API credentials always require a valid certificate on
+          // managed HTTPS origins, even when other servers allow an override.
+          onBadCertificate:
+              badCertificateCallback == null || isNerdVpnUrl(uri.toString())
+                  ? null
+                  : (certificate) =>
+                      badCertificateCallback(certificate, uri.host, uri.port),
         );
         raw = secure;
         socket = _SecureStreamSocket(secure);

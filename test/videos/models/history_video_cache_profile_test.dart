@@ -92,4 +92,52 @@ void main() {
     expect(loaded.toJson(), cached.toJson());
     expect(database.getLocalHistory().length, 1);
   });
+
+  test('cached Music history retains catalog artwork and song metadata',
+      () async {
+    const cover = 'https://lh3.googleusercontent.com/album=w512-h512';
+    final stored = HistoryVideoCache.fromJson({
+      'videoId': 'song',
+      'title': 'Song',
+      'author': 'Artist',
+      'thumbnail': cover,
+      'lengthSeconds': 185,
+      'created': '2026-11-01T00:00:00.000',
+      'musicMetadata': {
+        'title': 'Song',
+        'artist': 'Artist',
+        'album': 'Album',
+        'thumbnails': [
+          {'url': cover, 'width': 512, 'height': 512}
+        ],
+      },
+    });
+    await database.upsertHistoryVideo(stored);
+    final restored = HistoryVideoCache.fromJson(jsonDecode(
+        jsonEncode(database.getHistoryVideoByVideoId('song')!.toJson())));
+    final video = restored.toVideo();
+
+    expect(video.musicMetadata?.title, 'Song');
+    expect(video.musicMetadata?.artist, 'Artist');
+    expect(video.musicMetadata?.album, 'Album');
+    expect(video.musicMetadata?.thumbnails.single.url, cover);
+    expect(video.musicMetadata?.thumbnails.single.width, 512);
+    expect(video.videoThumbnails.single.url, cover);
+    expect(video.lengthSeconds, 185);
+  });
+
+  test('legacy history remains an ordinary video without Music metadata', () {
+    final stored = HistoryVideoCache.fromJson({
+      'videoId': 'video',
+      'title': 'Video',
+      'author': 'Channel',
+      'thumbnail': '/vi/video/hqdefault.jpg',
+      'created': '2026-11-01T00:00:00.000',
+    });
+    final video = stored.toVideo();
+
+    expect(video.musicMetadata, isNull);
+    expect(video.videoThumbnails.single.url, '/vi/video/hqdefault.jpg');
+    expect(video.lengthSeconds, isNull);
+  });
 }

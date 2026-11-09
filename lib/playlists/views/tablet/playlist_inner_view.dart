@@ -17,7 +17,7 @@ import '../../states/playlist.dart';
 class TabletPlaylistInnerView extends StatelessWidget {
   final bool canDeleteVideos;
   final Function(BuildContext context, Video video) removeVideoFromPlaylist;
-  final Function(BuildContext context, String videoId) openVideo;
+  final Function(BuildContext context, Video video) openVideo;
 
   const TabletPlaylistInnerView(
       {super.key,
@@ -142,8 +142,7 @@ class TabletPlaylistInnerView extends StatelessWidget {
                     showMetrics: false,
                     showVideoModalSheet: showVideoModalSheet,
                     allowModalSheet: canDeleteVideos,
-                    openVideoOverride: (context, video) =>
-                        openVideo(context, video.videoId),
+                    openVideoOverride: openVideo,
                   ),
                 ),
               )

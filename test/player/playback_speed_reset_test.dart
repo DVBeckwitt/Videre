@@ -4,10 +4,13 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/models/playback_pitch.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -15,7 +18,9 @@ import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:river_player/river_player.dart';
@@ -34,6 +39,7 @@ class _VideoWithoutAutostart extends VideoPlayerCubit {
 class _RetainedAudioPlayer implements AudioPlayer {
   double nativeSpeed = 1;
   double nativePitch = 1;
+  Duration nativePosition = Duration.zero;
   final pitchesAtPlay = <double>[];
   final speedCalls = <double>[];
   final speedsAtPlay = <double>[];
@@ -44,11 +50,15 @@ class _RetainedAudioPlayer implements AudioPlayer {
   double get speed => nativeSpeed;
 
   @override
+  Duration get position => nativePosition;
+
+  @override
   Future<Duration?> setAudioSource(AudioSource source,
       {bool preload = true,
       int? initialIndex,
       Duration? initialPosition}) async {
     sources.add(source);
+    nativePosition = initialPosition ?? Duration.zero;
     if (heldSource != null) return heldSource!.future;
     return const Duration(minutes: 1);
   }
@@ -125,6 +135,8 @@ void main() {
   late TestPlayerCubit player;
   late double nativeVideoSpeed;
   late double nativeVideoPitch;
+  late Size? nativeVideoSize;
+  late bool rejectDoubleSpeed;
   late int videoPitchCalls;
   late List<double> videoSpeedCalls;
   late List<String> videoSources;
@@ -145,6 +157,8 @@ void main() {
     player = TestPlayerCubit(PlayerState.init(null), settings);
     nativeVideoSpeed = 1;
     nativeVideoPitch = 1;
+    nativeVideoSize = const Size(640, 360);
+    rejectDoubleSpeed = false;
     videoPitchCalls = 0;
     videoSpeedCalls = [];
     videoSources = [];
@@ -161,20 +175,25 @@ void main() {
         nativeVideoPitch = (call.arguments['pitch'] as num).toDouble();
       }
       if (call.method == 'setSpeed') {
-        nativeVideoSpeed = (call.arguments['speed'] as num).toDouble();
+        final speed = (call.arguments['speed'] as num).toDouble();
+        if (rejectDoubleSpeed && speed == 2) {
+          throw PlatformException(code: 'speed_rejected');
+        }
+        nativeVideoSpeed = speed;
         videoSpeedCalls.add(nativeVideoSpeed);
       }
       if (call.method == 'setDataSource') {
         videoSources.add(call.arguments['dataSource']['uri'] as String);
         // Native players retain their rate across sources. The Dart wrapper
         // independently resets its value to 1, so asserting the UI is not enough.
+        final size = nativeVideoSize;
         await messenger.handlePlatformMessage(
             events.name,
             const StandardMethodCodec().encodeSuccessEnvelope({
               'event': 'initialized',
               'duration': 60000,
-              'width': 640,
-              'height': 360,
+              if (size != null) 'width': size.width,
+              if (size != null) 'height': size.height,
               'isLiveStream': false,
             }),
             (_) {});
@@ -238,6 +257,186 @@ void main() {
       }
     });
   }
+
+  test('video speed boost restores the latest chosen rate without saving 2x',
+      () async {
+    await settings.setRememberPlayBackSpeed(true);
+    final video = videoCubit();
+    try {
+      expect(video.startSpeedBoost(), isNull);
+      await video.playVideo(false);
+      video.setSpeed(1.25);
+      await _flush();
+      videoSpeedCalls.clear();
+
+      final release = video.startSpeedBoost();
+      expect(release, isNotNull);
+      await _flush();
+      expect(nativeVideoSpeed, 2);
+      expect(video.getSpeed(), 1.25);
+      expect(player.state.speed, 1.25);
+      expect(settings.state.lastSpeed, 1.25);
+
+      video.setSpeed(1.5);
+      await _flush();
+      expect(videoSpeedCalls, everyElement(2));
+      expect(nativeVideoSpeed, 2);
+      expect(video.getSpeed(), 1.5);
+      expect(player.state.speed, 1.5);
+      expect(settings.state.lastSpeed, 1.5);
+
+      videoSpeedCalls.clear();
+      release!();
+      await _flush();
+      expect(videoSpeedCalls, [1.5]);
+      expect(nativeVideoSpeed, 1.5);
+
+      await video.videoController!.pause();
+      expect(video.startSpeedBoost(), isNull);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('switching videos clears a speed boost and invalidates its release',
+      () async {
+    await settings.setRememberPlayBackSpeed(false);
+    final video = videoCubit();
+    try {
+      await video.playVideo(false);
+      video.setSpeed(1.75);
+      await _flush();
+
+      final releaseFirst = video.startSpeedBoost();
+      expect(releaseFirst, isNotNull);
+      await _flush();
+      expect(nativeVideoSpeed, 2);
+
+      video.switchVideo(_video('second'));
+      await _flush();
+      expect(videoSources.last, contains('second'));
+      expect(nativeVideoSpeed, 1);
+      expect(player.state.speed, 1);
+
+      final releaseSecond = video.startSpeedBoost();
+      expect(releaseSecond, isNotNull);
+      await _flush();
+      videoSpeedCalls.clear();
+      releaseFirst!();
+      await _flush();
+      expect(videoSpeedCalls, isEmpty);
+      expect(nativeVideoSpeed, 2);
+
+      releaseSecond!();
+      await _flush();
+      expect(videoSpeedCalls, [1]);
+      expect(nativeVideoSpeed, 1);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('a rejected speed boost ends the hold and clears the override',
+      () async {
+    final video = videoCubit();
+    try {
+      await video.playVideo(false);
+      video.setSpeed(1.25);
+      await _flush();
+
+      rejectDoubleSpeed = true;
+      var endings = 0;
+      final release = video.startSpeedBoost(onEnded: () => endings++);
+      expect(release, isNotNull);
+      await _flush();
+      expect(endings, 1);
+      expect(nativeVideoSpeed, 1.25);
+
+      video.setSpeed(1.5);
+      release!();
+      await _flush();
+      expect(endings, 1);
+      expect(nativeVideoSpeed, 1.5);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('fullscreen uses a safe aspect ratio without decoder dimensions',
+      () async {
+    nativeVideoSize = null;
+    final video = videoCubit();
+    try {
+      await video.playVideo(false);
+      await _flush();
+      expect(player.state.aspectRatio, 16 / 9);
+      video.onEnterFullScreen();
+      expect(video.videoController!.getAspectRatio(), 16 / 9);
+    } finally {
+      await video.close();
+    }
+  });
+
+  testWidgets('a same-video reload clears the speed boost before release',
+      (tester) async {
+    final video = await tester.runAsync(() async {
+      await player.close();
+      player = TestPlayerCubit(
+          PlayerState.init(null).copyWith(
+            currentlyPlaying: _video('first'),
+            isMini: false,
+            isHidden: false,
+          ),
+          settings);
+      final video = videoCubit();
+      addTearDown(video.close);
+      await video.playVideo(false);
+      video.setSpeed(1.25);
+      await _flush();
+      return video;
+    });
+    app_main.darkColorScheme = const ColorScheme.dark();
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<PlayerCubit>.value(value: player),
+        BlocProvider<SettingsCubit>.value(value: settings),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 390,
+              height: 220,
+              child: PlayerControls(mediaPlayerCubit: video),
+            ),
+          ),
+        ),
+      ),
+    ));
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    final hold =
+        await tester.startGesture(bounds.topLeft + const Offset(40, 60));
+    try {
+      await tester.pump(kLongPressTimeout);
+      expect(nativeVideoSpeed, 2);
+      expect(find.text('2×'), findsOneWidget);
+
+      await tester.runAsync(() async {
+        await video!.playVideo(false);
+        await _flush();
+      });
+      await tester.pump();
+      expect(videoSources, hasLength(2));
+      expect(nativeVideoSpeed, 1.25);
+      expect(player.state.isPlaying, isTrue);
+      expect(find.text('2×'), findsNothing);
+    } finally {
+      await hold.up();
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
 
   test('offline audio uses the persisted document URI', () async {
     const uri = 'content://documents/tree/folder/document/audio.webm';

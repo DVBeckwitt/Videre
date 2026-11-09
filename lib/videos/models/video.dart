@@ -11,6 +11,7 @@ import '../../utils/models/image_object.dart';
 import 'adaptive_format.dart';
 import 'caption.dart';
 import 'format_stream.dart';
+import 'music_metadata.dart';
 import 'storyboard.dart';
 
 part 'video.freezed.dart';
@@ -110,6 +111,10 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       String? authorId,
       String? authorUrl,
       @Default([]) List<ImageObject> videoThumbnails,
+      MusicMetadata? musicMetadata,
+      // Queue occurrences are local playback state, never Invidious metadata.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      String? queueEntryId,
       @JsonKey(includeFromJson: false, includeToJson: false)
       @Default(false)
       bool filtered,
@@ -130,7 +135,38 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
 
   const Video._();
 
-  factory Video.fromJson(Map<String, Object?> json) => _$VideoFromJson(json);
+  factory Video.fromJson(Map<String, Object?> json) =>
+      _restoreMusicArtwork(_$VideoFromJson(json));
+
+  static Video _restoreMusicArtwork(Video video) {
+    final music = video.musicMetadata;
+    if (music == null) return video;
+    final restored =
+        music.withoutVideoThumbnailFallbacks(video.videoThumbnails);
+    return identical(music, restored)
+        ? video
+        : video.copyWith(musicMetadata: restored);
+  }
+
+  /// Playback responses describe the upload; retain its queue occurrence and
+  /// the song's catalog identity when fetching fresh stream URLs.
+  Video preservingMusicMetadataFrom(Video source) {
+    final music = source.musicMetadata;
+    if (source.videoId != videoId) return this;
+    if (music == null) {
+      return queueEntryId == source.queueEntryId
+          ? this
+          : copyWith(queueEntryId: source.queueEntryId);
+    }
+    return copyWith(
+      queueEntryId: source.queueEntryId,
+      musicMetadata: music,
+      title: music.title,
+      author: music.artist,
+      videoThumbnails:
+          music.thumbnails.isEmpty ? videoThumbnails : music.thumbnails,
+    );
+  }
 
   @override
   Uri getInvidiousLink(Server server, int? timestamp) {

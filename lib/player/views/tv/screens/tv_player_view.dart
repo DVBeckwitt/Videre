@@ -57,6 +57,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
                 });
               }
               return Stack(
+                fit: StackFit.expand,
                 children: [
                   if (state.hasVideo)
                     VideoPlayer(

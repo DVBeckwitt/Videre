@@ -5,6 +5,8 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/media_handler.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -18,10 +20,13 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/videos/models/format_stream.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
+import 'package:just_audio/just_audio.dart' as native_audio show PlayerState;
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
@@ -59,6 +64,13 @@ class _RecordingPlayer extends TestPlayerCubit {
   }
 }
 
+class _MediaSessionPlayer extends PlayerCubit {
+  _MediaSessionPlayer(super.initialState, super.settings);
+
+  @override
+  Future<void> onReady() async {}
+}
+
 class _NativeAudio implements AudioPlayer {
   final errors = <Object>[];
   final sources = <AudioSource>[];
@@ -69,6 +81,7 @@ class _NativeAudio implements AudioPlayer {
   Duration nativePosition = Duration.zero;
   int playCalls = 0;
   bool disposed = false;
+  void Function()? onLoad;
 
   @override
   double get speed => nativeSpeed;
@@ -86,6 +99,7 @@ class _NativeAudio implements AudioPlayer {
       Duration? initialPosition}) async {
     sources.add(source);
     sourcePositions.add(initialPosition);
+    onLoad?.call();
     nativePosition = initialPosition ?? Duration.zero;
     if (errors.isNotEmpty) throw errors.removeAt(0);
     return const Duration(minutes: 2);
@@ -130,10 +144,12 @@ class _RetryService extends Service {
   Completer<void>? held;
   int retryCalls = 0;
   int metadataCalls = 0;
+  bool proxy = true;
+  bool stripMusicMetadata = false;
   final retryVideos = <Video>[];
 
   @override
-  bool useProxy() => true;
+  bool useProxy() => proxy;
 
   @override
   Future<Video> getVideo(String videoId,
@@ -155,7 +171,11 @@ class _RetryService extends Service {
     onRetry?.call(next);
     if (held != null) await held!.future;
     if (!isCurrent()) return null;
-    return video.copyWith(backendPlayback: next);
+    return video.copyWith(
+        backendPlayback: next,
+        musicMetadata: stripMusicMetadata ? null : video.musicMetadata,
+        title: stripMusicMetadata ? 'Upload' : video.title,
+        author: stripMusicMetadata ? 'Channel' : video.author);
   }
 }
 
@@ -172,6 +192,10 @@ Video _video(String id, Server server) => Video(
 
 PlayerException _retryable() =>
     PlayerException(2002, 'Transport failure', 0, backendRetryable: true);
+
+AdaptiveFormat _adaptive(String url, {String bitrate = '128000'}) =>
+    AdaptiveFormat(null, bitrate, null, url, '140', 'audio/mp4', '100', '1',
+        'RECTANGULAR', 'mp4', 'mp4a', null, null);
 
 Future<void> _flush() async {
   for (var i = 0; i < 8; i++) {
@@ -309,6 +333,152 @@ void main() {
         (replacementNative.sources.single as UriAudioSource).headers?['Cookie'],
         contains('ROUTE=1'));
     expect(retryService.retryCalls, 1);
+  });
+
+  test('audio backend recovery retains music catalog labels', () async {
+    retryService.stripMusicMetadata = true;
+    const music =
+        MusicMetadata(title: 'Song', artist: 'Artist', album: 'Album');
+    final native = _NativeAudio()..errors.add(_retryable());
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(musicMetadata: music));
+    await audio.playVideo(false, startAt: Duration.zero);
+    expect(audio.state.video!.musicMetadata, music);
+    expect(audio.state.video!.title, 'Song');
+    expect(audio.state.video!.author, 'Artist');
+    expect(player.state.currentlyPlaying!.musicMetadata!.album, 'Album');
+  });
+
+  test(
+      'native music interruption updates transport without replacing the source',
+      () async {
+    const music =
+        MusicMetadata(title: 'Song', artist: 'Artist', album: 'Album');
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(musicMetadata: music));
+    await audio.playVideo(false, startAt: const Duration(seconds: 37));
+    audio.onStateStreamChange(
+        native_audio.PlayerState(false, ProcessingState.ready));
+    expect(player.events.last.type, MediaEventType.pause);
+    audio.onStateStreamChange(
+        native_audio.PlayerState(true, ProcessingState.ready));
+    expect(player.events.last.type, MediaEventType.play);
+    expect(native.sources, hasLength(1));
+    expect(native.sourcePositions.single, const Duration(seconds: 37));
+    expect(audio.state.video!.musicMetadata, music);
+  });
+
+  for (final offline in [false, true]) {
+    test(
+        'resumed music publishes the admitted position to MediaSession, offline=$offline',
+        () async {
+      const position = Duration(seconds: 33);
+      const music =
+          MusicMetadata(title: 'Song', artist: 'Artist', album: 'Album');
+      final video = _video('song', preferred).copyWith(musicMetadata: music);
+      const downloaded = DownloadedVideo(
+          videoId: 'song',
+          title: 'Song',
+          lengthSeconds: 120,
+          quality: 'audio',
+          audioOnly: true,
+          musicMetadata: music);
+      final controller = _MediaSessionPlayer(
+          PlayerState.init(null).copyWith(
+              isAudio: true,
+              isHidden: false,
+              startAt: position,
+              position: position,
+              videos: offline ? [] : [video],
+              currentlyPlaying: offline ? null : video,
+              offlineVideos: offline ? [downloaded] : [],
+              offlineCurrentlyPlaying: offline ? downloaded : null),
+          settings);
+      final handler = app_main.mediaHandler = MediaHandler(controller);
+      final native = _NativeAudio();
+      final audio = _Audio(
+          AudioPlayerState(
+              video: offline ? null : video,
+              offlineVideo: offline ? downloaded : null),
+          controller,
+          settings,
+          native);
+      native.onLoad = () {
+        audio.onPositionChanged(Duration.zero);
+        audio.onStateStreamChange(
+            native_audio.PlayerState(false, ProcessingState.ready));
+      };
+      try {
+        await audio.playVideo(offline, startAt: position);
+        expect(native.sourcePositions.single, position);
+        expect(handler.playbackState.value.playing, isTrue);
+        expect(handler.playbackState.value.updatePosition, position);
+        expect(controller.state.position, position);
+      } finally {
+        await audio.close();
+        await controller.close();
+      }
+    });
+  }
+
+  test('proxy audio-only responses route adaptive audio through the instance',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred)
+            .copyWith(formatStreams: [], adaptiveFormats: [
+          _adaptive('https://r1.googlevideo.com/videoplayback?id=song&itag=140')
+        ]));
+    await audio.playVideo(false);
+    final source = native.sources.single as UriAudioSource;
+    expect(source.uri.toString(),
+        'https://instance.example/videoplayback?id=song&itag=140');
+    expect(source.headers?['Cookie'], contains('ROUTE=0'));
+    expect(source.headers?['X-Instance'], 'kept');
+    expect(audio.state.error, isNull);
+  });
+
+  test('proxy audio retains a supported combined source preference', () async {
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(
+            adaptiveFormats: [_adaptive('https://r1.googlevideo.com/audio')]));
+    await audio.playVideo(false);
+    expect((native.sources.single as UriAudioSource).uri.toString(),
+        'https://instance.example/song.mp4');
+  });
+
+  test('audio-only proxy skips invalid URLs and never selects legacy HD720',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(formatStreams: [
+          FormatStream('https://instance.example/legacy', '22', 'video/mp4',
+              'hd720', 'mp4', 'h264', '720p', '720p', '1280x720'),
+        ], adaptiveFormats: [
+          _adaptive('https://unrelated.example/unsafe', bitrate: '300000'),
+          _adaptive('https://user:password@r1.googlevideo.com/unsafe',
+              bitrate: '200000'),
+          _adaptive('https://r1.googlevideo.com/audio'),
+        ]));
+    await audio.playVideo(false);
+    expect((native.sources.single as UriAudioSource).uri.toString(),
+        'https://instance.example/audio');
+  });
+
+  test('direct adaptive audio never receives instance authentication headers',
+      () async {
+    retryService.proxy = false;
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(adaptiveFormats: [
+          _adaptive('https://r1.googlevideo.com/audio'),
+        ]));
+    await audio.playVideo(false);
+    final source = native.sources.single as UriAudioSource;
+    expect(source.uri.toString(), 'https://r1.googlevideo.com/audio');
+    expect(source.headers, isNull);
   });
 
   test('unknown decoder errors do not switch backends', () async {

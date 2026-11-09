@@ -6,17 +6,11 @@ import 'package:flutter/services.dart';
 
 import '../settings/models/db/server.dart';
 import 'gateway_context.dart';
+import 'nerdvpn_origin.dart';
+
+export 'nerdvpn_origin.dart';
 
 const nerdVpnKeyHeader = 'X-Invidious-Token';
-
-bool isNerdVpnUrl(String value) {
-  final uri = Uri.tryParse(value);
-  return uri != null &&
-      uri.scheme == 'https' &&
-      uri.host == 'invidious.nerdvpn.de' &&
-      uri.port == 443 &&
-      uri.userInfo.isEmpty;
-}
 
 class NerdVpnPkce {
   final String verifier;
@@ -61,6 +55,7 @@ class NerdVpnAccessStatus {
       'signInRequired',
       'unavailable',
       'missing',
+      'proxyRequired',
     }.contains(state)) {
       throw const NerdVpnAccessRequired('unavailable');
     }
@@ -89,6 +84,8 @@ class NerdVpnAccessRequired implements Exception {
         'signInRequired' => 'Sign in to NerdVPN again to enable API access.',
         'missing' =>
           'Sign in to NerdVPN or enter an API key in server settings.',
+        'proxyRequired' =>
+          'Enable SOCKS5/Orbot in Network proxy to use this onion server.',
         _ => 'NerdVPN API access is temporarily unavailable. Try again later.',
       };
 }

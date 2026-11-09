@@ -73,6 +73,22 @@ internal class SocksOnlySelector(policy: ProxyPolicy) : ProxySelector() {
     }
 }
 
+/** HTTP onion credentials may only leave through the app's explicit SOCKS
+ * policy. Proxy selection runs before DNS and for every redirected origin. */
+private class OnionGuardSelector(private val delegate: ProxySelector?) : ProxySelector() {
+    override fun select(uri: URI): List<Proxy> {
+        val url = uri.toString().toHttpUrlOrNull()
+        if (url?.scheme == "http" && isNerdVpnOrigin(url)) {
+            throw NerdVpnAccessRequired("proxyRequired")
+        }
+        return delegate?.select(uri) ?: listOf(Proxy.NO_PROXY)
+    }
+
+    override fun connectFailed(uri: URI?, address: SocketAddress?, error: IOException?) {
+        delegate?.connectFailed(uri, address, error)
+    }
+}
+
 /** Media3 creates independent calls for manifest children, so their credential
  * origin must be anchored to the original media source rather than each call. */
 private data class SourceHeaderScope(val origin: HttpUrl?, val names: Set<String>)
@@ -118,6 +134,8 @@ internal class PolicyCallFactory : Call.Factory {
                     if (isLoopbackHost(hostname)) Dns.SYSTEM.lookup(hostname)
                     else throw UnknownHostException("Direct DNS is disabled while SOCKS5 is enabled.")
             })
+        } else {
+            builder.proxySelector(OnionGuardSelector(ProxySelector.getDefault()))
         }
         val nextClient = builder.build()
         synchronized(lock) {

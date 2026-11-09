@@ -531,7 +531,7 @@ class Service {
             !next.matches(await db.getCurrentlySelectedServer())) {
           return null;
         }
-        return processed;
+        return processed.preservingMusicMetadataFrom(video);
       }
       return null;
     } finally {
@@ -751,6 +751,10 @@ class Service {
     if (!NerdVpnAccess.supports(original)) {
       throw ArgumentError('This server does not support NerdVPN sign-in');
     }
+    if (isNerdVpnOnionUrl(original.url)) {
+      // An external browser does not inherit Videre's SOCKS routing policy.
+      return authenticateProtected(original);
+    }
     final intent = await NerdVpnAccess.instance.beginAuth(original);
     final token = await _browserToken(original);
     if (token == null) return null;
@@ -765,6 +769,9 @@ class Service {
     final original = owner.getAccount(accountId);
     if (original == null) {
       throw InvidiousServiceError('Account no longer exists');
+    }
+    if (NerdVpnAccess.supports(original) && isNerdVpnOnionUrl(original.url)) {
+      return (await logInProtected(original))?.authToken;
     }
     final generation = _beginAuthentication(original);
     final intent = NerdVpnAccess.supports(original)
@@ -1017,9 +1024,17 @@ class Service {
 
       log.info('Calling $url');
       final response = await httpClient.get(Uri.parse(url));
-      Iterable i = handleResponse(response);
-      return List<SponsorSegment>.from(
-          i.map((e) => SponsorSegment.fromJson(e)));
+      final Iterable entries = handleResponse(response);
+      final segments = <SponsorSegment>[];
+      for (final entry in entries) {
+        if (entry is! Map<String, dynamic>) continue;
+        try {
+          segments.add(SponsorSegment.fromJson(entry));
+        } catch (_) {
+          // Keep usable segments if one entry is malformed or unsupported.
+        }
+      }
+      return segments;
     } catch (err) {
       return [];
     }
@@ -1521,6 +1536,7 @@ class Service {
             authorUrl: savedVideo.authorUrl,
             lengthSeconds: savedVideo.lengthSeconds,
             videoThumbnails: savedVideo.videoThumbnails,
+            musicMetadata: savedVideo.musicMetadata,
           )
         ];
         playlists[index] =

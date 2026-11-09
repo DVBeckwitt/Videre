@@ -1,19 +1,26 @@
 import 'dart:async';
 
+import 'package:auto_route/auto_route.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/states/player.dart';
+import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video_in_list.dart';
+import 'package:clipious/videos/views/components/compact_video.dart';
+import 'package:clipious/videos/views/components/history_video.dart';
 import 'package:clipious/videos/views/tv/components/video_item.dart';
 import 'package:clipious/videos/views/tv/screens/history.dart';
 import 'package:file/local.dart';
@@ -81,6 +88,58 @@ class _CacheManager implements cache.BaseCacheManager {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _Player extends Cubit<PlayerState> implements PlayerCubit {
+  _Player() : super(PlayerState.init(null));
+
+  final calls = <({List<Video> videos, bool? audio, Duration? startAt})>[];
+  bool failPlayback = false;
+
+  @override
+  Future<void> playVideo(List<Video> videos,
+      {bool? audio, Duration? startAt, bool? playing}) async {
+    if (failPlayback) throw StateError('Playback unavailable');
+    calls.add((videos: videos, audio: audio, startAt: startAt));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _Router extends AppRouter {
+  _Router() : super(hasServer: true);
+
+  final pushed = <PageRouteInfo>[];
+
+  @override
+  Future<T?> push<T extends Object?>(PageRouteInfo route,
+      {OnNavigationFailure? onFailure}) {
+    pushed.add(route);
+    return Future<T?>.value();
+  }
+}
+
+// Capture the TV player route without starting a native decoder in this test.
+class _Navigator extends Navigator {
+  const _Navigator({super.key, required super.onGenerateRoute});
+
+  @override
+  NavigatorState createState() => _NavigatorState();
+}
+
+class _NavigatorState extends NavigatorState {
+  final pushed = <Route<dynamic>>[];
+  bool failPlayback = false;
+
+  @override
+  Future<T?> push<T extends Object?>(Route<T> route) {
+    if (failPlayback) {
+      return Future<T?>.error(StateError('Playback unavailable'));
+    }
+    pushed.add(route);
+    return Completer<T?>().future;
+  }
 }
 
 void main() {
@@ -155,6 +214,96 @@ void main() {
   Future<void> focusCard(WidgetTester tester, String id) async {
     Focus.of(cardContext(tester, id)).requestFocus();
     await tester.pump();
+  }
+
+  for (final tv in [false, true]) {
+    for (final selection in ['Music', 'video', 'unavailable Music']) {
+      testWidgets('${tv ? 'TV' : 'phone'} history opens $selection selection',
+          (tester) async {
+        final originalIsTv = app_main.isTv;
+        app_main.isTv = tv;
+        addTearDown(() => app_main.isTv = originalIsTv);
+        const music = MusicMetadata(
+            title: 'Saved song', artist: 'Artist', album: 'Album');
+        await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
+            'song', 'Saved song', 'Artist', '',
+            musicMetadata: selection == 'video' ? null : music)));
+        final player = _Player()
+          ..failPlayback = selection == 'unavailable Music';
+        final router = _Router();
+        final navigator = GlobalKey<_NavigatorState>();
+        addTearDown(player.close);
+        addTearDown(router.dispose);
+        tester.view.physicalSize = const Size(1280, 720);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(MultiBlocProvider(
+          providers: [
+            BlocProvider<AppCubit>.value(value: app),
+            BlocProvider<PlayerCubit>.value(value: player),
+          ],
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: StackRouterScope(
+              controller: router,
+              stateHash: 0,
+              child: _Navigator(
+                key: navigator,
+                onGenerateRoute: (_) => MaterialPageRoute<void>(
+                  builder: (_) => tv
+                      ? const TvHistoryScreen()
+                      : const Scaffold(body: HistoryVideoView(videoId: 'song')),
+                ),
+              ),
+            ),
+          ),
+        ));
+        await settle(tester);
+        navigator.currentState!.failPlayback = selection == 'unavailable Music';
+
+        if (tv) {
+          await focusCard(tester, 'song');
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        } else {
+          tester.widget<CompactVideo>(find.byType(CompactVideo)).onTap!();
+        }
+        await settle(tester);
+
+        if (selection == 'video') {
+          expect(router.pushed.single.routeName,
+              tv ? TvVideoRoute.name : VideoRoute.name);
+          expect(player.calls, isEmpty);
+          expect(navigator.currentState!.pushed, isEmpty);
+        } else if (selection == 'unavailable Music') {
+          final context = tv
+              ? cardContext(tester, 'song')
+              : tester.element(find.byType(HistoryVideoView));
+          expect(find.text(AppLocalizations.of(context)!.musicPlaybackError),
+              findsOneWidget);
+          expect(router.pushed, isEmpty);
+        } else if (tv) {
+          expect(navigator.currentState!.pushed, hasLength(1));
+          final route =
+              navigator.currentState!.pushed.single as MaterialPageRoute<void>;
+          final dynamic screen = route.builder(cardContext(tester, 'song'));
+          final videos = screen.videos as List<Video>;
+          expect(videos.single.musicMetadata?.album, 'Album');
+          expect(player.calls, isEmpty);
+          route.dispose();
+        } else {
+          expect(player.calls, hasLength(1));
+          expect(
+              player.calls.single.videos.single.musicMetadata?.album, 'Album');
+          expect(player.calls.single.audio, isTrue);
+          expect(player.calls.single.startAt, Duration.zero);
+        }
+        if (selection != 'video') expect(router.pushed, isEmpty);
+        expect(history.metadataRequests, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    }
   }
 
   testWidgets('guest TV history uses cached videos and opens with the remote',

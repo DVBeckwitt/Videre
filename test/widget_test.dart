@@ -10,9 +10,16 @@ import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/home/views/components/content_mode_selector.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/music/models/music_album.dart';
+import 'package:clipious/music/models/music_discovery.dart';
+import 'package:clipious/music/models/music_playlist.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/views/screens/music_mode.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -22,6 +29,7 @@ import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -77,6 +85,7 @@ class _TestService extends Service {
   List<Comment> comments = [];
   List<Video> feedVideos = [];
   final feedRequests = <int>[];
+  int discoveryRequests = 0;
   bool failNextFeed = false;
 
   @override
@@ -132,10 +141,16 @@ class _TestService extends Service {
   Future<bool> isLoggedIn() async => loggedIn;
 
   @override
-  Future<List<Video>> getTrending({String? type}) async => videos;
+  Future<List<Video>> getTrending({String? type}) async {
+    discoveryRequests++;
+    return videos;
+  }
 
   @override
-  Future<List<Video>> getPopular() async => videos;
+  Future<List<Video>> getPopular() async {
+    discoveryRequests++;
+    return videos;
+  }
 
   @override
   Future<Video> getVideo(String videoId,
@@ -197,6 +212,53 @@ class _PendingNavigationSettings extends TestSettingsCubit {
   }
 }
 
+class _SessionApp extends TestAppCubit {
+  _SessionApp() : super(AppState(0, null, HomeLayout()));
+
+  void restartSession() =>
+      emit(state.copyWith(sessionRevision: state.sessionRevision + 1));
+}
+
+class _TestMusicCatalog extends MusicCatalogService {
+  int releaseCalls = 0;
+
+  @override
+  Future<List<MusicAlbum>> getNewReleases() async {
+    releaseCalls++;
+    return [const MusicAlbum(id: 'MPREfresh', title: 'Fresh album')];
+  }
+
+  @override
+  Future<MusicCharts> getCharts({String country = 'ZZ'}) async => MusicCharts(
+        country: country,
+        countries: const [MusicCountry(code: 'ZZ', name: 'Global')],
+        playlists: const [MusicPlaylist(id: 'PLchart', title: 'Public chart')],
+      );
+
+  @override
+  Future<List<MusicMoodCategory>> getMoodCategories() async => const [
+        MusicMoodCategory(
+            title: 'Focus', params: 'focus-public', group: 'Moods')
+      ];
+
+  @override
+  Future<List<MusicPlaylist>> getMoodPlaylists(String params) async =>
+      const [MusicPlaylist(id: 'PLfocus', title: 'Focus playlist')];
+}
+
+Future<void> _selectHomeMode(WidgetTester tester, String label) async {
+  await tester.tap(find.descendant(
+      of: find.byType(ContentModeSelector), matching: find.text(label)));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _openPhoneQueue(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('More shortcuts'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Video queue'));
+  await tester.pumpAndSettle();
+}
+
 class _QueueSelectionPlayer extends TestPlayerCubit {
   _QueueSelectionPlayer(super.initialState, super.settings);
 
@@ -215,6 +277,7 @@ Future<void> _pumpHomepage(
   SettingsState? settingsState,
   PlayerCubit Function(SettingsCubit)? createPlayer,
   SettingsCubit Function(SettingsState, AppCubit)? createSettings,
+  AppCubit? initialApp,
   int firstIndex = 0,
   bool settle = true,
 }) async {
@@ -225,7 +288,8 @@ Future<void> _pumpHomepage(
 
   await tester.runAsync(() => globals.db
       .saveSetting(SettingsValue(onOpenSettingName, firstIndex.toString())));
-  final appCubit = TestAppCubit(AppState(firstIndex, null, HomeLayout()));
+  final appCubit =
+      initialApp ?? TestAppCubit(AppState(firstIndex, null, HomeLayout()));
   final initialSettings = settingsState ?? SettingsState.init();
   final settingsCubit = createSettings?.call(initialSettings, appCubit) ??
       TestSettingsCubit(initialSettings, appCubit);
@@ -444,9 +508,12 @@ void main() {
   _testDefaultThumbnailCacheManager = _ThumbnailTestCacheManager();
   CachedNetworkImageProvider.defaultCacheManager =
       _testDefaultThumbnailCacheManager;
+  late MusicCatalogService previousCatalog;
 
   setUp(() async {
     app_main.isTv = false;
+    previousCatalog = musicCatalogService;
+    musicCatalogService = _TestMusicCatalog();
     globals.service = _TestService(
       videos: List.generate(
         6,
@@ -483,6 +550,7 @@ void main() {
   });
 
   tearDown(() async {
+    musicCatalogService = previousCatalog;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, null);
     await globals.db.close();
@@ -694,7 +762,9 @@ void main() {
             .map((item) => item.label),
         ['Search', 'Home', 'Subscriptions', 'Playlists']);
     expect(navigation.selectedIndex, 1);
-    await tester.tap(find.byTooltip('History'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('History'));
     await tester.pumpAndSettle();
     expect(find.text('History'), findsOneWidget);
     await tester.pageBack();
@@ -1033,7 +1103,9 @@ void main() {
     expect(
         tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
         0);
-    await tester.tap(find.byTooltip('Playlists'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playlists'));
     await tester.pumpAndSettle();
     expect(find.text('Playlists'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1053,7 +1125,9 @@ void main() {
     await tester.pumpAndSettle();
     final selectedIndex =
         tester.widget<NavigationBar>(navigation).selectedIndex;
-    await tester.tap(find.byTooltip('Playlists'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playlists'));
     await tester.pumpAndSettle();
     expect(find.text('Playlists'), findsOneWidget);
     expect(navigation, findsNothing);
@@ -1074,14 +1148,16 @@ void main() {
           ...settings.settings,
           appLayoutSettingName: SettingsValue(appLayoutSettingName, 'playlist'),
         }));
-    await tester.tap(find.byTooltip('Playlists'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playlists'));
     await tester.pumpAndSettle();
     expect(find.text('Playlists'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('phone queue shortcut fits between downloads and playlists',
+  testWidgets('phone queue stays reachable in overflow and preserves the tab',
       (tester) async {
     await _pumpHomepage(tester, const Size(320, 640));
     final navigation = find.byType(NavigationBar);
@@ -1090,15 +1166,11 @@ void main() {
     await tester.pumpAndSettle();
     final selectedIndex =
         tester.widget<NavigationBar>(navigation).selectedIndex;
-    final queue = find.byTooltip('Video queue');
     expect(tester.getCenter(find.byIcon(Icons.download)).dx,
-        lessThan(tester.getCenter(queue).dx));
-    expect(tester.getCenter(queue).dx,
-        lessThan(tester.getCenter(find.byTooltip('Playlists')).dx));
+        lessThan(tester.getCenter(find.byTooltip('More shortcuts')).dx));
     expect(tester.takeException(), isNull);
 
-    await tester.tap(queue);
-    await tester.pumpAndSettle();
+    await _openPhoneQueue(tester);
     expect(find.byType(VideoQueueScreen), findsOneWidget);
     expect(find.text('Your queue is empty'), findsOneWidget);
     final settings =
@@ -1114,6 +1186,266 @@ void main() {
         tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('phone mode switch retains video and swipeable Music navigation',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(320, 640));
+    final navigation = find.byType(NavigationBar);
+    await tester.tap(
+        find.descendant(of: navigation, matching: find.byIcon(Icons.history)));
+    await tester.pumpAndSettle();
+    final selectedIndex =
+        tester.widget<NavigationBar>(navigation).selectedIndex;
+    expect((musicCatalogService as _TestMusicCatalog).releaseCalls, 0);
+    await _selectHomeMode(tester, 'Music');
+    expect(find.byType(MusicModeScreen), findsOneWidget);
+    expect(find.text('New releases'), findsOneWidget);
+    expect(
+        tester
+            .widget<NavigationBar>(navigation)
+            .destinations
+            .cast<NavigationDestination>()
+            .map((item) => item.label),
+        ['Home', 'Explore', 'Library']);
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    await tester.dragFrom(const Offset(290, 150), const Offset(-270, 0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+    expect(find.byKey(const ValueKey('music-explore-charts')), findsOneWidget);
+    await tester.dragFrom(const Offset(290, 150), const Offset(-270, 0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
+    expect(
+        find.text(
+            'Nothing saved here yet. Save music while browsing, or create a playlist.'),
+        findsOneWidget);
+    await tester.tap(find.byTooltip('Search'));
+    await tester.pumpAndSettle();
+    expect(find.text('Search songs, albums, artists, or playlists'),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
+    await _selectHomeMode(tester, 'Videos');
+    expect(
+        tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
+    expect(find.text('History'), findsWidgets);
+    await _selectHomeMode(tester, 'Music');
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
+    await tester
+        .tap(find.descendant(of: navigation, matching: find.text('Home')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(find.text('Fresh album'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('Back closes an Explore mood without changing the Music page',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    final navigation = find.byType(NavigationBar);
+    await tester
+        .tap(find.descendant(of: navigation, matching: find.text('History')));
+    await tester.pumpAndSettle();
+    final videoTab = tester.widget<NavigationBar>(navigation).selectedIndex;
+    await _selectHomeMode(tester, 'Music');
+    await tester
+        .tap(find.descendant(of: navigation, matching: find.text('Explore')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-explore-moods')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Focus'));
+    await tester.pumpAndSettle();
+    expect(find.text('Focus playlist'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+    expect(find.text('Focus playlist'), findsNothing);
+    expect(find.text('Focus'), findsOneWidget);
+    await _selectHomeMode(tester, 'Videos');
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, videoTab);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final size in [const Size(320, 640), const Size(1024, 768)]) {
+    for (final musicOnly in [false, true]) {
+      testWidgets(
+          'single-mode home opens the forced mode at $size (Music=$musicOnly)',
+          (tester) async {
+        final initial = SettingsState.init();
+        await _pumpHomepage(tester, size,
+            settingsState: initial.copyWith(settings: {
+              ...initial.settings,
+              homeExperienceSettingName: SettingsValue(
+                  homeExperienceSettingName,
+                  musicOnly
+                      ? HomeExperience.musicOnly.name
+                      : HomeExperience.videosOnly.name),
+              homeContentModeSettingName: SettingsValue(
+                  homeContentModeSettingName,
+                  musicOnly
+                      ? HomeContentMode.videos.name
+                      : HomeContentMode.music.name),
+            }));
+        expect(find.byType(ContentModeSelector), findsNothing);
+        expect(find.byType(MusicModeScreen),
+            musicOnly ? findsOneWidget : findsNothing);
+        final catalog = musicCatalogService as _TestMusicCatalog;
+        if (musicOnly) {
+          expect(catalog.releaseCalls, greaterThan(0));
+          expect(find.text('Fresh album'), findsOneWidget);
+          expect((globals.service as _TestService).discoveryRequests, 0);
+          expect((globals.service as _TestService).feedRequests, isEmpty);
+        } else {
+          expect(catalog.releaseCalls, 0);
+          expect(find.text('Home'), findsWidgets);
+        }
+        await tester.tap(find.byIcon(Icons.settings));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Browsing'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Home experience'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Videos and Music'));
+        await tester.pumpAndSettle();
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        expect(find.byType(ContentModeSelector), findsOneWidget);
+        final selector = tester
+            .widget<ContentModeSelector>(find.byType(ContentModeSelector));
+        expect(selector.value,
+            musicOnly ? HomeContentMode.videos : HomeContentMode.music);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
+  testWidgets('tablet Music rail and swipes select the same pages',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(1024, 768));
+    await _selectHomeMode(tester, 'Music');
+    final rail = find.byType(NavigationRail);
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 0);
+    await tester.tap(find.descendant(of: rail, matching: find.text('Explore')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 1);
+    await tester.dragFrom(const Offset(950, 120), const Offset(-850, 0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 2);
+    await _selectHomeMode(tester, 'Videos');
+    expect(find.descendant(of: rail, matching: find.text('Subscriptions')),
+        findsOneWidget);
+    expect(find.descendant(of: rail, matching: find.text('Explore')),
+        findsNothing);
+    await _selectHomeMode(tester, 'Music');
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 2);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('an empty tablet video layout still exposes the mode switch',
+      (tester) async {
+    final initial = SettingsState.init();
+    await _pumpHomepage(tester, const Size(1024, 768),
+        settingsState: initial.copyWith(settings: {
+          ...initial.settings,
+          appLayoutSettingName: SettingsValue(appLayoutSettingName, ''),
+        }));
+    expect(find.byType(ContentModeSelector), findsOneWidget);
+    expect(find.byType(NavigationRail), findsNothing);
+    await _selectHomeMode(tester, 'Music');
+    expect(find.text('Fresh album'), findsOneWidget);
+    expect(find.byType(NavigationRail), findsOneWidget);
+    await _selectHomeMode(tester, 'Videos');
+    expect(find.byType(ContentModeSelector), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a new session resets both retained mode page selections',
+      (tester) async {
+    final app = _SessionApp();
+    await _pumpHomepage(tester, const Size(390, 844), initialApp: app);
+    final navigation = find.byType(NavigationBar);
+    await tester
+        .tap(find.descendant(of: navigation, matching: find.text('History')));
+    await tester.pumpAndSettle();
+    await _selectHomeMode(tester, 'Music');
+    await tester
+        .tap(find.descendant(of: navigation, matching: find.text('Library')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
+    app.restartSession();
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(find.text('Fresh album'), findsOneWidget);
+    await _selectHomeMode(tester, 'Videos');
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('mode switch fits a narrow phone with large text',
+      (tester) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await _pumpHomepage(tester, const Size(320, 640));
+    expect(tester.takeException(), isNull);
+    await _selectHomeMode(tester, 'Music');
+    expect(find.byType(MusicModeScreen), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _selectHomeMode(tester, 'Videos');
+    expect(find.byType(ContentModeSelector), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final offline in [false, true]) {
+    testWidgets(
+        'mode and Music page changes preserve shared playback (offline=$offline)',
+        (tester) async {
+      final videos = (globals.service as _TestService).videos.take(2).toList();
+      final downloads = videos
+          .map((video) => DownloadedVideo(
+              videoId: video.videoId,
+              title: video.title!,
+              lengthSeconds: 60,
+              quality: 'audio',
+              audioOnly: true))
+          .toList();
+      await _pumpHomepage(tester, const Size(390, 844),
+          playerState: PlayerState.init(offline ? null : videos).copyWith(
+            offlineVideos: offline ? downloads : [],
+            currentlyPlaying: offline ? null : videos.first,
+            offlineCurrentlyPlaying: offline ? downloads.first : null,
+            isHidden: false,
+            isPlaying: true,
+            position: const Duration(seconds: 23),
+          ));
+      final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+      final before = player.state;
+      await _selectHomeMode(tester, 'Music');
+      await tester.tap(find.descendant(
+          of: find.byType(NavigationBar), matching: find.text('Explore')));
+      await tester.pumpAndSettle();
+      expect(tester.element(find.byType(Player)).read<PlayerCubit>(),
+          same(player));
+      expect(player.state, same(before));
+      await _selectHomeMode(tester, 'Videos');
+      expect(player.state, same(before));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   testWidgets(
       'download folder can be selected, cancelled and reset from an empty library',
@@ -1261,7 +1593,7 @@ void main() {
   testWidgets('open queue updates when videos are added and cleared',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
-    await tester.tap(find.byTooltip('Video queue'));
+    await _openPhoneQueue(tester);
     await tester.pumpAndSettle();
     final player =
         tester.element(find.byType(VideoQueueScreen)).read<PlayerCubit>();
@@ -1314,7 +1646,7 @@ void main() {
           ));
       final player = tester.element(find.byType(Player)).read<PlayerCubit>();
       final before = player.state;
-      await tester.tap(find.byTooltip('Video queue'));
+      await _openPhoneQueue(tester);
       await tester.pumpAndSettle();
       expect(find.byType(VideoQueueScreen), findsOneWidget);
       expect(
@@ -1354,7 +1686,7 @@ void main() {
       await _pumpHomepage(tester, const Size(390, 844),
           createPlayer: (settings) =>
               _QueueSelectionPlayer(initialState, settings));
-      await tester.tap(find.byTooltip('Video queue'));
+      await _openPhoneQueue(tester);
       await tester.pumpAndSettle();
       final player =
           tester.element(find.byType(VideoQueueScreen)).read<PlayerCubit>();
@@ -2094,6 +2426,50 @@ void main() {
     }
   }
 
+  for (final sourceAspectRatio in [9 / 16, 21 / 9]) {
+    testWidgets(
+        'fullscreen fills the viewport for source aspect $sourceAspectRatio and restores inline sizing',
+        (tester) async {
+      const viewport = Size(390, 844);
+      tester.view.padding = const FakeViewPadding(bottom: 24);
+      addTearDown(tester.view.resetPadding);
+      await _pumpExpandedPlayer(tester, viewport, selectedIndex: 0);
+      final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+      final videoWidget = find.byKey(const ValueKey('player'));
+      final videoState = tester.state(videoWidget);
+      final videoSurface = find.ancestor(
+        of: videoWidget,
+        matching: find.byType(AspectRatio),
+      );
+      final inlineSize = tester.getSize(videoSurface);
+      expect(inlineSize.aspectRatio, closeTo(16 / 9, 0.001));
+
+      player.setEvent(MediaEvent<double>(
+        state: MediaState.ready,
+        type: MediaEventType.aspectRatioChanged,
+        value: sourceAspectRatio,
+      ));
+      player.setFullScreen(FullScreenState.fullScreen);
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(videoSurface), Offset.zero & viewport);
+      expect(tester.state(videoWidget), same(videoState));
+
+      player.setFullScreen(FullScreenState.notFullScreen);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(videoSurface), inlineSize);
+      expect(tester.state(videoWidget), same(videoState));
+
+      player.showMiniPlayer();
+      await tester.pumpAndSettle();
+      final miniSize = tester.getSize(videoSurface);
+      expect(miniSize.width, lessThan(inlineSize.width));
+      expect(miniSize.aspectRatio, closeTo(16 / 9, 0.001));
+      expect(tester.state(videoWidget), same(videoState));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('PiP fills the window and restores the mini player layout',
       (tester) async {
     final video = (globals.service as _TestService).videos[0];
@@ -2338,6 +2714,7 @@ void main() {
         await _pumpVideoThumbnail(
           tester,
           thumbnails: const [
+            'https://lh3.googleusercontent.com/artist=w540-h225-p-l90-rj',
             'https://yt3.googleusercontent.com/avatar=s176',
             '//yt3.ggpht.com/avatar=s88',
             'https://i.ytimg.com/vi/video-id/default.jpg',
@@ -2346,6 +2723,7 @@ void main() {
         );
 
         const expectedUrls = [
+          'https://example.com/ggpht/artist=w540-h225-p-l90-rj',
           'https://example.com/ggpht/avatar=s176',
           'https://example.com/ggpht/avatar=s88',
           'https://example.com/vi/video-id/default.jpg',

@@ -20,6 +20,10 @@ mixin _$DownloadedVideo {
   String? get accountId;
   String? get author;
   String? get authorUrl;
+  @_MusicMetadataConverter()
+  MusicMetadata? get musicMetadata;
+  @_SponsorSegmentConverter()
+  List<SponsorSegment> get sponsorSegments;
   bool get downloadComplete;
   bool get downloadFailed;
   bool get authenticationRequired;
@@ -56,6 +60,10 @@ mixin _$DownloadedVideo {
             (identical(other.author, author) || other.author == author) &&
             (identical(other.authorUrl, authorUrl) ||
                 other.authorUrl == authorUrl) &&
+            (identical(other.musicMetadata, musicMetadata) ||
+                other.musicMetadata == musicMetadata) &&
+            const DeepCollectionEquality()
+                .equals(other.sponsorSegments, sponsorSegments) &&
             (identical(other.downloadComplete, downloadComplete) ||
                 other.downloadComplete == downloadComplete) &&
             (identical(other.downloadFailed, downloadFailed) ||
@@ -87,6 +95,8 @@ mixin _$DownloadedVideo {
       accountId,
       author,
       authorUrl,
+      musicMetadata,
+      const DeepCollectionEquality().hash(sponsorSegments),
       downloadComplete,
       downloadFailed,
       authenticationRequired,
@@ -100,7 +110,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -117,6 +127,8 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       String? accountId,
       String? author,
       String? authorUrl,
+      @_MusicMetadataConverter() MusicMetadata? musicMetadata,
+      @_SponsorSegmentConverter() List<SponsorSegment> sponsorSegments,
       bool downloadComplete,
       bool downloadFailed,
       bool authenticationRequired,
@@ -148,6 +160,8 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? accountId = freezed,
     Object? author = freezed,
     Object? authorUrl = freezed,
+    Object? musicMetadata = freezed,
+    Object? sponsorSegments = null,
     Object? downloadComplete = null,
     Object? downloadFailed = null,
     Object? authenticationRequired = null,
@@ -184,6 +198,14 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.authorUrl
           : authorUrl // ignore: cast_nullable_to_non_nullable
               as String?,
+      musicMetadata: freezed == musicMetadata
+          ? _self.musicMetadata
+          : musicMetadata // ignore: cast_nullable_to_non_nullable
+              as MusicMetadata?,
+      sponsorSegments: null == sponsorSegments
+          ? _self.sponsorSegments
+          : sponsorSegments // ignore: cast_nullable_to_non_nullable
+              as List<SponsorSegment>,
       downloadComplete: null == downloadComplete
           ? _self.downloadComplete
           : downloadComplete // ignore: cast_nullable_to_non_nullable
@@ -326,6 +348,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? accountId,
             String? author,
             String? authorUrl,
+            @_MusicMetadataConverter() MusicMetadata? musicMetadata,
+            @_SponsorSegmentConverter() List<SponsorSegment> sponsorSegments,
             bool downloadComplete,
             bool downloadFailed,
             bool authenticationRequired,
@@ -349,6 +373,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.accountId,
             _that.author,
             _that.authorUrl,
+            _that.musicMetadata,
+            _that.sponsorSegments,
             _that.downloadComplete,
             _that.downloadFailed,
             _that.authenticationRequired,
@@ -386,6 +412,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? accountId,
             String? author,
             String? authorUrl,
+            @_MusicMetadataConverter() MusicMetadata? musicMetadata,
+            @_SponsorSegmentConverter() List<SponsorSegment> sponsorSegments,
             bool downloadComplete,
             bool downloadFailed,
             bool authenticationRequired,
@@ -408,6 +436,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.accountId,
             _that.author,
             _that.authorUrl,
+            _that.musicMetadata,
+            _that.sponsorSegments,
             _that.downloadComplete,
             _that.downloadFailed,
             _that.authenticationRequired,
@@ -442,6 +472,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? accountId,
             String? author,
             String? authorUrl,
+            @_MusicMetadataConverter() MusicMetadata? musicMetadata,
+            @_SponsorSegmentConverter() List<SponsorSegment> sponsorSegments,
             bool downloadComplete,
             bool downloadFailed,
             bool authenticationRequired,
@@ -464,6 +496,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.accountId,
             _that.author,
             _that.authorUrl,
+            _that.musicMetadata,
+            _that.sponsorSegments,
             _that.downloadComplete,
             _that.downloadFailed,
             _that.authenticationRequired,
@@ -490,6 +524,9 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.accountId,
       this.author,
       this.authorUrl,
+      @_MusicMetadataConverter() this.musicMetadata,
+      @_SponsorSegmentConverter()
+      final List<SponsorSegment> sponsorSegments = const [],
       this.downloadComplete = false,
       this.downloadFailed = false,
       this.authenticationRequired = false,
@@ -500,7 +537,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.container,
       required this.lengthSeconds,
       required this.quality})
-      : super._();
+      : _sponsorSegments = sponsorSegments,
+        super._();
   factory _DownloadedVideo.fromJson(Map<String, dynamic> json) =>
       _$DownloadedVideoFromJson(json);
 
@@ -517,6 +555,19 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   final String? author;
   @override
   final String? authorUrl;
+  @override
+  @_MusicMetadataConverter()
+  final MusicMetadata? musicMetadata;
+  final List<SponsorSegment> _sponsorSegments;
+  @override
+  @JsonKey()
+  @_SponsorSegmentConverter()
+  List<SponsorSegment> get sponsorSegments {
+    if (_sponsorSegments is EqualUnmodifiableListView) return _sponsorSegments;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_sponsorSegments);
+  }
+
   @override
   @JsonKey()
   final bool downloadComplete;
@@ -572,6 +623,10 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
             (identical(other.author, author) || other.author == author) &&
             (identical(other.authorUrl, authorUrl) ||
                 other.authorUrl == authorUrl) &&
+            (identical(other.musicMetadata, musicMetadata) ||
+                other.musicMetadata == musicMetadata) &&
+            const DeepCollectionEquality()
+                .equals(other._sponsorSegments, _sponsorSegments) &&
             (identical(other.downloadComplete, downloadComplete) ||
                 other.downloadComplete == downloadComplete) &&
             (identical(other.downloadFailed, downloadFailed) ||
@@ -603,6 +658,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       accountId,
       author,
       authorUrl,
+      musicMetadata,
+      const DeepCollectionEquality().hash(_sponsorSegments),
       downloadComplete,
       downloadFailed,
       authenticationRequired,
@@ -616,7 +673,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -635,6 +692,8 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       String? accountId,
       String? author,
       String? authorUrl,
+      @_MusicMetadataConverter() MusicMetadata? musicMetadata,
+      @_SponsorSegmentConverter() List<SponsorSegment> sponsorSegments,
       bool downloadComplete,
       bool downloadFailed,
       bool authenticationRequired,
@@ -666,6 +725,8 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? accountId = freezed,
     Object? author = freezed,
     Object? authorUrl = freezed,
+    Object? musicMetadata = freezed,
+    Object? sponsorSegments = null,
     Object? downloadComplete = null,
     Object? downloadFailed = null,
     Object? authenticationRequired = null,
@@ -702,6 +763,14 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.authorUrl
           : authorUrl // ignore: cast_nullable_to_non_nullable
               as String?,
+      musicMetadata: freezed == musicMetadata
+          ? _self.musicMetadata
+          : musicMetadata // ignore: cast_nullable_to_non_nullable
+              as MusicMetadata?,
+      sponsorSegments: null == sponsorSegments
+          ? _self._sponsorSegments
+          : sponsorSegments // ignore: cast_nullable_to_non_nullable
+              as List<SponsorSegment>,
       downloadComplete: null == downloadComplete
           ? _self.downloadComplete
           : downloadComplete // ignore: cast_nullable_to_non_nullable

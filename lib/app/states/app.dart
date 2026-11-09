@@ -127,6 +127,20 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       String? videoId;
       if (const {'http', 'https'}.contains(uri.scheme) &&
           youtubeHosts.contains(uri.host)) {
+        if (uri.host == youtubeMusicHost) {
+          final route = _musicLinkRoute(uri);
+          if (route == null) return;
+          if (isTv && fullStack) {
+            await appRouter.replaceAll([const TvHomeRoute(), route]);
+          } else if (fullStack) {
+            await appRouter.replaceAll([
+              MainRoute(children: [const MainContentRoute(), route])
+            ]);
+          } else {
+            await appRouter.push(route);
+          }
+          return;
+        }
         if (uri.pathSegments.length == 1 &&
             uri.pathSegments.contains("watch") &&
             uri.queryParameters.containsKey('v')) {
@@ -166,6 +180,37 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       log.severe('Couldn\'t open external video link (${err.runtimeType})',
           null, stacktrace);
     }
+  }
+
+  MusicRoute? _musicLinkRoute(Uri uri) {
+    if (uri.pathSegments.length == 1 && uri.pathSegments.single == 'watch') {
+      final videoId = uri.queryParameters['v'];
+      if (videoId != null && RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
+        return MusicRoute(videoId: videoId);
+      }
+    } else if (uri.pathSegments.length == 2 &&
+        (uri.pathSegments.first == 'browse' ||
+            uri.pathSegments.first == 'channel')) {
+      final id = uri.pathSegments.last;
+      if (RegExp(r'^UC[A-Za-z0-9_-]{22}$').hasMatch(id)) {
+        return MusicRoute(artistId: id);
+      }
+      if (uri.pathSegments.first == 'browse' &&
+          id.length <= 200 &&
+          RegExp(r'^MPRE[A-Za-z0-9_-]+$').hasMatch(id)) {
+        return MusicRoute(albumId: id);
+      }
+    } else if (uri.pathSegments.length == 1 &&
+        uri.pathSegments.single == 'playlist') {
+      final playlistId = uri.queryParameters['list'];
+      if (playlistId != null &&
+          playlistId.length <= 200 &&
+          RegExp(r'^(?:VL)?(?:PL|OLAK5uy_|RD)[A-Za-z0-9_-]+$')
+              .hasMatch(playlistId)) {
+        return MusicRoute(playlistId: playlistId);
+      }
+    }
+    return null;
   }
 
   rebuildApp() {

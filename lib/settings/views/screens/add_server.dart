@@ -229,6 +229,7 @@ class AddServerScreen extends StatelessWidget {
         : e is CannotAddServerError
             ? e.getLabel(locals)
             : e.toString();
+    final advice = connectionAdvice(e, locals);
     List<Widget> actions = [
       if (e is WrongThumbnailUrl && !isTv)
         TextButton(
@@ -244,9 +245,11 @@ class AddServerScreen extends StatelessWidget {
         context,
         locals.error,
         [
-          Text(connectionAdvice(e, locals)),
-          const Gap(12),
-          Text(errorMessage, style: Theme.of(context).textTheme.bodySmall),
+          Text(advice),
+          if (errorMessage != advice) ...[
+            const Gap(12),
+            Text(errorMessage, style: Theme.of(context).textTheme.bodySmall),
+          ],
         ],
         actions: actions);
   }

@@ -3,6 +3,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/music/views/components/music_player.dart';
 import '../../../downloads/models/downloaded_video.dart';
 import '../../../videos/models/video.dart';
 import '../../../videos/views/components/info.dart';
@@ -21,6 +22,12 @@ class TabletExpandedPlayer extends StatelessWidget {
 
     bool isFullScreen =
         controller.fullScreenState == FullScreenState.fullScreen;
+    if (!isFullScreen &&
+        !controller.isMini &&
+        controller.isAudio &&
+        (video?.musicMetadata ?? offlineVid?.musicMetadata) != null) {
+      return const MusicPlayer();
+    }
 
     return !isFullScreen &&
             !controller.isMini &&
@@ -36,6 +43,7 @@ class TabletExpandedPlayer extends StatelessWidget {
                       ? SingleChildScrollView(
                           child: VideoInfo(
                             video: video,
+                            loadDislikes: true,
                             descriptionAndTags: false,
                           ),
                         )

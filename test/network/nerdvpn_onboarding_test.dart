@@ -13,6 +13,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _origin = 'https://invidious.nerdvpn.de';
+const _onionOrigin =
+    'http://nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion';
 const _access = MethodChannel('videre/nerdvpn_access');
 const _manualKey = 'nvpn_0123456789abcdefghijklmnopqrstuv';
 
@@ -137,6 +139,50 @@ void main() {
     expect(api.events, ['token-sign-in', 'stats', 'video']);
     expect(api.validationHeaders?[gatewayContextHeader], isNotNull);
     expect(api.signedOut, isEmpty);
+  });
+
+  test('onion setup authenticates before probing its own API origin', () async {
+    cubit.urlController.text = _onionOrigin;
+    final account = await cubit.validateServer();
+    expect(account!.url, _onionOrigin);
+    expect(account.authToken, 'test-account-token');
+    expect(api.events, ['token-sign-in', 'stats', 'video']);
+    final context = GatewayRequestContext.tryParse(
+        api.validationHeaders![gatewayContextHeader]!);
+    expect(context!.origin.origin, _onionOrigin);
+    expect(api.signedOut, isEmpty);
+  });
+
+  test('onion waiting account remains saved without anonymous probes',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    accessState = 'waiting';
+    final account = await cubit.validateServer();
+    expect(account!.url, _onionOrigin);
+    expect(account.authToken, 'test-account-token');
+    expect(api.events, ['token-sign-in']);
+    expect(api.signedOut, isEmpty);
+    await database.upsertServer(account);
+    expect(database.getAccount(account.accountId)!.url, _onionOrigin);
+  });
+
+  test('onion manual key is stored securely with an onion-scoped context',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    await cubit.addHeader('X-Invidious-Token', _manualKey);
+    final account = await cubit.validateServer();
+    expect(account!.url, _onionOrigin);
+    expect(account.authToken, isNull);
+    expect(account.customHeaders, isEmpty);
+    expect(api.events, ['stats', 'video']);
+    expect(calls.map((call) => call.method), ['setKey', 'status']);
+    final context = GatewayRequestContext.tryParse(
+        (calls.first.arguments as Map)['context'] as String);
+    expect(context!.origin.origin, _onionOrigin);
+    expect(api.validationHeaders!.containsKey('X-Invidious-Token'), isFalse);
+    await database.upsertServer(account);
+    expect(database.getAccount(account.accountId)!.toJson().toString(),
+        isNot(contains(_manualKey)));
   });
 
   test('cancelled sign-in returns no account and sends no probes', () async {

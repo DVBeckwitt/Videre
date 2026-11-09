@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 // ignore: depend_on_referenced_packages
@@ -6,9 +8,11 @@ import 'package:audio_service_platform_interface/audio_service_platform_interfac
 // ignore: depend_on_referenced_packages
 import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -16,6 +20,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -140,6 +145,113 @@ void main() {
 
     expect(item.artUri, isNull);
     expect(item.artHeaders, isNull);
+  });
+
+  test('music notification uses the original cover without instance access',
+      () async {
+    const cover = 'https://lh3.googleusercontent.com/cover';
+    final music = MusicMetadata(
+        title: 'Song',
+        artist: 'Singer',
+        album: 'Album',
+        thumbnails: [ImageObject(null, cover, 500, 500)]);
+    final queued =
+        video('/vi/artwork-video/default.jpg').copyWith(musicMetadata: music);
+    final controller =
+        createPlayer(Video.fromJson(jsonDecode(jsonEncode(queued))));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.title, 'Song');
+    expect(item.artist, 'Singer');
+    expect(item.album, 'Album');
+    expect(item.artUri, Uri.parse(cover));
+    expect(item.artHeaders, isNull);
+
+    await db.deleteServerById(selectedServer);
+    expect((await controller.getMediaItem(0))!.artUri, item.artUri);
+  });
+
+  test('music notification without a cover keeps the instance video thumbnail',
+      () async {
+    const music = MusicMetadata(title: 'Song', artist: 'Singer');
+    final controller = createPlayer(
+        video('https://i.ytimg.com/vi/artwork-video/default.jpg')
+            .copyWith(musicMetadata: music));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.artUri,
+        Uri.parse('https://selected.example/vi/artwork-video/default.jpg'));
+    expect(
+        item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
+  });
+
+  test('saved Music fallback artwork retains protected instance headers',
+      () async {
+    const cover = 'https://selected.example/vi/artwork-video/default.jpg';
+    final saved = MusicLibraryEntry.song(video(cover).copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Singer')));
+    final restored = MusicLibraryEntry.tryParse(saved.toJson())!.toVideo();
+    final item = (await createPlayer(restored).getMediaItem(0))!;
+    expect(item.artUri, Uri.parse(cover));
+    expect(item.artHeaders, selectedServer.headersForUrl(cover));
+  });
+
+  test('old saved Music queue repairs instance artwork provenance', () async {
+    const cover = 'https://selected.example/vi/artwork-video/default.jpg';
+    // Older bookmarks copied their video fallback into both image fields.
+    final legacy = video(cover).copyWith(
+        musicMetadata: MusicMetadata(
+            title: 'Song',
+            artist: 'Singer',
+            thumbnails: [ImageObject(null, cover, 320, 180)]));
+    final restored = Video.fromJson(jsonDecode(jsonEncode(legacy)));
+    final item = (await createPlayer(restored).getMediaItem(0))!;
+    expect(item.artUri, Uri.parse(cover));
+    expect(item.artHeaders, selectedServer.headersForUrl(cover));
+  });
+
+  test('standalone Music artwork with an instance-like path remains intact',
+      () {
+    const cover = 'https://catalog.example/vi/song/cover.jpg';
+    final metadata = MusicMetadata(
+        title: 'Song',
+        artist: 'Singer',
+        thumbnails: [ImageObject(null, cover, 320, 180)]);
+    final restoredMetadata = MusicMetadata.fromJson(metadata.toJson());
+    expect(restoredMetadata.thumbnails.single.url, cover);
+    final restoredVideo = Video.fromJson(jsonDecode(jsonEncode(
+        const Video(videoId: 'song').copyWith(musicMetadata: metadata))));
+    expect(restoredVideo.musicMetadata!.thumbnails.single.url, cover);
+  });
+
+  test('downloaded music notifications retain album and artist offline',
+      () async {
+    final documents =
+        await Directory.systemTemp.createTemp('videre-music-art-');
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async => documents.path);
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(channel, null);
+      await documents.delete(recursive: true);
+    });
+    const downloaded = DownloadedVideo(
+        videoId: 'song',
+        title: 'Upload',
+        author: 'Channel',
+        lengthSeconds: 180,
+        quality: 'audio',
+        audioOnly: true,
+        musicMetadata:
+            MusicMetadata(title: 'Song', artist: 'Singer', album: 'Album'));
+    final controller = player = TestPlayerCubit(
+        PlayerState.init(null).copyWith(
+            offlineVideos: [downloaded], offlineCurrentlyPlaying: downloaded),
+        settings);
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.title, 'Song');
+    expect(item.artist, 'Singer');
+    expect(item.album, 'Album');
+    expect(item.artUri!.scheme, 'file');
   });
 
   test('malformed artwork does not prevent notification metadata', () async {

@@ -5,8 +5,10 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.ProxySelector
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketAddress
 import java.net.URI
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -64,6 +66,84 @@ class ProxyPolicyTest {
         factory.configure(ProxyPolicy())
         factory.block()
         assertThrows(IOException::class.java) { factory.newCall(request) }
+    }
+
+    @Test
+    fun `official HTTP onion requires app SOCKS before any route lookup`() {
+        val previous = ProxySelector.getDefault()
+        var routeLookups = 0
+        ProxySelector.setDefault(object : ProxySelector() {
+            override fun select(uri: URI): List<Proxy> {
+                routeLookups++
+                throw IOException("Unexpected route lookup in test.")
+            }
+            override fun connectFailed(uri: URI?, address: SocketAddress?, error: IOException?) = Unit
+        })
+        val factory = PolicyCallFactory()
+        try {
+            factory.configure(ProxyPolicy())
+            val request = Request.Builder().url("http://$NERDVPN_ONION_HOST/api/v1/stats").build()
+            val error = assertThrows(NerdVpnAccessRequired::class.java) {
+                factory.newCall(request).execute()
+            }
+            assertEquals("proxyRequired", error.state)
+            val apiError = assertThrows(NerdVpnAccessRequired::class.java) {
+                factory.newApiCall(request, ApiRedirectOptions()).execute()
+            }
+            assertEquals("proxyRequired", apiError.state)
+            assertEquals(0, routeLookups)
+        } finally {
+            factory.block()
+            ProxySelector.setDefault(previous)
+        }
+    }
+
+    @Test
+    fun `official HTTP onion stays reachable through the configured SOCKS endpoint`() {
+        FakeSocks().use { proxy ->
+            val served = proxy.serve { input, socket ->
+                assertEquals(NERDVPN_ONION_HOST to 80, readConnect(input, socket))
+                readHeaders(input)
+                socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray())
+            }
+            val factory = PolicyCallFactory()
+            factory.configure(ProxyPolicy(true, "127.0.0.1", proxy.port))
+            try {
+                factory.newCall(Request.Builder().url("http://$NERDVPN_ONION_HOST/api/v1/stats").build())
+                    .execute().use { assertEquals("ok", it.body!!.string()) }
+                served.get(10, TimeUnit.SECONDS)
+            } finally {
+                factory.block()
+            }
+        }
+    }
+
+    @Test
+    fun `direct local redirect cannot start a cleartext onion connection`() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { local ->
+            val worker = Executors.newSingleThreadExecutor()
+            val factory = PolicyCallFactory()
+            try {
+                val served = worker.submit {
+                    local.accept().use { socket ->
+                        socket.soTimeout = 5000
+                        readHeaders(DataInputStream(socket.getInputStream()))
+                        socket.getOutputStream().write(("HTTP/1.1 302 Found\r\n" +
+                            "Location: http://$NERDVPN_ONION_HOST/api/v1/stats\r\n" +
+                            "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
+                    }
+                }
+                factory.configure(ProxyPolicy())
+                val error = assertThrows(NerdVpnAccessRequired::class.java) {
+                    factory.newCall(Request.Builder().url("http://127.0.0.1:${local.localPort}/redirect").build()).execute()
+                }
+                assertEquals("proxyRequired", error.state)
+                served.get(10, TimeUnit.SECONDS)
+            } finally {
+                factory.block()
+                worker.shutdownNow()
+            }
+        }
     }
 
     @Test

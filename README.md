@@ -32,6 +32,7 @@ Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Vid
 - **Protected Servers.** Sign in through an Authentik gateway with an isolated browser session for each account.
 - **NerdVPN API access.** Browser sign-in retrieves your API key when eligible, keeps it encrypted on Android, and shows the instance's waiting or disabled-access status.
 - **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
+- **Music.** Use the top Videos/Music switch on phones, tablets, and TVs. Music has Home, Explore, and Library for public new releases, country charts, moods and genres, search, local bookmarks and playlists, and audio downloads on phones and tablets. The artwork player includes queue controls and saved-session resume. Choose Videos and Music, Videos only, or Music only under **Settings → Browsing → Home experience** or in the home customizer. Catalog browsing uses YouTube Music without a Google login; playback uses your Invidious backend. See [Music browsing, playback, and local library](./docs/music.md).
 - **Watch Offline.** Video, audio, and playlist downloads on phones and tablets, with pause, resume, retry, and Wi-Fi-only mode.
 - **Saved Playback.** Remember playback positions when reopening videos on phone or TV.
 - **Export/Import Profiles.** Back up and restore your local library and preferences as JSON, or import NewPipe subscriptions.
@@ -52,6 +53,8 @@ Open **Profiles** from the home screen or Settings to add, rename, or switch peo
 For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
 
 For `invidious.nerdvpn.de`, adding the instance opens browser sign-in. Your account stays saved if API access is not yet available, and settings show the eligibility date returned by the instance. Existing accounts can sign in again to grant API-key access or enter a manual key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**.
+
+The official NerdVPN onion address also supports this API-key flow. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, then add the onion instance. Sign-in opens inside Videre through that proxy. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
 
 For playback problems, **Connection help** checks the video API and lets you switch instances or open the video in a browser.
 
@@ -109,7 +112,7 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Moving from Clipious.** Videre (`com.github.dvbeckwitt.videre`) and Clipious (`com.github.lamarios.clipious`) install separately. Set up Videre before removing Clipious: Android does not transfer their data, and Videre cannot import Clipious app storage directly.
 
-**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, and video thumbnails use the selected Invidious instance's image proxy, including notification and download artwork. This is independent of the video-stream proxy and SOCKS5 settings; image failures do not retry the original Google URL. Third-party artwork such as DeArrow still uses its own service. Playback may connect directly to YouTube/Google when media proxying is off. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
+**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, and video thumbnails use the selected Invidious instance's image proxy, including notification and download artwork. This is independent of the video-stream proxy and SOCKS5 settings; image failures do not retry the original Google URL. Music catalog artwork loads from its original public image URLs through the configured network transport, like Music catalog requests, without Invidious credentials or Google login cookies. Third-party artwork such as DeArrow still uses its own service. Playback may connect directly to YouTube/Google when media proxying is off. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
 
 ## Contributing
 

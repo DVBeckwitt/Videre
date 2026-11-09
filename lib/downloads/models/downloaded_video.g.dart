@@ -14,6 +14,13 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
       accountId: json['accountId'] as String?,
       author: json['author'] as String?,
       authorUrl: json['authorUrl'] as String?,
+      musicMetadata: const _MusicMetadataConverter()
+          .fromJson(json['musicMetadata'] as Map<String, dynamic>?),
+      sponsorSegments: (json['sponsorSegments'] as List<dynamic>?)
+              ?.map((e) => const _SponsorSegmentConverter()
+                  .fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          const [],
       downloadComplete: json['downloadComplete'] as bool? ?? false,
       downloadFailed: json['downloadFailed'] as bool? ?? false,
       authenticationRequired: json['authenticationRequired'] as bool? ?? false,
@@ -35,6 +42,11 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
       'accountId': instance.accountId,
       'author': instance.author,
       'authorUrl': instance.authorUrl,
+      'musicMetadata':
+          const _MusicMetadataConverter().toJson(instance.musicMetadata),
+      'sponsorSegments': instance.sponsorSegments
+          .map(const _SponsorSegmentConverter().toJson)
+          .toList(),
       'downloadComplete': instance.downloadComplete,
       'downloadFailed': instance.downloadFailed,
       'authenticationRequired': instance.authenticationRequired,

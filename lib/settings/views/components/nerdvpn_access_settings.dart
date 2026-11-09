@@ -70,23 +70,39 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
   }
 
   Future<void> _preferences() async {
-    final url =
-        Uri.parse('https://invidious.nerdvpn.de/preferences#api-access');
+    final account = widget.account;
+    final url = Uri.parse(account.url)
+        .replace(path: '/preferences', fragment: 'api-access');
+    final onion = url.host.endsWith('.onion');
     try {
-      if (!isTv && await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      if (!onion &&
+          !isTv &&
+          await launchUrl(url, mode: LaunchMode.externalApplication)) {
         return;
       }
     } catch (_) {
       // A TV or a device without a browser can show the address instead.
     }
-    if (!mounted) return;
+    if (!mounted || widget.account != account) return;
     final locals = AppLocalizations.of(context)!;
     await showDialog<void>(
         context: context,
         animationStyle: AppMotion.dialogStyle(context),
         builder: (context) => AlertDialog(
               title: Text(locals.nerdVpnPreferences),
-              content: SelectableText(url.toString()),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (onion) ...[
+                      Text(locals.nerdVpnOnionPreferencesHelp),
+                      const SizedBox(height: 12),
+                    ],
+                    SelectableText(url.toString()),
+                  ],
+                ),
+              ),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.of(context).pop(),
@@ -96,6 +112,8 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
   }
 
   Future<void> _enterKey() async {
+    final account = widget.account;
+    final saveKey = widget.onSaveKey;
     var enteredKey = '';
     final locals = AppLocalizations.of(context)!;
     final form = GlobalKey<FormState>();
@@ -132,7 +150,9 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
                     child: Text(locals.ok)),
               ],
             ));
-    if (key != null && mounted) await _run(() => widget.onSaveKey(key));
+    if (key != null && mounted && widget.account == account) {
+      await _run(() => saveKey(key));
+    }
   }
 
   String _description(NerdVpnAccessStatus status, AppLocalizations locals) {
@@ -148,6 +168,8 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
         return locals.nerdVpnAccessDisabled;
       case 'denied':
         return locals.nerdVpnAccessDenied;
+      case 'proxyRequired':
+        return locals.nerdVpnProxyRequired;
       case 'unavailable':
         return locals.nerdVpnAccessUnavailable;
       default:

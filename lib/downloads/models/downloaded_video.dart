@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/videos/models/ided_video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +13,30 @@ part 'downloaded_video.freezed.dart';
 part 'downloaded_video.g.dart';
 
 const String _downloadFolder = 'downloads';
+
+class _MusicMetadataConverter
+    implements JsonConverter<MusicMetadata?, Map<String, dynamic>?> {
+  const _MusicMetadataConverter();
+
+  @override
+  MusicMetadata? fromJson(Map<String, dynamic>? json) =>
+      json == null ? null : MusicMetadata.fromJson(json);
+
+  @override
+  Map<String, dynamic>? toJson(MusicMetadata? metadata) => metadata?.toJson();
+}
+
+class _SponsorSegmentConverter
+    implements JsonConverter<SponsorSegment, Map<String, dynamic>> {
+  const _SponsorSegmentConverter();
+
+  @override
+  SponsorSegment fromJson(Map<String, dynamic> json) =>
+      SponsorSegment.fromJson(json);
+
+  @override
+  Map<String, dynamic> toJson(SponsorSegment segment) => segment.toJson();
+}
 
 @freezed
 sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
@@ -22,6 +48,10 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       String? accountId,
       String? author,
       String? authorUrl,
+      @_MusicMetadataConverter() MusicMetadata? musicMetadata,
+      @_SponsorSegmentConverter()
+      @Default([])
+      List<SponsorSegment> sponsorSegments,
       @Default(false) bool downloadComplete,
       @Default(false) bool downloadFailed,
       @Default(false) bool authenticationRequired,

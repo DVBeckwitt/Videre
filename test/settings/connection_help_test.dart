@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/material.dart';
@@ -67,6 +69,48 @@ void main() {
     await tester.tap(find.text('Help'));
     await tester.pumpAndSettle();
   }
+
+  Future<void> pumpError(WidgetTester tester, Object error) async {
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(body: Builder(builder: (context) {
+        return TextButton(
+            onPressed: () => AddServerScreen.handleError(context, error),
+            child: const Text('Show error'));
+      })),
+    ));
+    await tester.tap(find.text('Show error'));
+    await tester.pumpAndSettle();
+  }
+
+  for (final error in [
+    const GatewaySignInFailed(
+        'Enable SOCKS5/Orbot in Network proxy to use this onion server.'),
+    const NerdVpnAccessRequired('proxyRequired'),
+  ]) {
+    testWidgets('${error.runtimeType} explains missing onion proxy only once',
+        (tester) async {
+      await pumpError(tester, error);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text(error.toString()), findsOneWidget);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('connection error retains a distinct upstream detail',
+      (tester) async {
+    final error =
+        InvidiousServiceError('fixture upstream rejection', statusCode: 403);
+    await pumpError(tester, error);
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
+    expect(find.text(locals.instanceForbiddenHelp), findsOneWidget);
+    expect(find.text(error.toString()), findsOneWidget);
+  });
 
   testWidgets('stats success does not hide a blocked video API',
       (tester) async {

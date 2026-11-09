@@ -9,6 +9,7 @@ import 'package:clipious/videos/states/compact_video.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 
 import 'offline_video_thumbnail.dart';
+import 'video_duration_badge.dart';
 
 const double compactVideoHeight = 70;
 
@@ -96,6 +97,8 @@ class CompactVideo extends StatelessWidget {
                                 )
                               : video != null
                                   ? VideoThumbnailView(
+                                      musicThumbnails:
+                                          video!.musicMetadata?.thumbnails,
                                       images: video!.deArrowThumbnailUrl == null
                                           ? video!.videoThumbnails
                                           : null,
@@ -105,7 +108,17 @@ class CompactVideo extends StatelessWidget {
                                           ? [video!.deArrowThumbnailUrl!]
                                           : ImageObject
                                               .getThumbnailUrlsByPreferredOrder(
-                                                  video?.videoThumbnails))
+                                                  video?.videoThumbnails),
+                                      child: video!.isUpcoming == true
+                                          ? null
+                                          : Align(
+                                              alignment: Alignment.bottomRight,
+                                              child: VideoDurationBadge(
+                                                lengthSeconds:
+                                                    video!.lengthSeconds,
+                                                compact: true,
+                                              ),
+                                            ))
                                   : offlineVideo != null
                                       ? OfflineVideoThumbnail(
                                           video: offlineVideo!,
