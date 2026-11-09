@@ -112,6 +112,26 @@ void main() {
     expect(find.text(error.toString()), findsOneWidget);
   });
 
+  testWidgets('pending API approval is explained without connection advice',
+      (tester) async {
+    await pumpError(tester, const NerdVpnAccessRequired('waiting'));
+    expect(find.text('NerdVPN approval pending'), findsOneWidget);
+    expect(find.textContaining('not approved API access'), findsOneWidget);
+    expect(find.textContaining('Check eligibility'), findsOneWidget);
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
+    expect(find.text(locals.instanceConnectionHelp), findsNothing);
+    expect(find.text(locals.error), findsNothing);
+  });
+
+  testWidgets('a connection failure is not presented as pending approval',
+      (tester) async {
+    await pumpError(tester, http.ClientException('Connection closed'));
+    expect(find.text('NerdVPN approval pending'), findsNothing);
+    expect(find.textContaining('not approved API access'), findsNothing);
+    expect(find.text('Error'), findsOneWidget);
+  });
+
   testWidgets('stats success does not hide a blocked video API',
       (tester) async {
     final requests = <Uri>[];

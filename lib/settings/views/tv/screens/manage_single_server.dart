@@ -207,21 +207,25 @@ class TvManageSingleServerScreen extends StatelessWidget {
                     onCheck: cubit.checkApiAccess,
                     onSaveKey: cubit.setApiKey,
                   ),
-                SettingsTile(
-                  title: locals.protectedServerSignIn,
-                  enabled: !state.authenticating,
-                  description: locals.protectedServerSignInDescription,
-                  leading: const Icon(Icons.shield_outlined),
-                  onSelected: (context) =>
-                      _accountAction(context, cubit.logInProtected),
-                ),
-                SettingsTile(
-                  title: locals.cookieLogin,
-                  enabled: !state.authenticating &&
-                      !isLoggedIn &&
-                      !NerdVpnAccess.supports(server),
-                  onSelected: (context) => showLogInWithCookiesDialog(context),
-                ),
+                if (!(NerdVpnAccess.supports(server) &&
+                    isNerdVpnOnionUrl(server.url))) ...[
+                  SettingsTile(
+                    title: locals.protectedServerSignIn,
+                    enabled: !state.authenticating,
+                    description: locals.protectedServerSignInDescription,
+                    leading: const Icon(Icons.shield_outlined),
+                    onSelected: (context) =>
+                        _accountAction(context, cubit.logInProtected),
+                  ),
+                  SettingsTile(
+                    title: locals.cookieLogin,
+                    enabled: !state.authenticating &&
+                        !isLoggedIn &&
+                        !NerdVpnAccess.supports(server),
+                    onSelected: (context) =>
+                        showLogInWithCookiesDialog(context),
+                  ),
+                ],
                 SettingsTile(
                   title: locals.logout,
                   enabled: isLoggedIn || NerdVpnAccess.supports(server),

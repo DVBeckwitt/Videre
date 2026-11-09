@@ -135,15 +135,21 @@ Future<void> runServerAccountAction(
   } catch (error) {
     if (!context.mounted) return;
     final locals = AppLocalizations.of(context)!;
-    final message = Text(error is GatewayUnsupported ||
-            error is GatewaySignInFailed ||
-            error is NerdVpnAccessRequired
-        ? error.toString()
-        : locals.accountActionFailed);
+    final approvalPending =
+        error is NerdVpnAccessRequired && error.state == 'waiting';
+    final title =
+        approvalPending ? locals.nerdVpnApprovalPending : locals.error;
+    final message = Text(approvalPending
+        ? locals.nerdVpnAccessPending
+        : error is GatewayUnsupported ||
+                error is GatewaySignInFailed ||
+                error is NerdVpnAccessRequired
+            ? error.toString()
+            : locals.accountActionFailed);
     if (television) {
-      showTvAlertdialog(context, locals.error, [message]);
+      showTvAlertdialog(context, title, [message]);
     } else {
-      await showAlertDialog(context, locals.error, [message]);
+      await showAlertDialog(context, title, [message]);
     }
   }
 }

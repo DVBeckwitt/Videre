@@ -80,7 +80,9 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                               ? cubit.retryItems
                               : cubit.getItems,
                           child: Text(
-                            locals.couldntFetchVideos,
+                            state.error == ItemListErrors.nerdVpnApprovalPending
+                                ? locals.nerdVpnAccessPendingShort
+                                : locals.couldntFetchVideos,
                             style: small
                                 ? textTheme.labelSmall
                                 : textTheme.bodyMedium,

@@ -175,9 +175,13 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                   if (hasError)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Text(state.error == ItemListErrors.invalidScope
-                          ? locals.itemListErrorInvalidScope
-                          : locals.itemlistErrorGeneric),
+                      child: Text(switch (state.error) {
+                        ItemListErrors.nerdVpnApprovalPending =>
+                          locals.nerdVpnAccessPendingShort,
+                        ItemListErrors.invalidScope =>
+                          locals.itemListErrorInvalidScope,
+                        _ => locals.itemlistErrorGeneric,
+                      }),
                     ),
                   if (hasError || list.state.itemList.getHasMore())
                     _action(

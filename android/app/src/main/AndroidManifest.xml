@@ -24,6 +24,11 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <queries>
+        <!-- Resolve Tor Browser's public launcher when external links are disabled. -->
+        <package android:name="org.torproject.torbrowser" />
+    </queries>
+
     <application
         android:name="${applicationName}"
         android:banner="@drawable/banner"

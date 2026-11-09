@@ -149,6 +149,8 @@ class TvTextFieldScreen extends StatelessWidget {
                 child: TextField(
                   autofocus: true,
                   autocorrect: autocorrect ?? true,
+                  enableSuggestions: !(obscureText ?? false),
+                  enableIMEPersonalizedLearning: !(obscureText ?? false),
                   controller: controller,
                   keyboardType: keyboardType,
                   onSubmitted: (value) {

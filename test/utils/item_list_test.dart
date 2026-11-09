@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:clipious/network/nerdvpn_access.dart';
 
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/states/item_list.dart';
@@ -51,6 +52,28 @@ class _FilteredPages extends _Pages {
 }
 
 void main() {
+  test('pending approval is retained until a successful explicit retry',
+      () async {
+    final pages = _Pages()
+      ..initial = () async => throw const NerdVpnAccessRequired('waiting');
+    final cubit = await _loaded(pages);
+    addTearDown(cubit.close);
+    expect(cubit.state.error, ItemListErrors.nerdVpnApprovalPending);
+    pages.initial = () async => [1];
+    await cubit.retryItems();
+    expect(cubit.state.error, ItemListErrors.none);
+    expect(cubit.state.items, [1]);
+  });
+
+  test('unavailable API access is not confused with pending approval',
+      () async {
+    final pages = _Pages()
+      ..initial = () async => throw const NerdVpnAccessRequired('unavailable');
+    final cubit = await _loaded(pages);
+    addTearDown(cubit.close);
+    expect(cubit.state.error, ItemListErrors.couldNotFetchItems);
+  });
+
   test('visibility changes during pagination preserve the unfiltered pages',
       () async {
     final next = Completer<List<int>>();

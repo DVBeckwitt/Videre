@@ -120,6 +120,72 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('cancelled mini-player drag restores its docked position',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    player.showMiniPlayer();
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 300,
+      height: 120,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pump(const Duration(seconds: 4));
+    final gesture = await tester
+        .startGesture(tester.getCenter(find.byType(PlayerControls)));
+    await gesture.moveBy(const Offset(0, 60));
+    await tester.pump();
+    expect(player.state.isDragging, isTrue);
+    await gesture.cancel();
+    await tester.pump();
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.isMini, isTrue);
+    expect(player.state.top, isNull);
+    expect(player.state.showMiniPlaceholder, isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('explicit minimize clears an interrupted drag', (tester) async {
+    await createPlayingVideo(tester);
+    player.videoDragStarted(DragStartDetails());
+    player.videoDragged(DragUpdateDetails(
+        delta: const Offset(0, 250), globalPosition: const Offset(100, 1200)));
+    expect(player.state.isDragging, isTrue);
+    player.showMiniPlayer();
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.top, isNull);
+    expect(player.state.dragDistance, 0);
+  });
+
+  testWidgets('controls appearing mid-drag retain the cancellation handler',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    player.showMiniPlayer();
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 300,
+      height: 120,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pump(const Duration(seconds: 4));
+    final controls = tester
+        .element(find.byType(LayoutBuilder).last)
+        .read<PlayerControlsCubit>();
+    final gesture = await tester
+        .startGesture(tester.getCenter(find.byType(PlayerControls)));
+    await gesture.moveBy(const Offset(0, 60));
+    await tester.pump();
+    expect(player.state.isDragging, isTrue);
+    controls.showControls();
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.isMini, isTrue);
+    expect(player.state.top, isNull);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('separate controls keep their own hide deadlines',
       (tester) async {
     final first = PlayerControlsCubit(const PlayerControlsState(), player);

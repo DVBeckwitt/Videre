@@ -853,7 +853,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         value: state.isMini);
 
     emit(state.copyWith(
-        isMini: false, mediaEvent: mediaEvent, top: 0, isHidden: false));
+        isMini: false,
+        mediaEvent: mediaEvent,
+        top: 0,
+        isHidden: false,
+        isDragging: false,
+        dragDistance: 0,
+        showMiniPlaceholder: false));
     onOrientationChange();
   }
 
@@ -869,6 +875,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         mediaEvent: mediaEvent,
         top: null,
         isHidden: false,
+        isDragging: false,
+        dragDistance: 0,
+        showMiniPlaceholder: false,
       ));
     }
   }
@@ -1080,6 +1089,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _requestedBackendVideoId = video is Video ? video.videoId : null;
     _backendSwitchPending = true;
     _clearBackendProgress();
+    // Replacing the video disposes its controls and active gesture recognizer.
+    // Settle first, because that disposal does not deliver drag end/cancel.
+    videoDragCancelled();
     emit(state.copyWith(
         isClosing: false, requestedBackend: null, backendRecovery: null));
     if (backendRequest != null) {
@@ -1175,6 +1187,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _recordBackendRequest(
             currentlyPlaying.videoId, currentlyPlaying.backendPlayback);
       }
+      // A drag can also begin while the replacement metadata is loading.
+      videoDragCancelled();
       emit(state.copyWith(
           position: resumeAt,
           startAt: startAt,
@@ -1220,6 +1234,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (video is Video &&
           (state.backendRecovery != null || video.musicMetadata != null)) {
         pause();
+        videoDragCancelled();
         emit(state.copyWith(currentlyPlaying: video));
         setEvent(const MediaEvent(state: MediaState.error));
         return;
@@ -1405,13 +1420,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void videoDraggedEnd(DragEndDetails details) {
     bool showMini =
         state.dragDistance.abs() > 200 ? state.isMini : state.dragStartMini;
-    emit(state.copyWith(isDragging: false));
-    _debounce(
-      'drag-end',
-      animationDuration,
-      () => emit(state.copyWith(showMiniPlaceholder: false)),
-    );
+    // Settle the position and drag state together. A stale absolute top must
+    // never survive after the gesture ends or is interrupted by Android.
     if (showMini) {
+      showMiniPlayer();
+    } else {
+      showBigPlayer();
+    }
+  }
+
+  void videoDragCancelled() {
+    if (isClosed || !state.isDragging || state.isClosing) return;
+    if (state.dragStartMini) {
       showMiniPlayer();
     } else {
       showBigPlayer();
@@ -1745,6 +1765,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         state.isAudio != value) {
       _progressGeneration++;
       // The replacement decoder reads its starting position when it mounts.
+      videoDragCancelled();
       emit(state.copyWith(isAudio: value, startAt: state.position));
     }
   }

@@ -4,12 +4,18 @@ import 'package:bloc/bloc.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 
 import '../models/paginated_list.dart';
 
 part 'item_list.freezed.dart';
 
-enum ItemListErrors { none, couldNotFetchItems, invalidScope }
+enum ItemListErrors {
+  none,
+  couldNotFetchItems,
+  invalidScope,
+  nerdVpnApprovalPending
+}
 
 class ItemListCubit<T> extends Cubit<ItemListState<T>> {
   final ScrollController scrollController = ScrollController();
@@ -97,7 +103,10 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
       }
     } catch (err) {
       late ItemListErrors error;
-      if (err is InvidiousServiceError && err.message == "Invalid scope") {
+      if (err is NerdVpnAccessRequired && err.state == 'waiting') {
+        error = ItemListErrors.nerdVpnApprovalPending;
+      } else if (err is InvidiousServiceError &&
+          err.message == "Invalid scope") {
         error = ItemListErrors.invalidScope;
       } else {
         error = ItemListErrors.couldNotFetchItems;

@@ -141,6 +141,65 @@ class NerdVpnAccessManagerTest {
         assertEquals("ready", restarted.status(account)["state"])
     }
 
+    @Test fun `explicit pending approval without a usable date waits for a manual check`() {
+        for (rawDate in listOf<String?>(null, "invalid-date")) {
+            for (server in listOf(origin, "http://$onionHost".toHttpUrl(), "https://$onionHost".toHttpUrl())) {
+                val context = account.copy(origin = server)
+                val resource = server.resolve("/api/v1/videos/fixture")!!
+                val store = MemoryStore()
+                var requests = 0
+                val fetch = { _: GatewayContext, _: String ->
+                    requests++
+                    if (requests == 1) NerdVpnKeyResult(403, error = "not_yet_eligible",
+                        availableAt = rawDate?.let(::parseNerdVpnTimestamp))
+                    else NerdVpnKeyResult(200, key = replacementKey)
+                }
+                val manager = NerdVpnAccessManager(store, fetch) { initialTime }
+                val waiting = manager.authorize(context, token)
+                assertEquals("waiting", waiting["state"])
+                assertNull(waiting["availableAt"])
+                assertEquals(token, store.read(context)?.token)
+                val restarted = NerdVpnAccessManager(store, fetch) { initialTime + 86_400_000 }
+                repeat(3) { assertEquals("waiting", restarted.resolve(context, resource).error) }
+                assertEquals(1, requests)
+                assertEquals("ready", restarted.check(context)["state"])
+                assertEquals(replacementKey, restarted.resolve(context, resource).apiKey)
+                assertEquals(2, requests)
+            }
+        }
+    }
+
+    @Test fun `a failed eligibility refresh retains pending approval and its saved date`() {
+        for (failureCode in listOf(0, 429, 503, 200)) {
+            val store = MemoryStore()
+            var time = initialTime
+            val availableAt = initialTime + 86_400_000
+            var requests = 0
+            val manager = NerdVpnAccessManager(store, { _, _ ->
+                requests++
+                when (requests) {
+                    1 -> NerdVpnKeyResult(403, error = "not_yet_eligible", availableAt = availableAt)
+                    2 -> if (failureCode == 0) throw IOException("fixture offline")
+                        else NerdVpnKeyResult(failureCode, retryAfterSeconds = 120)
+                    else -> NerdVpnKeyResult(200, key = replacementKey)
+                }
+            }) { time }
+            manager.authorize(account, token)
+            val refreshed = manager.check(account)
+            assertEquals("waiting", refreshed["state"])
+            assertEquals(nerdVpnTimestamp(availableAt), refreshed["availableAt"])
+            assertEquals(token, store.read(account)?.token)
+            assertTrue(store.read(account)!!.retryAt!! > time)
+            assertEquals("waiting", manager.check(account)["state"])
+            assertEquals("waiting", manager.resolve(account, video).error)
+            assertEquals(2, requests)
+            time = store.read(account)!!.retryAt!! + 1
+            assertEquals("ready", manager.check(account)["state"])
+            assertEquals(replacementKey, manager.resolve(account, video).apiKey)
+            assertEquals(3, requests)
+        }
+    }
+
     @Test fun `reaching eligibility waits for a longer gateway cooldown before requesting a key`() {
         val store = MemoryStore()
         var time = initialTime

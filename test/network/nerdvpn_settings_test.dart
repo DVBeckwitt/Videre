@@ -31,6 +31,7 @@ import 'package:url_launcher_platform_interface/link.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 const _access = MethodChannel('videre/nerdvpn_access');
+const _torBrowser = MethodChannel('videre/tor_browser');
 const _account =
     Server(id: 'nerdvpn-account', url: 'https://invidious.nerdvpn.de');
 const _onionOrigin =
@@ -69,6 +70,8 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   var nativeStatus = <String, Object?>{};
   final calls = <String>[];
+  final browserCalls = <MethodCall>[];
+  var torBrowserAvailable = false;
   late _PreferencesLauncher launcher;
   late UrlLauncherPlatform originalLauncher;
   late bool originalTv;
@@ -80,6 +83,12 @@ void main() {
     UrlLauncherPlatform.instance = launcher = _PreferencesLauncher();
     nativeStatus = {'state': 'ready'};
     calls.clear();
+    browserCalls.clear();
+    torBrowserAvailable = false;
+    messenger.setMockMethodCallHandler(_torBrowser, (call) async {
+      browserCalls.add(call);
+      return torBrowserAvailable;
+    });
     messenger.setMockMethodCallHandler(_access, (call) async {
       calls.add(call.method);
       return nativeStatus;
@@ -88,6 +97,7 @@ void main() {
 
   tearDown(() {
     messenger.setMockMethodCallHandler(_access, null);
+    messenger.setMockMethodCallHandler(_torBrowser, null);
     UrlLauncherPlatform.instance = originalLauncher;
     app.isTv = originalTv;
   });
@@ -173,6 +183,7 @@ void main() {
     final displayDate =
         DateFormat.yMMMd('en').add_jm().format(availableAt.toLocal());
     expect(find.textContaining(displayDate), findsOneWidget);
+    expect(find.textContaining('not approved API access'), findsOneWidget);
     expect(find.text('Check eligibility'), findsOneWidget);
     final locals = AppLocalizations.of(
         tester.element(find.byType(NerdVpnAccessSettings)))!;
@@ -183,6 +194,34 @@ void main() {
     expect(checks, 1);
     expect(find.text('An API key is saved securely for this account.'),
         findsOneWidget);
+  });
+
+  testWidgets(
+      'waiting without a date still explains pending approval and the next step',
+      (tester) async {
+    nativeStatus = {'state': 'waiting'};
+    await showPanel(tester);
+    expect(find.textContaining('not approved API access'), findsOneWidget);
+    expect(find.textContaining('temporarily unavailable'), findsNothing);
+    expect(find.text('Check eligibility'), findsOneWidget);
+    expect(calls, ['status']);
+  });
+
+  testWidgets('a failed refresh keeps the known pending status visible',
+      (tester) async {
+    nativeStatus = {
+      'state': 'waiting',
+      'availableAt': '2031-02-18T09:30:00Z',
+    };
+    await showPanel(tester, onCheck: () async {
+      throw StateError('private-token');
+    });
+    await tester.tap(find.text('Check eligibility'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('not approved API access'), findsOneWidget);
+    expect(find.textContaining('private-token'), findsNothing);
+    expect(find.text('Check eligibility'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -328,6 +367,21 @@ void main() {
   });
 
   for (final television in [false, true]) {
+    testWidgets(
+        '${television ? 'TV' : 'phone'} onion preferences open the separate Tor Browser',
+        (tester) async {
+      app.isTv = television;
+      torBrowserAvailable = true;
+      await showPanel(tester, account: _onionAccount);
+      await tester.tap(find.text('Open NerdVPN preferences'));
+      await tester.pumpAndSettle();
+      expect(browserCalls.single.method, 'openNerdVpnPreferences');
+      expect(browserCalls.single.arguments, {'serverUrl': _onionOrigin});
+      expect(launcher.urls, isEmpty);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
     for (final scheme in ['http', 'https']) {
       testWidgets(
           '${television ? 'TV' : 'phone'} $scheme onion preferences preserve the selected origin with Tor guidance',
@@ -340,7 +394,10 @@ void main() {
         expect(launcher.urls, isEmpty);
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(find.text('$origin/preferences#api-access'), findsOneWidget);
-        expect(find.textContaining('browser connected to Tor'), findsOneWidget);
+        expect(
+            find.textContaining('Tor Browser cannot open this link directly'),
+            findsOneWidget);
+        expect(browserCalls.single.arguments, {'serverUrl': origin});
         expect(
             find.textContaining('https://invidious.nerdvpn.de'), findsNothing);
         expect(tester.takeException(), isNull);
@@ -353,16 +410,12 @@ void main() {
       await showManager(tester, television: television, account: _onionAccount);
       expect(find.byType(NerdVpnAccessSettings), findsOneWidget);
       expect(find.text('Enter API key'), findsOneWidget);
-      final cookie = find.text('Log in with cookie');
-      if (television) {
-        final tile = tester.widget<tv.SettingsTile>(
-            find.ancestor(of: cookie, matching: find.byType(tv.SettingsTile)));
-        expect(tile.enabled, isFalse);
-      } else {
-        final tile = tester.widget<phone.SettingsTile>(find.ancestor(
-            of: cookie, matching: find.byType(phone.SettingsTile)));
-        expect(tile.enabled, isFalse);
-      }
+      expect(find.text('Log in with cookie'), findsNothing);
+      expect(find.text('Log in with token'), findsNothing);
+      final locals = AppLocalizations.of(
+          tester.element(find.byType(NerdVpnAccessSettings)))!;
+      expect(find.text(locals.protectedServerSignIn), findsNothing);
+      expect(find.text(locals.logout), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -544,6 +597,7 @@ void main() {
       expect(cubit.state.valid, isTrue);
       expect(find.text(locals.instanceAddressDescription), findsOneWidget);
       expect(find.text(locals.testAndAddServer), findsOneWidget);
+      expect(find.text(locals.accountName), findsOneWidget);
       final validState = cubit.state;
 
       await enterUrl('https://invidious.nerdvpn.de');
@@ -551,12 +605,19 @@ void main() {
       expect(find.text(locals.nerdVpnAccessSignIn), findsOneWidget);
       expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
       expect(find.text(locals.instanceAddressDescription), findsNothing);
+      expect(find.text(locals.accountName), findsNothing);
 
       await enterUrl(_onionOrigin);
       expect(cubit.state.valid, isTrue);
-      expect(find.text(locals.nerdVpnAccessSignIn), findsOneWidget);
-      expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
+      expect(find.text(locals.nerdVpnOnionSetup), findsOneWidget);
+      expect(find.text(locals.nerdVpnAccessSignIn), findsNothing);
+      expect(find.text(locals.nerdVpnSignInAndAdd), findsNothing);
+      expect(find.text(locals.nerdVpnOpenTorBrowser), findsOneWidget);
+      expect(find.text(locals.nerdVpnManualKey), findsOneWidget);
+      expect(find.text(locals.protectedServer), findsNothing);
+      expect(find.text(locals.alsoTestServerConfig), findsNothing);
       expect(find.text(locals.instanceAddressDescription), findsNothing);
+      expect(find.text(locals.accountName), findsNothing);
 
       await cubit.addHeader('X-Invidious-Token', _manualKey);
       await tester.pumpAndSettle();
@@ -564,13 +625,15 @@ void main() {
       expect(find.text(locals.nerdVpnSignInAndAdd), findsNothing);
       cubit.removeHeader('X-Invidious-Token');
       await tester.pumpAndSettle();
-      expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
+      expect(find.text(locals.testAndAddServer), findsOneWidget);
+      expect(find.text(locals.nerdVpnSignInAndAdd), findsNothing);
 
       await enterUrl('https://different.example');
       expect(cubit.state.valid, isTrue);
       expect(find.text(locals.instanceAddressDescription), findsOneWidget);
       expect(find.text(locals.testAndAddServer), findsOneWidget);
       expect(find.text(locals.nerdVpnAccessSignIn), findsNothing);
+      expect(find.text(locals.accountName), findsOneWidget);
       expect(calls, isEmpty);
       expect(tester.takeException(), isNull);
     });

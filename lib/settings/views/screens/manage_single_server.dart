@@ -145,43 +145,48 @@ class ManageSingleServerScreen extends StatelessWidget {
                                   onSaveKey: cubit.setApiKey,
                                 ),
                               ),
-                            SettingsTile.navigation(
-                              leading: const Icon(Icons.shield_outlined),
-                              enabled: !state.authenticating,
-                              title: Text(locals.protectedServerSignIn),
-                              description:
-                                  Text(locals.protectedServerSignInDescription),
-                              onPressed: (context) => runServerAccountAction(
-                                  context, cubit.logInProtected),
-                            ),
-                            SettingsTile(
-                              leading: server.authToken?.isNotEmpty ?? false
-                                  ? const Icon(Icons.check)
-                                  : const Icon(Icons.token),
-                              enabled: !state.authenticating &&
-                                  (!isLoggedIn ||
-                                      NerdVpnAccess.supports(server)) &&
-                                  !state.hasBasicAuth,
-                              title: Text(locals.tokenLogin),
-                              value: Text(server.authToken?.isNotEmpty ?? false
-                                  ? locals.loggedIn
-                                  : locals.tokenLoginDescription),
-                              onPressed: (context) => runServerAccountAction(
-                                  context, cubit.logInWithToken),
-                            ),
-                            SettingsTile(
-                              leading: server.sidCookie?.isNotEmpty ?? false
-                                  ? const Icon(Icons.check)
-                                  : const Icon(Icons.cookie_outlined),
-                              enabled: !state.authenticating &&
-                                  !isLoggedIn &&
-                                  !NerdVpnAccess.supports(server),
-                              title: Text(locals.cookieLogin),
-                              value: Text(server.sidCookie?.isNotEmpty ?? false
-                                  ? locals.loggedIn
-                                  : locals.cookieLoginDescription),
-                              onPressed: showLogInWithCookiesDialog,
-                            ),
+                            if (!(NerdVpnAccess.supports(server) &&
+                                isNerdVpnOnionUrl(server.url))) ...[
+                              SettingsTile.navigation(
+                                leading: const Icon(Icons.shield_outlined),
+                                enabled: !state.authenticating,
+                                title: Text(locals.protectedServerSignIn),
+                                description: Text(
+                                    locals.protectedServerSignInDescription),
+                                onPressed: (context) => runServerAccountAction(
+                                    context, cubit.logInProtected),
+                              ),
+                              SettingsTile(
+                                leading: server.authToken?.isNotEmpty ?? false
+                                    ? const Icon(Icons.check)
+                                    : const Icon(Icons.token),
+                                enabled: !state.authenticating &&
+                                    (!isLoggedIn ||
+                                        NerdVpnAccess.supports(server)) &&
+                                    !state.hasBasicAuth,
+                                title: Text(locals.tokenLogin),
+                                value: Text(
+                                    server.authToken?.isNotEmpty ?? false
+                                        ? locals.loggedIn
+                                        : locals.tokenLoginDescription),
+                                onPressed: (context) => runServerAccountAction(
+                                    context, cubit.logInWithToken),
+                              ),
+                              SettingsTile(
+                                leading: server.sidCookie?.isNotEmpty ?? false
+                                    ? const Icon(Icons.check)
+                                    : const Icon(Icons.cookie_outlined),
+                                enabled: !state.authenticating &&
+                                    !isLoggedIn &&
+                                    !NerdVpnAccess.supports(server),
+                                title: Text(locals.cookieLogin),
+                                value: Text(
+                                    server.sidCookie?.isNotEmpty ?? false
+                                        ? locals.loggedIn
+                                        : locals.cookieLoginDescription),
+                                onPressed: showLogInWithCookiesDialog,
+                              ),
+                            ],
                             SettingsTile(
                               leading: const Icon(Icons.exit_to_app),
                               enabled:

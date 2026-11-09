@@ -89,23 +89,49 @@ its optional interception of `Authorization` must not consume the Invidious toke
 ## NerdVPN API access
 
 The canonical `https://invidious.nerdvpn.de` instance and its official onion
-address use PKCE browser sign-in and the `:api_key` scope. Both token sign-in and protected sign-in fetch the
-account's API key after the code exchange. Existing accounts can sign in again
-to grant this scope, or enter a manual key in account settings.
+address support managed API keys. Clearnet browser sign-in uses PKCE and the
+`:api_key` scope, and fetches the account's API key after the code exchange.
+Existing clearnet accounts can sign in again to grant this scope, or enter a
+manual key in account settings.
 
 The supported onion host is
 `nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion`,
 on HTTP port 80 or HTTPS port 443. Enable Orbot or another Tor-capable SOCKS5
-endpoint in **Network proxy** before using it. Onion sign-in uses Videre's
-isolated native browser and the configured proxy, including the token exchange
-and API-key request. HTTP onion requests are blocked before DNS or connection
+endpoint in **Network proxy** before using it. The onion setup hands off to the
+separately installed Tor Browser. On versions that reject links from other apps,
+choose **Copy address and open Tor Browser**, then paste the address into that
+browser. Sign in there, wait for API eligibility if required, enable API access,
+and enter the key in Videre.
+Videre does not bundle Tor Browser. Its own proxy must be configured separately;
+opening Tor Browser does not route Videre's requests. HTTP onion requests are
+blocked before DNS or connection
 when the app's SOCKS setting is off. HTTPS certificate checks remain mandatory.
 Other HTTP hosts, ports, and onion aliases do not gain managed API-key access.
 
-The onion preferences button shows the selected server's preferences address
-with guidance to open it in a Tor-capable browser. The server must expose the
-same authorization and API-key endpoints and permit the account's access;
-Videre cannot override eligibility restrictions or a gateway blocking the API.
+The onion preferences button explicitly targets the installed stable Tor Browser,
+never an arbitrary default browser or a private browser component. Copying its
+public preferences address requires a separate user action. If Tor Browser is
+unavailable, including on a TV,
+Videre shows installation guidance and the preferences address to open on
+another device. API keys are obscured during entry. Adding an onion server
+checks authenticated statistics and video metadata through Videre's configured
+transport before saving it; a failed check clears the unsaved credential.
+This grants API access for browsing and playback without importing browser
+cookies or linking an Invidious account token for remote library synchronization.
+The server must permit authenticated API and media requests from Videre;
+the app cannot override eligibility restrictions or a gateway blocking the API.
+
+A live check on November 9, 2026 reached the HTTP onion through Tor on Android
+16 with the normal Android WebView, but Gandalf stopped before the login form
+with "Web Crypto API is disabled". Chromium restricts Web Crypto to
+[secure origins](https://chromium.googlesource.com/chromium/src/+/main/docs/security/faq.md).
+This browser/gateway compatibility failure is separate from account eligibility.
+The same test account subsequently signed in successfully through the separately
+installed Tor Browser 16.0 on Android. Its onion preferences reported a six-hour
+minimum account age, which the test account had not yet reached. No API key was
+available during the check, so live authenticated API requests and onion playback remain
+unverified. The local fixture acceptance below establishes client behavior, not
+the live gateway's compatibility with API-key requests.
 
 API keys and the native recovery credential are encrypted with Android Keystore
 and scoped to the local profile, account, and exact origin (scheme, host, port).

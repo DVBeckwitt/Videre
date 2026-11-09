@@ -8,6 +8,7 @@ import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -208,6 +209,90 @@ void main() {
     expect(requests.single.url.origin, _account.url);
     expect(database.getAccount(_account.accountId)!.authToken, isNull);
     expect(authorizations, isEmpty);
+  });
+
+  for (final failure in <Exception>[
+    http.ClientException('private transport detail'),
+    TimeoutException('private transport detail'),
+    const SocketException('private transport detail'),
+    const HttpException('private transport detail'),
+    const HandshakeException('private transport detail'),
+  ]) {
+    test('${failure.runtimeType} during exchange asks for a fresh sign-in',
+        () async {
+      final previous = _account.copyWith(authToken: 'previous-token');
+      await database.upsertServer(previous);
+      await fileDb.useServer(previous);
+      respond = (_) async => throw failure;
+
+      await expectLater(
+          api.logIn(_account.accountId),
+          throwsA(isA<GatewaySignInFailed>()
+              .having(
+                  (error) => error.message, 'advice', contains('sign in again'))
+              .having((error) => error.toString(), 'safe message',
+                  isNot(contains('private transport detail')))));
+
+      expect(requests, hasLength(1));
+      expect(authorizations, isEmpty);
+      expect(
+          database.getAccount(_account.accountId)!.authToken, 'previous-token');
+      expect((await fileDb.getCurrentlySelectedServer()).authToken,
+          'previous-token');
+    });
+  }
+
+  test('an interrupted token response requires a fresh sign-in', () async {
+    client.close();
+    var exchanges = 0;
+    client = MockClient.streaming((_, __) async {
+      exchanges++;
+      return http.StreamedResponse(
+          Stream<List<int>>.error(
+              http.ClientException('private response detail')),
+          200);
+    });
+    service = api = Service(httpClient: client);
+
+    await expectLater(
+        api.logIn(_account.accountId),
+        throwsA(isA<GatewaySignInFailed>().having(
+            (error) => error.message, 'advice', contains('sign in again'))));
+
+    expect(exchanges, 1);
+    expect(authorizations, isEmpty);
+    expect(database.getAccount(_account.accountId)!.authToken, isNull);
+  });
+
+  test('retrying a failed exchange opens the browser for a new one-use code',
+      () async {
+    var browserOpens = 0;
+    messenger.setMockMethodCallHandler(_webAuth, (call) async {
+      browserOpens++;
+      return _codeCallback(
+          _callback(_authorization(call)), 'one-use-code-$browserOpens');
+    });
+    final successfulResponse = respond;
+    respond = (request) async {
+      if (requests.length == 1) {
+        throw http.ClientException('Connection closed before full header');
+      }
+      return successfulResponse(request);
+    };
+
+    await expectLater(
+        api.logIn(_account.accountId), throwsA(isA<GatewaySignInFailed>()));
+    expect(browserOpens, 1);
+    expect(requests, hasLength(1));
+    expect(database.getAccount(_account.accountId)!.authToken, isNull);
+
+    await api.logIn(_account.accountId);
+
+    expect(browserOpens, 2);
+    expect(requests.map((request) => jsonDecode(request.body)['code']),
+        ['one-use-code-1', 'one-use-code-2']);
+    expect(authorizations, hasLength(1));
+    expect(database.getAccount(_account.accountId)!.authToken, 'account-token');
   });
 
   test('a rate-limited code exchange pauses subsequent browser sign-in',

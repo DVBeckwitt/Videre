@@ -1,4 +1,5 @@
 import 'package:clipious/utils/motion.dart';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -39,7 +40,7 @@ class Player extends StatelessWidget {
             context.select((PlayerCubit value) => value.state.hasVideo);
         final bool isPip =
             context.select((PlayerCubit value) => value.state.isPip);
-        final double? top = context.select(
+        final double? requestedTop = context.select(
             (PlayerCubit value) => value.state.isPip ? 0.0 : value.state.top);
         final bool isMini =
             context.select((PlayerCubit value) => value.state.isMini) && !isPip;
@@ -70,6 +71,25 @@ class Player extends StatelessWidget {
             !isAudio &&
             !isMini &&
             !isFullScreen;
+
+        // The player is a sibling of the routed Scaffolds, so their keyboard
+        // resizing does not move this overlay. Keep it above the keyboard and
+        // bound a drag to the current viewport, including after a resize.
+        final padding = MediaQuery.paddingOf(context);
+        final keyboardInset = isMini && !isFullScreen
+            ? MediaQuery.viewInsetsOf(context).bottom
+            : 0.0;
+        final maxTop =
+            max(0.0, maxHeight - keyboardInset - padding.bottom - targetHeight);
+        final top = isFullScreen
+            ? 0.0
+            : isDragging && requestedTop != null
+                ? requestedTop
+                    .clamp(min(padding.top, maxTop), maxTop)
+                    .toDouble()
+                : isMini
+                    ? null
+                    : requestedTop;
 
         final playerHorizontalPosition = orientation == Orientation.landscape &&
                 isMini &&
@@ -121,7 +141,7 @@ class Player extends StatelessWidget {
                   ? 0
                   : isMini && isDragging && top != null
                       ? maxHeight - top - targetHeight
-                      : cubit.getBottom,
+                      : cubit.getBottom + keyboardInset,
           duration: isDragging ? Duration.zero : AppMotion.duration(context),
           curve: Curves.easeInOutQuad,
           child: AnimatedOpacity(

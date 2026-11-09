@@ -20,6 +20,7 @@ import 'package:clipious/media_handler.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
@@ -400,6 +401,35 @@ void main() {
         await retry;
         expect(video.state.requestedBackend, same(initialRequest));
       });
+
+      for (final accessState in ['waiting', 'disabled']) {
+        test(
+            'NerdVPN $accessState metadata failure preserves actionable advice',
+            () async {
+          final error = NerdVpnAccessRequired(accessState);
+          final failed =
+              video.stream.firstWhere((state) => !state.loadingVideo);
+          metadata.responses.single.completeError(error);
+          await failed;
+
+          expect(video.state.video, isNull);
+          expect(video.state.error, error.toString());
+          expect(video.state.error, isNot(coulnotLoadVideos));
+          if (accessState == 'waiting') {
+            expect(video.state.error, contains('not approved API access'));
+            expect(video.state.error, contains('Check eligibility'));
+          } else {
+            expect(video.state.error, isNot(contains('not approved')));
+          }
+
+          final retry = video.onReady();
+          expect(video.state.error, isEmpty);
+          metadata.responses.last.complete(Video(videoId: 'metadata-status'));
+          await retry;
+          expect(video.state.error, isEmpty);
+          expect(video.state.video?.videoId, 'metadata-status');
+        });
+      }
 
       test('old loads and disposal cannot publish request snapshots', () async {
         final oldObserver = metadata.observers.single!;

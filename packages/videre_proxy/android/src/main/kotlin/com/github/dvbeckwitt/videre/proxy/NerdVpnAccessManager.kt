@@ -220,12 +220,16 @@ internal class NerdVpnAccessManager(
                 response.statusCode == 0 && response.error == "proxyRequired" -> next.copy(state = "proxyRequired")
                 response.statusCode == 200 && response.key != null && validNerdVpnKey(response.key) ->
                     next.copy(key = response.key, state = "ready")
-                response.statusCode == 403 && response.error == "not_yet_eligible" && response.availableAt != null ->
+                response.statusCode == 403 && response.error == "not_yet_eligible" ->
                     next.copy(key = null, state = "waiting", availableAt = response.availableAt)
                 response.statusCode == 403 && response.error == "access_disabled" -> next.copy(key = null, state = "disabled")
                 response.statusCode == 403 && response.error == "access_denied" -> next.copy(state = "denied")
                 response.statusCode in setOf(401, 403) -> next.copy(state = "signInRequired")
-                else -> next.copy(state = "unavailable", retryAt = retryTime(response.retryAfterSeconds))
+                // A failed refresh does not revoke the server's last confirmed
+                // waiting state. Retain its date while respecting the cooldown.
+                else -> next.copy(state = if (current.state == "waiting") "waiting" else "unavailable",
+                    availableAt = current.availableAt.takeIf { current.state == "waiting" },
+                    retryAt = retryTime(response.retryAfterSeconds))
             }
         }
         store.write(context, record)

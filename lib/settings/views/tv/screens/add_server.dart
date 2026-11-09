@@ -9,6 +9,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
+import 'package:clipious/settings/views/components/nerdvpn_onion_setup.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/settings/views/components/server_account_dialogs.dart';
@@ -75,9 +76,11 @@ class TvAddServerScreen extends StatelessWidget {
                       ),
                       ValueListenableBuilder(
                         valueListenable: cubit.urlController,
-                        builder: (context, _, __) => Text(cubit.usesNerdVpn
-                            ? locals.nerdVpnAccessSignIn
-                            : locals.instanceAddressDescription),
+                        builder: (context, _, __) => Text(cubit.usesNerdVpnOnion
+                            ? locals.nerdVpnOnionSetup
+                            : cubit.usesNerdVpn
+                                ? locals.nerdVpnAccessSignIn
+                                : locals.instanceAddressDescription),
                       ),
                       const Gap(12),
                       OutlinedButton.icon(
@@ -101,18 +104,41 @@ class TvAddServerScreen extends StatelessWidget {
                           autocorrect: false,
                         ),
                       ),
-                      const Gap(10),
-                      Text(locals.accountName),
-                      ExcludeFocus(
-                        excluding: state.loading,
-                        child: TvTextField(controller: cubit.nameController),
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => cubit.usesNerdVpn
+                            ? const SizedBox.shrink()
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  const Gap(10),
+                                  Text(locals.accountName),
+                                  ExcludeFocus(
+                                    excluding: state.loading,
+                                    child: TvTextField(
+                                        controller: cubit.nameController),
+                                  ),
+                                ],
+                              ),
                       ),
-                      SwitchListTile(
-                        title: Text(locals.protectedServer),
-                        subtitle: Text(locals.protectedServerHelp),
-                        value: state.protectedServer,
-                        onChanged:
-                            state.loading ? null : cubit.setProtectedServer,
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => cubit.usesNerdVpnOnion
+                            ? NerdVpnOnionSetup(
+                                serverUrl: AddServerCubit.normalizeUrl(
+                                    cubit.urlController.text)!,
+                                apiKeyController: cubit.apiKeyController,
+                                loading: state.loading,
+                                television: true,
+                              )
+                            : SwitchListTile(
+                                title: Text(locals.protectedServer),
+                                subtitle: Text(locals.protectedServerHelp),
+                                value: state.protectedServer,
+                                onChanged: state.loading
+                                    ? null
+                                    : cubit.setProtectedServer,
+                              ),
                       ),
                       ListTile(
                         leading: AnimatedRotation(
@@ -205,22 +231,30 @@ class TvAddServerScreen extends StatelessWidget {
                                   valueListenable: cubit.urlController,
                                   builder: (context, _, __) => Text(cubit
                                               .usesNerdVpn &&
+                                          !cubit.usesNerdVpnOnion &&
                                           (state.protectedServer ||
                                               !state.headers.keys.any(
                                                   NerdVpnAccess.isKeyHeader))
                                       ? locals.nerdVpnSignInAndAdd
                                       : locals.testAndAddServer),
                                 )),
-                      CheckboxListTile(
-                        title: Text(
-                          locals.alsoTestServerConfig,
-                          style: textTheme.bodySmall,
-                        ),
-                        value: state.advancedTest,
-                        onChanged: state.loading || state.publicInstance != null
-                            ? null
-                            : (value) => cubit.setAdvancedTest(value ?? true),
-                      )
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => cubit.usesNerdVpnOnion
+                            ? const SizedBox.shrink()
+                            : CheckboxListTile(
+                                title: Text(
+                                  locals.alsoTestServerConfig,
+                                  style: textTheme.bodySmall,
+                                ),
+                                value: state.advancedTest,
+                                onChanged: state.loading ||
+                                        state.publicInstance != null
+                                    ? null
+                                    : (value) =>
+                                        cubit.setAdvancedTest(value ?? true),
+                              ),
+                      ),
                     ],
                   ),
                 ),

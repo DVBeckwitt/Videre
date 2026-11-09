@@ -6,6 +6,7 @@ import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -22,11 +23,15 @@ class _OnboardingService extends Service {
   bool cancelled = false;
   bool failValidation = false;
   Object? validationError;
+  Object? videoError;
   Completer<void>? signInWait;
+  Completer<void>? validationWait;
   final events = <String>[];
   final signedOut = <Server>[];
   Server? authorized;
   Map<String, String>? validationHeaders;
+  String? validationUrl;
+  Server? videoServer;
 
   @override
   Future<Server?> authenticateNerdVpn(Server original) async {
@@ -49,6 +54,8 @@ class _OnboardingService extends Service {
       String serverUrl, Map<String, String>? headers) async {
     events.add('stats');
     validationHeaders = headers;
+    validationUrl = serverUrl;
+    await validationWait?.future;
     if (validationError != null) throw validationError!;
     if (failValidation) throw StateError('Invalid instance response');
   }
@@ -58,6 +65,8 @@ class _OnboardingService extends Service {
       {Server? serverOverride,
       void Function(BackendPlayback request)? onBackendRequest}) async {
     events.add('video');
+    videoServer = serverOverride;
+    if (videoError != null) throw videoError!;
     return Video(videoId: videoId);
   }
 
@@ -77,6 +86,8 @@ void main() {
   late _OnboardingService api;
   final calls = <MethodCall>[];
   var accessState = 'ready';
+  Completer<void>? setKeyWait;
+  Object? setKeyError;
 
   setUp(() async {
     db = database = await SembastSqfDb.createInMemory();
@@ -85,9 +96,15 @@ void main() {
     cubit = AddServerCubit(const AddServerState());
     cubit.selectPublicInstance(_origin);
     accessState = 'ready';
+    setKeyWait = null;
+    setKeyError = null;
     calls.clear();
     messenger.setMockMethodCallHandler(_access, (call) async {
       calls.add(call);
+      if (call.method == 'setKey') {
+        await setKeyWait?.future;
+        if (setKeyError != null) throw setKeyError!;
+      }
       return {
         'state': accessState,
         if (accessState == 'waiting') 'availableAt': '2031-02-18T09:30:00Z',
@@ -141,30 +158,85 @@ void main() {
     expect(api.signedOut, isEmpty);
   });
 
-  test('onion setup authenticates before probing its own API origin', () async {
-    cubit.urlController.text = _onionOrigin;
+  test('NerdVPN ignores an account label hidden after changing the address',
+      () async {
+    cubit.nameController.text = 'x' * 81;
     final account = await cubit.validateServer();
-    expect(account!.url, _onionOrigin);
-    expect(account.authToken, 'test-account-token');
+    expect(account!.name, isEmpty);
     expect(api.events, ['token-sign-in', 'stats', 'video']);
-    final context = GatewayRequestContext.tryParse(
-        api.validationHeaders![gatewayContextHeader]!);
-    expect(context!.origin.origin, _onionOrigin);
-    expect(api.signedOut, isEmpty);
   });
 
-  test('onion waiting account remains saved without anonymous probes',
-      () async {
-    cubit.urlController.text = _onionOrigin;
-    accessState = 'waiting';
-    final account = await cubit.validateServer();
-    expect(account!.url, _onionOrigin);
-    expect(account.authToken, 'test-account-token');
-    expect(api.events, ['token-sign-in']);
-    expect(api.signedOut, isEmpty);
-    await database.upsertServer(account);
-    expect(database.getAccount(account.accountId)!.url, _onionOrigin);
-  });
+  for (final onionOrigin in [
+    _onionOrigin,
+    _onionOrigin.replaceFirst('http:', 'https:')
+  ]) {
+    test('manual setup validates $onionOrigin without launching a browser',
+        () async {
+      cubit.urlController.text = onionOrigin;
+      cubit.apiKeyController.text = '  $_manualKey  ';
+      cubit.setProtectedServer(true);
+      cubit.setAdvancedTest(false);
+      final account = await cubit.validateServer();
+
+      expect(cubit.usesNerdVpnOnion, isTrue);
+      expect(account!.url, onionOrigin);
+      expect(account.authToken, isNull);
+      expect(account.gatewayEnabled, isFalse);
+      expect(api.events, ['stats', 'video']);
+      expect(api.validationUrl, onionOrigin);
+      expect(api.videoServer, account);
+      final context = GatewayRequestContext.tryParse(
+          api.validationHeaders![gatewayContextHeader]!);
+      expect(context!.origin.origin, onionOrigin);
+      expect(
+          context.key,
+          GatewayRequestContext.forAccount(
+                  account.profileId, account.accountId, account.url)
+              ?.key);
+      expect(calls.map((call) => call.method), ['setKey', 'status']);
+      expect((calls.first.arguments as Map)['key'], _manualKey);
+      expect((calls.first.arguments as Map)['context'], context.encoded);
+      expect(cubit.state.toString(), isNot(contains(_manualKey)));
+      expect(api.validationHeaders.toString(), isNot(contains(_manualKey)));
+      await database.upsertServer(account);
+      expect(database.getAccount(account.accountId)!.toJson().toString(),
+          isNot(contains(_manualKey)));
+      expect(api.signedOut, isEmpty);
+    });
+  }
+
+  for (final entry in ['', ' ', 'nvpn_short', '${_manualKey}extra'].indexed) {
+    test(
+        'missing or malformed onion key is rejected before storage (${entry.$1})',
+        () async {
+      cubit.urlController.text = _onionOrigin;
+      cubit.apiKeyController.text = entry.$2;
+      await expectLater(
+          cubit.validateServer(), throwsA(isA<NerdVpnApiKeyException>()));
+      expect(calls, isEmpty);
+      expect(api.events, isEmpty);
+      expect(await database.getServers(), isEmpty);
+      expect(cubit.state.loading, isFalse);
+    });
+  }
+
+  for (final state in ['waiting', 'disabled', 'proxyRequired']) {
+    test('onion $state status rejects setup and removes the unsaved key',
+        () async {
+      cubit.urlController.text = _onionOrigin;
+      cubit.apiKeyController.text = _manualKey;
+      accessState = state;
+      await expectLater(
+          cubit.validateServer(),
+          throwsA(isA<NerdVpnAccessRequired>()
+              .having((e) => e.state, 'state', state)));
+      expect(api.events, isEmpty);
+      expect(api.signedOut.single.url, _onionOrigin);
+      expect(api.signedOut.single.customHeaders, isEmpty);
+      expect(await database.getServers(), isEmpty);
+      expect(cubit.state.loading, isFalse);
+    });
+  }
 
   test('onion manual key is stored securely with an onion-scoped context',
       () async {
@@ -183,6 +255,145 @@ void main() {
     await database.upsertServer(account);
     expect(database.getAccount(account.accountId)!.toJson().toString(),
         isNot(contains(_manualKey)));
+  });
+
+  test(
+      'matching onion key field and legacy header are accepted without saving either',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    await cubit.addHeader('x-invidious-token', ' $_manualKey ');
+    await cubit.addHeader('X-Other', 'keep');
+    final account = await cubit.validateServer();
+    expect(account!.customHeaders, {'X-Other': 'keep'});
+    expect(api.events, ['stats', 'video']);
+    expect(calls.where((call) => call.method == 'setKey'), hasLength(1));
+    expect(account.toJson().toString(), isNot(contains(_manualKey)));
+  });
+
+  test('conflicting onion keys fail without exposing either key in the error',
+      () async {
+    const otherKey = 'nvpn_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    await cubit.addHeader('X-Invidious-Token', otherKey);
+    await expectLater(
+        cubit.validateServer(),
+        throwsA(isA<NerdVpnApiKeyException>().having(
+            (e) => e.toString(),
+            'safe message',
+            allOf(isNot(contains(_manualKey)), isNot(contains(otherKey))))));
+    expect(calls, isEmpty);
+    expect(api.events, isEmpty);
+    expect(cubit.state.loading, isFalse);
+  });
+
+  test('key survives equivalent addresses but is cleared on an origin change',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    cubit.urlController.text = ' $_onionOrigin/ ';
+    expect(cubit.apiKeyController.text, _manualKey);
+    cubit.urlController.text = '$_onionOrigin:80';
+    expect(cubit.apiKeyController.text, _manualKey);
+    cubit.urlController.text = _onionOrigin.replaceFirst('http:', 'https:');
+    expect(cubit.apiKeyController.text, isEmpty);
+    cubit.apiKeyController.text = _manualKey;
+    cubit.urlController.text = _origin;
+    expect(cubit.apiKeyController.text, isEmpty);
+    expect(cubit.usesNerdVpnOnion, isFalse);
+  });
+
+  test('an invalid intermediate address cannot carry a key to another origin',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    cubit.urlController.text = 'http://';
+    expect(cubit.apiKeyController.text, isEmpty);
+    cubit.urlController.text = 'https://private.example';
+    expect(cubit.apiKeyController.text, isEmpty);
+    expect(cubit.usesNerdVpnOnion, isFalse);
+  });
+
+  for (final error in [
+    const NerdVpnAccessRequired('proxyRequired'),
+    const NerdVpnAccessRequired('denied'),
+    InvidiousServiceError('API access denied',
+        statusCode: 403, isGatewayResponse: true, errorCode: 'access_denied'),
+    StateError('Invalid instance response'),
+  ]) {
+    test('onion API validation failure cleans the unsaved key: $error',
+        () async {
+      cubit.urlController.text = _onionOrigin;
+      cubit.apiKeyController.text = _manualKey;
+      api.validationError = error;
+      await expectLater(cubit.validateServer(), throwsA(same(error)));
+      expect(api.events, ['stats']);
+      expect(api.signedOut.single.url, _onionOrigin);
+      expect(api.signedOut.single.customHeaders, isEmpty);
+      expect(await database.getServers(), isEmpty);
+      expect(cubit.state.loading, isFalse);
+    });
+  }
+
+  test('closing onion setup while storing its key cleans the unsaved key',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    setKeyWait = Completer<void>();
+    final pending = cubit.validateServer();
+    await Future<void>.delayed(Duration.zero);
+    expect(calls.map((call) => call.method), ['setKey']);
+    await cubit.close();
+    setKeyWait!.complete();
+    expect(await pending, isNull);
+    expect(api.signedOut.single.url, _onionOrigin);
+    expect(api.events, isEmpty);
+    expect(calls.map((call) => call.method), ['setKey']);
+    expect(await database.getServers(), isEmpty);
+  });
+
+  test('failed native key response clears any partially stored unsaved key',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    setKeyError = PlatformException(code: 'STORAGE_FAILURE');
+    await expectLater(
+        cubit.validateServer(), throwsA(isA<NerdVpnAccessRequired>()));
+    expect(api.signedOut.single.url, _onionOrigin);
+    expect(api.signedOut.single.customHeaders, isEmpty);
+    expect(api.events, isEmpty);
+    expect(await database.getServers(), isEmpty);
+    expect(cubit.state.loading, isFalse);
+  });
+
+  test('successful onion stats alone cannot hide a failed video API', () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    cubit.setAdvancedTest(false);
+    api.videoError = const NerdVpnAccessRequired('denied');
+    await expectLater(
+        cubit.validateServer(), throwsA(isA<NerdVpnAccessRequired>()));
+    expect(api.events, ['stats', 'video']);
+    expect(api.signedOut.single.url, _onionOrigin);
+    expect(await database.getServers(), isEmpty);
+    expect(cubit.state.loading, isFalse);
+  });
+
+  test('closing onion setup during API validation cleans the unsaved key',
+      () async {
+    cubit.urlController.text = _onionOrigin;
+    cubit.apiKeyController.text = _manualKey;
+    api.validationWait = Completer<void>();
+    final pending = cubit.validateServer();
+    await Future<void>.delayed(Duration.zero);
+    expect(api.events, ['stats']);
+    await cubit.close();
+    api.validationWait!.complete();
+    expect(await pending, isNull);
+    expect(api.signedOut.single.url, _onionOrigin);
+    expect(api.events, ['stats']);
+    expect(await database.getServers(), isEmpty);
   });
 
   test('cancelled sign-in returns no account and sends no probes', () async {
