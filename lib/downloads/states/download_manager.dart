@@ -25,6 +25,9 @@ import '../../network/nerdvpn_access.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
+import '../../videos/models/sponsor_segment.dart';
+import '../../videos/models/sponsor_segment_types.dart';
+import '../../videos/models/video.dart';
 import 'resumable_download.dart';
 import '../services/download_storage.dart';
 
@@ -236,11 +239,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<bool> addDownload(String videoId,
-          {String quality = '720p', bool audioOnly = false}) =>
+          {String quality = '720p', bool audioOnly = false, Video? video}) =>
       _mutate(() async {
         await _ready;
         if (!_current ||
             _switchingProfile ||
+            (video != null && video.videoId != videoId) ||
             !DownloadedVideo.isSafeFileId(videoId) ||
             _library.getDownloadByVideoId(videoId) != null ||
             _deleting.contains(videoId) ||
@@ -252,10 +256,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (!_current || _switchingProfile) return false;
           await _library.upsertDownload(DownloadedVideo(
               videoId: videoId,
-              title: videoId,
+              title: video?.musicMetadata?.title ?? video?.title ?? videoId,
+              author: video?.musicMetadata?.artist ?? video?.author,
+              authorUrl: video?.authorUrl,
+              musicMetadata: video?.musicMetadata,
               profileId: _library.profileId,
               accountId: account.accountId,
-              lengthSeconds: 0,
+              lengthSeconds: video?.lengthSeconds ?? 0,
               quality: quality,
               folderUri: state.folderUri,
               audioOnly: audioOnly));
@@ -268,12 +275,15 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       });
 
   Future<int> addDownloads(Iterable<String> videoIds,
-      {String quality = '720p', bool audioOnly = false}) async {
+      {String quality = '720p',
+      bool audioOnly = false,
+      Map<String, Video> videosById = const {}}) async {
     var added = 0;
     final generation = _generation;
     for (final id in videoIds.toSet()) {
       if (generation != _generation || _switchingProfile) break;
-      if (await addDownload(id, quality: quality, audioOnly: audioOnly)) {
+      if (await addDownload(id,
+          quality: quality, audioOnly: audioOnly, video: videosById[id])) {
         added++;
       }
     }
@@ -319,6 +329,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     final dio = Dio(BaseOptions(
         connectTimeout: const Duration(seconds: 20),
         receiveTimeout: const Duration(seconds: 30)));
+    Future<List<SponsorSegment>>? sponsorSegments;
     var lastUpdate = DateTime(0);
     void update(int count, int total, int step, int steps) {
       final now = DateTime.now();
@@ -386,16 +397,19 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             throw StateError(
                 'This video has no compatible tracks for the download');
           }
+          final music = video.musicMetadata ?? vid.musicMetadata;
           video = video.copyWith(
               container: container,
-              title: vid.title ?? video.title,
-              author: vid.author,
-              authorUrl: vid.authorUrl,
-              lengthSeconds: vid.lengthSeconds ?? 0,
+              title: music?.title ?? vid.title ?? video.title,
+              author: music?.artist ?? vid.author,
+              musicMetadata: music,
+              authorUrl: vid.authorUrl ?? video.authorUrl,
+              lengthSeconds: vid.lengthSeconds ?? video.lengthSeconds,
               downloadFailed: false,
               authenticationRequired: false);
           await library.upsertDownload(video);
           setVideos();
+          sponsorSegments ??= _downloadSponsorSegments(video, library, token);
           final mediaPath = await video.downloadPath;
           final staging = await video.stagingPath;
           final audioPath = '$staging.audio.part';
@@ -412,7 +426,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                     update(count, total, step, steps));
           }
 
-          final thumb = ImageObject.getBestThumbnail(vid.videoThumbnails)?.url;
+          final thumb = ImageObject.getBestThumbnail(
+                  music?.thumbnails.isNotEmpty == true
+                      ? music!.thumbnails
+                      : vid.videoThumbnails)
+              ?.url;
           if (thumb != null && thumb.isNotEmpty) {
             unawaited(token.whenCancel.then(artworkToken.cancel));
             // Optional artwork must not delay the first media request. Keep it
@@ -444,6 +462,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             }
           }
           await artwork;
+          video = video.copyWith(sponsorSegments: await sponsorSegments);
           if (token.isCancelled) throw token.cancelError!;
           if (video.folderUri == null) {
             await File(output).rename(mediaPath);
@@ -520,6 +539,37 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         emit(state.copyWith(downloadProgresses: {}));
         setVideos();
       }
+    }
+  }
+
+  Future<List<SponsorSegment>> _downloadSponsorSegments(
+      DownloadedVideo video, IDbClient library, CancelToken token) async {
+    if (video.musicMetadata == null || token.isCancelled) {
+      return video.sponsorSegments;
+    }
+    final categories = SponsorSegmentType.values
+        .where((type) =>
+            type.isEnabled(library.getSettings(type.settingsName())?.value))
+        .toList();
+    if (categories.isEmpty) return video.sponsorSegments;
+    try {
+      final segments = await Future.any([
+        service.getSponsorSegments(video.videoId, categories),
+        // The service has no cancellation token. A late result never writes to
+        // disk, and profile switches/deletion do not wait for this lookup.
+        token.whenCancel.then((_) => video.sponsorSegments),
+      ]).timeout(const Duration(seconds: 3),
+          onTimeout: () => video.sponsorSegments);
+      // Keep raw categories/actions/timings so playback can apply the current
+      // preferences offline. Non-finite numbers cannot be persisted as JSON.
+      final cacheable = segments
+          .where((segment) => segment.segment.every((time) => time.isFinite))
+          .toList();
+      // Service also returns an empty list for transport/HTTP failures, so an
+      // optional refresh without usable data must preserve the offline cache.
+      return cacheable.isEmpty ? video.sponsorSegments : cacheable;
+    } catch (_) {
+      return video.sponsorSegments;
     }
   }
 

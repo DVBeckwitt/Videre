@@ -5,6 +5,7 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/player/models/media_command.dart';
+import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -47,6 +48,19 @@ class _QueuePlayer extends TestPlayerCubit {
       playedVideos: ['a'],
       playQueue: ListQueue.of(['c']),
     ));
+  }
+
+  void seedDuplicateQueue() {
+    final videos = assignPlaybackQueueIds(const [
+      Video(videoId: 'a'),
+      Video(videoId: 'b'),
+      Video(videoId: 'a'),
+    ]);
+    emit(state.copyWith(
+        videos: videos,
+        currentlyPlaying: videos[2],
+        playedVideos: videos.take(2).map(playbackQueueId).toList(),
+        playQueue: ListQueue<String>()));
   }
 }
 
@@ -103,6 +117,28 @@ void main() {
     expect(player.state.videos.map((video) => video.videoId), ['b', 'c', 'a']);
     expect(player.state.playedVideos, ['a']);
     expect(player.state.playQueue, ['c']);
+  });
+
+  test('reorder retains the selected occurrence of a repeated song', () {
+    player.seedDuplicateQueue();
+    final selected = player.state.currentQueueId;
+    final first = playbackQueueId(player.state.videos[0]);
+    player.onQueueReorder(2, 0);
+    expect(player.state.currentQueueId, selected);
+    expect(player.currentIndex, 0);
+    expect(player.state.playedVideos, isEmpty);
+    expect(player.state.playQueue, [first, 'b']);
+  });
+
+  test('removing one repeated song leaves the current occurrence intact', () {
+    player.seedDuplicateQueue();
+    final selected = player.state.currentQueueId;
+    player.removeVideoFromQueue(playbackQueueId(player.state.videos[0]));
+    expect(player.state.videos.map((video) => video.videoId), ['b', 'a']);
+    expect(player.state.currentQueueId, selected);
+    expect(player.currentIndex, 1);
+    expect(player.state.playedVideos, ['b']);
+    expect(player.state.isClosing, isFalse);
   });
 
   test('dropping an item in its existing slot leaves playback untouched', () {

@@ -34,6 +34,7 @@ class _VideoWithoutAutostart extends VideoPlayerCubit {
 class _RetainedAudioPlayer implements AudioPlayer {
   double nativeSpeed = 1;
   double nativePitch = 1;
+  Duration nativePosition = Duration.zero;
   final pitchesAtPlay = <double>[];
   final speedCalls = <double>[];
   final speedsAtPlay = <double>[];
@@ -44,11 +45,15 @@ class _RetainedAudioPlayer implements AudioPlayer {
   double get speed => nativeSpeed;
 
   @override
+  Duration get position => nativePosition;
+
+  @override
   Future<Duration?> setAudioSource(AudioSource source,
       {bool preload = true,
       int? initialIndex,
       Duration? initialPosition}) async {
     sources.add(source);
+    nativePosition = initialPosition ?? Duration.zero;
     if (heldSource != null) return heldSource!.future;
     return const Duration(minutes: 1);
   }

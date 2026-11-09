@@ -12,6 +12,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -368,5 +369,83 @@ void main() {
     expect(video.authorUrl, 'https://www.youtube.com/channel/$channel');
     expect(video.videoThumbnails.single.url, 'https://example.com/image.jpg');
     expect(video.indexId, id);
+  });
+
+  test('Music playlist export and restore retains sanitized catalog metadata',
+      () async {
+    final cover =
+        ImageObject(null, 'https://lh3.googleusercontent.com/cover', 512, 512);
+    final music = MusicMetadata(
+        title: 'Catalog song',
+        artist: 'Catalog artist',
+        album: 'Catalog album',
+        thumbnails: [
+          cover,
+          ImageObject(
+              null, 'https://user:music-secret@example.com/cover', 512, 512),
+          ImageObject(null, 'file:///private/cover.jpg', 512, 512),
+          ImageObject(null, 'https:/missing-host.jpg', 512, 512),
+        ]);
+    final song = Video(
+        videoId: id,
+        title: 'Upload title',
+        author: 'Upload author',
+        lengthSeconds: 180,
+        musicMetadata: music);
+    const ordinary = Video(videoId: '12345678901', title: 'Ordinary video');
+    final playlist = Playlist(
+        playlistId: 'local:music',
+        title: 'Mixed library',
+        author: '',
+        videoCount: 2,
+        videos: [song, ordinary]);
+    await source.saveSetting(SettingsValue(
+        localPlaylistsSetting,
+        jsonEncode([
+          {
+            ...playlist.toJson(),
+            'videos': [
+              {
+                ...song.toJson(),
+                'dashUrl': 'https://private-stream.invalid/media',
+                'musicMetadata': {
+                  ...music.toJson(),
+                  'accountId': 'private-music-account',
+                  'authToken': 'private-music-token',
+                },
+              },
+              ordinary.toJson(),
+            ],
+          },
+        ])));
+
+    final encoded = (await source.exportBackup()).encode();
+    await target.restoreBackup(UserBackup.parse(encoded));
+    final restored = Playlist.fromJson(
+        (jsonDecode(target.getSettings(localPlaylistsSetting)!.value) as List)
+            .single);
+
+    final restoredMusic = restored.videos.first.musicMetadata;
+    expect(restoredMusic, isNotNull);
+    expect(restoredMusic!.toJson(), {
+      'title': music.title,
+      'artist': music.artist,
+      'album': music.album,
+      'thumbnails': [cover.toJson()],
+    });
+    expect(restored.videos.first.lengthSeconds, 180);
+    expect(restored.videos.last.musicMetadata, isNull);
+    expect(restored.videos.map((video) => video.videoId),
+        [song.videoId, ordinary.videoId]);
+    for (final private in [
+      'music-secret',
+      'private-music-account',
+      'private-music-token',
+      'private-stream',
+      'file:///',
+      'https:/missing-host',
+    ]) {
+      expect(encoded, isNot(contains(private)));
+    }
   });
 }

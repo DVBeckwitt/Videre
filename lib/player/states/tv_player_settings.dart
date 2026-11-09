@@ -94,17 +94,9 @@ class TvPlayerSettingsCubit extends Cubit<TvPlayerSettingsState> {
   }
 
   changeSubtitles(String selected) {
-    log.fine('Subtitles selected $selected');
-    BetterPlayerSubtitlesSource? track = videoController
-        ?.betterPlayerSubtitlesSourceList
-        .firstWhere((e) => '${e.name}' == selected);
-
-    settings.setLastSubtitle(selected);
-
-    if (track != null) {
-      log.fine('Changing subtitles to $selected');
-      videoController?.setupSubtitleSource(track);
-    }
+    final index = videoController?.betterPlayerSubtitlesSourceList
+        .indexWhere((track) => '${track.name}' == selected);
+    if (index != null && index >= 0) player.selectSubtitle(index);
   }
 }
 

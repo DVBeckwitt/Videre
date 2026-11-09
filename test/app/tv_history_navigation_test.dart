@@ -146,6 +146,7 @@ void main() {
       Icons.playlist_play,
       Icons.local_fire_department,
       Icons.trending_up,
+      Icons.music_note,
       Icons.account_circle_outlined,
       Icons.phonelink,
       Icons.settings,

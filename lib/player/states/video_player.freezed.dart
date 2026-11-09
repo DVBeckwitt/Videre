@@ -20,6 +20,7 @@ mixin _$VideoPlayerState implements DiagnosticableTreeMixin {
   Duration? get startAt;
   String get selectedNonDashTrack;
   Duration? get bufferPosition;
+  bool get subtitleFailed;
   Video? get video;
   DownloadedVideo? get offlineVideo;
   bool? get playNow;
@@ -43,6 +44,7 @@ mixin _$VideoPlayerState implements DiagnosticableTreeMixin {
       ..add(DiagnosticsProperty('startAt', startAt))
       ..add(DiagnosticsProperty('selectedNonDashTrack', selectedNonDashTrack))
       ..add(DiagnosticsProperty('bufferPosition', bufferPosition))
+      ..add(DiagnosticsProperty('subtitleFailed', subtitleFailed))
       ..add(DiagnosticsProperty('video', video))
       ..add(DiagnosticsProperty('offlineVideo', offlineVideo))
       ..add(DiagnosticsProperty('playNow', playNow))
@@ -63,6 +65,8 @@ mixin _$VideoPlayerState implements DiagnosticableTreeMixin {
                 other.selectedNonDashTrack == selectedNonDashTrack) &&
             (identical(other.bufferPosition, bufferPosition) ||
                 other.bufferPosition == bufferPosition) &&
+            (identical(other.subtitleFailed, subtitleFailed) ||
+                other.subtitleFailed == subtitleFailed) &&
             (identical(other.video, video) || other.video == video) &&
             (identical(other.offlineVideo, offlineVideo) ||
                 other.offlineVideo == offlineVideo) &&
@@ -80,6 +84,7 @@ mixin _$VideoPlayerState implements DiagnosticableTreeMixin {
       startAt,
       selectedNonDashTrack,
       bufferPosition,
+      subtitleFailed,
       video,
       offlineVideo,
       playNow,
@@ -87,7 +92,7 @@ mixin _$VideoPlayerState implements DiagnosticableTreeMixin {
 
   @override
   String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
-    return 'VideoPlayerState(colors: $colors, overFlowTextColor: $overFlowTextColor, key: $key, startAt: $startAt, selectedNonDashTrack: $selectedNonDashTrack, bufferPosition: $bufferPosition, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls)';
+    return 'VideoPlayerState(colors: $colors, overFlowTextColor: $overFlowTextColor, key: $key, startAt: $startAt, selectedNonDashTrack: $selectedNonDashTrack, bufferPosition: $bufferPosition, subtitleFailed: $subtitleFailed, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls)';
   }
 }
 
@@ -104,6 +109,7 @@ abstract mixin class $VideoPlayerStateCopyWith<$Res> {
       Duration? startAt,
       String selectedNonDashTrack,
       Duration? bufferPosition,
+      bool subtitleFailed,
       Video? video,
       DownloadedVideo? offlineVideo,
       bool? playNow,
@@ -132,6 +138,7 @@ class _$VideoPlayerStateCopyWithImpl<$Res>
     Object? startAt = freezed,
     Object? selectedNonDashTrack = null,
     Object? bufferPosition = freezed,
+    Object? subtitleFailed = null,
     Object? video = freezed,
     Object? offlineVideo = freezed,
     Object? playNow = freezed,
@@ -162,6 +169,10 @@ class _$VideoPlayerStateCopyWithImpl<$Res>
           ? _self.bufferPosition
           : bufferPosition // ignore: cast_nullable_to_non_nullable
               as Duration?,
+      subtitleFailed: null == subtitleFailed
+          ? _self.subtitleFailed
+          : subtitleFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
       video: freezed == video
           ? _self.video
           : video // ignore: cast_nullable_to_non_nullable
@@ -308,6 +319,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
             Duration? startAt,
             String selectedNonDashTrack,
             Duration? bufferPosition,
+            bool subtitleFailed,
             Video? video,
             DownloadedVideo? offlineVideo,
             bool? playNow,
@@ -325,6 +337,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
             _that.startAt,
             _that.selectedNonDashTrack,
             _that.bufferPosition,
+            _that.subtitleFailed,
             _that.video,
             _that.offlineVideo,
             _that.playNow,
@@ -356,6 +369,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
             Duration? startAt,
             String selectedNonDashTrack,
             Duration? bufferPosition,
+            bool subtitleFailed,
             Video? video,
             DownloadedVideo? offlineVideo,
             bool? playNow,
@@ -372,6 +386,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
             _that.startAt,
             _that.selectedNonDashTrack,
             _that.bufferPosition,
+            _that.subtitleFailed,
             _that.video,
             _that.offlineVideo,
             _that.playNow,
@@ -400,6 +415,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
             Duration? startAt,
             String selectedNonDashTrack,
             Duration? bufferPosition,
+            bool subtitleFailed,
             Video? video,
             DownloadedVideo? offlineVideo,
             bool? playNow,
@@ -416,6 +432,7 @@ extension VideoPlayerStatePatterns on VideoPlayerState {
             _that.startAt,
             _that.selectedNonDashTrack,
             _that.bufferPosition,
+            _that.subtitleFailed,
             _that.video,
             _that.offlineVideo,
             _that.playNow,
@@ -436,6 +453,7 @@ class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
       this.startAt,
       this.selectedNonDashTrack = "",
       this.bufferPosition = Duration.zero,
+      this.subtitleFailed = false,
       this.video,
       this.offlineVideo,
       this.playNow,
@@ -456,6 +474,9 @@ class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
   @override
   @JsonKey()
   final Duration? bufferPosition;
+  @override
+  @JsonKey()
+  final bool subtitleFailed;
   @override
   final Video? video;
   @override
@@ -483,6 +504,7 @@ class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
       ..add(DiagnosticsProperty('startAt', startAt))
       ..add(DiagnosticsProperty('selectedNonDashTrack', selectedNonDashTrack))
       ..add(DiagnosticsProperty('bufferPosition', bufferPosition))
+      ..add(DiagnosticsProperty('subtitleFailed', subtitleFailed))
       ..add(DiagnosticsProperty('video', video))
       ..add(DiagnosticsProperty('offlineVideo', offlineVideo))
       ..add(DiagnosticsProperty('playNow', playNow))
@@ -503,6 +525,8 @@ class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
                 other.selectedNonDashTrack == selectedNonDashTrack) &&
             (identical(other.bufferPosition, bufferPosition) ||
                 other.bufferPosition == bufferPosition) &&
+            (identical(other.subtitleFailed, subtitleFailed) ||
+                other.subtitleFailed == subtitleFailed) &&
             (identical(other.video, video) || other.video == video) &&
             (identical(other.offlineVideo, offlineVideo) ||
                 other.offlineVideo == offlineVideo) &&
@@ -520,6 +544,7 @@ class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
       startAt,
       selectedNonDashTrack,
       bufferPosition,
+      subtitleFailed,
       video,
       offlineVideo,
       playNow,
@@ -527,7 +552,7 @@ class _VideoPlayerState extends VideoPlayerState with DiagnosticableTreeMixin {
 
   @override
   String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
-    return 'VideoPlayerState(colors: $colors, overFlowTextColor: $overFlowTextColor, key: $key, startAt: $startAt, selectedNonDashTrack: $selectedNonDashTrack, bufferPosition: $bufferPosition, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls)';
+    return 'VideoPlayerState(colors: $colors, overFlowTextColor: $overFlowTextColor, key: $key, startAt: $startAt, selectedNonDashTrack: $selectedNonDashTrack, bufferPosition: $bufferPosition, subtitleFailed: $subtitleFailed, video: $video, offlineVideo: $offlineVideo, playNow: $playNow, disableControls: $disableControls)';
   }
 }
 
@@ -546,6 +571,7 @@ abstract mixin class _$VideoPlayerStateCopyWith<$Res>
       Duration? startAt,
       String selectedNonDashTrack,
       Duration? bufferPosition,
+      bool subtitleFailed,
       Video? video,
       DownloadedVideo? offlineVideo,
       bool? playNow,
@@ -576,6 +602,7 @@ class __$VideoPlayerStateCopyWithImpl<$Res>
     Object? startAt = freezed,
     Object? selectedNonDashTrack = null,
     Object? bufferPosition = freezed,
+    Object? subtitleFailed = null,
     Object? video = freezed,
     Object? offlineVideo = freezed,
     Object? playNow = freezed,
@@ -606,6 +633,10 @@ class __$VideoPlayerStateCopyWithImpl<$Res>
           ? _self.bufferPosition
           : bufferPosition // ignore: cast_nullable_to_non_nullable
               as Duration?,
+      subtitleFailed: null == subtitleFailed
+          ? _self.subtitleFailed
+          : subtitleFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
       video: freezed == video
           ? _self.video
           : video // ignore: cast_nullable_to_non_nullable

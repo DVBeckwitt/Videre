@@ -6,10 +6,13 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'utils/models/country.dart';
 
+const youtubeMusicHost = 'music.youtube.com';
+
 const youtubeHosts = [
   'youtube.com',
   'www.youtube.com',
   'm.youtube.com',
+  youtubeMusicHost,
   'youtu.be'
 ];
 

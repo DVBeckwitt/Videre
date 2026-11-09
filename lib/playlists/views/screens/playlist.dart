@@ -37,8 +37,14 @@ class PlaylistViewScreen extends StatelessWidget {
     });
   }
 
-  openVideo(BuildContext context, String videoId) {
-    AutoRouter.of(context).push(VideoRoute(videoId: videoId)).then((value) {
+  openVideo(BuildContext context, Video video) {
+    if (video.musicMetadata != null) {
+      context.read<PlayerCubit>().playVideo([video]);
+      return;
+    }
+    AutoRouter.of(context)
+        .push(VideoRoute(videoId: video.videoId))
+        .then((value) {
       if (!context.mounted) return;
       context
           .read<PlaylistCubit>()
@@ -51,12 +57,15 @@ class PlaylistViewScreen extends StatelessWidget {
     if (state.loading) return;
     final locals = AppLocalizations.of(context)!;
     try {
+      final videos = {
+        for (final video in state.playlist.videos)
+          if (!video.filterHide) video.videoId: video,
+      };
       final count = await context.read<DownloadManagerCubit>().addDownloads(
-          state.playlist.videos
-              .where((v) => !v.filterHide)
-              .map((v) => v.videoId),
+          videos.keys,
           quality: '720p',
-          audioOnly: false);
+          audioOnly: false,
+          videosById: videos);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content:

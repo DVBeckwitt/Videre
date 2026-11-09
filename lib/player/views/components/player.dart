@@ -53,6 +53,10 @@ class Player extends StatelessWidget {
             context.select((PlayerCubit value) => value.state.isClosing);
         final Video? currentlyPlaying =
             context.select((PlayerCubit value) => value.state.currentlyPlaying);
+        final music = context.select((PlayerCubit value) =>
+            value.state.currentlyPlaying?.musicMetadata ??
+            value.state.offlineCurrentlyPlaying?.musicMetadata);
+        final isMusic = isAudio && music != null;
         final FullScreenState fullScreen =
             context.select((PlayerCubit value) => value.state.fullScreenState);
         final bool isFullScreen =
@@ -163,7 +167,9 @@ class Player extends StatelessWidget {
                                     isMini || isPip || isFullScreen
                                         ? const SizedBox.shrink()
                                         : AppBar(
-                                            title: Text(locals.videoPlayer),
+                                            title: Text(isMusic
+                                                ? locals.music
+                                                : locals.videoPlayer),
                                             leading: IconButton(
                                               icon:
                                                   const Icon(Icons.expand_more),
@@ -177,12 +183,15 @@ class Player extends StatelessWidget {
                                                       video: currentlyPlaying,
                                                       showTimestampOption: true,
                                                     ),
-                                                    AddToPlayListButton(
-                                                        key: ValueKey(
-                                                            currentlyPlaying),
-                                                        videoId:
-                                                            currentlyPlaying
-                                                                .videoId)
+                                                    if (!isMusic)
+                                                      AddToPlayListButton(
+                                                          key: ValueKey(
+                                                              currentlyPlaying),
+                                                          video:
+                                                              currentlyPlaying,
+                                                          videoId:
+                                                              currentlyPlaying
+                                                                  .videoId)
                                                   ],
                                           ),
                                     Flexible(
@@ -198,7 +207,9 @@ class Player extends StatelessWidget {
                                                   .height
                                               : isMini
                                                   ? targetHeight
-                                                  : 500,
+                                                  : isMusic
+                                                      ? maxHeight
+                                                      : 500,
                                         ),
                                         duration: AppMotion.duration(context),
                                         child: Row(
@@ -242,7 +253,14 @@ class Player extends StatelessWidget {
                                                               canSwipeDownToMinimize,
                                                           onSwipeDown: cubit
                                                               .showMiniPlayer,
-                                                          child: videoPlayer,
+                                                          // Keep the audio decoder at the same location
+                                                          // while the artwork view expands or minimizes.
+                                                          child: Offstage(
+                                                            offstage: isMusic &&
+                                                                !isMini &&
+                                                                !isFullScreen,
+                                                            child: videoPlayer,
+                                                          ),
                                                         )),
                                                     if (!isFullScreen)
                                                       ConditionalWrap(
@@ -261,7 +279,9 @@ class Player extends StatelessWidget {
                                                                   const ExpandedPlayer()))
                                                   ],
                                                 )),
-                                            if (!isFullScreen && !isMini)
+                                            if (!isFullScreen &&
+                                                !isMini &&
+                                                !isMusic)
                                               DeviceWidget(
                                                   orientation: orientation,
                                                   portraitTabletAsPhone: true,

@@ -6,6 +6,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/video_queue.dart';
+import 'package:clipious/music/views/components/music_player.dart';
 
 import '../../../comments/views/components/comments_container.dart';
 import '../../../downloads/models/downloaded_video.dart';
@@ -80,6 +81,12 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
 
     bool isFullScreen =
         controller.fullScreenState == FullScreenState.fullScreen;
+    if (!isFullScreen &&
+        !controller.isMini &&
+        controller.isAudio &&
+        (video?.musicMetadata ?? offlineVid?.musicMetadata) != null) {
+      return const MusicPlayer();
+    }
     bool distractionFree = settings.distractionFreeMode;
     final tabs = _tabOrder(distractionFree);
     final selectedIndex = context
@@ -119,7 +126,7 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
                                 !controller.isPip,
                             scrollable: true,
                             onSwipeDown: player.showMiniPlayer,
-                            child: VideoInfo(video: video),
+                            child: VideoInfo(video: video, loadDislikes: true),
                           ),
                           if (!distractionFree)
                             MinimizeOnSwipeDown(

@@ -88,7 +88,7 @@ class VideoMetrics extends StatelessWidget {
         ]);
       }
 
-      if ((dislikes ?? 0) > 0) {
+      if (dislikes != null && dislikes! >= 0) {
         metrics.addAll([
           Icon(Icons.thumb_down, size: iconSize),
           Padding(

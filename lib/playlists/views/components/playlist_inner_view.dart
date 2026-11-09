@@ -16,7 +16,7 @@ import '../../states/playlist.dart';
 class PlaylistInnerView extends StatelessWidget {
   final bool canDeleteVideos;
   final Function(BuildContext context, Video video) removeVideoFromPlaylist;
-  final Function(BuildContext context, String videoId) openVideo;
+  final Function(BuildContext context, Video video) openVideo;
   const PlaylistInnerView(
       {super.key,
       required this.canDeleteVideos,
@@ -115,7 +115,7 @@ class PlaylistInnerView extends StatelessWidget {
                                 : null,
                             child: CompactVideo(
                               video: v,
-                              onTap: () => openVideo(context, v.videoId),
+                              onTap: () => openVideo(context, v),
                               key: ValueKey(v.videoId),
                             ))),
                     if (playlistState.loading)

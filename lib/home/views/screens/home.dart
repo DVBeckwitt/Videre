@@ -43,6 +43,8 @@ class _MainScreenState extends State<MainContentScreen> {
         router.push(const DownloadManagerRoute());
       case PhoneNavigationItem.queue:
         router.push(const VideoQueueRoute());
+      case PhoneNavigationItem.music:
+        router.push(MusicRoute());
       case PhoneNavigationItem.playlist:
         router.push(const PlaylistLibraryRoute());
       default:
@@ -285,6 +287,12 @@ class _MainScreenState extends State<MainContentScreen> {
                         if (deviceType == DeviceType.phone)
                           ..._topActions(context, phoneNavigation)
                         else ...[
+                          IconButton(
+                            tooltip: locals.music,
+                            onPressed: () =>
+                                AutoRouter.of(context).push(MusicRoute()),
+                            icon: const Icon(Icons.music_note),
+                          ),
                           const AppBarDownloadButton(),
                           IconButton(
                             onPressed: () {

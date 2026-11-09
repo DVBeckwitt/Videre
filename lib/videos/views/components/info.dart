@@ -1,6 +1,7 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/views/components/text_linkified.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -11,16 +12,19 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../../subscription_management/view/components/subscribe_button.dart';
 import '../../../utils/models/image_object.dart';
+import 'video_dislike_metrics.dart';
 
 class VideoInfo extends StatelessWidget {
   final Video video;
   final int? dislikes;
+  final bool loadDislikes;
   final bool titleAndChannelInfo, descriptionAndTags;
 
   const VideoInfo(
       {super.key,
       required this.video,
       this.dislikes,
+      this.loadDislikes = false,
       this.titleAndChannelInfo = true,
       this.descriptionAndTags = true});
 
@@ -41,6 +45,8 @@ class VideoInfo extends StatelessWidget {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
     var textTheme = Theme.of(context).textTheme;
     var player = context.read<PlayerCubit>();
+    final useDislikes = context
+        .select((SettingsCubit cubit) => cubit.state.useReturnYoutubeDislike);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0),
       child: Column(
@@ -55,12 +61,17 @@ class VideoInfo extends StatelessWidget {
           if (titleAndChannelInfo)
             Padding(
               padding: const EdgeInsets.only(bottom: 8.0),
-              child: VideoMetrics(
-                video: video,
-                dislikes: dislikes,
-                style: textTheme.bodyMedium,
-                iconSize: 15,
-              ),
+              child: loadDislikes
+                  ? VideoDislikeMetrics(
+                      video: video,
+                      style: textTheme.bodyMedium,
+                    )
+                  : VideoMetrics(
+                      video: video,
+                      dislikes: useDislikes ? dislikes : null,
+                      style: textTheme.bodyMedium,
+                      iconSize: 15,
+                    ),
             ),
           if (titleAndChannelInfo)
             Row(

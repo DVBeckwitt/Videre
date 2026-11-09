@@ -40,7 +40,10 @@ String invidiousImageUrl(String url, Server server) {
 
   String? path;
   if (image.host == 'yt3.ggpht.com' ||
-      image.host == 'yt3.googleusercontent.com') {
+      image.host == 'yt3.googleusercontent.com' ||
+      image.host == 'lh3.googleusercontent.com') {
+    // Music artist portraits use the same image IDs on lh3. Invidious's
+    // /ggpht route serves these too, without a direct Google fallback.
     path = '/ggpht${image.path}';
   } else if (RegExp(r'^i[0-9]?\.ytimg\.com$').hasMatch(image.host)) {
     // Only routes supported by Invidious's image controller. In particular,

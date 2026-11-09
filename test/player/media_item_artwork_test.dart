@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 // ignore: depend_on_referenced_packages
@@ -6,6 +7,7 @@ import 'package:audio_service_platform_interface/audio_service_platform_interfac
 // ignore: depend_on_referenced_packages
 import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/media_handler.dart';
@@ -16,6 +18,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -140,6 +143,58 @@ void main() {
 
     expect(item.artUri, isNull);
     expect(item.artHeaders, isNull);
+  });
+
+  test('music notification uses song artist album and cover metadata',
+      () async {
+    final music = MusicMetadata(
+        title: 'Song',
+        artist: 'Singer',
+        album: 'Album',
+        thumbnails: [
+          ImageObject(null, 'https://lh3.googleusercontent.com/cover', 500, 500)
+        ]);
+    final controller = createPlayer(
+        video('/vi/artwork-video/default.jpg').copyWith(musicMetadata: music));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.title, 'Song');
+    expect(item.artist, 'Singer');
+    expect(item.album, 'Album');
+    expect(item.artUri, Uri.parse('https://selected.example/ggpht/cover'));
+    expect(
+        item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
+  });
+
+  test('downloaded music notifications retain album and artist offline',
+      () async {
+    final documents =
+        await Directory.systemTemp.createTemp('videre-music-art-');
+    const channel = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async => documents.path);
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(channel, null);
+      await documents.delete(recursive: true);
+    });
+    const downloaded = DownloadedVideo(
+        videoId: 'song',
+        title: 'Upload',
+        author: 'Channel',
+        lengthSeconds: 180,
+        quality: 'audio',
+        audioOnly: true,
+        musicMetadata:
+            MusicMetadata(title: 'Song', artist: 'Singer', album: 'Album'));
+    final controller = player = TestPlayerCubit(
+        PlayerState.init(null).copyWith(
+            offlineVideos: [downloaded], offlineCurrentlyPlaying: downloaded),
+        settings);
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.title, 'Song');
+    expect(item.artist, 'Singer');
+    expect(item.album, 'Album');
+    expect(item.artUri!.scheme, 'file');
   });
 
   test('malformed artwork does not prevent notification metadata', () async {

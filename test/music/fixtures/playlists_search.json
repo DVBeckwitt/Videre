@@ -1,0 +1,178 @@
+{
+  "contents": {
+    "tabbedSearchResultsRenderer": {
+      "tabs": [
+        {
+          "tabRenderer": {
+            "content": {
+              "sectionListRenderer": {
+                "contents": [
+                  {
+                    "musicShelfRenderer": {
+                      "contents": [
+                        {
+                          "musicResponsiveListItemRenderer": {
+                            "thumbnail": {
+                              "musicThumbnailRenderer": {
+                                "thumbnail": {
+                                  "thumbnails": [
+                                    {
+                                      "url": "https://yt3.ggpht.com/FsAixq-GgxDhhjQ2Jsl074IOLCe9i4wrSe709GmdN8bxyWvW-pdAXwxsF4xlmbeZ-GzqzBl-9ag=s192",
+                                      "width": 192,
+                                      "height": 192
+                                    },
+                                    {
+                                      "url": "https://yt3.ggpht.com/FsAixq-GgxDhhjQ2Jsl074IOLCe9i4wrSe709GmdN8bxyWvW-pdAXwxsF4xlmbeZ-GzqzBl-9ag=s576",
+                                      "width": 576,
+                                      "height": 576
+                                    },
+                                    {
+                                      "url": "https://yt3.ggpht.com/FsAixq-GgxDhhjQ2Jsl074IOLCe9i4wrSe709GmdN8bxyWvW-pdAXwxsF4xlmbeZ-GzqzBl-9ag=s1200",
+                                      "width": 1200,
+                                      "height": 1200
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "flexColumns": [
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "Every Daft Punk Song"
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "Adam Is very weird",
+                                        "navigationEndpoint": {
+                                          "browseEndpoint": {
+                                            "browseId": "UCmIH9e23OjC0YIim5vmFkog",
+                                            "browseEndpointContextSupportedConfigs": {
+                                              "browseEndpointContextMusicConfig": {
+                                                "pageType": "MUSIC_PAGE_TYPE_USER_CHANNEL"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "text": " \u2022 "
+                                      },
+                                      {
+                                        "text": "281K views"
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ],
+                            "navigationEndpoint": {
+                              "browseEndpoint": {
+                                "browseId": "VLPLwO8Yaz8URbq0HdSG3VFeCIUSGpsjbCtH",
+                                "browseEndpointContextSupportedConfigs": {
+                                  "browseEndpointContextMusicConfig": {
+                                    "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "musicResponsiveListItemRenderer": {
+                            "thumbnail": {
+                              "musicThumbnailRenderer": {
+                                "thumbnail": {
+                                  "thumbnails": [
+                                    {
+                                      "url": "https://yt3.ggpht.com/6CswgTJJb6rWtnMF2_rzkYmwn_fMiXHjd5C-hWzqXx9xjKeRN0pAznFFyhAKnjUsmcGFNZwGdaeY=s192",
+                                      "width": 192,
+                                      "height": 192
+                                    },
+                                    {
+                                      "url": "https://yt3.ggpht.com/6CswgTJJb6rWtnMF2_rzkYmwn_fMiXHjd5C-hWzqXx9xjKeRN0pAznFFyhAKnjUsmcGFNZwGdaeY=s576",
+                                      "width": 576,
+                                      "height": 576
+                                    },
+                                    {
+                                      "url": "https://yt3.ggpht.com/6CswgTJJb6rWtnMF2_rzkYmwn_fMiXHjd5C-hWzqXx9xjKeRN0pAznFFyhAKnjUsmcGFNZwGdaeY=s1200",
+                                      "width": 1200,
+                                      "height": 1200
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "flexColumns": [
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "Sad songs Daft Punk"
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "Like WRLD",
+                                        "navigationEndpoint": {
+                                          "browseEndpoint": {
+                                            "browseId": "UCwXDkw1fcoCwWHsnN4AY3eA",
+                                            "browseEndpointContextSupportedConfigs": {
+                                              "browseEndpointContextMusicConfig": {
+                                                "pageType": "MUSIC_PAGE_TYPE_USER_CHANNEL"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "text": " \u2022 "
+                                      },
+                                      {
+                                        "text": "78K views"
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ],
+                            "navigationEndpoint": {
+                              "browseEndpoint": {
+                                "browseId": "VLPLIZjls6p5iwvQVDSZfM3gMWv9HMs8z3P6",
+                                "browseEndpointContextSupportedConfigs": {
+                                  "browseEndpointContextMusicConfig": {
+                                    "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

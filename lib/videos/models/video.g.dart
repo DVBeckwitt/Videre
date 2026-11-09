@@ -65,6 +65,10 @@ _Video _$VideoFromJson(Map<String, dynamic> json) => _Video(
               ?.map((e) => ImageObject.fromJson(e as Map<String, dynamic>))
               .toList() ??
           const [],
+      musicMetadata: json['musicMetadata'] == null
+          ? null
+          : MusicMetadata.fromJson(
+              json['musicMetadata'] as Map<String, dynamic>),
       viewCountText: json['viewCountText'] as String?,
     );
 
@@ -107,5 +111,6 @@ Map<String, dynamic> _$VideoToJson(_Video instance) => <String, dynamic>{
       'authorId': instance.authorId,
       'authorUrl': instance.authorUrl,
       'videoThumbnails': instance.videoThumbnails,
+      'musicMetadata': instance.musicMetadata,
       'viewCountText': instance.viewCountText,
     };

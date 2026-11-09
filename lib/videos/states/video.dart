@@ -23,10 +23,29 @@ class VideoCubit extends Cubit<VideoState> {
   final PlayerCubit player;
   final SettingsCubit settings;
   StreamSubscription<DownloadManagerState>? _downloadSubscription;
+  StreamSubscription<(bool, String)>? _dislikeSettingsSubscription;
   int _loadGeneration = 0;
+  int _dislikeGeneration = 0;
 
   VideoCubit(
       super.initialState, this.downloadManager, this.player, this.settings) {
+    var dislikeSettings = (
+      settings.state.useReturnYoutubeDislike,
+      settings.state.returnYoutubeDislikeUrl,
+    );
+    _dislikeSettingsSubscription = settings.stream
+        .map((state) =>
+            (state.useReturnYoutubeDislike, state.returnYoutubeDislikeUrl))
+        .listen((value) {
+      if (isClosed || value == dislikeSettings) return;
+      dislikeSettings = value;
+      final generation = ++_dislikeGeneration;
+      emit(state.copyWith(dislikes: null));
+      final video = state.video;
+      if (value.$1 && !state.loadingVideo && video != null) {
+        unawaited(_loadDislikes(video.videoId, _loadGeneration, generation));
+      }
+    });
     onReady();
   }
 
@@ -49,7 +68,8 @@ class VideoCubit extends Cubit<VideoState> {
 
       getDownloadStatus();
       if (settings.state.useReturnYoutubeDislike) {
-        unawaited(_loadDislikes(video.videoId, generation));
+        unawaited(
+            _loadDislikes(video.videoId, generation, ++_dislikeGeneration));
       }
     } catch (err) {
       late String error;
@@ -64,10 +84,13 @@ class VideoCubit extends Cubit<VideoState> {
     }
   }
 
-  Future<void> _loadDislikes(String videoId, int generation) async {
+  Future<void> _loadDislikes(
+      String videoId, int generation, int dislikeGeneration) async {
     try {
       final dislikes = await service.getDislikes(videoId);
-      if (!isClosed && generation == _loadGeneration) {
+      if (!isClosed &&
+          generation == _loadGeneration &&
+          dislikeGeneration == _dislikeGeneration) {
         emit(state.copyWith(dislikes: dislikes.dislikes));
       }
     } catch (_) {
@@ -102,6 +125,7 @@ class VideoCubit extends Cubit<VideoState> {
   @override
   close() async {
     ++_loadGeneration;
+    await _dislikeSettingsSubscription?.cancel();
     await _downloadSubscription?.cancel();
     return super.close();
   }

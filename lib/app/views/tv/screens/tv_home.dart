@@ -212,6 +212,25 @@ class _TvHomeScreenState extends State<TvHomeScreen> {
                                   onFocusChanged:
                                       homeCubit.menuItemFocusChanged,
                                   onPressed: (context) =>
+                                      AutoRouter.of(context).push(MusicRoute()),
+                                  unfocusedColor: Colors.transparent,
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(8),
+                                    child: Row(children: [
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 8),
+                                        child: Icon(Icons.music_note),
+                                      ),
+                                      if (homeState)
+                                        Expanded(
+                                            child: MenuItemText(locals.music)),
+                                    ]),
+                                  ),
+                                ),
+                                TvButton(
+                                  onFocusChanged:
+                                      homeCubit.menuItemFocusChanged,
+                                  onPressed: (context) =>
                                       showProfilePicker(context),
                                   unfocusedColor: Colors.transparent,
                                   child: Padding(

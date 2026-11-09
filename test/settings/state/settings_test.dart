@@ -398,11 +398,13 @@ Future<void> main() async {
     expect(SettingsState.init().skipStep, 30);
   });
 
-  test('sponsor skipping and dislike counts are on without saved settings', () {
+  test('sponsor and non-music skipping default on alongside dislike counts',
+      () {
     expect(settingsCubit.state.useReturnYoutubeDislike, isTrue);
     final enabled = SponsorSegmentType.values.where((type) => type
         .isEnabled(settingsCubit.state.settings[type.settingsName()]?.value));
-    expect(enabled, [SponsorSegmentType.sponsor]);
+    expect(enabled,
+        [SponsorSegmentType.sponsor, SponsorSegmentType.musicOffTopic]);
   });
 
   test('saved choices override defaults after settings reload', () async {
@@ -427,6 +429,40 @@ Future<void> main() async {
         SponsorSegmentType.intro.isEnabled(
             restored.settings[SponsorSegmentType.intro.settingsName()]?.value),
         isTrue);
+  });
+
+  test('SponsorBlock defaults and explicit opt-outs stay with each profile',
+      () async {
+    List<SponsorSegmentType> enabled() => SponsorSegmentType.values
+        .where((type) => type.isEnabled(
+            settingsCubit.state.settings[type.settingsName()]?.value))
+        .toList();
+
+    await settingsCubit.saveSetting(SettingsValue(
+        SponsorSegmentType.musicOffTopic.settingsName(), 'false'));
+    await settingsCubit.reloadForProfile();
+    expect(enabled(), [SponsorSegmentType.sponsor]);
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(enabled(),
+        [SponsorSegmentType.sponsor, SponsorSegmentType.musicOffTopic]);
+
+    await settingsCubit.saveSetting(
+        SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+    await settingsCubit.reloadForProfile();
+    expect(enabled(), [SponsorSegmentType.musicOffTopic]);
+
+    await db.useProfile('default');
+    await fileDb.useProfile('default');
+    await settingsCubit.reloadForProfile();
+    expect(enabled(), [SponsorSegmentType.sponsor]);
+    expect(
+        db.getSettings(SponsorSegmentType.musicOffTopic.settingsName())?.value,
+        'false');
+    expect(db.getSettings(SponsorSegmentType.sponsor.settingsName()), isNull);
   });
 
   test('setting and reading settings', () async {

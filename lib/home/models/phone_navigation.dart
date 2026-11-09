@@ -12,6 +12,7 @@ enum PhoneNavigationItem {
   search(HomeDataSource.search),
   downloads(HomeDataSource.downloads),
   queue(null),
+  music(null),
   playlist(HomeDataSource.playlist),
   popular(HomeDataSource.popular),
   trending(HomeDataSource.trending),
@@ -21,9 +22,11 @@ enum PhoneNavigationItem {
   final HomeDataSource? source;
 
   bool get isTab => source?.route != null && this != downloads;
-  IconData get icon => source?.getIcon() ?? Icons.queue_music;
-  String label(AppLocalizations locals) =>
-      source?.getLabel(locals) ?? locals.videoQueue;
+  IconData get icon =>
+      this == music ? Icons.music_note : source?.getIcon() ?? Icons.queue_music;
+  String label(AppLocalizations locals) => this == music
+      ? locals.music
+      : source?.getLabel(locals) ?? locals.videoQueue;
 }
 
 enum NavigationArea { bottom, top, hidden }
@@ -51,6 +54,7 @@ class PhoneNavigation {
         PhoneNavigationItem.downloads,
         PhoneNavigationItem.queue,
         PhoneNavigationItem.playlist,
+        PhoneNavigationItem.music,
       ]);
 
   factory PhoneNavigation.fromLegacy(List<HomeDataSource> sources, int first) {

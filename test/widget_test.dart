@@ -694,7 +694,9 @@ void main() {
             .map((item) => item.label),
         ['Search', 'Home', 'Subscriptions', 'Playlists']);
     expect(navigation.selectedIndex, 1);
-    await tester.tap(find.byTooltip('History'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('History'));
     await tester.pumpAndSettle();
     expect(find.text('History'), findsOneWidget);
     await tester.pageBack();
@@ -1033,7 +1035,9 @@ void main() {
     expect(
         tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
         0);
-    await tester.tap(find.byTooltip('Playlists'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playlists'));
     await tester.pumpAndSettle();
     expect(find.text('Playlists'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1053,7 +1057,9 @@ void main() {
     await tester.pumpAndSettle();
     final selectedIndex =
         tester.widget<NavigationBar>(navigation).selectedIndex;
-    await tester.tap(find.byTooltip('Playlists'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playlists'));
     await tester.pumpAndSettle();
     expect(find.text('Playlists'), findsOneWidget);
     expect(navigation, findsNothing);
@@ -1074,14 +1080,16 @@ void main() {
           ...settings.settings,
           appLayoutSettingName: SettingsValue(appLayoutSettingName, 'playlist'),
         }));
-    await tester.tap(find.byTooltip('Playlists'));
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playlists'));
     await tester.pumpAndSettle();
     expect(find.text('Playlists'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('phone queue shortcut fits between downloads and playlists',
+  testWidgets('phone queue shortcut fits between downloads and more shortcuts',
       (tester) async {
     await _pumpHomepage(tester, const Size(320, 640));
     final navigation = find.byType(NavigationBar);
@@ -1094,7 +1102,7 @@ void main() {
     expect(tester.getCenter(find.byIcon(Icons.download)).dx,
         lessThan(tester.getCenter(queue).dx));
     expect(tester.getCenter(queue).dx,
-        lessThan(tester.getCenter(find.byTooltip('Playlists')).dx));
+        lessThan(tester.getCenter(find.byTooltip('More shortcuts')).dx));
     expect(tester.takeException(), isNull);
 
     await tester.tap(queue);
@@ -1108,6 +1116,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(settings.state.autoplayQueue, isFalse);
     expect(SettingsState.init().autoplayQueue, isFalse);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(
+        tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone Music shortcut opens search and preserves the active tab',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(320, 640));
+    final navigation = find.byType(NavigationBar);
+    await tester.tap(
+        find.descendant(of: navigation, matching: find.byIcon(Icons.history)));
+    await tester.pumpAndSettle();
+    final selectedIndex =
+        tester.widget<NavigationBar>(navigation).selectedIndex;
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Music'));
+    await tester.pumpAndSettle();
+    expect(find.text('Search songs, albums, artists, or playlists'),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
     await tester.pageBack();
     await tester.pumpAndSettle();
     expect(
@@ -2338,6 +2369,7 @@ void main() {
         await _pumpVideoThumbnail(
           tester,
           thumbnails: const [
+            'https://lh3.googleusercontent.com/artist=w540-h225-p-l90-rj',
             'https://yt3.googleusercontent.com/avatar=s176',
             '//yt3.ggpht.com/avatar=s88',
             'https://i.ytimg.com/vi/video-id/default.jpg',
@@ -2346,6 +2378,7 @@ void main() {
         );
 
         const expectedUrls = [
+          'https://example.com/ggpht/artist=w540-h225-p-l90-rj',
           'https://example.com/ggpht/avatar=s176',
           'https://example.com/ggpht/avatar=s88',
           'https://example.com/vi/video-id/default.jpg',

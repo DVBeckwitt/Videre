@@ -7,6 +7,7 @@ import '../settings/models/db/settings.dart';
 import '../settings/models/db/video_filter.dart';
 import '../videos/models/db/history_video_cache.dart';
 import '../videos/models/db/progress.dart';
+import '../videos/models/music_metadata.dart';
 import '../videos/models/video.dart';
 import '../videos/models/sponsor_segment_types.dart';
 
@@ -141,6 +142,7 @@ class UserBackup {
                 if (!_videoId.hasMatch(video.videoId)) {
                   throw const FormatException('Invalid playlist video.');
                 }
+                final music = video.musicMetadata;
                 return Video(
                     videoId: video.videoId,
                     indexId: video.videoId,
@@ -152,6 +154,16 @@ class UserBackup {
                     videoThumbnails: video.videoThumbnails
                         .where((thumbnail) => _safeHttpUrl(thumbnail.url))
                         .toList(),
+                    musicMetadata: music == null
+                        ? null
+                        : MusicMetadata(
+                            title: music.title,
+                            artist: music.artist,
+                            album: music.album,
+                            thumbnails: music.thumbnails
+                                .where(
+                                    (thumbnail) => _safeHttpUrl(thumbnail.url))
+                                .toList()),
                     lengthSeconds: video.lengthSeconds);
               }).toList();
               final clean = Playlist(

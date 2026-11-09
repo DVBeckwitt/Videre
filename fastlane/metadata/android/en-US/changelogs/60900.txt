@@ -1,0 +1,5 @@
+- Beta: anonymous Music browsing, playback, local playlists and downloads on phones, tablets and TVs.
+- SponsorBlock skips paid sponsors and non-music sections by default while preserving explicit off preferences.
+- Cache SponsorBlock data for new Music downloads and keep precise skip boundaries.
+- Preserve Music metadata in playlist downloads and backups; fix artist links and unavailable album tracks.
+- Improve caption failure recovery and Return YouTube Dislike counts.

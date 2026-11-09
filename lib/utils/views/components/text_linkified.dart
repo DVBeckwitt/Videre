@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/app/states/app.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
@@ -33,7 +37,9 @@ class TextLinkified extends StatelessWidget {
   void openLink(BuildContext context, LinkableElement link) {
     if (link is UrlElement) {
       var uri = Uri.parse(link.url);
-      if (youtubeHosts.contains(uri.host)) {
+      if (uri.host == youtubeMusicHost) {
+        unawaited(context.read<AppCubit>().openAppLink(link.url, false));
+      } else if (youtubeHosts.contains(uri.host)) {
         if (uri.pathSegments.length == 1 &&
             uri.pathSegments.contains("watch") &&
             uri.queryParameters.containsKey('v')) {

@@ -10,6 +10,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -199,5 +200,49 @@ void main() {
     await next;
     expect(player.state.playedVideos, ['a', 'b']);
     expect(player.state.playQueue, isEmpty);
+  });
+
+  test('repeated playlist songs advance and go back by queue occurrence',
+      () async {
+    await player.playVideo([videos[0], videos[1], videos[0]], audio: true);
+    final keys = player.state.videos.map(playbackQueueId).toList();
+    expect(keys.toSet(), hasLength(3));
+    expect(player.state.videos.map((video) => video.videoId), ['a', 'b', 'a']);
+    expect(player.state.playQueue, [keys[1], keys[2]]);
+
+    Future<void> move(void Function() action, String key) async {
+      EasyThrottle.cancel(skipToVideoThrottleName);
+      final changed =
+          player.stream.firstWhere((state) => state.currentQueueId == key);
+      action();
+      await changed.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+
+    await move(player.playNext, keys[1]);
+    await move(player.playNext, keys[2]);
+    expect(player.currentIndex, 2);
+    expect(player.state.playedVideos, [keys[0], keys[1]]);
+    expect(player.state.playQueue, isEmpty);
+    // Android metadata and history continue identifying the real upload.
+    expect(handler.mediaItem.value?.id, 'a');
+    expect((await player.getMediaItem(2))?.id, 'a');
+    await move(player.playPrevious, keys[1]);
+    expect(player.currentIndex, 1);
+    expect(player.state.playQueue, [keys[2]]);
+  });
+
+  test('shuffle selection can choose another occurrence of the same song',
+      () async {
+    await player.playVideo([videos[0], videos[1], videos[0]], audio: true);
+    final keys = player.state.videos.map(playbackQueueId).toList();
+    await settings.setShuffle(true);
+    await player.skipToVideo(2);
+    expect(player.state.currentQueueId, keys[2]);
+    expect(player.currentIndex, 2);
+    expect(player.state.playedVideos, [keys[0]]);
+    expect(player.state.playQueue, [keys[1]]);
+    player.generatePlayQueue();
+    expect(player.state.playQueue, [keys[1]]);
   });
 }

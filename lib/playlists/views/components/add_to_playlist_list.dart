@@ -108,7 +108,9 @@ class _AddPlayListFormState extends State<AddPlayListForm> {
                     padding: const EdgeInsets.all(8.0),
                     child: Text('${locals.playlistVisibility}:'),
                   ),
-                  DropdownButton(
+                  Expanded(
+                      child: DropdownButton(
+                    isExpanded: true,
                     value: privacyValue,
                     items: [
                       DropdownMenuItem(
@@ -130,7 +132,7 @@ class _AddPlayListFormState extends State<AddPlayListForm> {
                         privacyValue = value ?? '';
                       });
                     },
-                  ),
+                  )),
                 ],
               ),
             ),

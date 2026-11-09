@@ -44,31 +44,35 @@ class BetterPlayerSubtitlesFactory {
 
   static Future<List<BetterPlayerSubtitle>> _parseSubtitlesFromNetwork(
       BetterPlayerSubtitlesSource source) async {
+    final client = HttpClient();
+    const timeout = Duration(seconds: 10);
     try {
-      final client = HttpClient();
       final List<BetterPlayerSubtitle> subtitles = [];
       for (final String? url in source.urls!) {
-        final request = await client.getUrl(Uri.parse(url!));
+        final request = await client.getUrl(Uri.parse(url!)).timeout(timeout);
         source.headers?.keys.forEach((key) {
           final value = source.headers![key];
           if (value != null) {
             request.headers.add(key, value);
           }
         });
-        final response = await request.close();
-        final data = await response.transform(const Utf8Decoder()).join();
+        final response = await request.close().timeout(timeout);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw HttpException(
+              'Subtitle request failed (${response.statusCode}).');
+        }
+        final data = await response
+            .transform(const Utf8Decoder())
+            .join()
+            .timeout(timeout);
         final cacheList = _parseString(data);
         subtitles.addAll(cacheList);
       }
-      client.close();
-
       BetterPlayerUtils.log("Parsed total subtitles: ${subtitles.length}");
       return subtitles;
-    } catch (exception) {
-      BetterPlayerUtils.log(
-          "Failed to read subtitles from network: $exception");
+    } finally {
+      client.close(force: true);
     }
-    return [];
   }
 
   static List<BetterPlayerSubtitle> _parseSubtitlesFromMemory(
