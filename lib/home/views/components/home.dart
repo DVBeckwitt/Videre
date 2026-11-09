@@ -11,8 +11,6 @@ import 'package:clipious/router.dart';
 
 import '../../../utils/views/components/app_icon.dart';
 
-const double smallVideoViewHeight = 140;
-
 class HomeView extends StatelessWidget {
   const HomeView({super.key});
 

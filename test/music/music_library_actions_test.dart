@@ -6,6 +6,8 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
+import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/service.dart';
@@ -47,6 +49,9 @@ class _PausedLibrary extends Service {
 
 class _Downloads implements DownloadManagerCubit {
   final calls = <({String id, bool audioOnly, Video? video})>[];
+
+  @override
+  Stream<DownloadManagerState> get stream => const Stream.empty();
 
   @override
   Future<bool> addDownload(String videoId,
@@ -151,18 +156,138 @@ void main() {
         [first.videoId]);
   });
 
-  Future<void> show(WidgetTester tester, {bool compact = false}) async {
+  Future<void> show(WidgetTester tester,
+      {bool compact = false, Widget? body}) async {
     await tester.pumpWidget(BlocProvider<AppCubit>.value(
       value: app,
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
-          body: MusicLibraryActions(
-              videos: const [first, second], compact: compact),
+          body: body ??
+              MusicLibraryActions(
+                  videos: const [first, second], compact: compact),
         ),
       ),
     ));
+  }
+
+  testWidgets('mounted song actions update after another control saves it',
+      (tester) async {
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await show(tester,
+        body: const Column(children: [
+          MusicLibraryActions(videos: [first], compact: false),
+          MusicLibraryActions(videos: [first], compact: false),
+        ]));
+    expect(find.text('Save song'), findsNWidgets(2));
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Save song').first);
+      await Future.doWhile(() async {
+        await tester.pump();
+        if (library.contains(MusicLibraryKind.song, first.videoId)) {
+          return false;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return true;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Save song'), findsNothing);
+    expect(find.text('Remove saved song'), findsNWidgets(2));
+  });
+
+  for (final initiallySaved in [false, true]) {
+    testWidgets(
+        'open song menu preserves its displayed action when saved state changes '
+        '(initially saved: $initiallySaved)', (tester) async {
+      final library = MusicLibraryService.forProfile(db, db.profileId);
+      final entry = MusicLibraryEntry.song(first);
+      if (initiallySaved) {
+        await tester.runAsync(() => library.save(entry));
+      }
+      await show(tester, body: const MusicLibraryActions(videos: [first]));
+      await tester.tap(find.byTooltip('Music actions'));
+      await tester.pumpAndSettle();
+      final action = initiallySaved ? 'Remove saved song' : 'Save song';
+      expect(find.text(action), findsOneWidget);
+
+      // Another screen can change the same bookmark while this menu is open.
+      await tester.runAsync(() => initiallySaved
+          ? library.remove(entry.kind, entry.id)
+          : library.save(entry));
+      await tester.pumpAndSettle();
+      expect(find.text(action), findsOneWidget);
+      await tester.runAsync(() async {
+        await tester.tap(find.text(action));
+        await tester.pumpAndSettle();
+        await Future.doWhile(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await tester.pump();
+          final button = tester.widget<PopupMenuButton<dynamic>>(
+              find.byWidgetPredicate((widget) => widget is PopupMenuButton));
+          return !button.enabled;
+        }).timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+      expect(library.contains(entry.kind, entry.id), !initiallySaved);
+    });
+  }
+
+  for (final action in ['Save song', 'Save to playlist', 'Download audio']) {
+    testWidgets('open $action menu keeps the track it was opened for',
+        (tester) async {
+      final videos = ValueNotifier<List<Video>>([first]);
+      addTearDown(videos.dispose);
+      final downloads = _Downloads();
+      final library = MusicLibraryService.forProfile(db, db.profileId);
+      await show(tester,
+          body: BlocProvider<DownloadManagerCubit>.value(
+            value: downloads,
+            child: ValueListenableBuilder<List<Video>>(
+              valueListenable: videos,
+              builder: (context, value, _) =>
+                  MusicLibraryActions(videos: value),
+            ),
+          ));
+      await tester.tap(find.byTooltip('Music actions'));
+      await tester.pumpAndSettle();
+
+      // A media notification or incoming link can change the player track.
+      videos.value = [second];
+      await tester.pumpAndSettle();
+      expect(find.text(action), findsOneWidget);
+      await tester.runAsync(() async {
+        await tester.tap(find.text(action));
+        await tester.pumpAndSettle();
+        if (action == 'Save to playlist') {
+          expect(find.text('Watch Later'), findsOneWidget);
+          await tester.tap(find.text('Watch Later'));
+        }
+        await Future.doWhile(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await tester.pump();
+          final button = tester.widget<PopupMenuButton<dynamic>>(
+              find.byWidgetPredicate((widget) => widget is PopupMenuButton));
+          return !button.enabled;
+        }).timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+
+      if (action == 'Save song') {
+        expect(library.entries.map((entry) => entry.id), [first.videoId]);
+      } else if (action == 'Save to playlist') {
+        expect(
+            service
+                .getLocalPlaylists()
+                .first
+                .videos
+                .map((video) => video.videoId),
+            [first.videoId]);
+      } else {
+        expect(downloads.calls.map((call) => call.id), [first.videoId]);
+      }
+    });
   }
 
   testWidgets(
@@ -224,8 +349,8 @@ void main() {
         (await tester.runAsync(() => db.createProfile('Another person')))!;
     await tester.runAsync(() => db.useProfile(next.id));
     app.profileChanged(next.id);
-    await tester.tap(find.text('Save to playlist'));
     await tester.pumpAndSettle();
+    expect(find.text('Save to playlist'), findsNothing);
     expect(find.byType(AlertDialog), findsNothing);
     expect(service.getLocalPlaylists().first.videos, isEmpty);
   });

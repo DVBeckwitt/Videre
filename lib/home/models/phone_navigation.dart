@@ -54,7 +54,6 @@ class PhoneNavigation {
         PhoneNavigationItem.downloads,
         PhoneNavigationItem.queue,
         PhoneNavigationItem.playlist,
-        PhoneNavigationItem.music,
       ]);
 
   factory PhoneNavigation.fromLegacy(List<HomeDataSource> sources, int first) {
@@ -80,8 +79,30 @@ class PhoneNavigation {
   }
 
   List<PhoneNavigationItem> get hidden => PhoneNavigationItem.values
-      .where((item) => !bottom.contains(item) && !top.contains(item))
+      .where((item) =>
+          item != PhoneNavigationItem.music &&
+          !bottom.contains(item) &&
+          !top.contains(item))
       .toList();
+
+  /// Keep old serialized Music shortcuts readable without retaining a duplicate
+  /// entry now that Music is a top-level browsing mode.
+  PhoneNavigation withoutMusicShortcut() {
+    if (!bottom.contains(PhoneNavigationItem.music) &&
+        !top.contains(PhoneNavigationItem.music)) {
+      return this;
+    }
+    final nextBottom = [...bottom]..remove(PhoneNavigationItem.music);
+    final nextTop = [...top]..remove(PhoneNavigationItem.music);
+    if (nextBottom.length < 2) {
+      final replacement = nextBottom.contains(PhoneNavigationItem.search)
+          ? PhoneNavigationItem.home
+          : PhoneNavigationItem.search;
+      nextBottom.add(replacement);
+      nextTop.remove(replacement);
+    }
+    return PhoneNavigation(nextBottom, nextTop, startup: startup);
+  }
 
   List<PhoneNavigationItem> items(NavigationArea area) => switch (area) {
         NavigationArea.bottom => bottom,
@@ -99,6 +120,7 @@ class PhoneNavigation {
   /// Insertion is relative to an item, avoiding shifting drag indexes.
   PhoneNavigation? move(PhoneNavigationItem item, NavigationArea area,
       {PhoneNavigationItem? before}) {
+    if (item == PhoneNavigationItem.music) return null;
     if (before == item) return this;
     final nextBottom = [...bottom]..remove(item);
     final nextTop = [...top]..remove(item);
@@ -153,7 +175,8 @@ class PhoneNavigation {
       final startup =
           PhoneNavigationItem.values.byName(json['startup'] as String);
       if (!bottom.contains(startup) || !startup.isTab) return null;
-      return PhoneNavigation(bottom, top, startup: startup);
+      return PhoneNavigation(bottom, top, startup: startup)
+          .withoutMusicShortcut();
     } on FormatException {
       return null;
     } on ArgumentError {

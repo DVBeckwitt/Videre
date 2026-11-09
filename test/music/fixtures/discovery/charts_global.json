@@ -1,0 +1,1810 @@
+{
+  "contents": {
+    "singleColumnBrowseResultsRenderer": {
+      "tabs": [
+        {
+          "tabRenderer": {
+            "content": {
+              "sectionListRenderer": {
+                "contents": [
+                  {
+                    "musicShelfRenderer": {
+                      "subheaders": [
+                        {
+                          "musicSideAlignedItemRenderer": {
+                            "startItems": [
+                              {
+                                "musicSortFilterButtonRenderer": {
+                                  "title": {
+                                    "runs": [
+                                      {
+                                        "text": "Global"
+                                      }
+                                    ]
+                                  },
+                                  "menu": {
+                                    "musicMultiSelectMenuRenderer": {
+                                      "title": {},
+                                      "options": [
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "United States"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-US"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Global"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-ZZ"
+                                          }
+                                        },
+                                        {},
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Argentina"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-AR"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Australia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-AU"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Austria"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-AT"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Belgium"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-BE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Bolivia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-BO"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Brazil"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-BR"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Canada"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-CA"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Chile"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-CL"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Colombia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-CO"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Costa Rica"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-CR"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Czechia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-CZ"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Denmark"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-DK"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Dominican Republic"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-DO"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Ecuador"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-EC"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Egypt"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-EG"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "El Salvador"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-SV"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Estonia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-EE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Finland"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-FI"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "France"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-FR"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Germany"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-DE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Guatemala"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-GT"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Honduras"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-HN"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Hong Kong"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-HK"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Hungary"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-HU"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Iceland"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-IS"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "India"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-IN"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Indonesia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-ID"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Ireland"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-IE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Israel"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-IL"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Italy"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-IT"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Japan"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-JP"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Kenya"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-KE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Luxembourg"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-LU"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Malaysia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-MY"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Mexico"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-MX"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Netherlands"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-NL"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "New Zealand"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-NZ"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Nicaragua"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-NI"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Nigeria"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-NG"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Norway"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-NO"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Panama"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-PA"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Paraguay"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-PY"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Peru"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-PE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Philippines"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-PH"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Poland"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-PL"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Portugal"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-PT"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Romania"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-RO"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Russia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-RU"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Saudi Arabia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-SA"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Serbia"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-RS"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Singapore"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-SG"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "South Africa"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-ZA"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "South Korea"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-KR"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Spain"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-ES"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Sweden"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-SE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Switzerland"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-CH"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Taiwan"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-TW"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Tanzania"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-TZ"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Thailand"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-TH"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Turkey"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-TR"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Uganda"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-UG"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Ukraine"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-UA"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "United Arab Emirates"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-AE"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "United Kingdom"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-GB"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "United States"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-US"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Uruguay"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-UY"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Vietnam"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-VN"
+                                          }
+                                        },
+                                        {
+                                          "musicMultiSelectMenuItemRenderer": {
+                                            "title": {
+                                              "runs": [
+                                                {
+                                                  "text": "Zimbabwe"
+                                                }
+                                              ]
+                                            },
+                                            "formItemEntityKey": "fixture-country-ZW"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "musicCarouselShelfRenderer": {
+                      "header": {
+                        "musicCarouselShelfBasicHeaderRenderer": {
+                          "title": {
+                            "runs": [
+                              {
+                                "text": "Video charts"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "contents": [
+                        {
+                          "musicTwoRowItemRenderer": {
+                            "thumbnailRenderer": {
+                              "musicThumbnailRenderer": {
+                                "thumbnail": {
+                                  "thumbnails": [
+                                    {
+                                      "url": "https://yt3.googleusercontent.com/Roy2kMrA51N0DXqzMGLHGo2z0EPjbMpEJx8jQsqbDCQP5j6-VoFNQdUPhNLWOp-4WovJNkcAU1VQ=s192",
+                                      "width": 192,
+                                      "height": 192
+                                    },
+                                    {
+                                      "url": "https://yt3.googleusercontent.com/Roy2kMrA51N0DXqzMGLHGo2z0EPjbMpEJx8jQsqbDCQP5j6-VoFNQdUPhNLWOp-4WovJNkcAU1VQ=s576",
+                                      "width": 576,
+                                      "height": 576
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "title": {
+                              "runs": [
+                                {
+                                  "text": "Daily Top Music Videos - Global",
+                                  "navigationEndpoint": {
+                                    "browseEndpoint": {
+                                      "browseId": "VLPL4fGSI1pDJn6t3TXLGiiJdD-sZbrG3tG0",
+                                      "browseEndpointContextSupportedConfigs": {
+                                        "browseEndpointContextMusicConfig": {
+                                          "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "subtitle": {
+                              "runs": [
+                                {
+                                  "text": "Chart"
+                                },
+                                {
+                                  "text": " • "
+                                },
+                                {
+                                  "text": "YouTube Charts",
+                                  "navigationEndpoint": {
+                                    "browseEndpoint": {
+                                      "browseId": "FEmusic_charts",
+                                      "browseEndpointContextSupportedConfigs": {
+                                        "browseEndpointContextMusicConfig": {
+                                          "pageType": "MUSIC_PAGE_TYPE_USER_CHANNEL"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "navigationEndpoint": {
+                              "browseEndpoint": {
+                                "browseId": "VLPL4fGSI1pDJn6t3TXLGiiJdD-sZbrG3tG0",
+                                "browseEndpointContextSupportedConfigs": {
+                                  "browseEndpointContextMusicConfig": {
+                                    "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                                  }
+                                }
+                              }
+                            },
+                            "menu": {}
+                          }
+                        },
+                        {
+                          "musicTwoRowItemRenderer": {
+                            "thumbnailRenderer": {
+                              "musicThumbnailRenderer": {
+                                "thumbnail": {
+                                  "thumbnails": [
+                                    {
+                                      "url": "https://yt3.googleusercontent.com/Bi_vvJ3klUb60_Osznxnx4BciiLqp5OJaG66Nh-glu62FZhgMFs2-XZmz7KzUmoyZlGwzbClG-B6=s192",
+                                      "width": 192,
+                                      "height": 192
+                                    },
+                                    {
+                                      "url": "https://yt3.googleusercontent.com/Bi_vvJ3klUb60_Osznxnx4BciiLqp5OJaG66Nh-glu62FZhgMFs2-XZmz7KzUmoyZlGwzbClG-B6=s576",
+                                      "width": 576,
+                                      "height": 576
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "title": {
+                              "runs": [
+                                {
+                                  "text": "Top 100 Music Videos Global",
+                                  "navigationEndpoint": {
+                                    "browseEndpoint": {
+                                      "browseId": "VLPL4fGSI1pDJn5kI81J1fYWK5eZRl1zJ5kM",
+                                      "browseEndpointContextSupportedConfigs": {
+                                        "browseEndpointContextMusicConfig": {
+                                          "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "subtitle": {
+                              "runs": [
+                                {
+                                  "text": "Chart"
+                                },
+                                {
+                                  "text": " • "
+                                },
+                                {
+                                  "text": "YouTube Charts",
+                                  "navigationEndpoint": {
+                                    "browseEndpoint": {
+                                      "browseId": "FEmusic_charts",
+                                      "browseEndpointContextSupportedConfigs": {
+                                        "browseEndpointContextMusicConfig": {
+                                          "pageType": "MUSIC_PAGE_TYPE_USER_CHANNEL"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            },
+                            "navigationEndpoint": {
+                              "browseEndpoint": {
+                                "browseId": "VLPL4fGSI1pDJn5kI81J1fYWK5eZRl1zJ5kM",
+                                "browseEndpointContextSupportedConfigs": {
+                                  "browseEndpointContextMusicConfig": {
+                                    "pageType": "MUSIC_PAGE_TYPE_PLAYLIST"
+                                  }
+                                }
+                              }
+                            },
+                            "menu": {}
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "musicCarouselShelfRenderer": {
+                      "header": {
+                        "musicCarouselShelfBasicHeaderRenderer": {
+                          "title": {
+                            "runs": [
+                              {
+                                "text": "Top artists"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "contents": [
+                        {
+                          "musicResponsiveListItemRenderer": {
+                            "thumbnail": {
+                              "musicThumbnailRenderer": {
+                                "thumbnail": {
+                                  "thumbnails": [
+                                    {
+                                      "url": "https://lh3.googleusercontent.com/_wPXKRCH5rAX8AK1kJZ1bNhSpNyyEgBRNmREdPmLbvTy3sX_ldiKMRYFc5uChygV_KRx_SDrH1KgUifk=w60-h60-p-l90-rj",
+                                      "width": 60,
+                                      "height": 60
+                                    },
+                                    {
+                                      "url": "https://lh3.googleusercontent.com/_wPXKRCH5rAX8AK1kJZ1bNhSpNyyEgBRNmREdPmLbvTy3sX_ldiKMRYFc5uChygV_KRx_SDrH1KgUifk=w120-h120-p-l90-rj",
+                                      "width": 120,
+                                      "height": 120
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "flexColumns": [
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "Alka Yagnik"
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "2.32M subscribers"
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ],
+                            "menu": {},
+                            "navigationEndpoint": {
+                              "browseEndpoint": {
+                                "browseId": "UCptBkLZ6XRxoyn8SkUMc_Iw",
+                                "browseEndpointContextSupportedConfigs": {
+                                  "browseEndpointContextMusicConfig": {
+                                    "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        {
+                          "musicResponsiveListItemRenderer": {
+                            "thumbnail": {
+                              "musicThumbnailRenderer": {
+                                "thumbnail": {
+                                  "thumbnails": [
+                                    {
+                                      "url": "https://lh3.googleusercontent.com/W_yOqnKSDYyeVOY_AsXhuAtb6rW3vCL3GtJ9DA1GxWOrJfyeSOqzvTv_TkFHijdkVPXWutASBlRFPg=w60-h60-p-l90-rj",
+                                      "width": 60,
+                                      "height": 60
+                                    },
+                                    {
+                                      "url": "https://lh3.googleusercontent.com/W_yOqnKSDYyeVOY_AsXhuAtb6rW3vCL3GtJ9DA1GxWOrJfyeSOqzvTv_TkFHijdkVPXWutASBlRFPg=w120-h120-p-l90-rj",
+                                      "width": 120,
+                                      "height": 120
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "flexColumns": [
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "Arijit Singh"
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                  "text": {
+                                    "runs": [
+                                      {
+                                        "text": "6.57M subscribers"
+                                      }
+                                    ]
+                                  }
+                                }
+                              }
+                            ],
+                            "menu": {},
+                            "navigationEndpoint": {
+                              "browseEndpoint": {
+                                "browseId": "UCDxKh1gFWeYsqePvgVzmPoQ",
+                                "browseEndpointContextSupportedConfigs": {
+                                  "browseEndpointContextMusicConfig": {
+                                    "pageType": "MUSIC_PAGE_TYPE_ARTIST"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "frameworkUpdates": {
+    "entityBatchUpdate": {
+      "mutations": [
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-US",
+              "opaqueToken": "US",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-ZZ",
+              "opaqueToken": "ZZ",
+              "selected": true
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-AR",
+              "opaqueToken": "AR",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-AU",
+              "opaqueToken": "AU",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-AT",
+              "opaqueToken": "AT",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-BE",
+              "opaqueToken": "BE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-BO",
+              "opaqueToken": "BO",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-BR",
+              "opaqueToken": "BR",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-CA",
+              "opaqueToken": "CA",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-CL",
+              "opaqueToken": "CL",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-CO",
+              "opaqueToken": "CO",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-CR",
+              "opaqueToken": "CR",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-CZ",
+              "opaqueToken": "CZ",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-DK",
+              "opaqueToken": "DK",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-DO",
+              "opaqueToken": "DO",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-EC",
+              "opaqueToken": "EC",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-EG",
+              "opaqueToken": "EG",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-SV",
+              "opaqueToken": "SV",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-EE",
+              "opaqueToken": "EE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-FI",
+              "opaqueToken": "FI",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-FR",
+              "opaqueToken": "FR",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-DE",
+              "opaqueToken": "DE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-GT",
+              "opaqueToken": "GT",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-HN",
+              "opaqueToken": "HN",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-HK",
+              "opaqueToken": "HK",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-HU",
+              "opaqueToken": "HU",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-IS",
+              "opaqueToken": "IS",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-IN",
+              "opaqueToken": "IN",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-ID",
+              "opaqueToken": "ID",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-IE",
+              "opaqueToken": "IE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-IL",
+              "opaqueToken": "IL",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-IT",
+              "opaqueToken": "IT",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-JP",
+              "opaqueToken": "JP",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-KE",
+              "opaqueToken": "KE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-LU",
+              "opaqueToken": "LU",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-MY",
+              "opaqueToken": "MY",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-MX",
+              "opaqueToken": "MX",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-NL",
+              "opaqueToken": "NL",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-NZ",
+              "opaqueToken": "NZ",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-NI",
+              "opaqueToken": "NI",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-NG",
+              "opaqueToken": "NG",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-NO",
+              "opaqueToken": "NO",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-PA",
+              "opaqueToken": "PA",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-PY",
+              "opaqueToken": "PY",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-PE",
+              "opaqueToken": "PE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-PH",
+              "opaqueToken": "PH",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-PL",
+              "opaqueToken": "PL",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-PT",
+              "opaqueToken": "PT",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-RO",
+              "opaqueToken": "RO",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-RU",
+              "opaqueToken": "RU",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-SA",
+              "opaqueToken": "SA",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-RS",
+              "opaqueToken": "RS",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-SG",
+              "opaqueToken": "SG",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-ZA",
+              "opaqueToken": "ZA",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-KR",
+              "opaqueToken": "KR",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-ES",
+              "opaqueToken": "ES",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-SE",
+              "opaqueToken": "SE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-CH",
+              "opaqueToken": "CH",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-TW",
+              "opaqueToken": "TW",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-TZ",
+              "opaqueToken": "TZ",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-TH",
+              "opaqueToken": "TH",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-TR",
+              "opaqueToken": "TR",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-UG",
+              "opaqueToken": "UG",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-UA",
+              "opaqueToken": "UA",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-AE",
+              "opaqueToken": "AE",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-GB",
+              "opaqueToken": "GB",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-UY",
+              "opaqueToken": "UY",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-VN",
+              "opaqueToken": "VN",
+              "selected": false
+            }
+          }
+        },
+        {
+          "payload": {
+            "musicFormBooleanChoice": {
+              "id": "fixture-country-ZW",
+              "opaqueToken": "ZW",
+              "selected": false
+            }
+          }
+        }
+      ]
+    }
+  }
+}

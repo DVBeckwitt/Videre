@@ -219,7 +219,12 @@ int getGridCount(BuildContext context) {
 }
 
 double getGridAspectRatio(BuildContext context) {
-  return getGridCount(context) > 1 ? 16 / 15 : 16 / 13;
+  final fontSize = Theme.of(context).textTheme.bodyMedium?.fontSize ?? 14;
+  final scale =
+      max(1.0, MediaQuery.textScalerOf(context).scale(fontSize) / fontSize);
+  // Preserve the 16:9 artwork while giving labels their scaled vertical space.
+  final labelHeight = getGridCount(context) > 1 ? 6 : 4;
+  return 16 / (9 + labelHeight * scale);
 }
 
 okCancelDialog(

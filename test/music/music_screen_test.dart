@@ -327,6 +327,81 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final detail in [
+    (name: 'album', screen: const MusicScreen(albumId: 'MPREalbum')),
+    (name: 'artist', screen: const MusicScreen(artistId: 'UCartist')),
+    (name: 'playlist', screen: const MusicScreen(playlistId: 'PLpublic')),
+  ]) {
+    testWidgets('direct ${detail.name} returns to its caller on the first Back',
+        (tester) async {
+      await show(tester, screen: const Scaffold(body: Text('Origin')));
+      final navigator = Navigator.of(tester.element(find.text('Origin')));
+      for (final systemBack in [false, true]) {
+        unawaited(navigator
+            .push<void>(MaterialPageRoute(builder: (_) => detail.screen)));
+        await tester.pumpAndSettle();
+        expect(find.byType(MusicScreen), findsOneWidget);
+        if (systemBack) {
+          await tester.binding.handlePopRoute();
+        } else {
+          await tester.tap(find.byTooltip('Back'));
+        }
+        await tester.pumpAndSettle();
+        expect(find.byType(MusicScreen), findsNothing);
+        expect(find.text('Origin'), findsOneWidget);
+      }
+    });
+  }
+
+  testWidgets(
+      'direct artist returns through its own album history before leaving',
+      (tester) async {
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const MusicScreen(artistId: 'UCartist'))));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Album'), 180,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView), matching: find.byType(Scrollable))
+            .first);
+    await tester.tap(find.text('Album'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('music-play-all')), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Artist description'), findsOneWidget);
+    expect(find.byType(MusicScreen), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Origin'), findsOneWidget);
+    expect(find.byType(MusicScreen), findsNothing);
+  });
+
+  testWidgets('searching from a direct detail keeps Back to search behavior',
+      (tester) async {
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const MusicScreen(albumId: 'MPREalbum'))));
+    await tester.pumpAndSettle();
+    await search(tester, 'song');
+    catalog.responses.single.complete([first]);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Artist'));
+    await tester.pumpAndSettle();
+    expect(find.text('Artist description'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicScreen), findsOneWidget);
+    expect(find.text('First song'), findsOneWidget);
+    expect(find.text('Artist description'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Origin'), findsOneWidget);
+  });
+
   testWidgets(
       'artist search opens songs, albums, singles and returns from an album',
       (tester) async {

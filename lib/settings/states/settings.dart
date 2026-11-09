@@ -18,6 +18,7 @@ import '../../main.dart' show isTv;
 import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
+import '../../home/models/content_mode.dart';
 import '../../player/states/player.dart';
 import '../../utils.dart';
 import '../../utils/motion.dart';
@@ -484,6 +485,39 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setPhoneNavigation(PhoneNavigation layout) =>
       _set(phoneNavigationSettingName, layout.encode());
 
+  Future<void> setHomeContentMode(HomeContentMode mode) async {
+    final owner = db.forProfile(db.profileId);
+    final session = appCubit.state.sessionRevision;
+    await owner
+        .saveSetting(SettingsValue(homeContentModeSettingName, mode.name));
+    if (isClosed ||
+        db.profileId != owner.profileId ||
+        appCubit.state.sessionRevision != session) {
+      return;
+    }
+    emit(state.copyWith(settings: {
+      ...state.settings,
+      homeContentModeSettingName:
+          SettingsValue(homeContentModeSettingName, mode.name),
+    }));
+  }
+
+  Future<void> setHomeExperience(HomeExperience experience) async {
+    final owner = db.forProfile(db.profileId);
+    final session = appCubit.state.sessionRevision;
+    final setting = SettingsValue(homeExperienceSettingName, experience.name);
+    await owner.saveSetting(setting);
+    if (isClosed ||
+        db.profileId != owner.profileId ||
+        appCubit.state.sessionRevision != session) {
+      return;
+    }
+    emit(state.copyWith(settings: {
+      ...state.settings,
+      homeExperienceSettingName: setting,
+    }));
+  }
+
   setNavigationBarLabelBehavior(
           NavigationDestinationLabelBehavior behavior) async =>
       await _set(navigationBarLabelBehaviorSettingName, behavior.name);
@@ -685,6 +719,24 @@ sealed class SettingsState with _$SettingsState {
 
   PhoneNavigation get phoneNavigation =>
       savedPhoneNavigation ?? PhoneNavigation.fromLegacy(appLayout, onOpen);
+
+  HomeContentMode get homeContentMode =>
+      _get(homeContentModeSettingName)?.value == HomeContentMode.music.name
+          ? HomeContentMode.music
+          : HomeContentMode.videos;
+
+  HomeExperience get homeExperience => HomeExperience.values.firstWhere(
+      (experience) => experience.name == _get(homeExperienceSettingName)?.value,
+      orElse: () => HomeExperience.videosAndMusic);
+
+  HomeContentMode get effectiveHomeContentMode => switch (homeExperience) {
+        HomeExperience.videosAndMusic => homeContentMode,
+        HomeExperience.videosOnly => HomeContentMode.videos,
+        HomeExperience.musicOnly => HomeContentMode.music,
+      };
+
+  bool get showContentModeSelector =>
+      homeExperience == HomeExperience.videosAndMusic;
 
   NavigationDestinationLabelBehavior get navigationBarLabelBehavior =>
       NavigationDestinationLabelBehavior.values.firstWhere((e) =>

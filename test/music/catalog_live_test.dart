@@ -5,6 +5,39 @@ import 'package:http/http.dart' as http;
 // Explicitly opt in; the canonical offline suite must never require YouTube.
 // flutter test --dart-define=VIDERE_LIVE_MUSIC_TEST=true test/music/catalog_live_test.dart
 void main() {
+  test('public anonymous discovery feeds smoke check', () async {
+    final client = http.Client();
+    addTearDown(client.close);
+    final catalog = MusicCatalogService(httpClient: client);
+    final releases = await catalog.getNewReleases();
+    expect(releases, isNotEmpty);
+    expect(releases.every((album) => album.id.startsWith('MPRE')), isTrue);
+    final global = await catalog.getCharts();
+    final us = await catalog.getCharts(country: 'US');
+    expect(global.country, 'ZZ');
+    expect(us.country, 'US');
+    expect(global.playlists, isNotEmpty);
+    expect(us.playlists, isNotEmpty);
+    expect(global.artists, isNotEmpty);
+    expect(us.countries.any((country) => country.code == 'ZZ'), isTrue);
+    final moods = await catalog.getMoodCategories();
+    expect(moods, isNotEmpty);
+    expect(moods.any((category) => category.group == 'For you'), isFalse);
+    final playlists = await catalog.getMoodPlaylists(moods.first.params);
+    expect(playlists, isNotEmpty);
+    // Public counts only; no request configuration or transport details.
+    // ignore: avoid_print
+    print('Live discovery: ${releases.length} new releases; '
+        'global ${global.playlists.length} chart playlists, '
+        '${global.artists.length} artist cards; '
+        'US ${us.playlists.length} chart playlists, '
+        '${us.artists.length} artist cards; '
+        '${us.countries.length} countries; ${moods.length} mood/genre categories; '
+        '${playlists.length} ${moods.first.title} playlists.');
+  },
+      skip: !const bool.fromEnvironment('VIDERE_LIVE_MUSIC_TEST'),
+      timeout: const Timeout(Duration(minutes: 3)));
+
   test('public catalog search, album, song and playlist smoke check', () async {
     final client = http.Client();
     addTearDown(client.close);

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import '../home/models/phone_navigation.dart';
+import '../music/models/music_library_entry.dart';
 
 import '../offline_subscriptions/models/offline_subscription.dart';
 import '../playlists/models/playlist.dart';
@@ -234,6 +235,7 @@ class UserBackup {
 
   static bool validSetting(SettingsValue setting) {
     final name = setting.name, value = setting.value;
+    if (name == 'music-library-v1') return _validMusicLibrary(value);
     if (value.length > 2048) return false;
     const booleans = {
       dynamicTheme,
@@ -284,6 +286,9 @@ class UserBackup {
           number <= (name == lastSpeedSettingName ? 10 : 200);
     }
     return switch (name) {
+      'home-content-mode' => const ['videos', 'music'].contains(value),
+      'home-experience' =>
+        const ['videosAndMusic', 'videosOnly', 'musicOnly'].contains(value),
       phoneNavigationSettingName => PhoneNavigation.decode(value) != null,
       browsingCountry => RegExp(r'^[A-Z]{2}$').hasMatch(value),
       localeSettingName =>
@@ -319,5 +324,101 @@ class UserBackup {
                 }.contains(item)),
       _ => false,
     };
+  }
+
+  /// Merge collection data stored in a preference row without discarding saved
+  /// items as though the entire library were a single ordinary preference.
+  static String mergeMusicLibrary(String existing, String incoming) {
+    if (!_validMusicLibrary(existing) || !_validMusicLibrary(incoming)) {
+      throw const FormatException('The Music library cannot be merged.');
+    }
+    final entries = <String, dynamic>{};
+    final playlists = <String>{};
+    for (final value in [existing, incoming]) {
+      final data = jsonDecode(value) as Map<String, dynamic>;
+      for (final row in data['entries'] as List) {
+        // Existing metadata and ordering win when the same bookmark is in both
+        // libraries; different kinds may legitimately share a catalog ID.
+        entries.putIfAbsent('${row['kind']}:${row['id']}', () => row);
+      }
+      playlists.addAll((data['playlists'] as List).cast<String>());
+    }
+    final merged = jsonEncode({
+      'version': 1,
+      'entries': entries.values.toList(),
+      'playlists': playlists.toList(),
+    });
+    if (!_validMusicLibrary(merged)) {
+      throw const FormatException(
+          'The combined Music library exceeds its size or item limit.');
+    }
+    return merged;
+  }
+
+  /// Music bookmarks can exceed ordinary preference sizes. Keep their own
+  /// bound below the complete backup limit, and accept only canonical display
+  /// metadata produced by the library sanitizer. Unknown fields never travel.
+  static bool _validMusicLibrary(String value) {
+    if (value.length > musicLibraryMaximumBytes ||
+        utf8.encode(value).length > musicLibraryMaximumBytes) {
+      return false;
+    }
+    try {
+      final data = jsonDecode(value);
+      if (data is! Map ||
+          data.length != 3 ||
+          data['version'] is! int ||
+          data['version'] != 1 ||
+          data['entries'] is! List ||
+          data['playlists'] is! List) {
+        return false;
+      }
+      final entries = data['entries'] as List;
+      final playlists = data['playlists'] as List;
+      if (entries.length > musicLibraryMaximumEntries ||
+          playlists.length > musicLibraryMaximumEntries) {
+        return false;
+      }
+      final identities = <String>{};
+      for (final row in entries) {
+        final entry = MusicLibraryEntry.tryParse(row);
+        if (entry == null ||
+            !_sameJson(row, entry.toJson()) ||
+            !identities.add('${entry.kind.name}:${entry.id}')) {
+          return false;
+        }
+      }
+      final localIds = <String>{};
+      final localId = RegExp(r'^local:[A-Za-z0-9_-]{1,128}$');
+      for (final id in playlists) {
+        if (id is! String ||
+            localId.stringMatch(id) != id ||
+            !localIds.add(id)) {
+          return false;
+        }
+      }
+      return true;
+    } on FormatException {
+      return false;
+    }
+  }
+
+  static bool _sameJson(Object? left, Object? right) {
+    if (left is Map && right is Map) {
+      return left.length == right.length &&
+          left.keys.every((key) =>
+              right.containsKey(key) && _sameJson(left[key], right[key]));
+    }
+    if (left is List && right is List) {
+      return left.length == right.length &&
+          Iterable.generate(left.length)
+              .every((index) => _sameJson(left[index], right[index]));
+    }
+    // JSON numeric equality treats 0.0 and 0 as equal in Dart. The bookmark
+    // schema uses integers, so do not let malformed dimensions pass as zero.
+    if (left is num || right is num) {
+      return left is int && right is int && left == right;
+    }
+    return left == right;
   }
 }

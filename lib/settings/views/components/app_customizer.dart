@@ -7,6 +7,7 @@ import 'package:clipious/utils.dart';
 import '../../states/app_customizer.dart';
 import '../../states/settings.dart';
 import 'phone_navigation_editor.dart';
+import 'home_experience_setting.dart';
 
 class AppCustomizer extends StatelessWidget {
   const AppCustomizer({super.key});
@@ -36,87 +37,95 @@ class AppCustomizer extends StatelessWidget {
               sources.contains(startup) ? startup : sources.firstOrNull;
           return Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8.0),
-                child: Text(locals.customizeAppLayoutExplanation,
-                    style: textTheme.labelSmall),
-              ),
-              ReorderableListView.builder(
-                physics: const NeverScrollableScrollPhysics(),
-                shrinkWrap: true,
-                itemBuilder: (context, index) {
-                  HomeDataSource source = sources[index];
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(children: [
+                    const HomeExperienceSetting(),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: Text(locals.customizeAppLayoutExplanation,
+                          style: textTheme.labelSmall),
+                    ),
+                    ReorderableListView.builder(
+                      physics: const NeverScrollableScrollPhysics(),
+                      shrinkWrap: true,
+                      itemBuilder: (context, index) {
+                        HomeDataSource source = sources[index];
 
-                  return Row(
-                    key: ValueKey(source),
-                    children: [
-                      IconButton(
-                          onPressed: () =>
-                              settings.selectOnOpen(state.indexOf(source)),
-                          icon: Icon(
-                              visibleStartup == source
-                                  ? Icons.home
-                                  : Icons.home_outlined,
-                              color: visibleStartup == source
-                                  ? colors.primary
-                                  : colors.secondary)),
-                      Checkbox(
-                        value: state.contains(source),
-                        onChanged: (value) =>
-                            appLayout.updateSource(source, value ?? false),
-                      ),
-                      Expanded(
-                          child: ReorderableDragStartListener(
-                              index: index,
-                              child: Text(source.getLabel(locals)))),
-                      ReorderableDragStartListener(
-                        index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Icon(
-                            Icons.drag_indicator,
-                            color: colors.secondary,
-                            size: 15,
-                          ),
-                        ),
-                      )
-                    ],
-                  );
-                },
-                itemCount: sources.length,
-                onReorder: (oldIndex, newIndex) {
-                  if (newIndex == oldIndex || newIndex == oldIndex + 1) return;
-                  final source = sources[oldIndex];
-                  final remaining = List.of(state)..remove(source);
-                  final target = newIndex == sources.length
-                      ? remaining.length
-                      : remaining.indexOf(sources[newIndex]);
-                  appLayout.reorder(state.indexOf(source), target);
-                },
-              ),
-              const Divider(),
-              ListView(
-                physics: const NeverScrollableScrollPhysics(),
-                shrinkWrap: true,
-                children: HomeDataSource.values
-                    .where((element) =>
-                        canCustomize(element) && !state.contains(element))
-                    .map((e) => Row(
+                        return Row(
+                          key: ValueKey(source),
                           children: [
-                            Padding(
-                              padding: const EdgeInsets.only(left: 48.0),
-                              child: Checkbox(
-                                value: state.contains(e),
-                                onChanged: (value) =>
-                                    appLayout.updateSource(e, value ?? false),
-                              ),
+                            IconButton(
+                                onPressed: () => settings
+                                    .selectOnOpen(state.indexOf(source)),
+                                icon: Icon(
+                                    visibleStartup == source
+                                        ? Icons.home
+                                        : Icons.home_outlined,
+                                    color: visibleStartup == source
+                                        ? colors.primary
+                                        : colors.secondary)),
+                            Checkbox(
+                              value: state.contains(source),
+                              onChanged: (value) => appLayout.updateSource(
+                                  source, value ?? false),
                             ),
-                            Expanded(child: Text(e.getLabel(locals)))
+                            Expanded(
+                                child: ReorderableDragStartListener(
+                                    index: index,
+                                    child: Text(source.getLabel(locals)))),
+                            ReorderableDragStartListener(
+                              index: index,
+                              child: Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Icon(
+                                  Icons.drag_indicator,
+                                  color: colors.secondary,
+                                  size: 15,
+                                ),
+                              ),
+                            )
                           ],
-                        ))
-                    .toList(),
+                        );
+                      },
+                      itemCount: sources.length,
+                      onReorder: (oldIndex, newIndex) {
+                        if (newIndex == oldIndex || newIndex == oldIndex + 1) {
+                          return;
+                        }
+                        final source = sources[oldIndex];
+                        final remaining = List.of(state)..remove(source);
+                        final target = newIndex == sources.length
+                            ? remaining.length
+                            : remaining.indexOf(sources[newIndex]);
+                        appLayout.reorder(state.indexOf(source), target);
+                      },
+                    ),
+                    const Divider(),
+                    ListView(
+                      physics: const NeverScrollableScrollPhysics(),
+                      shrinkWrap: true,
+                      children: HomeDataSource.values
+                          .where((element) =>
+                              canCustomize(element) && !state.contains(element))
+                          .map((e) => Row(
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 48.0),
+                                    child: Checkbox(
+                                      value: state.contains(e),
+                                      onChanged: (value) => appLayout
+                                          .updateSource(e, value ?? false),
+                                    ),
+                                  ),
+                                  Expanded(child: Text(e.getLabel(locals)))
+                                ],
+                              ))
+                          .toList(),
+                    ),
+                  ]),
+                ),
               ),
-              Expanded(child: Container()),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [

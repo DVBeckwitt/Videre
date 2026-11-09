@@ -10,6 +10,7 @@ import 'package:clipious/utils/views/components/placeholders.dart';
 
 import '../../../utils.dart';
 import '../../../settings/views/components/phone_navigation_editor.dart';
+import '../../../settings/views/components/home_experience_setting.dart';
 
 @RoutePage()
 class EditHomeLayoutScreen extends StatelessWidget {
@@ -43,6 +44,7 @@ class EditHomeLayoutScreen extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: innerHorizontalPadding),
         child: ListView(
           children: [
+            const HomeExperienceSetting(),
             Text(
               locals.layoutEditorExplanation,
               style: textStyle.bodySmall,

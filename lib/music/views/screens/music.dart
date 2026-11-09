@@ -8,6 +8,7 @@ import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -65,9 +66,10 @@ class _MusicScreenState extends State<MusicScreen> {
   List<MusicArtist> _artists = [];
   List<MusicPlaylist> _playlists = [];
   MusicCollection? _collection;
+  bool _collectionIsAlbum = true;
   MusicArtistPage? _artistPage;
   final _browseHistory =
-      <({MusicCollection? collection, MusicArtistPage? artist})>[];
+      <({MusicCollection? collection, MusicArtistPage? artist, bool album})>[];
   bool _loading = false;
   bool _failed = false;
   bool _searched = false;
@@ -76,6 +78,16 @@ class _MusicScreenState extends State<MusicScreen> {
   Future<void> Function()? _retry;
 
   bool get _hasBrowsePage => _collection != null || _artistPage != null;
+
+  // A direct catalog link has no search results to return to. Preserve in-page
+  // history first; submitting a search establishes a new local destination.
+  bool get _returnToOrigin =>
+      _hasBrowsePage &&
+      !_searched &&
+      _browseHistory.isEmpty &&
+      (widget.albumId != null ||
+          widget.artistId != null ||
+          widget.playlistId != null);
 
   @override
   void initState() {
@@ -208,6 +220,7 @@ class _MusicScreenState extends State<MusicScreen> {
         setState(() {
           _rememberBrowsePage();
           _collection = collection;
+          _collectionIsAlbum = album;
           _artistPage = null;
         });
       }
@@ -216,7 +229,11 @@ class _MusicScreenState extends State<MusicScreen> {
 
   void _rememberBrowsePage() {
     if (_collection != null || _artistPage != null) {
-      _browseHistory.add((collection: _collection, artist: _artistPage));
+      _browseHistory.add((
+        collection: _collection,
+        artist: _artistPage,
+        album: _collectionIsAlbum
+      ));
     }
   }
 
@@ -275,6 +292,7 @@ class _MusicScreenState extends State<MusicScreen> {
         final previous = _browseHistory.removeLast();
         _collection = previous.collection;
         _artistPage = previous.artist;
+        _collectionIsAlbum = previous.album;
       } else {
         _collection = null;
         _artistPage = null;
@@ -512,6 +530,9 @@ class _MusicScreenState extends State<MusicScreen> {
               icon: const Icon(Icons.play_arrow),
               label: Text(locals.musicPlayAll)),
           const SizedBox(height: 8),
+          MusicBookmarkButton(
+              entry: MusicLibraryEntry.collection(collection,
+                  album: _collectionIsAlbum)),
           MusicLibraryActions(
               videos:
                   collection.tracks.map((track) => track.toVideo()).toList(),
@@ -537,6 +558,8 @@ class _MusicScreenState extends State<MusicScreen> {
           const SizedBox(height: 12),
           Text(artistPage.artist.name,
               style: Theme.of(context).textTheme.titleLarge),
+          MusicBookmarkButton(
+              entry: MusicLibraryEntry.artist(artistPage.artist)),
           if (artistPage.description case final String description)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -602,9 +625,9 @@ class _MusicScreenState extends State<MusicScreen> {
           (!before.sessionRecoveryRequired && after.sessionRecoveryRequired),
       listener: (context, state) => _clearForSession(),
       child: PopScope(
-        canPop: !_hasBrowsePage,
+        canPop: !_hasBrowsePage || _returnToOrigin,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _backToSearch();
+          if (!didPop && !_returnToOrigin) _backToSearch();
         },
         child: Shortcuts(
           shortcuts: {
@@ -616,10 +639,16 @@ class _MusicScreenState extends State<MusicScreen> {
               leading: !_hasBrowsePage
                   ? null
                   : IconButton(
-                      tooltip: _browseHistory.isEmpty
+                      tooltip: _browseHistory.isEmpty && !_returnToOrigin
                           ? locals.musicBackToSearch
                           : MaterialLocalizations.of(context).backButtonTooltip,
-                      onPressed: _backToSearch,
+                      onPressed: () {
+                        if (_returnToOrigin) {
+                          Navigator.of(context).maybePop();
+                        } else {
+                          _backToSearch();
+                        }
+                      },
                       icon: const Icon(Icons.arrow_back)),
             ),
             body: SafeArea(

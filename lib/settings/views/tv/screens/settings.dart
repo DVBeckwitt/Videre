@@ -1,4 +1,6 @@
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/home/models/content_mode.dart';
+import 'package:clipious/settings/views/components/home_experience_setting.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/extensions.dart';
@@ -67,6 +69,32 @@ class TVSettingsScreen extends StatelessWidget {
 
   openAppLayout(BuildContext context) {
     AutoRouter.of(context).push(const TvAppLayoutSettingsRoute());
+  }
+
+  void selectHomeExperience(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final cubit = context.read<SettingsCubit>();
+    final app = context.read<AppCubit>();
+    final profileId = db.profileId;
+    final revision = app.state.sessionRevision;
+    AutoRouter.of(context).push(TvSelectFromListRoute(
+      title: locals.homeExperience,
+      options: HomeExperience.values
+          .map((value) => homeExperienceLabel(value, locals))
+          .toList(),
+      selected: homeExperienceLabel(cubit.state.homeExperience, locals),
+      onSelect: (String selected) {
+        if (cubit.isClosed ||
+            db.profileId != profileId ||
+            app.state.sessionRevision != revision ||
+            app.state.globalLoading ||
+            app.state.sessionRecoveryRequired) {
+          return;
+        }
+        cubit.setHomeExperience(HomeExperience.values.firstWhere(
+            (value) => homeExperienceLabel(value, locals) == selected));
+      },
+    ));
   }
 
   showSelectLanguage(BuildContext context) {
@@ -216,6 +244,13 @@ class TVSettingsScreen extends StatelessWidget {
             child: ListView(
               children: [
                 SettingsTitle(title: locals.browsing),
+                SettingsTile(
+                  autofocus: true,
+                  title: locals.homeExperience,
+                  description:
+                      homeExperienceLabel(state.homeExperience, locals),
+                  onSelected: selectHomeExperience,
+                ),
                 SettingsTile(
                   title: locals.customizeAppLayout,
                   description:

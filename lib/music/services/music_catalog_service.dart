@@ -6,12 +6,14 @@ import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_discovery.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:http/http.dart' as http;
 
 part 'music_catalog_parser.dart';
+part 'music_discovery_parser.dart';
 
 MusicCatalogService musicCatalogService = MusicCatalogService();
 
@@ -46,6 +48,8 @@ class MusicCatalogService {
   static final _albumId = RegExp(r'^MPRE[a-zA-Z0-9_-]+$');
   static final _artistId = RegExp(r'^UC[a-zA-Z0-9_-]{22}$');
   static final _playlistId = RegExp(r'^(PL|OLAK5uy_|RD)[a-zA-Z0-9_-]+$');
+  static final _countryCode = RegExp(r'^[A-Z]{2}$');
+  static final _browseParams = RegExp(r'^[a-zA-Z0-9_+/%=-]{1,2048}$');
   static const _userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -61,6 +65,82 @@ class MusicCatalogService {
 
   Future<List<MusicPlaylist>> searchPlaylists(String query) =>
       _search(query, 'Eg-KAQwIABAAGAAgACgBMABqChAEEAMQCRAFEAo%3D', _playlist);
+
+  /// The public new releases grid, never search results or a personal home feed.
+  Future<List<MusicAlbum>> getNewReleases() => _discoveryBrowse({
+        'browseId': 'FEmusic_new_releases_albums'
+      }, _discoveryAlbum, (album) => album.id, onlyGrids: true);
+
+  Future<MusicCharts> getCharts({String country = 'ZZ'}) async {
+    final code = country.toUpperCase();
+    if (!_countryCode.hasMatch(code)) {
+      throw const MusicCatalogException('Invalid music chart country.');
+    }
+    final data = await _request('browse', {
+      'browseId': 'FEmusic_charts',
+      'formData': {
+        'selectedValues': [code]
+      },
+    });
+    return _discoveryCharts(data, code);
+  }
+
+  Future<List<MusicMoodCategory>> getMoodCategories() async => _discoveryMoods(
+      await _request('browse', {'browseId': 'FEmusic_moods_and_genres'}));
+
+  Future<List<MusicPlaylist>> getMoodPlaylists(String params) async {
+    if (!_browseParams.hasMatch(params)) {
+      throw const MusicCatalogException('Invalid music mood category.');
+    }
+    return _discoveryBrowse(
+        {'browseId': 'FEmusic_moods_and_genres_category', 'params': params},
+        _discoveryPlaylist,
+        (playlist) => playlist.id);
+  }
+
+  Future<List<T>> _discoveryBrowse<T>(Map<String, Object?> body,
+      T? Function(Map<String, dynamic>) parse, String Function(T) identity,
+      {bool onlyGrids = false}) async {
+    final items = <String, T>{};
+    final pending = <Map<String, Object?>>[body];
+    final seenContinuations = <String>{};
+    // Discovery can expose multiple shelves. Bound the entire operation, not
+    // merely each shelf, and report incomplete results instead of truncating.
+    for (var pageNumber = 0;
+        pageNumber < 10 && pending.isNotEmpty;
+        pageNumber++) {
+      final data = await _request('browse', pending.removeAt(0));
+      for (final container
+          in _discoveryContainers(data, onlyGrids: onlyGrids)) {
+        final rows = container['items'] ?? container['contents'];
+        if (rows is! List) _invalidDiscovery();
+        for (final row in rows) {
+          final card = _map(row)['musicTwoRowItemRenderer'];
+          if (card is! Map<String, dynamic>) continue;
+          final item = parse(card);
+          if (item != null) items.putIfAbsent(identity(item), () => item);
+        }
+        final continuations = [
+          ..._maps(container['continuations'], 'nextContinuationData')
+              .map((value) => value['continuation']),
+          ..._maps(rows, 'continuationCommand').map((value) => value['token']),
+        ];
+        for (final continuation in continuations) {
+          if (continuation is! String ||
+              !_browseParams.hasMatch(continuation) ||
+              !seenContinuations.add(continuation)) {
+            _invalidDiscovery();
+          }
+          pending.add({'continuation': continuation});
+        }
+      }
+    }
+    if (pending.isNotEmpty) {
+      throw const MusicCatalogException(
+          'Music discovery could not finish loading.');
+    }
+    return items.values.toList();
+  }
 
   Future<List<T>> _search<T>(String query, String params,
       T? Function(Map<String, dynamic>) parseRow) async {

@@ -13,6 +13,16 @@ import '../../../downloads/models/downloaded_video.dart';
 import '../../../utils/models/paginated_list.dart';
 
 const smallVideoAspectRatio = 0.76;
+const smallVideoViewHeight = 140.0;
+
+double smallVideoListHeight(BuildContext context) {
+  final label = Theme.of(context).textTheme.labelSmall;
+  final fontSize = label?.fontSize ?? 11;
+  final extra = MediaQuery.textScalerOf(context).scale(fontSize) - fontSize;
+  // Each compact card has a title and author beneath its fixed-size artwork.
+  return smallVideoViewHeight +
+      (extra > 0 ? (2 * extra * (label?.height ?? 1.45)).ceilToDouble() : 0);
+}
 
 class VideoList<T extends IdedVideo> extends StatelessWidget {
   final PaginatedList<T> paginatedVideoList;
@@ -90,15 +100,23 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
                                 !small && state.itemList.hasRefresh()
                                     ? await cubit.refreshItems()
                                     : Future.delayed(Duration.zero),
-                            child: GridView.count(
-                              crossAxisCount: gridCount,
+                            child: GridView(
                               controller: cubit.scrollController,
                               scrollDirection: scrollDirection,
-                              crossAxisSpacing: small ? 8 : 5,
-                              mainAxisSpacing: small ? 8 : 5,
-                              childAspectRatio: small
-                                  ? smallVideoAspectRatio
-                                  : getGridAspectRatio(context),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: gridCount,
+                                crossAxisSpacing: small ? 8 : 5,
+                                mainAxisSpacing: small ? 8 : 5,
+                                mainAxisExtent:
+                                    small && scrollDirection == Axis.horizontal
+                                        ? smallVideoViewHeight /
+                                            smallVideoAspectRatio
+                                        : null,
+                                childAspectRatio: small
+                                    ? smallVideoAspectRatio
+                                    : getGridAspectRatio(context),
+                              ),
                               children: [
                                 ...items.map((v) {
                                   Video? onlineVideo;
