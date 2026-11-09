@@ -7,6 +7,7 @@ import 'package:logging/logging.dart';
 
 import '../../downloads/states/download_manager.dart';
 import '../../globals.dart';
+import '../../network/nerdvpn_access.dart';
 import '../../player/models/backend_playback.dart';
 import '../../player/states/player.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
@@ -75,6 +76,8 @@ class VideoCubit extends Cubit<VideoState> {
       late String error;
       if (err is InvidiousServiceError) {
         error = (err).message;
+      } else if (err is NerdVpnAccessRequired) {
+        error = err.toString();
       } else {
         error = coulnotLoadVideos;
       }

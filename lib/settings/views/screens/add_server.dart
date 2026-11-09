@@ -19,6 +19,7 @@ import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
+import 'package:clipious/settings/views/components/nerdvpn_onion_setup.dart';
 import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/utils.dart';
@@ -68,6 +69,9 @@ class AddServerScreen extends StatelessWidget {
   }
 
   static String connectionAdvice(Object error, AppLocalizations locals) {
+    if (error is NerdVpnAccessRequired && error.state == 'waiting') {
+      return locals.nerdVpnAccessPending;
+    }
     if (error is GatewaySignInFailed || error is NerdVpnAccessRequired) {
       return error.toString();
     }
@@ -89,6 +93,7 @@ class AddServerScreen extends StatelessWidget {
       }
     }
     if (error is TypeError) return locals.instanceInvalidResponseHelp;
+    if (error is NerdVpnApiKeyException) return error.message;
     if (error is FormatException) return locals.instanceAddressInvalid;
     if (error is ServerAlreadyExists) {
       return locals.instanceAlreadySavedHelp;
@@ -228,8 +233,11 @@ class AddServerScreen extends StatelessWidget {
         ? '${e.getLabel(locals)}\n\n$wikiUrl'
         : e is CannotAddServerError
             ? e.getLabel(locals)
-            : e.toString();
+            : e is NerdVpnApiKeyException
+                ? e.message
+                : e.toString();
     final advice = connectionAdvice(e, locals);
+    final approvalPending = e is NerdVpnAccessRequired && e.state == 'waiting';
     List<Widget> actions = [
       if (e is WrongThumbnailUrl && !isTv)
         TextButton(
@@ -243,10 +251,10 @@ class AddServerScreen extends StatelessWidget {
 
     showAlertDialog(
         context,
-        locals.error,
+        approvalPending ? locals.nerdVpnApprovalPending : locals.error,
         [
           Text(advice),
-          if (errorMessage != advice) ...[
+          if (!approvalPending && errorMessage != advice) ...[
             const Gap(12),
             Text(errorMessage, style: Theme.of(context).textTheme.bodySmall),
           ],
@@ -303,9 +311,11 @@ class AddServerScreen extends StatelessWidget {
                     children: <Widget>[
                       ValueListenableBuilder(
                         valueListenable: cubit.urlController,
-                        builder: (context, _, __) => Text(cubit.usesNerdVpn
-                            ? locals.nerdVpnAccessSignIn
-                            : locals.instanceAddressDescription),
+                        builder: (context, _, __) => Text(cubit.usesNerdVpnOnion
+                            ? locals.nerdVpnOnionSetup
+                            : cubit.usesNerdVpn
+                                ? locals.nerdVpnAccessSignIn
+                                : locals.instanceAddressDescription),
                       ),
                       const Gap(12),
                       const PublicInstancesButton(
@@ -329,20 +339,38 @@ class AddServerScreen extends StatelessWidget {
                         enableSuggestions: false,
                         enableIMEPersonalizedLearning: false,
                       ),
-                      const Gap(10),
-                      TextField(
-                        controller: cubit.nameController,
-                        readOnly: state.loading,
-                        maxLength: 80,
-                        decoration:
-                            InputDecoration(labelText: locals.accountName),
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => cubit.usesNerdVpn
+                            ? const SizedBox.shrink()
+                            : Column(children: [
+                                const Gap(10),
+                                TextField(
+                                  controller: cubit.nameController,
+                                  readOnly: state.loading,
+                                  maxLength: 80,
+                                  decoration: InputDecoration(
+                                      labelText: locals.accountName),
+                                ),
+                              ]),
                       ),
-                      SwitchListTile(
-                        title: Text(locals.protectedServer),
-                        subtitle: Text(locals.protectedServerHelp),
-                        value: state.protectedServer,
-                        onChanged:
-                            state.loading ? null : cubit.setProtectedServer,
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => cubit.usesNerdVpnOnion
+                            ? NerdVpnOnionSetup(
+                                serverUrl: AddServerCubit.normalizeUrl(
+                                    cubit.urlController.text)!,
+                                apiKeyController: cubit.apiKeyController,
+                                loading: state.loading,
+                              )
+                            : SwitchListTile(
+                                title: Text(locals.protectedServer),
+                                subtitle: Text(locals.protectedServerHelp),
+                                value: state.protectedServer,
+                                onChanged: state.loading
+                                    ? null
+                                    : cubit.setProtectedServer,
+                              ),
                       ),
                       ListTile(
                         leading: AnimatedRotation(
@@ -435,22 +463,30 @@ class AddServerScreen extends StatelessWidget {
                                   valueListenable: cubit.urlController,
                                   builder: (context, _, __) => Text(cubit
                                               .usesNerdVpn &&
+                                          !cubit.usesNerdVpnOnion &&
                                           (state.protectedServer ||
                                               !state.headers.keys.any(
                                                   NerdVpnAccess.isKeyHeader))
                                       ? locals.nerdVpnSignInAndAdd
                                       : locals.testAndAddServer),
                                 )),
-                      CheckboxListTile(
-                        title: Text(
-                          locals.alsoTestServerConfig,
-                          style: textTheme.bodySmall,
-                        ),
-                        value: state.advancedTest,
-                        onChanged: state.loading || state.publicInstance != null
-                            ? null
-                            : (value) => cubit.setAdvancedTest(value ?? true),
-                      )
+                      ValueListenableBuilder(
+                        valueListenable: cubit.urlController,
+                        builder: (context, _, __) => cubit.usesNerdVpnOnion
+                            ? const SizedBox.shrink()
+                            : CheckboxListTile(
+                                title: Text(
+                                  locals.alsoTestServerConfig,
+                                  style: textTheme.bodySmall,
+                                ),
+                                value: state.advancedTest,
+                                onChanged: state.loading ||
+                                        state.publicInstance != null
+                                    ? null
+                                    : (value) =>
+                                        cubit.setAdvancedTest(value ?? true),
+                              ),
+                      ),
                     ],
                   ),
                 ),

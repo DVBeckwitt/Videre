@@ -49,45 +49,52 @@ class TvHorizontalItemList<T> extends StatelessWidget {
                     child: LinearProgressIndicator(
                   minHeight: 3,
                 )),
-              !state.loading && items.isEmpty && !canLoadMore
-                  ? const SizedBox.shrink()
-                  : SizedBox(
-                      height: 250,
-                      child: ListView.builder(
-                        scrollDirection: Axis.horizontal,
-                        controller: cubit.scrollController,
-                        itemCount: items.length +
-                            (state.loading
-                                ? 10
-                                : canLoadMore
-                                    ? 1
-                                    : 0),
-                        itemBuilder: (context, index) {
-                          if (!state.loading && index == items.length) {
-                            return SizedBox(
-                                width: 200,
-                                child: Center(
-                                    child: TvButton(
-                                        autofocus: items.isEmpty,
-                                        onPressed: (_) =>
-                                            state.error == ItemListErrors.none
+              state.error == ItemListErrors.nerdVpnApprovalPending &&
+                      items.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Text(locals.nerdVpnAccessPendingShort),
+                    )
+                  : !state.loading && items.isEmpty && !canLoadMore
+                      ? const SizedBox.shrink()
+                      : SizedBox(
+                          height: 250,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            controller: cubit.scrollController,
+                            itemCount: items.length +
+                                (state.loading
+                                    ? 10
+                                    : canLoadMore
+                                        ? 1
+                                        : 0),
+                            itemBuilder: (context, index) {
+                              if (!state.loading && index == items.length) {
+                                return SizedBox(
+                                    width: 200,
+                                    child: Center(
+                                        child: TvButton(
+                                            autofocus: items.isEmpty,
+                                            onPressed: (_) => state.error ==
+                                                    ItemListErrors.none
                                                 ? cubit.getMoreItems()
                                                 : cubit.retryItems(),
-                                        child: Padding(
-                                            padding: const EdgeInsets.all(16),
-                                            child: Text(state.error ==
-                                                    ItemListErrors.none
-                                                ? locals.loadMore
-                                                : locals.retry)))));
-                          }
-                          if (index >= items.length) {
-                            return getPlaceholder();
-                          }
-                          T e = items[index];
-                          return buildItem(context, index, e);
-                        },
-                      ),
-                    ),
+                                            child: Padding(
+                                                padding:
+                                                    const EdgeInsets.all(16),
+                                                child: Text(state.error ==
+                                                        ItemListErrors.none
+                                                    ? locals.loadMore
+                                                    : locals.retry)))));
+                              }
+                              if (index >= items.length) {
+                                return getPlaceholder();
+                              }
+                              T e = items[index];
+                              return buildItem(context, index, e);
+                            },
+                          ),
+                        ),
             ],
           );
         },

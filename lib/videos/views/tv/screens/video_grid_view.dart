@@ -63,6 +63,11 @@ class TvGridScreen extends StatelessWidget {
                         : const SizedBox.shrink()
                   ],
                 ),
+                if (state.error == ItemListErrors.nerdVpnApprovalPending)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(locals.nerdVpnAccessPendingShort),
+                  ),
                 Expanded(
                     child: GridView.count(
                   controller: cubit.scrollController,

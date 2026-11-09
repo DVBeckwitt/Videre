@@ -233,6 +233,8 @@ class PlayerControls extends StatelessWidget {
 
             bool isMini =
                 context.select((PlayerCubit cubit) => cubit.state.isMini);
+            final isDragging =
+                context.select((PlayerCubit cubit) => cubit.state.isDragging);
             bool isPlaying =
                 context.select((PlayerCubit cubit) => cubit.state.isPlaying);
             Video? currentlyPlaying = context
@@ -297,6 +299,9 @@ class PlayerControls extends StatelessWidget {
             var canDragToAdjustDeviceSettings = screenControlsEnabled &&
                 playerState.fullScreenState == FullScreenState.fullScreen &&
                 !playerState.displayControls;
+            final canDragPlayer =
+                playerState.fullScreenState != FullScreenState.fullScreen &&
+                    !playerState.displayControls;
 
             return BlocListener<PlayerCubit, PlayerState>(
               listenWhen: (previous, current) =>
@@ -312,21 +317,20 @@ class PlayerControls extends StatelessWidget {
                         videoPlayer is VideoPlayerCubit
                     ? videoPlayer
                     : null,
-                onVerticalDragEnd:
-                    playerState.fullScreenState == FullScreenState.fullScreen ||
-                            playerState.displayControls
-                        ? null
-                        : player.videoDraggedEnd,
+                // Keep the active recognizer until it settles even if controls
+                // appear mid-drag. Disposing it would skip end/cancel entirely.
+                onVerticalDragEnd: canDragPlayer
+                    ? player.videoDraggedEnd
+                    : isDragging
+                        ? (_) => player.videoDragCancelled()
+                        : null,
                 onVerticalDragUpdate:
-                    playerState.fullScreenState == FullScreenState.fullScreen ||
-                            playerState.displayControls
-                        ? null
-                        : player.videoDragged,
+                    canDragPlayer ? player.videoDragged : null,
                 onVerticalDragStart:
-                    playerState.fullScreenState == FullScreenState.fullScreen ||
-                            playerState.displayControls
-                        ? null
-                        : player.videoDragStarted,
+                    canDragPlayer ? player.videoDragStarted : null,
+                onVerticalDragCancel: canDragPlayer || isDragging
+                    ? player.videoDragCancelled
+                    : null,
                 child: SafeArea(
                   top:
                       playerState.fullScreenState == FullScreenState.fullScreen,
@@ -946,6 +950,7 @@ class _PlayerSurface extends StatefulWidget {
     required this.onVerticalDragStart,
     required this.onVerticalDragUpdate,
     required this.onVerticalDragEnd,
+    required this.onVerticalDragCancel,
     required this.child,
   });
 
@@ -953,6 +958,7 @@ class _PlayerSurface extends StatefulWidget {
   final GestureDragStartCallback? onVerticalDragStart;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
+  final GestureDragCancelCallback? onVerticalDragCancel;
   final Widget child;
 
   @override
@@ -1008,6 +1014,7 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
       onVerticalDragStart: widget.onVerticalDragStart,
       onVerticalDragUpdate: widget.onVerticalDragUpdate,
       onVerticalDragEnd: widget.onVerticalDragEnd,
+      onVerticalDragCancel: widget.onVerticalDragCancel,
       onLongPressStart: canBoost ? _startSpeedBoost : null,
       onLongPressEnd: canBoost ? (_) => _endSpeedBoost() : null,
       onLongPressCancel: canBoost ? _endSpeedBoost : null,

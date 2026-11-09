@@ -74,6 +74,7 @@ const strictValidationTargets = [
   './test/player/video_quality_test.dart',
   './test/player/seek_preview_test.dart',
   './test/player/player_controls_test.dart',
+  './test/player/mini_player_position_test.dart',
   './test/videos/models/storyboard_test.dart',
   './test/utils/backup_test.dart',
   './test/utils/item_list_test.dart',

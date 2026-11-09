@@ -69,6 +69,8 @@ class _HistoryViewState extends State<HistoryView> {
                       child: Padding(
                       padding: const EdgeInsets.all(8.0),
                       child: Text(switch (state.error) {
+                        ItemListErrors.nerdVpnApprovalPending =>
+                          locals.nerdVpnAccessPendingShort,
                         ItemListErrors.invalidScope =>
                           locals.itemListErrorInvalidScope,
                         _ => locals.itemlistErrorGeneric

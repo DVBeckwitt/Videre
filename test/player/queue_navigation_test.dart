@@ -10,8 +10,10 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -19,6 +21,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../test_app_cubit.dart';
@@ -31,6 +34,19 @@ class _ArtworkFailurePlayer extends TestPlayerCubit {
   @override
   Future<MediaItem?> getMediaItem(int index) async =>
       throw const FileSystemException('Artwork unavailable');
+}
+
+class _PendingMetadataService extends Service {
+  final started = Completer<void>();
+  final response = Completer<Video>();
+
+  @override
+  Future<Video> getVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest}) {
+    started.complete();
+    return response.future;
+  }
 }
 
 void main() {
@@ -108,6 +124,63 @@ void main() {
       expect(player.state.playQueue.toList(), ['c']);
     });
   }
+
+  for (final mini in [false, true]) {
+    test(
+        'queue advance settles an interrupted ${mini ? 'mini' : 'expanded'} drag',
+        () async {
+      if (mini) player.showMiniPlayer();
+      player.videoDragStarted(DragStartDetails());
+      player.videoDragged(DragUpdateDetails(
+          delta: const Offset(0, 60), globalPosition: const Offset(100, 700)));
+      expect(player.state.isDragging, isTrue);
+      final next = player.stream
+          .firstWhere((state) => state.currentlyPlaying?.videoId == 'b');
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await next.timeout(const Duration(seconds: 2));
+      expect(player.state.isDragging, isFalse);
+      expect(player.state.isMini, mini);
+      expect(player.state.top, mini ? isNull : 0);
+      expect(player.state.dragDistance, 0);
+      expect(player.state.showMiniPlaceholder, isFalse);
+      expect(player.state.playQueue.toList(), ['c']);
+    });
+  }
+
+  test('queue advance settles a drag begun while metadata was loading',
+      () async {
+    final previousService = service;
+    final pending = _PendingMetadataService();
+    service = pending;
+    addTearDown(() => service = previousService);
+    await player.playVideo([videos.first, const Video(videoId: 'b')]);
+    player.showMiniPlayer();
+    final next = player.stream
+        .firstWhere((state) => state.currentlyPlaying?.videoId == 'b');
+    player.setEvent(const MediaEvent(state: MediaState.completed));
+    await pending.started.future;
+    player.videoDragStarted(DragStartDetails());
+    player.videoDragged(DragUpdateDetails(
+        delta: const Offset(0, 60), globalPosition: const Offset(100, 700)));
+    pending.response.complete(videos[1]);
+    await next.timeout(const Duration(seconds: 2));
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.isMini, isTrue);
+    expect(player.state.top, isNull);
+  });
+
+  test('replacing video with audio settles the discarded controls drag',
+      () async {
+    player.showMiniPlayer();
+    player.videoDragStarted(DragStartDetails());
+    player.videoDragged(DragUpdateDetails(
+        delta: const Offset(0, 60), globalPosition: const Offset(100, 700)));
+    player.switchAudio(true);
+    expect(player.state.isAudio, isTrue);
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.isMini, isTrue);
+    expect(player.state.top, isNull);
+  });
 
   for (final repeat in PlayerRepeat.values) {
     test('queue autoplay off also stops completion in ${repeat.name}',

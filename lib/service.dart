@@ -709,10 +709,23 @@ class Service {
         'code_verifier': pkce.verifier,
         'callback_url': callback.toString(),
       });
-    final exchange = await httpClient
-        .send(request)
-        .then(http.Response.fromStream)
-        .timeout(const Duration(seconds: 30));
+    final http.Response exchange;
+    try {
+      exchange = await httpClient
+          .send(request)
+          .then(http.Response.fromStream)
+          .timeout(const Duration(seconds: 30));
+    } catch (error) {
+      if (error is http.ClientException ||
+          error is TimeoutException ||
+          error is IOException) {
+        // The server may have consumed the one-use code before the connection
+        // failed. A fresh browser sign-in is required; never replay this POST.
+        throw const GatewaySignInFailed(
+            'NerdVPN could not complete sign-in because the connection failed or timed out. Check your connection, then sign in again.');
+      }
+      rethrow;
+    }
     // Never log the authorization code, verifier, callback or token body.
     if (exchange.statusCode != 200) {
       if (const {429, 503}.contains(exchange.statusCode)) {

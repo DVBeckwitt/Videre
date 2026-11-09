@@ -17,6 +17,10 @@ part 'add_server.freezed.dart';
 
 typedef PublicInstance = ({String url, bool api});
 
+class NerdVpnApiKeyException extends FormatException {
+  const NerdVpnApiKeyException(super.message);
+}
+
 class AddServerCubit extends Cubit<AddServerState> {
   static const directoryUrl = 'https://api.invidious.io/instances.json';
   // Being listed in the directory does not mean a host accepts app requests.
@@ -31,18 +35,26 @@ class AddServerCubit extends Cubit<AddServerState> {
   final TextEditingController headerNameController = TextEditingController();
   final TextEditingController headerValueController = TextEditingController();
   final TextEditingController nameController = TextEditingController();
+  final TextEditingController apiKeyController = TextEditingController();
   final String _profileId = db.profileId;
+  String? _apiKeyOrigin;
 
   AddServerCubit(super.initialState) {
     urlController.addListener(
       () {
         if (!isClosed) {
+          final normalizedUrl = normalizeUrl(urlController.text);
+          final origin =
+              normalizedUrl == null ? null : Uri.parse(normalizedUrl).origin;
+          if (origin != _apiKeyOrigin) {
+            apiKeyController.clear();
+            _apiKeyOrigin = origin;
+          }
           emit(state.copyWith(
               valid: validUrl,
-              publicInstance:
-                  normalizeUrl(urlController.text) == state.publicInstance
-                      ? state.publicInstance
-                      : null));
+              publicInstance: normalizedUrl == state.publicInstance
+                  ? state.publicInstance
+                  : null));
         }
       },
     );
@@ -54,6 +66,7 @@ class AddServerCubit extends Cubit<AddServerState> {
     headerNameController.dispose();
     headerValueController.dispose();
     nameController.dispose();
+    apiKeyController.dispose();
     return super.close();
   }
 
@@ -61,10 +74,16 @@ class AddServerCubit extends Cubit<AddServerState> {
     if (isClosed || state.loading) return null;
     final serverUrl = normalizeUrl(urlController.text);
     final headers = Map<String, String>.from(state.headers);
-    final protectedServer = state.protectedServer;
-    final accountName = nameController.text.trim();
-    final advancedTest = state.advancedTest || state.publicInstance != null;
+    final onionManualSetup = usesNerdVpnOnion;
+    final enteredApiKey = apiKeyController.text.trim();
+    final protectedServer = state.protectedServer && !onionManualSetup;
+    // NerdVPN collects the username on its own sign-in page. Ignore any local
+    // label left in the hidden field after switching from another instance.
+    final accountName = usesNerdVpn ? '' : nameController.text.trim();
+    final advancedTest =
+        state.advancedTest || state.publicInstance != null || onionManualSetup;
     Server? protectedSession;
+    var credentialsStored = false;
     emit(state.copyWith(loading: true));
     try {
       if (serverUrl == null) {
@@ -89,20 +108,53 @@ class AddServerCubit extends Cubit<AddServerState> {
           url: serverUrl,
           customHeaders: headers);
       final nerdVpn = NerdVpnAccess.supports(server);
+      if (isClosed && (nerdVpn || protectedServer)) return null;
       final manualKeys = headers.entries
-          .where((entry) => entry.key.toLowerCase() == 'x-invidious-token');
-      if (nerdVpn && manualKeys.isNotEmpty) {
-        if (manualKeys.length != 1) {
-          throw const FormatException('Enter one API key for this account.');
+          .where((entry) => NerdVpnAccess.isKeyHeader(entry.key))
+          .toList();
+      String? manualKey;
+      if (nerdVpn) {
+        if (manualKeys.length > 1) {
+          throw const NerdVpnApiKeyException(
+              'Enter one API key for this account. Remove duplicate API key headers.');
         }
-        await NerdVpnAccess.instance.setKey(server, manualKeys.single.value);
+        final headerKey =
+            manualKeys.isEmpty ? null : manualKeys.single.value.trim();
+        if (onionManualSetup &&
+            enteredApiKey.isNotEmpty &&
+            headerKey != null &&
+            headerKey != enteredApiKey) {
+          throw const NerdVpnApiKeyException(
+              'The API key field and custom header contain different keys. Remove the custom API key header and try again.');
+        }
+        manualKey = onionManualSetup && enteredApiKey.isNotEmpty
+            ? enteredApiKey
+            : headerKey;
+        if (onionManualSetup && (manualKey == null || manualKey.isEmpty)) {
+          throw const NerdVpnApiKeyException(
+              'Open NerdVPN in Tor Browser, enable API access in your preferences, then paste the API key here.');
+        }
+        if (manualKey != null && !NerdVpnAccess.isValidKey(manualKey)) {
+          throw const NerdVpnApiKeyException(
+              'Enter the complete NerdVPN API key: nvpn_ followed by 32 letters or numbers.');
+        }
+      }
+      if (manualKey != null) {
         server = server.copyWith(
             customHeaders: Map<String, String>.from(headers)
-              ..removeWhere(
-                  (name, _) => name.toLowerCase() == 'x-invidious-token'));
+              ..removeWhere((name, _) => NerdVpnAccess.isKeyHeader(name)));
+        // Track the new account before crossing the platform channel: a failed
+        // response must not leave a key that was already written natively.
         protectedSession = server;
+        await NerdVpnAccess.instance.setKey(server, manualKey);
+        credentialsStored = true;
+        if (isClosed) {
+          await service.logOutProtected(server);
+          protectedSession = null;
+          return null;
+        }
       }
-      if (protectedServer || (nerdVpn && manualKeys.isEmpty)) {
+      if (protectedServer || (nerdVpn && manualKey == null)) {
         final authenticated = protectedServer
             ? await service.authenticateProtected(server)
             : await service.authenticateNerdVpn(server);
@@ -115,6 +167,7 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
         server = authenticated;
         protectedSession = server;
+        credentialsStored = true;
         if (isClosed) {
           await service.logOutProtected(server);
           protectedSession = null;
@@ -122,8 +175,8 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
 
-      // Eligibility and disabled access are saved account states. The gateway
-      // can reject the API probes until the account receives a working key.
+      // Browser sign-in can retain an account awaiting approval. Manual onion
+      // setup only succeeds after its key and authenticated API both work.
       if (nerdVpn) {
         final access = await NerdVpnAccess.instance.status(server);
         if (isClosed) {
@@ -131,12 +184,20 @@ class AddServerCubit extends Cubit<AddServerState> {
           protectedSession = null;
           return null;
         }
-        if (!access.ready) return server;
+        if (!access.ready) {
+          if (onionManualSetup) throw NerdVpnAccessRequired(access.state);
+          return server;
+        }
       }
 
       await service
           .validateServer(serverUrl, server.headersForUrl(serverUrl))
           .timeout(const Duration(seconds: 15));
+      if (isClosed && protectedSession != null) {
+        await service.logOutProtected(protectedSession);
+        protectedSession = null;
+        return null;
+      }
 
       if (advancedTest) {
         final video = await service
@@ -167,6 +228,8 @@ class AddServerCubit extends Cubit<AddServerState> {
       return server;
     } catch (error) {
       if (!isClosed &&
+          !onionManualSetup &&
+          credentialsStored &&
           protectedSession != null &&
           NerdVpnAccess.supports(protectedSession) &&
           (error is NerdVpnAccessRequired ||
@@ -210,6 +273,9 @@ class AddServerCubit extends Cubit<AddServerState> {
 
   bool get usesNerdVpn =>
       NerdVpnAccess.supportsUrl(normalizeUrl(urlController.text) ?? '');
+
+  bool get usesNerdVpnOnion =>
+      usesNerdVpn && isNerdVpnOnionUrl(normalizeUrl(urlController.text) ?? '');
 
   void selectPublicInstance(String url) {
     if (isClosed || state.loading) return;

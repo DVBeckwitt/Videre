@@ -10,6 +10,7 @@ import '../../../network/nerdvpn_access.dart';
 import '../../../router.dart';
 import '../../../utils/motion.dart';
 import '../../models/db/server.dart';
+import 'nerdvpn_onion_setup.dart';
 
 class NerdVpnAccessSettings extends StatefulWidget {
   final Server account;
@@ -71,6 +72,11 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
 
   Future<void> _preferences() async {
     final account = widget.account;
+    if (isNerdVpnOnionUrl(account.url)) {
+      await openNerdVpnTorPreferences(context, account.url,
+          isCurrent: () => mounted && widget.account == account);
+      return;
+    }
     final url = Uri.parse(account.url)
         .replace(path: '/preferences', fragment: 'api-access');
     final onion = url.host.endsWith('.onion');
@@ -130,6 +136,7 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
                   obscureText: true,
                   autocorrect: false,
                   enableSuggestions: false,
+                  enableIMEPersonalizedLearning: false,
                   maxLength: 37,
                   decoration: const InputDecoration(hintText: 'nvpn_…'),
                   validator: (value) => NerdVpnAccess.isValidKey(value ?? '')
@@ -162,7 +169,7 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
       case 'waiting':
         final date = status.availableAt;
         return date == null
-            ? locals.nerdVpnAccessUnavailable
+            ? locals.nerdVpnAccessWaitingUnknown
             : locals.nerdVpnAccessWaiting(_date(date));
       case 'disabled':
         return locals.nerdVpnAccessDisabled;
@@ -173,7 +180,9 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
       case 'unavailable':
         return locals.nerdVpnAccessUnavailable;
       default:
-        return locals.nerdVpnAccessSignIn;
+        return isNerdVpnOnionUrl(widget.account.url)
+            ? locals.nerdVpnOnionSetup
+            : locals.nerdVpnAccessSignIn;
     }
   }
 
@@ -199,12 +208,15 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(locals.nerdVpnAccessTitle,
+                Text(
+                    status?.state == 'waiting'
+                        ? locals.nerdVpnApprovalPending
+                        : locals.nerdVpnAccessTitle,
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 if (snapshot.hasError || _failed)
-                  Text(locals.accountActionFailed)
-                else if (status != null)
+                  Text(locals.accountActionFailed),
+                if (!snapshot.hasError && status != null)
                   Text(_description(status, locals)),
                 if (status?.retryAt != null)
                   Text(locals.nerdVpnAccessRetryAt(_date(status!.retryAt!))),

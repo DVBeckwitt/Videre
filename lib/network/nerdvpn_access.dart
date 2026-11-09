@@ -78,7 +78,8 @@ class NerdVpnAccessRequired implements Exception {
 
   @override
   String toString() => switch (state) {
-        'waiting' => 'This account is waiting for NerdVPN API access.',
+        'waiting' =>
+          'NerdVPN has not approved API access for this account yet. Playback and other requests to this server are paused. Open this account in server settings to see when access can be requested, then tap Check eligibility. Signing in again will not shorten the waiting period.',
         'disabled' => 'API access is disabled in your NerdVPN preferences.',
         'denied' => 'NerdVPN has restricted access from this connection.',
         'signInRequired' => 'Sign in to NerdVPN again to enable API access.',

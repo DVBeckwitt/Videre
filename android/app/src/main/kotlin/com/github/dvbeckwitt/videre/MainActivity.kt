@@ -36,6 +36,7 @@ class MainActivity : AudioServiceActivity() {
     private var backendBrowser: BackendDiscoveryBrowser? = null
     private var gatewayChannel: MethodChannel? = null
     private var gatewayBrowser: GatewayAuthBrowser? = null
+    private var torBrowserChannel: MethodChannel? = null
     private var autoPip = false
     private var pipAspectRatio = Rational(16, 9)
     private var pendingFile: FileRequest? = null
@@ -75,6 +76,10 @@ class MainActivity : AudioServiceActivity() {
         gatewayChannel = MethodChannel(messenger, "videre/gateway_auth").also {
             it.setMethodCallHandler { call, result -> gatewayBrowser?.handle(call, result)
                 ?: result.error("GATEWAY_BROWSER_UNAVAILABLE", null, null) }
+        }
+        val torBrowser = TorBrowserLauncher(this)
+        torBrowserChannel = MethodChannel(messenger, "videre/tor_browser").also {
+            it.setMethodCallHandler(torBrowser::handle)
         }
         // AudioService retains this engine while the Activity is recreated.
         if (!flutterEngine.plugins.has(VidereNetworkPlugin::class.java)) {
@@ -181,6 +186,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun releaseChannels() {
+        torBrowserChannel?.setMethodCallHandler(null)
+        torBrowserChannel = null
         gatewayChannel?.setMethodCallHandler(null)
         gatewayChannel = null
         gatewayBrowser?.close()
