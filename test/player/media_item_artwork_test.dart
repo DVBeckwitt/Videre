@@ -145,22 +145,36 @@ void main() {
     expect(item.artHeaders, isNull);
   });
 
-  test('music notification uses song artist album and cover metadata',
+  test('music notification uses the original cover without instance access',
       () async {
+    const cover = 'https://lh3.googleusercontent.com/cover';
     final music = MusicMetadata(
         title: 'Song',
         artist: 'Singer',
         album: 'Album',
-        thumbnails: [
-          ImageObject(null, 'https://lh3.googleusercontent.com/cover', 500, 500)
-        ]);
+        thumbnails: [ImageObject(null, cover, 500, 500)]);
     final controller = createPlayer(
         video('/vi/artwork-video/default.jpg').copyWith(musicMetadata: music));
     final item = (await controller.getMediaItem(0))!;
     expect(item.title, 'Song');
     expect(item.artist, 'Singer');
     expect(item.album, 'Album');
-    expect(item.artUri, Uri.parse('https://selected.example/ggpht/cover'));
+    expect(item.artUri, Uri.parse(cover));
+    expect(item.artHeaders, isNull);
+
+    await db.deleteServerById(selectedServer);
+    expect((await controller.getMediaItem(0))!.artUri, item.artUri);
+  });
+
+  test('music notification without a cover keeps the instance video thumbnail',
+      () async {
+    const music = MusicMetadata(title: 'Song', artist: 'Singer');
+    final controller = createPlayer(
+        video('https://i.ytimg.com/vi/artwork-video/default.jpg')
+            .copyWith(musicMetadata: music));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.artUri,
+        Uri.parse('https://selected.example/vi/artwork-video/default.jpg'));
     expect(
         item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
   });

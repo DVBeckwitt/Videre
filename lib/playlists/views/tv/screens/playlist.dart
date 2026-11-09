@@ -56,6 +56,7 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                           Video video =
                               playlistState.playlist.videos[itemIndex];
                           return VideoThumbnailView(
+                              musicThumbnails: video.musicMetadata?.thumbnails,
                               images: video.deArrowThumbnailUrl == null
                                   ? video.videoThumbnails
                                   : null,

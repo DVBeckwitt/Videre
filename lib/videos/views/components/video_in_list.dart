@@ -143,6 +143,7 @@ class VideoListItem extends StatelessWidget {
                       )
                     : video != null
                         ? VideoThumbnailView(
+                            musicThumbnails: video!.musicMetadata?.thumbnails,
                             videoId: video!.videoId,
                             images: video!.deArrowThumbnailUrl == null
                                 ? video!.videoThumbnails

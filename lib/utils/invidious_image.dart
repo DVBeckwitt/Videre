@@ -25,7 +25,9 @@ String invidiousImageCacheKey(String url, Server server) {
 /// Routes YouTube artwork through Invidious, independently of the video-stream
 /// and SOCKS proxy settings. Resolve at request time so saved metadata benefits
 /// too, without storing an instance-specific replacement in the library.
-String invidiousImageUrl(String url, Server server) {
+String invidiousImageUrl(String url, Server server,
+    {bool useInvidiousProxy = true}) {
+  if (!useInvidiousProxy) return url;
   if (url.isEmpty) return url;
   final image = Uri.tryParse(url);
   if (image == null) return url;

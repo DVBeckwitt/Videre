@@ -1423,6 +1423,36 @@ void main() {
     expect(await File('$cover.part').exists(), isFalse);
   });
 
+  test('music audio download saves its catalog cover without instance headers',
+      () async {
+    const coverPath = '/vi/music-cover/cover.jpg';
+    final requests = <(String, String?)>[];
+    final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+      requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
+      request.response.add([10, 11, 12]);
+      await request.response.close();
+    }, onAudio: (request) {
+      requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
+    });
+    final cover = 'http://127.0.0.1:${mediaServer!.port}$coverPath';
+    final audio = video.copyWith(
+        audioOnly: true,
+        musicMetadata: MusicMetadata(
+            title: 'Song',
+            artist: 'Artist',
+            thumbnails: [ImageObject(null, cover, 500, 500)]));
+    await db.upsertDownload(audio);
+    manager.setVideos();
+    service = _DownloadService((_) async => remote);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    expect(requests,
+        unorderedEquals([(coverPath, null), ('/audio', 'artwork-instance')]));
+    expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+  });
+
   test('media starts while artwork is pending and artwork is committed whole',
       () async {
     final audio = video.copyWith(audioOnly: true);

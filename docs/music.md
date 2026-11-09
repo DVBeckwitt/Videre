@@ -99,7 +99,11 @@ Public discovery feeds, catalog searches, and artist, album, or playlist lookups
 contact `music.youtube.com` through Videre's configured network transport, including
 SOCKS5/Orbot. These requests do not send Invidious credentials or Google login
 cookies. Playback URLs are resolved by the selected Invidious backend and follow
-the media-proxy setting. Artwork uses Videre's existing image routing.
+the media-proxy setting. Music catalog artwork loads from its original public
+image URLs through the same configured network transport, without Invidious
+credentials or Google login cookies. Album, artist, playlist, player, download,
+and notification covers therefore do not depend on the Invidious image proxy.
+Fallback video thumbnails still use the selected instance's image routing.
 
 YouTube Music catalog endpoints are unofficial. Their response formats are
 isolated in `MusicCatalogService` and its parsers, with offline fixtures and an

@@ -371,6 +371,7 @@ class _MusicScreenState extends State<MusicScreen> {
           ? const Icon(Icons.music_note)
           : Thumbnail(
               images: images,
+              useInvidiousProxy: false,
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
             ));
 
@@ -819,6 +820,7 @@ class _MusicTvAudio extends StatelessWidget {
             final current = state.currentlyPlaying ?? video;
             final offline = state.offlineCurrentlyPlaying ?? offlineVideo;
             final metadata = current?.musicMetadata ?? offline?.musicMetadata;
+            final musicImages = metadata?.thumbnails ?? const <ImageObject>[];
             if (audio.error != null ||
                 state.mediaEvent.state == MediaState.error) {
               return _MusicPlaybackFailure(
@@ -840,7 +842,10 @@ class _MusicTvAudio extends StatelessWidget {
                           ? OfflineVideoThumbnail(
                               borderRadius: 16, video: offline)
                           : Thumbnail(
-                              images: current?.videoThumbnails,
+                              images: musicImages.isNotEmpty
+                                  ? musicImages
+                                  : current?.videoThumbnails,
+                              useInvidiousProxy: musicImages.isEmpty,
                               decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(16))),
                     ),

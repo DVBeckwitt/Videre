@@ -77,6 +77,7 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                           )
                         : Thumbnail(
                             images: widget.thumbnails,
+                            useInvidiousProxy: false,
                             decoration: BoxDecoration(borderRadius: radius),
                           ),
                   ),

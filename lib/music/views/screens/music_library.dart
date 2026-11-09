@@ -61,13 +61,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   }
 
   Widget _artwork(List<ImageObject> images,
-          {IconData icon = Icons.music_note}) =>
+          {IconData icon = Icons.music_note, bool useInvidiousProxy = false}) =>
       SizedBox.square(
         dimension: 52,
         child: images.isEmpty
             ? Icon(icon)
             : Thumbnail(
                 images: images,
+                useInvidiousProxy: useInvidiousProxy,
                 decoration:
                     BoxDecoration(borderRadius: BorderRadius.circular(8))),
       );
@@ -160,12 +161,20 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ? _empty()
             : ListView.builder(
                 itemCount: songs.length,
-                itemBuilder: (_, index) => ListTile(
-                    leading: _artwork(songs[index].videoThumbnails),
-                    title: Text(songs[index].musicMetadata!.title),
-                    subtitle: Text(songs[index].musicMetadata!.artist),
-                    trailing: MusicLibraryActions(videos: [songs[index]]),
-                    onTap: () => _play(songs.skip(index).toList()))),
+                itemBuilder: (_, index) {
+                  final song = songs[index];
+                  final music = song.musicMetadata!;
+                  return ListTile(
+                      leading: _artwork(
+                          music.thumbnails.isNotEmpty
+                              ? music.thumbnails
+                              : song.videoThumbnails,
+                          useInvidiousProxy: music.thumbnails.isEmpty),
+                      title: Text(music.title),
+                      subtitle: Text(music.artist),
+                      trailing: MusicLibraryActions(videos: [song]),
+                      onTap: () => _play(songs.skip(index).toList()));
+                }),
       ),
     ]);
   }

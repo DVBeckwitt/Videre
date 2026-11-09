@@ -125,6 +125,8 @@ class TvVideoScreen extends StatelessWidget {
                       videoState.video == null
                           ? Container(color: colors.surface)
                           : VideoThumbnailView(
+                              musicThumbnails:
+                                  videoState.video!.musicMetadata?.thumbnails,
                               images:
                                   videoState.video!.deArrowThumbnailUrl == null
                                       ? videoState.video!.videoThumbnails

@@ -53,6 +53,7 @@ class VideoInnerView extends StatelessWidget {
                     ? const BoxConstraints(maxHeight: 100)
                     : null,
                 child: VideoThumbnailView(
+                  musicThumbnails: video.musicMetadata?.thumbnails,
                   images: video.deArrowThumbnailUrl == null
                       ? video.videoThumbnails
                       : null,

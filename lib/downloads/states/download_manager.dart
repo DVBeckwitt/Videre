@@ -426,16 +426,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                     update(count, total, step, steps));
           }
 
+          final musicThumbnails = music?.thumbnails ?? const [];
+          final useInvidiousProxy = musicThumbnails.isEmpty;
           final thumb = ImageObject.getBestThumbnail(
-                  music?.thumbnails.isNotEmpty == true
-                      ? music!.thumbnails
-                      : vid.videoThumbnails)
+                  useInvidiousProxy ? vid.videoThumbnails : musicThumbnails)
               ?.url;
           if (thumb != null && thumb.isNotEmpty) {
             unawaited(token.whenCancel.then(artworkToken.cancel));
             // Optional artwork must not delay the first media request. Keep it
             // part of this job so pause, delete and proxy changes can join it.
-            artwork = _downloadArtwork(dio, video, thumb, server, artworkToken);
+            artwork = _downloadArtwork(dio, video, thumb, server, artworkToken,
+                useInvidiousProxy: useInvidiousProxy);
           }
           await transfer(audio, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
@@ -591,7 +592,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<void> _downloadArtwork(Dio dio, DownloadedVideo video, String thumb,
-      Server server, CancelToken token) async {
+      Server server, CancelToken token,
+      {required bool useInvidiousProxy}) async {
     final deadline = Timer(const Duration(seconds: 5),
         () => token.cancel('Artwork download deadline'));
     File? partial;
@@ -599,11 +601,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       final target = File(await video.thumbnailPath);
       partial = File('${target.path}.part');
       if (token.isCancelled || await target.exists()) return;
-      final url = invidiousImageUrl(thumb, server);
+      final url = invidiousImageUrl(thumb, server,
+          useInvidiousProxy: useInvidiousProxy);
       await dio.download(url, partial.path,
           cancelToken: token,
           options: Options(
-              headers: server.headersForUrl(url),
+              headers: useInvidiousProxy ? server.headersForUrl(url) : null,
               // Covers are optional; do not try to decode an error response
               // whose body may not match its advertised content type.
               receiveDataWhenStatusError: false));

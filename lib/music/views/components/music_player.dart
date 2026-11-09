@@ -355,6 +355,9 @@ class _MusicArtwork extends StatelessWidget {
         : video?.videoThumbnails ?? [];
     return images.isEmpty
         ? placeholder
-        : Thumbnail(images: images, decoration: const BoxDecoration());
+        : Thumbnail(
+            images: images,
+            useInvidiousProxy: music.thumbnails.isEmpty,
+            decoration: const BoxDecoration());
   }
 }

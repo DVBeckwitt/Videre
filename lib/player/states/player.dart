@@ -1600,22 +1600,25 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (state.videos.isNotEmpty) {
       var e = state.videos[index];
       final music = e.musicMetadata;
+      final musicThumbnails = music?.thumbnails ?? const [];
       final thumbnail = ImageObject.getBestThumbnail(
-              music?.thumbnails.isNotEmpty == true
-                  ? music!.thumbnails
-                  : e.videoThumbnails)
+              musicThumbnails.isEmpty ? e.videoThumbnails : musicThumbnails)
           ?.url;
       String? artworkUrl;
       Map<String, String>? artworkHeaders;
       if (thumbnail != null && thumbnail.isNotEmpty) {
-        final playing = state.currentlyPlaying;
-        final server = (playing?.videoId == e.videoId
-                ? playing?.backendPlayback?.server
-                : null) ??
-            e.backendPlayback?.server ??
-            await db.getCurrentlySelectedServer();
-        artworkUrl = invidiousImageUrl(thumbnail, server);
-        artworkHeaders = server.headersForUrl(artworkUrl);
+        if (musicThumbnails.isNotEmpty) {
+          artworkUrl = thumbnail;
+        } else {
+          final playing = state.currentlyPlaying;
+          final server = (playing?.videoId == e.videoId
+                  ? playing?.backendPlayback?.server
+                  : null) ??
+              e.backendPlayback?.server ??
+              await db.getCurrentlySelectedServer();
+          artworkUrl = invidiousImageUrl(thumbnail, server);
+          artworkHeaders = server.headersForUrl(artworkUrl);
+        }
       }
       return MediaItem(
           id: e.videoId,
