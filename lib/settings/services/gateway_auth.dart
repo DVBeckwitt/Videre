@@ -98,6 +98,10 @@ class GatewayAuth {
       if (error.code == 'GATEWAY_UNSUPPORTED') {
         throw const GatewayUnsupported();
       }
+      if (error.code == 'GATEWAY_ONION_PROXY_REQUIRED') {
+        throw const GatewaySignInFailed(
+            'Enable SOCKS5/Orbot in Network proxy to use this onion server.');
+      }
       if (error.code == 'GATEWAY_TOKEN_EXPIRED') {
         throw const GatewaySignInFailed(
             'The sign-in code expired or was already used. Sign in again.');

@@ -15,6 +15,8 @@ void main() {
   const access = MethodChannel('videre/nerdvpn_access');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  const onionOrigin =
+      'http://nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion';
 
   Server server(String id, {bool gatewayEnabled = true}) => Server(
       url: 'https://instance.example',
@@ -212,6 +214,101 @@ void main() {
             (error) => error.toString(),
             'message',
             'The sign-in code expired or was already used. Sign in again.')));
+  });
+
+  test('onion sign-in keeps the selected origin and native context together',
+      () async {
+    const account = Server(
+        url: onionOrigin,
+        id: 'onion-selected-origin',
+        profileId: 'tor-profile');
+    final context = GatewayRequestContext.forAccount(
+        account.profileId, account.accountId, account.url)!;
+    final calls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(access, (call) async {
+      expect((call.arguments as Map)['context'], context.encoded);
+      return {'state': 'missing'};
+    });
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      calls.add(call);
+      return call.method == 'signIn' ? 'onion-fixture-token' : null;
+    });
+    expect(await GatewayAuth.signIn(account), 'onion-fixture-token');
+    expect(calls.map((call) => call.method), ['close', 'signIn']);
+    expect((calls.last.arguments as Map)['context'], context.encoded);
+    expect((calls.last.arguments as Map)['serverUrl'], onionOrigin);
+    expect(context.origin.origin, onionOrigin);
+  });
+
+  test('onion sign-in without SOCKS gives safe actionable guidance', () async {
+    const account = Server(url: onionOrigin, id: 'onion-proxy-required');
+    messenger.setMockMethodCallHandler(
+        access, (call) async => {'state': 'proxyRequired'});
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      if (call.method == 'signIn') {
+        throw PlatformException(
+            code: 'GATEWAY_ONION_PROXY_REQUIRED',
+            message: 'private-proxy-configuration');
+      }
+      return null;
+    });
+    await expectLater(
+        GatewayAuth.signIn(account),
+        throwsA(isA<GatewaySignInFailed>().having(
+            (error) => error.toString(),
+            'message',
+            'Enable SOCKS5/Orbot in Network proxy to use this onion server.')));
+  });
+
+  test('onion logout rejects its late token without cancelling another profile',
+      () async {
+    const first = Server(
+        url: onionOrigin, id: 'same-onion-account', profileId: 'first-profile');
+    final second = first.copyWith(profileId: 'second-profile');
+    String contextFor(Server account) => GatewayRequestContext.forAccount(
+            account.profileId, account.accountId, account.url)!
+        .encoded;
+    final firstContext = contextFor(first);
+    final secondContext = contextFor(second);
+    final started = <String, Completer<void>>{
+      firstContext: Completer<void>(),
+      secondContext: Completer<void>(),
+    };
+    final tokens = <String, Completer<String>>{
+      firstContext: Completer<String>(),
+      secondContext: Completer<String>(),
+    };
+    final revoked = <String>[];
+    messenger.setMockMethodCallHandler(
+        access, (call) async => {'state': 'missing'});
+    messenger.setMockMethodCallHandler(sessions, (call) async {
+      if (call.method == 'status') return enabled(17);
+      revoked.add((call.arguments as Map)['context'] as String);
+      return null;
+    });
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      final arguments = call.arguments as Map;
+      final context = arguments['context'] as String;
+      if (call.method == 'signIn') {
+        started[context]!.complete();
+        return tokens[context]!.future;
+      }
+      if (arguments['revision'] == 17) {
+        expect(context, firstContext);
+        tokens[context]!.complete('stale-onion-fixture-token');
+      }
+      return null;
+    });
+    final firstLogin = GatewayAuth.signIn(first);
+    await started[firstContext]!.future;
+    final secondLogin = GatewayAuth.signIn(second);
+    await started[secondContext]!.future;
+    await GatewayAuth.signOut(first);
+    tokens[secondContext]!.complete('other-profile-fixture-token');
+    expect(await firstLogin, isNull);
+    expect(await secondLogin, 'other-profile-fixture-token');
+    expect(revoked, [firstContext]);
+    expect(firstContext, isNot(secondContext));
   });
 
   test('protected sign-in observes the persisted Retry-After before opening',

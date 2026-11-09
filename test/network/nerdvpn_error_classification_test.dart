@@ -34,7 +34,12 @@ void main() {
     expect(failure.isAuthenticationFailure, isFalse);
   });
 
-  for (final origin in [instance.url, 'https://instance.example']) {
+  for (final (origin, retryable) in [
+    (instance.url, false),
+    ('http://$nerdVpnOnionHost', false),
+    ('https://$nerdVpnOnionHost', false),
+    ('https://instance.example', true),
+  ]) {
     test('$origin preserves its unavailable response classification', () {
       final api = Service();
       addTearDown(api.httpClient.close);
@@ -46,7 +51,7 @@ void main() {
           throwsA(isA<InvidiousServiceError>().having(
               (error) => isBackendRetryable(error),
               'backend retry',
-              origin != instance.url)));
+              retryable)));
     });
   }
 

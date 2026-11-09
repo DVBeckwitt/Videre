@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:uuid/uuid.dart';
 
+import 'nerdvpn_origin.dart';
+
 /// Internal transport metadata. Every transport must remove this before sending.
 const gatewayContextHeader = 'X-Videre-Gateway-Context';
 
@@ -30,7 +32,7 @@ class GatewayRequestContext {
 
   static bool _validOrigin(Uri? uri) =>
       uri != null &&
-      uri.scheme == 'https' &&
+      (uri.scheme == 'https' || isNerdVpnOnionUrl(uri.toString())) &&
       uri.host.isNotEmpty &&
       uri.userInfo.isEmpty;
 

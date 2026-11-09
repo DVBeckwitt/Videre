@@ -6,6 +6,7 @@ import org.junit.Test
 
 class NerdVpnPkceTest {
     private val server = "https://invidious.nerdvpn.de".toHttpUrl()
+    private val onionHost = "nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion"
 
     @Test fun `S256 matches RFC 7636 vector`() {
         assertEquals("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
@@ -30,8 +31,27 @@ class NerdVpnPkceTest {
         for (url in listOf("http://invidious.nerdvpn.de", "https://www.invidious.nerdvpn.de",
             "https://invidious.nerdvpn.de:8443", "https://invidious.nerdvpn.de/another-instance",
             "https://invidious.nerdvpn.de.attacker.example", "https://user@invidious.nerdvpn.de",
-            "https://invidious.nerdvpn.de/?query=yes", "https://invidious.nerdvpn.de/#fragment")) {
+            "https://invidious.nerdvpn.de/?query=yes", "https://invidious.nerdvpn.de/#fragment",
+            "http://other.onion", "http://sub.$onionHost", "http://$onionHost.attacker.example",
+            "http://$onionHost:81", "https://$onionHost:8443", "http://user@$onionHost",
+            "http://$onionHost/another-instance", "http://$onionHost/?query=yes", "http://$onionHost/#fragment")) {
             assertNull(url, NerdVpnPkce.forServer(url.toHttpUrl(), "nonce"))
+        }
+    }
+
+    @Test fun `onion PKCE authorization stays on selected origin and validates callback`() {
+        for (scheme in listOf("http", "https")) {
+            val onion = "$scheme://$onionHost".toHttpUrl()
+            val attempt = NerdVpnPkce.forServer(onion, "onion-nonce")!!
+            val authorization = attempt.authorizationUrl(onion).toHttpUrl()
+            assertEquals(scheme, authorization.scheme)
+            assertEquals(onionHost, authorization.host)
+            assertEquals(onion.port, authorization.port)
+            assertEquals("/authorize_token", authorization.encodedPath)
+            assertTrue(authorization.queryParameter("scopes")!!.split(',').contains(":api_key"))
+            assertEquals("S256", authorization.queryParameter("code_challenge_method"))
+            assertEquals("fixture-code", attempt.codeFromCallback("${attempt.callbackUrl}?code=fixture-code"))
+            assertNull(attempt.codeFromCallback("videre-gateway://callback/other?code=fixture-code"))
         }
     }
 

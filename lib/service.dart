@@ -751,6 +751,10 @@ class Service {
     if (!NerdVpnAccess.supports(original)) {
       throw ArgumentError('This server does not support NerdVPN sign-in');
     }
+    if (isNerdVpnOnionUrl(original.url)) {
+      // An external browser does not inherit Videre's SOCKS routing policy.
+      return authenticateProtected(original);
+    }
     final intent = await NerdVpnAccess.instance.beginAuth(original);
     final token = await _browserToken(original);
     if (token == null) return null;
@@ -765,6 +769,9 @@ class Service {
     final original = owner.getAccount(accountId);
     if (original == null) {
       throw InvidiousServiceError('Account no longer exists');
+    }
+    if (NerdVpnAccess.supports(original) && isNerdVpnOnionUrl(original.url)) {
+      return (await logInProtected(original))?.authToken;
     }
     final generation = _beginAuthentication(original);
     final intent = NerdVpnAccess.supports(original)

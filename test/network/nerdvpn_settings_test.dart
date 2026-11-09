@@ -5,6 +5,8 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app;
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/states/server_settings.dart';
@@ -23,11 +25,31 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:settings_ui/settings_ui.dart' as phone;
+// ignore: depend_on_referenced_packages
+import 'package:url_launcher_platform_interface/link.dart';
+// ignore: depend_on_referenced_packages
+import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 const _access = MethodChannel('videre/nerdvpn_access');
 const _account =
     Server(id: 'nerdvpn-account', url: 'https://invidious.nerdvpn.de');
+const _onionOrigin =
+    'http://nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion';
+const _onionAccount = Server(id: 'onion-account', url: _onionOrigin);
 const _manualKey = 'nvpn_0123456789abcdefghijklmnopqrstuv';
+
+class _PreferencesLauncher extends UrlLauncherPlatform {
+  final urls = <String>[];
+
+  @override
+  LinkDelegate? get linkDelegate => null;
+
+  @override
+  Future<bool> launchUrl(String url, LaunchOptions options) async {
+    urls.add(url);
+    return true;
+  }
+}
 
 class _SettingsApp extends AppCubit {
   _SettingsApp() : super(AppState(0, null, HomeLayout()));
@@ -47,8 +69,15 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   var nativeStatus = <String, Object?>{};
   final calls = <String>[];
+  late _PreferencesLauncher launcher;
+  late UrlLauncherPlatform originalLauncher;
+  late bool originalTv;
 
   setUp(() {
+    originalTv = app.isTv;
+    app.isTv = false;
+    originalLauncher = UrlLauncherPlatform.instance;
+    UrlLauncherPlatform.instance = launcher = _PreferencesLauncher();
     nativeStatus = {'state': 'ready'};
     calls.clear();
     messenger.setMockMethodCallHandler(_access, (call) async {
@@ -57,11 +86,16 @@ void main() {
     });
   });
 
-  tearDown(() => messenger.setMockMethodCallHandler(_access, null));
+  tearDown(() {
+    messenger.setMockMethodCallHandler(_access, null);
+    UrlLauncherPlatform.instance = originalLauncher;
+    app.isTv = originalTv;
+  });
 
   Future<void> showPanel(WidgetTester tester,
       {Future<void> Function()? onCheck,
       Future<void> Function(String)? onSaveKey,
+      Server account = _account,
       bool authenticating = false}) async {
     await tester.pumpWidget(MaterialApp(
       locale: const Locale('en'),
@@ -70,7 +104,7 @@ void main() {
       home: Scaffold(
         body: SingleChildScrollView(
           child: NerdVpnAccessSettings(
-            account: _account,
+            account: account,
             authenticating: authenticating,
             onCheck: onCheck ?? () async {},
             onSaveKey: onSaveKey ?? (_) async {},
@@ -203,6 +237,72 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('onion API key entry uses its own account status',
+      (tester) async {
+    final contexts = <GatewayRequestContext>[];
+    messenger.setMockMethodCallHandler(_access, (call) async {
+      contexts.add(GatewayRequestContext.tryParse(
+          (call.arguments as Map)['context'] as String)!);
+      return nativeStatus;
+    });
+    final saved = <String>[];
+    await showPanel(tester,
+        account: _onionAccount, onSaveKey: (key) async => saved.add(key));
+    await tester.tap(find.text('Enter API key'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), _manualKey);
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(saved, [_manualKey]);
+    expect(contexts, hasLength(2));
+    expect(contexts.every((context) => context.origin.origin == _onionOrigin),
+        isTrue);
+    expect(
+        contexts.first.key,
+        isNot(GatewayRequestContext.forAccount(
+                _onionAccount.profileId, _onionAccount.accountId, _account.url)!
+            .key));
+    expect(find.text(_manualKey), findsNothing);
+  });
+
+  testWidgets('open key dialog cannot save into a different account',
+      (tester) async {
+    final originalSaves = <String>[];
+    final replacementSaves = <String>[];
+    await showPanel(tester, onSaveKey: (key) async => originalSaves.add(key));
+    await tester.tap(find.text('Enter API key'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), _manualKey);
+    await showPanel(tester,
+        account: _account.copyWith(profileId: 'another-profile'),
+        onSaveKey: (key) async => replacementSaves.add(key));
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(originalSaves, isEmpty);
+    expect(replacementSaves, isEmpty);
+  });
+
+  testWidgets('HTTPS preferences retain their existing browser handoff',
+      (tester) async {
+    await showPanel(tester);
+    await tester.tap(find.text('Open NerdVPN preferences'));
+    await tester.pumpAndSettle();
+    expect(
+        launcher.urls, ['https://invidious.nerdvpn.de/preferences#api-access']);
+    expect(find.byType(AlertDialog), findsNothing);
+  });
+
+  testWidgets('onion access without SOCKS explains how to enable Tor routing',
+      (tester) async {
+    nativeStatus = {'state': 'proxyRequired'};
+    await showPanel(tester, account: _onionAccount);
+    final locals = AppLocalizations.of(
+        tester.element(find.byType(NerdVpnAccessSettings)))!;
+    expect(find.text(locals.nerdVpnProxyRequired), findsOneWidget);
+    expect(find.text(locals.accountActionFailed), findsNothing);
+    expect(find.text('Check again'), findsOneWidget);
+  });
+
   testWidgets(
       'failed access checks show a generic message without exception details',
       (tester) async {
@@ -228,6 +328,44 @@ void main() {
   });
 
   for (final television in [false, true]) {
+    for (final scheme in ['http', 'https']) {
+      testWidgets(
+          '${television ? 'TV' : 'phone'} $scheme onion preferences preserve the selected origin with Tor guidance',
+          (tester) async {
+        app.isTv = television;
+        final origin = _onionOrigin.replaceFirst('http:', '$scheme:');
+        await showPanel(tester, account: _onionAccount.copyWith(url: origin));
+        await tester.tap(find.text('Open NerdVPN preferences'));
+        await tester.pumpAndSettle();
+        expect(launcher.urls, isEmpty);
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.text('$origin/preferences#api-access'), findsOneWidget);
+        expect(find.textContaining('browser connected to Tor'), findsOneWidget);
+        expect(
+            find.textContaining('https://invidious.nerdvpn.de'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets(
+        '${television ? 'TV' : 'phone'} onion account exposes managed API access',
+        (tester) async {
+      await showManager(tester, television: television, account: _onionAccount);
+      expect(find.byType(NerdVpnAccessSettings), findsOneWidget);
+      expect(find.text('Enter API key'), findsOneWidget);
+      final cookie = find.text('Log in with cookie');
+      if (television) {
+        final tile = tester.widget<tv.SettingsTile>(
+            find.ancestor(of: cookie, matching: find.byType(tv.SettingsTile)));
+        expect(tile.enabled, isFalse);
+      } else {
+        final tile = tester.widget<phone.SettingsTile>(find.ancestor(
+            of: cookie, matching: find.byType(phone.SettingsTile)));
+        expect(tile.enabled, isFalse);
+      }
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
         '${television ? 'TV' : 'phone'} manual-key-only account can clear its key without deleting the account',
         (tester) async {
@@ -410,6 +548,12 @@ void main() {
 
       await enterUrl('https://invidious.nerdvpn.de');
       expect(identical(cubit.state, validState), isTrue);
+      expect(find.text(locals.nerdVpnAccessSignIn), findsOneWidget);
+      expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
+      expect(find.text(locals.instanceAddressDescription), findsNothing);
+
+      await enterUrl(_onionOrigin);
+      expect(cubit.state.valid, isTrue);
       expect(find.text(locals.nerdVpnAccessSignIn), findsOneWidget);
       expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
       expect(find.text(locals.instanceAddressDescription), findsNothing);

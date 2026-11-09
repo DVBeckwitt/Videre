@@ -88,13 +88,29 @@ its optional interception of `Authorization` must not consume the Invidious toke
 
 ## NerdVPN API access
 
-The canonical `https://invidious.nerdvpn.de` instance uses PKCE browser sign-in
-and the `:api_key` scope. Both token sign-in and protected sign-in fetch the
+The canonical `https://invidious.nerdvpn.de` instance and its official onion
+address use PKCE browser sign-in and the `:api_key` scope. Both token sign-in and protected sign-in fetch the
 account's API key after the code exchange. Existing accounts can sign in again
 to grant this scope, or enter a manual key in account settings.
 
+The supported onion host is
+`nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion`,
+on HTTP port 80 or HTTPS port 443. Enable Orbot or another Tor-capable SOCKS5
+endpoint in **Network proxy** before using it. Onion sign-in uses Videre's
+isolated native browser and the configured proxy, including the token exchange
+and API-key request. HTTP onion requests are blocked before DNS or connection
+when the app's SOCKS setting is off. HTTPS certificate checks remain mandatory.
+Other HTTP hosts, ports, and onion aliases do not gain managed API-key access.
+
+The onion preferences button shows the selected server's preferences address
+with guidance to open it in a Tor-capable browser. The server must expose the
+same authorization and API-key endpoints and permit the account's access;
+Videre cannot override eligibility restrictions or a gateway blocking the API.
+
 API keys and the native recovery credential are encrypted with Android Keystore
-and scoped to the local profile, account, and HTTPS origin. Transports resolve
+and scoped to the local profile, account, and exact origin (scheme, host, port).
+Clearnet, HTTP onion, and HTTPS onion credentials are never shared automatically.
+Transports resolve
 the key for each API, image, media, download, and worker request. Legacy custom
 header keys migrate into this store. The store is excluded from Android backup.
 
@@ -105,6 +121,12 @@ failures share one recovery attempt. Reads can retry once after recovery, while
 writes require an explicit retry. Gateway rate limits and temporary outages keep
 credentials and honor `Retry-After`. Ambiguous token errors prompt reauthorization
 while preserving the saved login.
+
+Android acceptance against an isolated SOCKS/onion fixture verified PKCE
+sign-in, API-key retrieval, manual-key storage, restart persistence, one-request
+key recovery, native video playback, and recovery after disabling/re-enabling
+the proxy. This verifies client behavior, not live NerdVPN account eligibility
+or compatibility with its currently deployed onion gateway.
 
 ## Verification
 
