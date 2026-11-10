@@ -141,6 +141,7 @@ class PlaylistLibraryService {
         // Backup restore also writes this record transactionally. Read only
         // after acquiring the transaction so neither operation loses the other.
         await database.db.transaction((txn) async {
+          await database.ensureProfileExists(txn);
           final record =
               database.settingsStore.record(playlistLibrarySettingName);
           final stored = (await record.get(txn))?['value'];

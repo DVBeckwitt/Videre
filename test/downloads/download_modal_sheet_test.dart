@@ -24,7 +24,8 @@ class _Metadata extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) {
     accounts.add(serverOverride);
     if (!started.isCompleted) started.complete();
     return fetch();

@@ -8,6 +8,8 @@ import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/mini_player.dart';
+import 'package:clipious/player/views/components/mini_player_progress.dart';
 import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -82,9 +84,14 @@ void main() {
     await db.close();
   });
 
-  Future<AudioPlayerCubit> pumpPlayer(WidgetTester tester) async {
-    tester.view.devicePixelRatio = 1;
-    tester.view.physicalSize = window;
+  Future<AudioPlayerCubit> pumpPlayer(
+    WidgetTester tester, {
+    double pixelRatio = 1,
+    Size physicalSize = window,
+    ThemeData? theme,
+  }) async {
+    tester.view.devicePixelRatio = pixelRatio;
+    tester.view.physicalSize = physicalSize;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.runAsync(() async {
@@ -95,6 +102,7 @@ void main() {
           BlocProvider<PlayerCubit>.value(value: player),
         ],
         child: MaterialApp(
+          theme: theme,
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
           home: ValueListenableBuilder<MediaQueryData>(
@@ -129,6 +137,35 @@ void main() {
     });
     return decoder;
   }
+
+  testWidgets('compact Music player fits a taller mixed-script title',
+      (tester) async {
+    const title = 'PSY - GANGNAM STYLE(강남스타일) M/V';
+    const artist = 'officialpsy';
+    final track = song.copyWith(
+      title: title,
+      author: artist,
+      musicMetadata: const MusicMetadata(title: title, artist: artist),
+    );
+    await player.seed(player.state.copyWith(currentlyPlaying: track));
+    viewport.value = viewport.value.copyWith(size: const Size(360, 720));
+    await pumpPlayer(
+      tester,
+      physicalSize: const Size(540, 1080),
+      pixelRatio: 1.5,
+      // Match the taller fallback-font line seen on Android.
+      theme: ThemeData(
+        textTheme: const TextTheme(bodySmall: TextStyle(height: 17 / 12)),
+      ),
+    );
+
+    final bounds = tester.getRect(find.byType(MiniPlayer));
+    expect(tester.getRect(find.text('$title - $artist')).top,
+        greaterThanOrEqualTo(bounds.top));
+    expect(tester.getRect(find.byType(MiniPlayerProgress)).bottom,
+        lessThanOrEqualTo(bounds.bottom));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('mini-player drag stays within the safe viewport at both edges',
       (tester) async {

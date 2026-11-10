@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:clipious/player/dash_manifest_resolver.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -140,7 +143,6 @@ void main() {
 
   for (final failure in [
     (400, 'Invalid check ID.'),
-    (403, 'No check ID.'),
     (500, 'No check ID.'),
   ]) {
     test('does not scrape for unrelated error $failure', () async {
@@ -150,6 +152,72 @@ void main() {
         return http.Response(failure.$2, failure.$1);
       }));
       expect(await resolver.resolve(original, videoId, server), isNull);
+      expect(calls, 1);
+    });
+  }
+
+  for (final status in [401, 403, 429]) {
+    for (final failedStep in [1, 2, 3]) {
+      test('DASH HTTP $status stops fallback at request $failedStep', () async {
+        var calls = 0;
+        final resolver = DashManifestResolver(MockClient((_) async {
+          calls++;
+          if (calls == failedStep) return http.Response('Refused', status);
+          return calls == 1
+              ? http.Response('No check ID.', 400)
+              : http.Response(watchPage(recovered), 200);
+        }));
+        await expectLater(
+            resolver.resolve(original, videoId, server, throwRetryable: true),
+            throwsA(isA<InvidiousServiceError>()
+                .having((error) => error.statusCode, 'status', status)));
+        expect(calls, failedStep);
+      });
+    }
+  }
+
+  for (final retryAfter in ['10', 'invalid', 'Tue, 10 Nov 2026 12:00:10 GMT']) {
+    test('DASH cooldown $retryAfter cannot become backend fallback', () async {
+      var calls = 0;
+      final resolver = DashManifestResolver(MockClient((_) async {
+        calls++;
+        return http.Response('Unavailable', 503,
+            headers: {'retry-after': retryAfter});
+      }), now: () => DateTime.utc(2026, 11, 10, 12));
+      await expectLater(
+          resolver.resolve(original, videoId, server, throwRetryable: true),
+          throwsA(isA<InvidiousServiceError>()
+              .having(isBackendRetryable, 'backend retry', isFalse)));
+      expect(calls, 1);
+    });
+  }
+
+  for (final retryAfter in ['0', 'Tue, 10 Nov 2026 11:59:00 GMT']) {
+    test('DASH elapsed cooldown $retryAfter allows bounded backend fallback',
+        () async {
+      final resolver = DashManifestResolver(MockClient((_) async {
+        return http.Response('Unavailable', 503,
+            headers: {'retry-after': retryAfter});
+      }), now: () => DateTime.utc(2026, 11, 10, 12));
+      await expectLater(
+          resolver.resolve(original, videoId, server, throwRetryable: true),
+          throwsA(isA<BackendPlaybackFailure>()));
+    });
+  }
+
+  for (final failure in [
+    const HandshakeException('Certificate refused'),
+    const SocketException('Privacy policy refused'),
+  ]) {
+    test('DASH preserves a terminal ${failure.runtimeType}', () async {
+      var calls = 0;
+      final resolver = DashManifestResolver(MockClient((_) async {
+        calls++;
+        throw failure;
+      }));
+      await expectLater(
+          resolver.resolve(original, videoId, server, throwRetryable: true),
+          throwsA(same(failure)));
       expect(calls, 1);
     });
   }
@@ -238,13 +306,12 @@ void main() {
     expect(calls, 2);
   });
 
-  test('external manifests keep native handling without instance headers',
-      () async {
+  test('external manifests are not admitted for native playback', () async {
     final resolver = DashManifestResolver(MockClient((_) async {
       fail('External manifest must not be probed');
     }));
     const direct = 'https://r1.googlevideo.com/manifest.mpd';
-    expect(await resolver.resolve(direct, videoId, server), direct);
+    expect(await resolver.resolve(direct, videoId, server), isNull);
   });
 
   test('redirects retain native handling without forwarding credentials',

@@ -23,7 +23,9 @@ class _TestApp extends AppCubit {
 
 class _SessionService extends Service {
   Future<void> Function()? validate;
+  Future<void> Function(Server)? revoke;
   final validatedAccounts = <String>[];
+  final revokedAccounts = <String>[];
 
   @override
   Future<void> validateCurrentSessionSafely() async {
@@ -34,6 +36,13 @@ class _SessionService extends Service {
 
   @override
   Future<void> syncHistory() async {}
+
+  @override
+  Future<Server?> logOutProtected(Server account) async {
+    revokedAccounts.add('${account.profileId}/${account.accountId}');
+    await revoke?.call(account);
+    return account;
+  }
 }
 
 class _FailingMirror extends FileDB {
@@ -122,6 +131,98 @@ void main() {
     expect(app.state.globalLoading, isFalse);
     expect(app.state.sessionRecoveryRequired, isFalse);
   }
+
+  test('deleting an inactive profile preserves the active runtime and account',
+      () async {
+    var stopped = false;
+    app.beforeAccountSwitch = () async => stopped = true;
+    await app.deleteProfile(second.profileId);
+    expect(stopped, isFalse);
+    expect(sessionService.revokedAccounts,
+        ['${second.profileId}/${second.accountId}']);
+    expect((await db.getProfiles()).single.id, first.profileId);
+    expect(() => db.forProfile(second.profileId), throwsStateError);
+    await expectSelected(first);
+  });
+
+  test('deleting the active Default profile safely selects a surviving person',
+      () async {
+    final lifecycle = <String>[];
+    app.beforeAccountSwitch = () async => lifecycle.add('stop:${db.profileId}');
+    app.afterAccountSwitch =
+        () async => lifecycle.add('reload:${db.profileId}');
+    app.resetNavigation =
+        (_) async => lifecycle.add('navigate:${db.profileId}');
+    sessionService.revoke = (account) async {
+      expect(account.profileId, first.profileId);
+      expect(db.profileId, second.profileId);
+      expect(db.forProfile(first.profileId).getAccount(first.accountId),
+          isNotNull);
+      lifecycle.add('revoke:${account.profileId}');
+    };
+    await app.deleteProfile(first.profileId);
+    expect(lifecycle, [
+      'stop:default',
+      'reload:${second.profileId}',
+      'navigate:${second.profileId}',
+      'revoke:default'
+    ]);
+    expect((await db.getProfiles()).single.id, second.profileId);
+    await expectSelected(second);
+  });
+
+  test('the last profile is protected before any credentials are revoked',
+      () async {
+    await app.deleteProfile(second.profileId);
+    sessionService.revokedAccounts.clear();
+    await expectLater(app.deleteProfile(first.profileId), throwsStateError);
+    expect(sessionService.revokedAccounts, isEmpty);
+    expect((await db.getProfiles()).single.id, first.profileId);
+    await expectSelected(first);
+  });
+
+  test('failed native cleanup retains the profile for a later deletion retry',
+      () async {
+    sessionService.revoke = (_) async => throw StateError('Cleanup failed');
+    await expectLater(app.deleteProfile(first.profileId), throwsStateError);
+    expect(await db.getProfiles(), hasLength(2));
+    expect(
+        db.forProfile(first.profileId).getAccount(first.accountId), isNotNull);
+    await expectSelected(second);
+    sessionService.revoke = null;
+    await app.deleteProfile(first.profileId);
+    expect((await db.getProfiles()).single.id, second.profileId);
+    await expectSelected(second);
+  });
+
+  test('queued switching cannot reopen a profile while it is being deleted',
+      () async {
+    final started = Completer<void>();
+    final release = Completer<void>();
+    sessionService.revoke = (_) async {
+      started.complete();
+      await release.future;
+    };
+    final deletion = app.deleteProfile(first.profileId);
+    await started.future;
+    final switching =
+        expectLater(app.switchProfile(first.profileId), throwsStateError);
+    release.complete();
+    await deletion;
+    await switching;
+    expect((await db.getProfiles()).single.id, second.profileId);
+    await expectSelected(second);
+  });
+
+  test('failed active-profile switching prevents deletion and sign-out',
+      () async {
+    app.beforeAccountSwitch =
+        () async => throw StateError('Cannot stop playback');
+    await expectLater(app.deleteProfile(first.profileId), throwsStateError);
+    expect(sessionService.revokedAccounts, isEmpty);
+    expect(await db.getProfiles(), hasLength(2));
+    await expectSelected(first);
+  });
 
   for (final stage in [
     'before',

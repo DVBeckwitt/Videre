@@ -3,6 +3,7 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/app/views/components/player_placeholder.dart';
+import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/player.dart';
 
 import '../../../player/states/player.dart';
@@ -47,6 +48,8 @@ class MainScreen extends StatelessWidget {
                 right: playerHorizontalPosition.width,
                 child: SafeArea(child: const PlayerPlaceHolder())),
             Player(constraints.maxHeight),
+            if (!globalLoading)
+              const Positioned.fill(child: PlayerRetryIndicator()),
             if (globalLoading)
               Positioned(
                   child: Container(

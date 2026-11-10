@@ -8,9 +8,19 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   final streams = <int, StreamController<VideoEvent>>{};
   final pendingPlays = <Completer<void>>[];
   int nextId = 0;
+  Completer<Duration>? heldPosition;
+  Completer<DateTime?>? heldAbsolutePosition;
+  Completer<void> positionStarted = Completer<void>();
+  Completer<void> absolutePositionStarted = Completer<void>();
+  Duration position = const Duration(seconds: 1);
 
   void reset() {
     pendingPlays.clear();
+    heldPosition = null;
+    heldAbsolutePosition = null;
+    positionStarted = Completer<void>();
+    absolutePositionStarted = Completer<void>();
+    position = const Duration(seconds: 1);
   }
 
   @override
@@ -55,11 +65,21 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   @override
   Future<void> pause(int? textureId) async {}
   @override
-  Future<Duration> getPosition(int? textureId) async =>
-      const Duration(seconds: 1);
+  Future<void> seekTo(int? textureId, Duration? position) async {}
+  @override
+  Future<Duration> getPosition(int? textureId) async {
+    if (!positionStarted.isCompleted) positionStarted.complete();
+    final held = heldPosition;
+    if (held != null) return held.future;
+    return position;
+  }
 
   @override
-  Future<DateTime?> getAbsolutePosition(int? textureId) async => null;
+  Future<DateTime?> getAbsolutePosition(int? textureId) async {
+    if (!absolutePositionStarted.isCompleted)
+      absolutePositionStarted.complete();
+    return heldAbsolutePosition?.future;
+  }
 }
 
 Future<void> trackTimers(Future<void> Function(List<Timer>) body) async {
@@ -141,6 +161,82 @@ void main() {
               await controller.pause();
               expect(timers.where((timer) => timer.isActive), isEmpty);
             } finally {
+              await controller.dispose();
+            }
+          }));
+
+  for (final heldStage in ['position', 'absolute position']) {
+    test(
+        'a pending $heldStage poll cannot update a replacement source',
+        () => trackTimers((timers) async {
+              final controller = await player();
+              final heldPosition = heldStage == 'position'
+                  ? platform.heldPosition = Completer<Duration>()
+                  : null;
+              final heldAbsolute = heldStage == 'absolute position'
+                  ? platform.heldAbsolutePosition = Completer<DateTime?>()
+                  : null;
+              platform.position = const Duration(seconds: 40);
+              try {
+                final play = controller.play();
+                platform.pendingPlays.last.complete();
+                await play;
+                await (heldPosition != null
+                    ? platform.positionStarted.future
+                    : platform.absolutePositionStarted.future);
+                await controller.setNetworkDataSource(
+                    'https://example.com/replacement.mp4');
+                heldPosition?.complete(const Duration(seconds: 40));
+                heldAbsolute?.complete(DateTime.utc(2026, 1, 1));
+                await Future<void>.delayed(Duration.zero);
+                await Future<void>.delayed(Duration.zero);
+
+                expect(controller.value.position, Duration.zero);
+                expect(controller.value.absolutePosition, isNull);
+                expect(controller.value.isPlaying, isFalse);
+                expect(timers.where((timer) => timer.isActive), isEmpty);
+              } finally {
+                if (heldPosition != null && !heldPosition.isCompleted) {
+                  heldPosition.complete(const Duration(seconds: 40));
+                }
+                if (heldAbsolute != null && !heldAbsolute.isCompleted) {
+                  heldAbsolute.complete(null);
+                }
+                await controller.dispose();
+              }
+            }));
+  }
+
+  test(
+      'a pending position poll cannot release a newer seek target',
+      () => trackTimers((timers) async {
+            final controller = await player();
+            final held = platform.heldPosition = Completer<Duration>();
+            try {
+              final play = controller.play();
+              platform.pendingPlays.last.complete();
+              await play;
+              await platform.positionStarted.future;
+              await controller.pause();
+              await controller.seekTo(const Duration(seconds: 18));
+              held.complete(const Duration(seconds: 40));
+              await Future<void>.delayed(Duration.zero);
+              await Future<void>.delayed(Duration.zero);
+
+              platform.heldPosition = null;
+              platform.position = const Duration(seconds: 12);
+              platform.positionStarted = Completer<void>();
+              final resume = controller.play();
+              platform.pendingPlays.last.complete();
+              await resume;
+              await platform.positionStarted.future;
+              await Future<void>.delayed(Duration.zero);
+              await controller.pause();
+              expect(controller.value.position, const Duration(seconds: 18),
+                  reason: 'A pre-seek poll must not release the seek target; '
+                      'the native decoder has not yet reached it.');
+            } finally {
+              if (!held.isCompleted) held.complete(const Duration(seconds: 40));
               await controller.dispose();
             }
           }));

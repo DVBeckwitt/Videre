@@ -36,10 +36,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.SSLException
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -66,10 +68,22 @@ class SocksPlaybackDeviceTest {
 
     @Test(timeout = 45000)
     fun videoAudioAndSeekUseSocksWithRemoteDestinationDns() {
+        videoAudioAndSeek("videre-playback.invalid", 8123)
+    }
+
+    @Test(timeout = 45000)
+    fun canonicalHttpOnionVideoAudioAndSeekUseSocksWithRemoteDestinationDns() {
+        videoAudioAndSeek(NERDVPN_ONION_HOST, 80)
+    }
+
+    private fun videoAudioAndSeek(host: String, port: Int) {
         val bytes = instrumentation.context.assets.open("socks_fixture.mp4").use { it.readBytes() }
-        FixtureSocks(bytes).use { proxy ->
+        FixtureSocks(
+            mapOf("/fixture.mp4" to FixtureResource(bytes, "video/mp4")),
+            allowedDestinations = setOf(host to port),
+        ).use { proxy ->
             ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", proxy.port).toMap())
-            val source = "http://videre-playback.invalid:8123/fixture.mp4"
+            val source = "http://$host:$port/fixture.mp4"
             PlayerProbe(source).use { probe ->
                 probe.await("video frames and decoded audio") {
                     probe.videoFrames.get() >= 3 && probe.position() >= 700 && probe.audioBuffers() > 0
@@ -109,7 +123,7 @@ class SocksPlaybackDeviceTest {
             }
             assertTrue("No SOCKS destination was observed", proxy.destinations.isNotEmpty())
             assertTrue("Origin hostname was not sent through SOCKS", proxy.destinations.all {
-                it == ("videre-playback.invalid" to 8123)
+                it == (host to port)
             })
             assertTrue("No byte-range request reached the proxy", proxy.ranges.get() > 0)
             proxy.failure.get()?.let { throw AssertionError("SOCKS fixture failed", it) }
@@ -120,21 +134,49 @@ class SocksPlaybackDeviceTest {
     fun stoppedProxyFailsWithoutResolvingTheOriginLocally() {
         val closedPort = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
         ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", closedPort).toMap())
-        val source = "http://videre-no-direct-fallback.invalid:8123/fixture.mp4"
+        for (source in listOf(
+            "http://videre-no-direct-fallback.invalid:8123/fixture.mp4",
+            "http://$NERDVPN_ONION_HOST/fixture.mp4",
+            "https://$NERDVPN_ONION_HOST/fixture.mp4",
+        )) {
+            val start = SystemClock.elapsedRealtime()
+            val failure = failedOpen(source)
+            assertFalse("Failure attempted origin DNS instead of failing at the proxy", generateSequence<Throwable>(failure) {
+                it.cause
+            }.any { it is UnknownHostException })
+            assertTrue("A refused local proxy should fail promptly", SystemClock.elapsedRealtime() - start < 5000)
+        }
+    }
+
+    @Test(timeout = 20000)
+    fun httpsOnionSendsRemoteSocksHostnameAndTlsWithoutDirectFallback() {
+        FixtureSocks(
+            emptyMap(),
+            allowedDestinations = setOf(NERDVPN_ONION_HOST to 443),
+            captureTlsHello = true,
+        ).use { proxy ->
+            ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", proxy.port).toMap())
+            val failure = failedOpen("https://$NERDVPN_ONION_HOST/fixture.mp4")
+            val causes = generateSequence<Throwable>(failure) { it.cause }.toList()
+            assertTrue("Expected TLS failure after the fixture closes its tunnel", causes.any { it is SSLException })
+            assertFalse("HTTPS origin was resolved locally", causes.any { it is UnknownHostException })
+            assertEquals(listOf(NERDVPN_ONION_HOST to 443), proxy.destinations.toList())
+            assertEquals("Production TLS must send a ClientHello through SOCKS", 1, proxy.tlsHellos.get())
+            assertTrue("TLS failure must not become cleartext HTTP", proxy.requests.isEmpty())
+            proxy.failure.get()?.let { throw AssertionError("TLS SOCKS fixture failed", it) }
+        }
+    }
+
+    private fun failedOpen(source: String): IOException {
         val dataSource = ProxyDataSource.factory("Videre device acceptance", null, source).createDataSource()
-        val start = SystemClock.elapsedRealtime()
-        val failure = try {
+        return try {
             dataSource.open(DataSpec.Builder().setUri(source).build())
-            throw AssertionError("A stopped SOCKS proxy unexpectedly connected")
+            throw AssertionError("A failed SOCKS route unexpectedly connected")
         } catch (error: IOException) {
             error
         } finally {
             dataSource.close()
         }
-        assertFalse("Failure attempted origin DNS instead of failing at the proxy", generateSequence<Throwable>(failure) {
-            it.cause
-        }.any { it is UnknownHostException })
-        assertTrue("A refused local proxy should fail promptly", SystemClock.elapsedRealtime() - start < 5000)
     }
 
     @Test(timeout = 30000)
@@ -290,30 +332,27 @@ class SocksPlaybackDeviceTest {
         val arguments = InstrumentationRegistry.getArguments()
         val source = arguments.getString("orbotMediaUrl")
         assumeTrue("Pass orbotMediaUrl to run real Orbot acceptance", source != null)
-        require(source!!.startsWith("https://")) { "Orbot fixture must use HTTPS" }
+        requireTorMediaSource(source!!)
         val port = arguments.getString("orbotPort")?.toInt() ?: 9050
         ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", port).toMap())
         PlayerProbe(source).use { probe ->
-            probe.await("real Orbot HTTPS playback", timeoutMs = 90000) {
+            probe.await("real Tor playback", timeoutMs = 90000) {
                 probe.videoFrames.get() >= 3 && probe.position() >= 700
             }
         }
     }
 
-    /** Supply a seekable HTTPS audio-only recording longer than five seconds. */
+    /** Supply a seekable HTTPS or HTTP onion audio recording longer than five seconds. */
     @Test(timeout = 120000)
     fun optionalRealOrbotHttpsAudioPlaybackPauseSeekAndResume() {
         val arguments = InstrumentationRegistry.getArguments()
         val source = arguments.getString("orbotAudioUrl")
         assumeTrue("Pass orbotAudioUrl to run real Tor audio acceptance", source != null)
-        val uri = URI(source!!)
-        require(uri.scheme == "https" && uri.host != null && !isLoopbackHost(uri.host)) {
-            "Tor audio fixture must use an external HTTPS origin"
-        }
+        requireTorMediaSource(source!!)
         val port = arguments.getString("orbotPort")?.toInt() ?: 9050
         ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", port).toMap())
         PlayerProbe(source).use { probe ->
-            probe.await("real Tor HTTPS audio decoding", timeoutMs = 90000) {
+            probe.await("real Tor audio decoding", timeoutMs = 90000) {
                 probe.audioBuffers() > 0 && probe.position() >= 700
             }
             main {
@@ -335,6 +374,36 @@ class SocksPlaybackDeviceTest {
                     probe.audioBuffers() > previousBuffers
             }
             assertEquals("Audio-only fixture rendered video", 0, probe.videoFrames.get())
+        }
+    }
+
+    @Test
+    fun optionalTorArgumentsPermitHttpOnionButRejectPublicHttpAndOfficialOrigins() {
+        for (source in listOf(
+            "http://$NERDVPN_ONION_HOST/audio.m4a",
+            "https://$NERDVPN_ONION_HOST/audio.m4a",
+            "https://media.example.invalid/audio.m4a",
+        )) requireTorMediaSource(source)
+        for (source in listOf(
+            "http://media.example.invalid/audio.m4a", "http://short.onion/audio.m4a",
+            "http://$NERDVPN_ONION_HOST.example.invalid/audio.m4a",
+            "https://youtube.com/watch", "https://rr1.googlevideo.com/audio",
+            "https://youtube.googleapis.com/audio", "https://ytimg.com/image",
+            "https://127.0.0.1/audio.m4a", "https://localhost/audio.m4a",
+            "https://[::1]/audio.m4a", "https://user:fixture@media.example.invalid/audio.m4a",
+            "https://media.example.invalid/audio.m4a#fragment", "file:///audio.m4a",
+        )) assertThrows("Unsafe optional Tor fixture URL was accepted", IllegalArgumentException::class.java) {
+            requireTorMediaSource(source)
+        }
+    }
+
+    private fun requireTorMediaSource(source: String) {
+        val uri = URI(source)
+        val host = uri.host?.lowercase(Locale.ROOT)
+        require(host != null && uri.rawUserInfo == null && uri.rawFragment == null &&
+            !isLoopbackHost(host) && !isOfficialYoutubeHost(host) &&
+            (uri.scheme == "https" || (uri.scheme == "http" && Regex("[a-z2-7]{56}\\.onion").matches(host)))) {
+            "Tor fixture must use external HTTPS or a valid HTTP onion, without credentials or official YouTube origins"
         }
     }
 
@@ -487,6 +556,10 @@ class SocksPlaybackDeviceTest {
     private class FixtureSocks(
         private val resources: Map<String, FixtureResource>,
         private val holdBodies: Boolean = false,
+        private val allowedDestinations: Set<Pair<String, Int>> = setOf(
+            "videre-playback.invalid" to 8123, "videre-segments.invalid" to 8123,
+        ),
+        private val captureTlsHello: Boolean = false,
     ) : AutoCloseable {
         constructor(bytes: ByteArray) : this(mapOf("/fixture.mp4" to FixtureResource(bytes, "video/mp4")))
 
@@ -496,6 +569,7 @@ class SocksPlaybackDeviceTest {
         val port: Int get() = server.localPort
         val destinations = ConcurrentLinkedQueue<Pair<String, Int>>()
         val ranges = AtomicInteger()
+        val tlsHellos = AtomicInteger()
         val requests = ConcurrentLinkedQueue<FixtureRequest>()
         private val abortedBodies = AtomicInteger()
         val failure = AtomicReference<Throwable>()
@@ -531,9 +605,23 @@ class SocksPlaybackDeviceTest {
                     val host = ByteArray(input.readUnsignedByte()).also(input::readFully).toString(Charsets.US_ASCII)
                     val destination = host to input.readUnsignedShort()
                     destinations.add(destination)
-                    check(destination.first in setOf("videre-playback.invalid", "videre-segments.invalid") && destination.second == 8123)
+                    check(destination in allowedDestinations)
                     output.write(byteArrayOf(5, 0, 0, 1, 127, 0, 0, 1, 0, 80))
                     output.flush()
+                    if (captureTlsHello) {
+                        // Keep production trust and hostname verification intact.
+                        // This proves remote DNS and TLS initiation, then fails
+                        // closed before any certificate or HTTP response exists.
+                        check(input.readUnsignedByte() == 22) { "Expected a TLS handshake record" }
+                        check(input.readUnsignedByte() == 3)
+                        input.readUnsignedByte()
+                        val length = input.readUnsignedShort()
+                        check(length in 4..18432) { "Invalid TLS record length" }
+                        val hello = ByteArray(length).also(input::readFully)
+                        check(hello[0] == 1.toByte()) { "Expected TLS ClientHello" }
+                        tlsHellos.incrementAndGet()
+                        return
+                    }
                     val headers = readHeader(input)
                     val target = headers.lineSequence().first().split(' ')[1]
                     val path = android.net.Uri.parse(target).path ?: throw IOException("Missing fixture path")

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -45,8 +46,10 @@ import 'channels/models/channel_videos.dart';
 import 'comments/models/video_comments.dart';
 import 'notifications/models/db/subscription_notifications.dart';
 import 'network/native_proxy_http_client.dart';
+import 'network/network_proxy.dart';
 import 'network/origin_scoped_http_client.dart';
 import 'network/gateway_context.dart';
+import 'network/gateway_session_bridge.dart';
 import 'network/nerdvpn_access.dart';
 import 'settings/services/gateway_auth.dart';
 import 'search/models/search_suggestion.dart';
@@ -84,9 +87,34 @@ const urlPostUserPlaylistVideo = '/api/v1/auth/playlists/:id/videos';
 const urlDeleteUserPlaylist = '/api/v1/auth/playlists/:id';
 const urlDeleteUserPlaylistVideo = '/api/v1/auth/playlists/:id/videos/:index';
 const urlGetPublicPlaylist = '/api/v1/playlists/:id';
+const urlGetMix = '/api/v1/mixes/:id';
 const urlGetDislikes = 'https://returnyoutubedislikeapi.com/votes?videoId=';
 const urlGetClearHistory = '/api/v1/auth/history';
 const urlAddDeleteHistory = '/api/v1/auth/history/:id';
+
+/// The caller owns the visible lifetime of an interactive video load.
+class VideoLoadObserver {
+  final bool Function() isCurrent;
+  final void Function() onRetry;
+
+  const VideoLoadObserver({required this.isCurrent, required this.onRetry});
+}
+
+class _InteractiveVideoRequest {
+  final observers = <VideoLoadObserver>{};
+  late final Future<Video> result;
+  bool retrying = false;
+
+  bool get hasActiveObserver =>
+      observers.any((observer) => observer.isCurrent());
+
+  void announceRetry() {
+    retrying = true;
+    for (final observer in List.of(observers)) {
+      if (observer.isCurrent()) observer.onRetry();
+    }
+  }
+}
 
 class Service {
   final log = Logger('Service');
@@ -95,7 +123,10 @@ class Service {
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
   final _videoRequests = <String, Future<Response>>{};
+  final _interactiveVideoRequests =
+      <(String, Server, Object, int, bool), _InteractiveVideoRequest>{};
   final _browseCache = <String, ({DateTime expires, Response response})>{};
+  int _sessionRevision = 0;
   Future<void> _localPlaylistWrite = Future.value();
   final Map<String, int> _authenticationAttempts = {};
   final Map<String, Future<Server>> _keyMigrations = {};
@@ -143,7 +174,9 @@ class Service {
   }
 
   void clearSessionCaches() {
+    _sessionRevision++;
     _videoRequests.clear();
+    _interactiveVideoRequests.clear();
     _browseCache.clear();
   }
 
@@ -159,7 +192,7 @@ class Service {
         _now = now ?? DateTime.now,
         _wait = wait ?? Future<void>.delayed;
 
-  Duration? _retryAfter(Response response) {
+  Duration? _retryAfter(http.BaseResponse response) {
     final value = response.headers['retry-after']?.trim();
     if (value == null) return null;
     final seconds =
@@ -294,18 +327,21 @@ class Service {
         json is Map && json['error'] is String ? json['error'] as String : null;
     final isGatewayResponse = response.request != null &&
         isNerdVpnUrl(response.request!.url.toString());
+    final retryAfter = _retryAfter(response);
+    final retryAfterIsInvalid =
+        response.headers.containsKey('retry-after') && retryAfter == null;
 
     if (response.statusCode == 429) {
-      final delay = _retryAfter(response);
       final seconds =
-          delay == null ? null : (delay.inMilliseconds / 1000).ceil();
+          retryAfter == null ? null : (retryAfter.inMilliseconds / 1000).ceil();
       throw InvidiousServiceError(
         seconds != null && seconds > 0
             ? 'Too many requests. Try again in $seconds seconds.'
             : 'Too many requests. Try again later.',
         statusCode: 429,
         responseWasHtml: isHtml,
-        retryAfter: delay,
+        retryAfter: retryAfter,
+        retryAfterIsInvalid: retryAfterIsInvalid,
         errorCode: errorCode,
         isGatewayResponse: isGatewayResponse,
       );
@@ -319,7 +355,8 @@ class Service {
         message,
         statusCode: response.statusCode,
         responseWasHtml: isHtml,
-        retryAfter: _retryAfter(response),
+        retryAfter: retryAfter,
+        retryAfterIsInvalid: retryAfterIsInvalid,
         errorCode: errorCode,
         isGatewayResponse: isGatewayResponse,
       );
@@ -343,10 +380,6 @@ class Service {
     );
   }
 
-  bool useProxy() {
-    return db.getSettings(useProxySettingName)?.value == 'true';
-  }
-
   Future<ServerRequest> buildRequest(String baseUrl,
       {Map<String, String>? pathParams,
       Map<String, String?>? query,
@@ -368,7 +401,9 @@ class Service {
         ...uri.queryParametersAll,
         for (final entry in query?.entries ?? <MapEntry<String, String?>>[])
           if (entry.value != null) entry.key: entry.value,
-        if (useProxy()) 'local': 'true',
+        // Playback stays on Invidious even for profiles/backups that used to
+        // disable media proxying. There is no direct YouTube transport mode.
+        'local': 'true',
       };
       if (queryParameters.isNotEmpty) {
         uri = uri.replace(queryParameters: queryParameters);
@@ -409,37 +444,96 @@ class Service {
     }
   }
 
+  /// Normalize stored credentials before a caller freezes its playback route.
+  /// Migration keeps the original server snapshot and may not admit a newer
+  /// account, profile, session, or proxy configuration while it is pending.
+  Future<Server> preparePlaybackServer({Server? serverOverride}) async {
+    final owner = db;
+    final profileId = owner.profileId;
+    final sessionRevision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
+    bool current() =>
+        identical(db, owner) &&
+        owner.profileId == profileId &&
+        _sessionRevision == sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(NetworkProxy.instance.config, proxy);
+    final selected = serverOverride ?? await owner.getCurrentlySelectedServer();
+    if (!current()) throw StateError('The playback connection changed.');
+    final server = await _migrateNerdVpnKey(selected);
+    if (!current()) throw StateError('The playback connection changed.');
+    if (serverOverride == null) {
+      final selectedNow = await owner.getCurrentlySelectedServer();
+      if (!current() || !BackendPlayback(server).matches(selectedNow)) {
+        throw StateError('The playback connection changed.');
+      }
+    }
+    return server;
+  }
+
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) async {
-    final server = serverOverride ?? await db.getCurrentlySelectedServer();
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
+    final observer = serverOverride == null ? loadObserver : null;
+    final originalDb = db;
+    final profileId = originalDb.profileId;
+    final sessionRevision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
+    bool connectionCurrent() =>
+        identical(db, originalDb) &&
+        originalDb.profileId == profileId &&
+        _sessionRevision == sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(NetworkProxy.instance.config, proxy);
+    bool active() =>
+        observer == null || (observer.isCurrent() && connectionCurrent());
+    // Import legacy credentials before freezing the admitted header snapshot.
+    // Keep the original context across that await; migration must not bless a
+    // concurrent profile, session, or proxy change as a new playback request.
+    final server = await preparePlaybackServer(serverOverride: serverOverride);
+    if (!connectionCurrent()) {
+      throw StateError('The playback connection changed.');
+    }
     // Explicit callers (downloads and connection tests) own their server snapshot
     // and subsequent request headers. Only normal playback may change routes.
     final initialRequest =
         serverOverride == null ? BackendPlayback(server) : null;
+    final connection = initialRequest ?? BackendPlayback(server);
     var playback = server.backendSelector == null ? null : initialRequest;
     Video video;
     while (true) {
+      if (!active()) throw StateError('The video load was cancelled.');
       try {
         video = await _getVideoMetadata(videoId, playback?.server ?? server,
             backendRequest: playback ?? initialRequest,
-            onBackendRequest: onBackendRequest);
+            onBackendRequest: onBackendRequest,
+            loadObserver: observer,
+            allowSameRouteRetry: (playback?.retryIndex ?? 0) == 0);
         break;
       } catch (error) {
-        if (!isBackendRetryable(error) || playback?.canRetry != true) rethrow;
+        if (!active() ||
+            !isBackendRetryable(error) ||
+            playback?.canRetry != true) {
+          rethrow;
+        }
         if (!playback!.matches(await db.getCurrentlySelectedServer())) rethrow;
         final next = playback.next();
         if (next == null) rethrow;
         playback = next;
       }
     }
-    final processed =
-        await _processVideo(video.copyWith(backendPlayback: playback));
+    if (!active()) throw StateError('The video load was cancelled.');
+    final processed = await _processVideo(video.copyWith(
+        backendPlayback: playback,
+        playbackConnection: playback ?? connection,
+        playbackSourceId: Object()));
     if (initialRequest != null &&
         !initialRequest.matches(await db.getCurrentlySelectedServer())) {
       throw StateError(
           'The playback connection changed while loading this video.');
     }
+    if (!active()) throw StateError('The video load was cancelled.');
     return processed;
   }
 
@@ -470,8 +564,10 @@ class Service {
         playback = next;
         continue;
       }
-      final processed =
-          await _processVideo(loaded.copyWith(backendPlayback: playback));
+      final processed = await _processVideo(loaded.copyWith(
+          backendPlayback: playback,
+          playbackConnection: playback,
+          playbackSourceId: Object()));
       if (!active() ||
           !playback.matches(await db.getCurrentlySelectedServer())) {
         throw StateError('The playback connection changed.');
@@ -482,7 +578,31 @@ class Service {
 
   Future<Video> _getVideoMetadata(String videoId, Server server,
       {BackendPlayback? backendRequest,
-      void Function(BackendPlayback request)? onBackendRequest}) async {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver,
+      bool allowSameRouteRetry = true}) async {
+    final video = await _loadVideoMetadata(videoId, server,
+        backendRequest: backendRequest,
+        onBackendRequest: onBackendRequest,
+        loadObserver: loadObserver,
+        allowSameRouteRetry: allowSameRouteRetry);
+    // A successful HTTP response can still belong to another cache key. Reject
+    // it before source admission, post-processing, or any backend retry.
+    if (video.videoId != videoId) {
+      throw const FormatException('The server returned another video.');
+    }
+    return video;
+  }
+
+  Future<Video> _loadVideoMetadata(String videoId, Server server,
+      {BackendPlayback? backendRequest,
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver,
+      bool allowSameRouteRetry = true}) async {
+    final originalDb = db;
+    final profileId = originalDb.profileId;
+    final sessionRevision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
     final request = await buildRequest(urlGetVideo,
         pathParams: {':id': videoId}, serverOverride: server);
     if (backendRequest != null) {
@@ -490,10 +610,218 @@ class Service {
         throw StateError(
             'The playback connection changed while loading this video.');
       }
+      if (loadObserver?.isCurrent() == false) {
+        throw StateError('The video load was cancelled.');
+      }
       onBackendRequest?.call(backendRequest);
     }
-    final response = await _get(request, coalesce: true);
-    return Video.fromJson(handleResponse(response));
+    if (loadObserver != null && backendRequest != null) {
+      bool connectionCurrent() =>
+          identical(db, originalDb) &&
+          originalDb.profileId == profileId &&
+          _sessionRevision == sessionRevision &&
+          !NetworkProxy.instance.isChanging &&
+          identical(NetworkProxy.instance.config, proxy);
+      Future<bool> unchanged() async =>
+          connectionCurrent() &&
+          backendRequest
+              .matches(await originalDb.getCurrentlySelectedServer()) &&
+          connectionCurrent();
+      if (!connectionCurrent()) {
+        throw StateError('The playback connection changed.');
+      }
+      return _getInteractiveVideoMetadata(request, backendRequest, loadObserver,
+          unchanged: unchanged, allowRetry: allowSameRouteRetry);
+    }
+    if (!isNerdVpnUrl(request.uri.toString())) {
+      final response = await _get(request, coalesce: true);
+      return Video.fromJson(handleResponse(response));
+    }
+    final owner = originalDb.forProfile(server.profileId);
+    // Unsaved connection tests are allowed, but deleting or changing a saved
+    // account must not dispatch another request with its old credentials.
+    final account = owner.getAccount(server.accountId);
+    final selected = (await originalDb.getServers())
+        .where((account) => account.inUse)
+        .firstOrNull;
+    Future<bool> unchanged() async {
+      final currentSelected = (await originalDb.getServers())
+          .where((account) => account.inUse)
+          .firstOrNull;
+      return identical(db, originalDb) &&
+          originalDb.profileId == profileId &&
+          _sessionRevision == sessionRevision &&
+          !NetworkProxy.instance.isChanging &&
+          identical(NetworkProxy.instance.config, proxy) &&
+          currentSelected == selected &&
+          owner.getAccount(server.accountId) == account;
+    }
+
+    const budget = Duration(seconds: 15);
+    final started = _now();
+    var expired = false;
+    Duration remaining() => budget - _now().difference(started);
+
+    Future<Video> load() async {
+      final response = await _get(request, coalesce: true);
+      try {
+        return Video.fromJson(handleResponse(response));
+      } on InvidiousServiceError catch (error) {
+        // NerdVPN uses 500 for this transient companion startup response.
+        // Do not turn arbitrary 500s, gateway failures or other instances into
+        // retries. Keep the same account, backend cookie and metadata URL.
+        if (response.request?.url.origin != request.uri.origin ||
+            error.statusCode != 500 ||
+            error.responseWasHtml ||
+            error.retryAfterIsInvalid ||
+            error.errorCode !=
+                'This backend is still starting and not yet available. '
+                    'Please wait for a short time or use another backend.') {
+          rethrow;
+        }
+        final delay = error.retryAfter ?? const Duration(seconds: 1);
+        if (expired ||
+            delay > const Duration(seconds: 2) ||
+            remaining() <= delay) {
+          rethrow;
+        }
+        if (!await unchanged()) {
+          throw StateError('The playback connection changed.');
+        }
+        if (delay > Duration.zero) await _wait(delay);
+        if (!await unchanged()) {
+          throw StateError('The playback connection changed.');
+        }
+        if (expired || remaining() <= Duration.zero) {
+          throw TimeoutException('Video metadata request expired.');
+        }
+        // One additional request only, even if it returns another retryable
+        // status. Do not restart the usual GET retry or its timeout budget.
+        final retried = await httpClient
+            .get(request.uri, headers: request.headers)
+            .timeout(remaining());
+        if (!await unchanged()) {
+          throw StateError('The playback connection changed.');
+        }
+        return Video.fromJson(handleResponse(retried));
+      }
+    }
+
+    return load().timeout(budget, onTimeout: () {
+      expired = true;
+      throw TimeoutException('Video metadata request expired.');
+    });
+  }
+
+  Future<Video> _getInteractiveVideoMetadata(
+      ServerRequest request, BackendPlayback route, VideoLoadObserver observer,
+      {required Future<bool> Function() unchanged,
+      required bool allowRetry}) async {
+    final key = (
+      request._cacheKey,
+      route.preferredServer,
+      NetworkProxy.instance.config,
+      _sessionRevision,
+      allowRetry
+    );
+    final existing = _interactiveVideoRequests[key];
+    final pending = existing ?? _InteractiveVideoRequest();
+    pending.observers.add(observer);
+    if (existing == null) {
+      _interactiveVideoRequests[key] = pending;
+      pending.result = _loadInteractiveVideoMetadata(request, pending,
+              unchanged: unchanged, allowRetry: allowRetry)
+          .whenComplete(() {
+        if (identical(_interactiveVideoRequests[key], pending)) {
+          _interactiveVideoRequests.remove(key);
+        }
+      });
+    }
+    try {
+      if (pending.retrying && observer.isCurrent()) observer.onRetry();
+      final video = await pending.result;
+      if (!observer.isCurrent()) {
+        throw StateError('The video load was cancelled.');
+      }
+      return video;
+    } finally {
+      pending.observers.remove(observer);
+    }
+  }
+
+  Future<Video> _loadInteractiveVideoMetadata(
+      ServerRequest request, _InteractiveVideoRequest pending,
+      {required Future<bool> Function() unchanged, required bool allowRetry}) {
+    const budget = Duration(seconds: 15);
+    final started = _now();
+    var expired = false;
+    Duration remaining() => budget - _now().difference(started);
+
+    Future<void> checkCurrent() async {
+      if (!pending.hasActiveObserver ||
+          !await unchanged() ||
+          !pending.hasActiveObserver) {
+        throw StateError('The video or playback connection changed.');
+      }
+      if (expired || remaining() <= Duration.zero) {
+        throw TimeoutException('Video metadata request expired.');
+      }
+    }
+
+    Future<Video> load() async {
+      await checkCurrent();
+      Response? response;
+      try {
+        response = await httpClient.get(request.uri, headers: request.headers);
+        await checkCurrent();
+        return Video.fromJson(handleResponse(response));
+      } catch (error) {
+        final delay =
+            allowRetry ? _videoRetryDelay(error, response, request) : null;
+        if (expired || delay == null || remaining() <= delay) rethrow;
+        await checkCurrent();
+        pending.announceRetry();
+        if (delay > Duration.zero) await _wait(delay);
+        await checkCurrent();
+        // Keep one budget for transient failures and rate limits. The follow-up
+        // uses the exact original request, with no second retry wrapper.
+        final retried =
+            await httpClient.get(request.uri, headers: request.headers);
+        await checkCurrent();
+        return Video.fromJson(handleResponse(retried));
+      }
+    }
+
+    return load().timeout(budget, onTimeout: () {
+      expired = true;
+      throw TimeoutException('Video metadata request expired.');
+    });
+  }
+
+  Duration? _videoRetryDelay(
+      Object error, Response? response, ServerRequest request) {
+    const defaultDelay = Duration(seconds: 1);
+    if (error is TimeoutException ||
+        (error is SocketException && error.osError != null)) {
+      return defaultDelay;
+    }
+    if (error is! InvidiousServiceError ||
+        error.isGatewayAccessFailure ||
+        response == null ||
+        (response.request?.url.origin ?? request.uri.origin) !=
+            request.uri.origin ||
+        !const {408, 429, 500, 502, 503, 504}.contains(error.statusCode) ||
+        (error.statusCode == 500 && error.responseWasHtml)) {
+      return null;
+    }
+    final delay = error.retryAfter;
+    if (delay != null) {
+      return delay <= const Duration(seconds: 2) ? delay : null;
+    }
+    return error.statusCode == 429 ||
+            response.headers.containsKey('retry-after')
+        ? null
+        : defaultDelay;
   }
 
   /// Recovery changes only the server snapshot on this video, never the saved
@@ -525,8 +853,10 @@ class Service {
             !next.matches(await db.getCurrentlySelectedServer())) {
           return null;
         }
-        final processed =
-            await _processVideo(loaded.copyWith(backendPlayback: next));
+        final processed = await _processVideo(loaded.copyWith(
+            backendPlayback: next,
+            playbackConnection: next,
+            playbackSourceId: Object()));
         if (!isCurrent() ||
             !next.matches(await db.getCurrentlySelectedServer())) {
           return null;
@@ -539,6 +869,49 @@ class Service {
     }
   }
 
+  /// Refresh one admitted source without stacking metadata or backend retries.
+  Future<Video> refreshPlaybackVideo(Video video,
+      {required bool Function() isCurrent}) async {
+    final connection = video.playbackConnection ?? video.backendPlayback;
+    if (connection == null) {
+      throw StateError('The original playback connection is unavailable.');
+    }
+    final originalDb = db;
+    final sessionRevision = _sessionRevision;
+    bool active() =>
+        isCurrent() &&
+        identical(db, originalDb) &&
+        _sessionRevision == sessionRevision &&
+        !NetworkProxy.instance.isChanging;
+    Future<void> check() async {
+      if (!active() ||
+          !connection.matches(await originalDb.getCurrentlySelectedServer()) ||
+          !active()) {
+        throw StateError('The video or playback connection changed.');
+      }
+    }
+
+    await check();
+    final loaded = await _getVideoMetadata(video.videoId, connection.server,
+        backendRequest: connection,
+        loadObserver: VideoLoadObserver(isCurrent: active, onRetry: () {}),
+        allowSameRouteRetry: false);
+    await check();
+    if (loaded.videoId != video.videoId) {
+      throw const FormatException('The server returned another video.');
+    }
+    return video.copyWith(
+        formatStreams: loaded.formatStreams,
+        adaptiveFormats: loaded.adaptiveFormats,
+        dashUrl: loaded.dashUrl,
+        hlsUrl: loaded.hlsUrl,
+        captions: loaded.captions,
+        storyboards: loaded.storyboards,
+        lengthSeconds: loaded.lengthSeconds ?? video.lengthSeconds,
+        playbackConnection: connection,
+        playbackSourceId: Object());
+  }
+
   Future<Video> _processVideo(Video video) async {
     video = (await DeArrow.processVideos([video]))[0];
     video = video.copyWith(
@@ -549,21 +922,196 @@ class Service {
 
   Future<VideoTranscript> getTranscript(
     String videoId,
-    Caption caption,
-  ) async {
+    Caption caption, {
+    Server? serverOverride,
+  }) =>
+      _getTranscript(videoId, caption, serverOverride: serverOverride);
+
+  ///Loads the selected track through the same account and extraction backend
+  ///as the playing video. The structured endpoint avoids instances whose
+  ///timedtext-backed captions endpoint returns an empty successful response.
+  Future<String> getPlaybackCaptions(
+    String videoId,
+    Caption caption, {
+    required Server server,
+  }) async {
+    try {
+      return (await _getTranscript(videoId, caption,
+              serverOverride: server, forPlayback: true))
+          .toWebVtt();
+    } catch (error) {
+      if (_captionAccessFailure(error)) rethrow;
+      return _getWatchPlaybackCaptions(videoId, caption, server);
+    }
+  }
+
+  bool _captionAccessFailure(Object error) =>
+      error is NerdVpnAccessRequired ||
+      error is GatewayAuthenticationRequired ||
+      error is HandshakeException ||
+      (error is SocketException && error.osError == null) ||
+      (error is InvidiousServiceError &&
+          (error.isGatewayAccessFailure ||
+              error.retryAfterIsInvalid ||
+              (error.retryAfter ?? Duration.zero) > Duration.zero ||
+              const {401, 403, 429}.contains(error.statusCode)));
+
+  Future<void> _cancelCaptionRead(Future<void> Function() cancel) async {
+    try {
+      await cancel();
+    } catch (_) {
+      // Cleanup cannot replace an HTTP refusal or timeout.
+    }
+  }
+
+  Future<Response> _captionResponse(ServerRequest request) {
+    const timeout = Duration(seconds: 15);
+    const maxBodyBytes = 4 * 1024 * 1024;
+    var expired = false;
+    StreamIterator<List<int>>? activeBody;
+
+    Future<Response> read() async {
+      final get = http.Request('GET', request.uri)..followRedirects = false;
+      get.headers.addAll(request.headers);
+      final response = await httpClient.send(get);
+      final retryAfter = _retryAfter(response);
+      final retryAfterIsInvalid =
+          response.headers.containsKey('retry-after') && retryAfter == null;
+      final refused = const {401, 403, 429}.contains(response.statusCode) ||
+          (response.statusCode >= 400 &&
+              (retryAfterIsInvalid ||
+                  (retryAfter ?? Duration.zero) > Duration.zero));
+      if (expired || refused) {
+        // A refusal or a response whose headers arrived after the deadline
+        // never needs its body. Do not wait for stream cleanup to finish.
+        unawaited(_cancelCaptionRead(() => response.stream
+            .listen(null, onError: (Object _, StackTrace __) {})
+            .cancel()));
+        if (expired) throw TimeoutException('Caption request expired', timeout);
+        throw InvidiousServiceError('Caption request refused',
+            statusCode: response.statusCode,
+            retryAfter: retryAfter,
+            retryAfterIsInvalid: retryAfterIsInvalid);
+      }
+      final body = StreamIterator(response.stream);
+      activeBody = body;
+      final bytes = BytesBuilder(copy: false);
+      try {
+        while (await body.moveNext()) {
+          final chunk = body.current;
+          if (chunk.length > maxBodyBytes - bytes.length) {
+            throw InvidiousServiceError('Caption response is too large');
+          }
+          bytes.add(chunk);
+        }
+        return Response.bytes(bytes.takeBytes(), response.statusCode,
+            request: response.request, headers: response.headers);
+      } finally {
+        activeBody = null;
+        unawaited(_cancelCaptionRead(body.cancel));
+      }
+    }
+
+    return read().timeout(timeout, onTimeout: () {
+      expired = true;
+      final body = activeBody;
+      if (body != null) unawaited(_cancelCaptionRead(body.cancel));
+      throw TimeoutException('Caption request expired', timeout);
+    });
+  }
+
+  Future<String> _getWatchPlaybackCaptions(
+      String videoId, Caption caption, Server server) async {
+    try {
+      final watch = await buildRequest('/watch',
+          query: {'v': videoId}, accept: 'text/html', serverOverride: server);
+      final page = await _captionResponse(watch);
+      if (page.statusCode != 200) {
+        throw InvidiousServiceError('The instance caption page is unavailable',
+            statusCode: page.statusCode, retryAfter: _retryAfter(page));
+      }
+      final origin = Uri.parse(server.url);
+      final prefix = origin.path.replaceFirst(RegExp(r'/$'), '');
+      final paths = {
+        '$prefix/api/v1/captions/$videoId',
+        '$prefix/companion/api/v1/captions/$videoId',
+      };
+      final candidates = <Uri>{};
+      final document = html.parse(utf8.decode(page.bodyBytes));
+      for (final track in document.querySelectorAll('video#player track')) {
+        if (!const {'captions', 'subtitles'}
+                .contains(track.attributes['kind']) ||
+            track.attributes['label'] != caption.label ||
+            track.attributes['srclang'] != caption.languageCode) {
+          continue;
+        }
+        final src = track.attributes['src'];
+        if (src == null || src.trim().isEmpty) continue;
+        final target = Uri.tryParse(src);
+        if (target == null) continue;
+        final resolved = watch.uri.resolveUri(target);
+        if (!const {'http', 'https'}.contains(resolved.scheme) ||
+            resolved.userInfo.isNotEmpty ||
+            resolved.origin != origin.origin ||
+            !paths.contains(resolved.path)) {
+          continue;
+        }
+        candidates.add(resolved.removeFragment());
+      }
+      if (candidates.length != 1) {
+        throw const FormatException('No unambiguous instance caption track');
+      }
+      final headers = Map<String, String>.from(watch.headers)
+        ..removeWhere((name, _) => name.toLowerCase() == 'accept')
+        ..['Accept'] = 'text/vtt';
+      // This is the one track advertised by this video's player page. Keep its
+      // signed query intact, never log/cache it, and never follow redirects.
+      final response = await _captionResponse(ServerRequest(
+          uri: candidates.single, headers: headers, server: watch.server));
+      return _webVttTranscript(response, caption, preserveRepeatedLines: true)
+          .toWebVtt();
+    } catch (error) {
+      if (_captionAccessFailure(error) || error is InvidiousServiceError) {
+        rethrow;
+      }
+      throw InvidiousServiceError(
+          'Could not load instance captions (${error.runtimeType})');
+    }
+  }
+
+  Future<VideoTranscript> _getTranscript(
+    String videoId,
+    Caption caption, {
+    Server? serverOverride,
+    bool forPlayback = false,
+  }) async {
+    // Keep the fallback on the original account if the selection changes while
+    // a request is pending.
+    final server = serverOverride ?? await db.getCurrentlySelectedServer();
     final query = {'label': caption.label};
+
+    VideoTranscript validate(VideoTranscript transcript) {
+      if (transcript.lines.isEmpty) {
+        throw const FormatException('Transcript has no usable lines');
+      }
+      if (forPlayback) transcript.toWebVtt();
+      return transcript;
+    }
 
     try {
       final request = await buildRequest(
         urlGetTranscript,
         pathParams: {':id': videoId},
         query: query,
+        serverOverride: server,
       );
-      final response = await _get(request);
-      final transcript = VideoTranscript.fromJson(handleResponse(response));
-      if (transcript.lines.isNotEmpty) return transcript;
-      throw const FormatException('Structured transcript has no usable lines');
+      final response = forPlayback
+          ? await _captionResponse(request)
+          : await _get(request).timeout(const Duration(seconds: 15));
+      return validate(VideoTranscript.fromJson(handleResponse(response),
+          preserveRepeatedLines: forPlayback));
     } catch (error) {
+      if (forPlayback && _captionAccessFailure(error)) rethrow;
       log.warning(
         'Structured transcript unavailable; trying caption fallback '
         '(${error.runtimeType})',
@@ -571,47 +1119,76 @@ class Service {
     }
 
     try {
-      final request = await buildRequest(
+      final canonicalRequest = await buildRequest(
         urlGetCaptions,
         pathParams: {':id': videoId},
         query: query,
         accept: 'text/vtt',
+        serverOverride: server,
       );
-      final response = await _get(request);
-      final body = utf8.decode(response.bodyBytes);
-      final trimmedBody = body.trimLeft();
-      final contentType = response.headers['content-type']?.toLowerCase() ?? '';
-      final isHtml =
-          contentType.contains('html') || trimmedBody.startsWith('<');
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw InvidiousServiceError(
-          isHtml
-              ? 'The reverse proxy returned HTML instead of WebVTT'
-              : 'Request failed with HTTP ${response.statusCode}',
-          statusCode: response.statusCode,
-          responseWasHtml: isHtml,
-        );
-      }
-      if (isHtml) {
-        throw InvidiousServiceError(
-          'The reverse proxy returned HTML instead of WebVTT',
-          statusCode: response.statusCode,
-          responseWasHtml: true,
-        );
-      }
-
-      return VideoTranscript.fromWebVtt(
-        body,
-        label: caption.label,
-        languageCode: caption.languageCode,
-      );
+      final request = forPlayback
+          ? _playbackCaptionRequest(canonicalRequest, caption)
+          : canonicalRequest;
+      final response = forPlayback
+          ? await _captionResponse(request)
+          : await _get(request).timeout(const Duration(seconds: 15));
+      return validate(_webVttTranscript(response, caption,
+          preserveRepeatedLines: forPlayback));
     } on InvidiousServiceError {
       rethrow;
     } catch (error) {
+      if (forPlayback && _captionAccessFailure(error)) rethrow;
       throw InvidiousServiceError(
         'Could not load transcript (${error.runtimeType})',
       );
+    }
+  }
+
+  VideoTranscript _webVttTranscript(Response response, Caption caption,
+      {required bool preserveRepeatedLines}) {
+    final body = utf8.decode(response.bodyBytes);
+    final contentType = response.headers['content-type']?.toLowerCase() ?? '';
+    final isHtml =
+        contentType.contains('html') || body.trimLeft().startsWith('<');
+    if (response.statusCode < 200 || response.statusCode >= 300 || isHtml) {
+      throw InvidiousServiceError(
+        isHtml
+            ? 'The reverse proxy returned HTML instead of WebVTT'
+            : 'Request failed with HTTP ${response.statusCode}',
+        statusCode: response.statusCode,
+        responseWasHtml: isHtml,
+        retryAfter: _retryAfter(response),
+      );
+    }
+    return VideoTranscript.fromWebVtt(body,
+        label: caption.label,
+        languageCode: caption.languageCode,
+        preserveRepeatedLines: preserveRepeatedLines);
+  }
+
+  ServerRequest _playbackCaptionRequest(
+      ServerRequest canonical, Caption caption) {
+    try {
+      final origin = Uri.parse(canonical.server!.url);
+      final base =
+          Uri.parse(origin.toString().endsWith('/') ? '$origin' : '$origin/');
+      final advertised = base.resolve(caption.url);
+      if (caption.url.trim().isEmpty ||
+          advertised.userInfo.isNotEmpty ||
+          !const {'http', 'https'}.contains(advertised.scheme) ||
+          advertised.origin != origin.origin) {
+        return canonical;
+      }
+      // Some instances supply a companion path or signed query. Preserve it
+      // only on this video's instance; captions never fall back to Google or
+      // another origin with account credentials.
+      return ServerRequest(
+        uri: advertised.removeFragment(),
+        headers: canonical.headers,
+        server: canonical.server,
+      );
+    } on FormatException {
+      return canonical;
     }
   }
 
@@ -1678,20 +2255,35 @@ class Service {
 
   Future<void> syncAccountHistory(Server account,
       {IDbClient? database, bool force = false, bool pull = true}) async {
-    if (NerdVpnAccess.supports(account)) {
-      try {
-        account = await _migrateNerdVpnKey(account);
-        if (!(await NerdVpnAccess.instance.status(account)).ready) return;
-      } on NerdVpnAccessRequired {
-        return;
-      }
+    final source = database ?? db;
+    if (source is SembastSqfDb && !source.profileExists(account.profileId)) {
+      return;
     }
-    final worker = _watchSynchronizer(account, database: database);
-    await worker?.run(account, force: force, pull: pull);
+    final owner = source.forProfile(account.profileId);
+    try {
+      if (NerdVpnAccess.supports(account)) {
+        account = await _migrateNerdVpnKey(account);
+        if (owner is SembastSqfDb && !owner.isProfileAvailable) return;
+        if (!(await NerdVpnAccess.instance.status(account)).ready) return;
+      }
+      if (owner is SembastSqfDb && !owner.isProfileAvailable) return;
+      final worker = _watchSynchronizer(account, database: owner);
+      await worker?.run(account, force: force, pull: pull);
+    } on NerdVpnAccessRequired {
+      return;
+    } on StateError {
+      // A late background reply after deletion is cancellation. Other storage
+      // errors still surface instead of being mistaken for an absent person.
+      if (owner is! SembastSqfDb || owner.isProfileAvailable) rethrow;
+    }
   }
 
   WatchHistorySync? _watchSynchronizer(Server account, {IDbClient? database}) {
-    final scoped = (database ?? db).forProfile(account.profileId);
+    final source = database ?? db;
+    if (source is SembastSqfDb && !source.profileExists(account.profileId)) {
+      return null;
+    }
+    final scoped = source.forProfile(account.profileId);
     if (scoped is! SembastSqfDb || !hasHistoryAccount(account)) return null;
     final key = '${identityHashCode(scoped.db)}:${account.profileId}';
     return _watchSynchronizers.putIfAbsent(
@@ -1781,6 +2373,33 @@ class Service {
     } catch (_) {
       return null;
     }
+  }
+
+  /// A dynamic mix returns a current batch, without a total or playlist author.
+  /// Request its native endpoint instead of parsing the playlist redirect as a
+  /// finite public playlist.
+  Future<Playlist> getMix(String mixId, {Server? serverOverride}) async {
+    final req = await buildRequest(urlGetMix,
+        pathParams: {':id': mixId}, serverOverride: serverOverride);
+    final data = handleResponse(await _get(req));
+    if (data is! Map<String, dynamic> ||
+        data['mixId'] != mixId ||
+        data['title'] is! String ||
+        (data['title'] as String).trim().isEmpty ||
+        data['videos'] is! List) {
+      throw InvidiousServiceError('The server returned an invalid mix');
+    }
+    final source = (data['videos'] as List)
+        .map((value) => Video.fromJson(Map<String, dynamic>.from(value as Map)))
+        .toList();
+    final videos = await postProcessVideos(source);
+    return Playlist(
+        playlistId: mixId,
+        title: data['title'] as String,
+        author: '',
+        videoCount: source.length,
+        videos: videos,
+        removedByFilter: source.length - videos.length);
   }
 
   Future<Playlist> getPublicPlaylists(String playlistId,

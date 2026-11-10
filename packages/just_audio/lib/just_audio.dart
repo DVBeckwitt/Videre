@@ -676,6 +676,39 @@ class AudioPlayer {
   /// The current position of the player.
   Duration get position => _getPositionFor(playbackEvent);
 
+  /// Reads the Android native playhead without extrapolating its position,
+  /// activating a decoder, or starting a polling timer. A missing capability,
+  /// inactive player, or superseded platform/load returns null.
+  Future<NativePlaybackProgress?> getNativePlaybackProgress() async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        _disposed ||
+        !_active) return null;
+    final native = _nativePlatform;
+    final id = _id;
+    final activation = _activationCount;
+    final loadRequest = _pluginLoadRequest;
+    final loadFuture = _loadFuture;
+    if (native == null || id == null) return null;
+    bool current() =>
+        !_disposed &&
+        _active &&
+        _id == id &&
+        _activationCount == activation &&
+        identical(_nativePlatform, native) &&
+        identical(_pluginLoadRequest, loadRequest) &&
+        identical(_loadFuture, loadFuture);
+    try {
+      await native;
+      if (!current()) return null;
+      final value = await MethodChannel('com.ryanheise.just_audio.methods.$id')
+          .invokeMapMethod<String, dynamic>('getPlaybackProgress');
+      return current() ? NativePlaybackProgress._fromMap(value) : null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   Duration _getPositionFor(PlaybackEvent playbackEvent) {
     if (playing && processingState == ProcessingState.ready) {
       final result = playbackEvent.updatePosition +
@@ -1909,7 +1942,84 @@ class PlayerEvent {
   String toString() => "{playbackEvent=$playbackEvent, playing=$playing}";
 }
 
-/// Encapsulates the playback state and current position of the player.
+/// A native Android observation, not the estimated position used by seek bars.
+/// Compare monotonic sample times only within the same source revision/player.
+class NativePlaybackProgress {
+  final Duration position;
+  final Duration bufferedPosition;
+  final Duration? duration;
+
+  /// Android elapsed realtime in milliseconds, not a wall-clock timestamp.
+  final int sampledAtMillis;
+
+  /// Native load identity. Only compare within the same active native player.
+  final int sourceRevision;
+  final bool playWhenReady;
+  final bool isPlaying;
+  final ProcessingState processingState;
+  final int suppressionReason;
+  final bool seekPending;
+  final bool hasError;
+
+  const NativePlaybackProgress({
+    required this.position,
+    required this.bufferedPosition,
+    required this.duration,
+    required this.sampledAtMillis,
+    required this.sourceRevision,
+    required this.playWhenReady,
+    required this.isPlaying,
+    required this.processingState,
+    required this.suppressionReason,
+    required this.seekPending,
+    required this.hasError,
+  });
+
+  static NativePlaybackProgress? _fromMap(Map<String, dynamic>? value) {
+    if (value == null) return null;
+    for (final name in [
+      'positionMillis',
+      'bufferedPositionMillis',
+      'sampledAtMillis',
+      'sourceRevision',
+      'processingState',
+      'suppressionReason',
+    ]) {
+      if (value[name] is! int || (value[name] as int) < 0) return null;
+    }
+    for (final name in [
+      'playWhenReady',
+      'isPlaying',
+      'seekPending',
+      'hasError'
+    ]) {
+      if (value[name] is! bool) return null;
+    }
+    final durationMillis = value['durationMillis'];
+    if (durationMillis != null &&
+        (durationMillis is! int || durationMillis < 0)) return null;
+    final processing = value['processingState'] as int;
+    if (processing >= ProcessingState.values.length) return null;
+    return NativePlaybackProgress(
+      position: Duration(milliseconds: value['positionMillis'] as int),
+      bufferedPosition:
+          Duration(milliseconds: value['bufferedPositionMillis'] as int),
+      duration: durationMillis == null
+          ? null
+          : Duration(milliseconds: durationMillis as int),
+      sampledAtMillis: value['sampledAtMillis'] as int,
+      sourceRevision: value['sourceRevision'] as int,
+      playWhenReady: value['playWhenReady'] as bool,
+      isPlaying: value['isPlaying'] as bool,
+      processingState: ProcessingState.values[processing],
+      suppressionReason: value['suppressionReason'] as int,
+      seekPending: value['seekPending'] as bool,
+      hasError: value['hasError'] as bool,
+    );
+  }
+}
+
+/// Encapsulates the playback state and timing information from the platform.
 class PlaybackEvent {
   /// The current processing state.
   final ProcessingState processingState;

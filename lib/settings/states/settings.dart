@@ -19,6 +19,7 @@ import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
+import '../../player/models/video_display_mode.dart';
 import '../../player/states/player.dart';
 import '../../utils.dart';
 import '../../utils/motion.dart';
@@ -69,10 +70,6 @@ class SettingsCubit extends Cubit<SettingsState> {
     await setForceLandscapeFullScreen(value);
   }
 
-  toggleFillFullscreen(bool value) async {
-    await setFillFullscreen(value);
-  }
-
   toggleDynamicTheme(bool value) async {
     await setUseDynamicTheme(value);
     updateApp();
@@ -80,10 +77,6 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   toggleDash(bool value) async {
     await setUseDash(value);
-  }
-
-  toggleProxy(bool value) async {
-    await setUseProxy(value);
   }
 
   toggleAutoplayOnLoad(bool value) async {
@@ -401,8 +394,6 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setOnOpen(int i) async => await _set(onOpenSettingName, i);
 
-  setUseProxy(bool b) async => await _set(useProxySettingName, b);
-
   setBlackBackground(bool b) async => await _set(blackBackgroundSettingName, b);
 
   setRememberSubtitles(bool b) async => await _set(rememberLastSubtitle, b);
@@ -417,7 +408,21 @@ class SettingsCubit extends Cubit<SettingsState> {
     await _set(lastVideoQualitySettingName, height);
   }
 
-  setFillFullscreen(bool b) async => await _set(fillFullScreen, b);
+  Future<void> setVideoDisplayMode(VideoDisplayMode mode) async {
+    final owner = db.forProfile(db.profileId);
+    final session = appCubit.state.sessionRevision;
+    final setting = SettingsValue(videoDisplayModeSettingName, mode.name);
+    await owner.saveSetting(setting);
+    if (isClosed ||
+        db.profileId != owner.profileId ||
+        appCubit.state.sessionRevision != session) {
+      return;
+    }
+    emit(state.copyWith(settings: {
+      ...state.settings,
+      videoDisplayModeSettingName: setting,
+    }));
+  }
 
   setForceTvUi(bool b) async => await _set(forceTvUiSettingName, b);
 
@@ -597,8 +602,6 @@ sealed class SettingsState with _$SettingsState {
 
   int get onOpen => int.parse(_get(onOpenSettingName)?.value ?? '0');
 
-  bool get useProxy => _get(useProxySettingName)?.value == 'true';
-
   bool get blackBackground => _get(blackBackgroundSettingName)?.value == 'true';
 
   bool get rememberSubtitles => _get(rememberLastSubtitle)?.value == 'true';
@@ -614,7 +617,11 @@ sealed class SettingsState with _$SettingsState {
     return height != null && height >= 0 && height <= 16384 ? height : null;
   }
 
-  bool get fillFullscreen => _get(fillFullScreen)?.value == 'true';
+  VideoDisplayMode get videoDisplayMode =>
+      VideoDisplayMode.fromStorage(_get(videoDisplayModeSettingName)?.value) ??
+      (_get(fillFullScreen)?.value == 'true'
+          ? VideoDisplayMode.crop
+          : VideoDisplayMode.fit);
 
   String? get locale => _get(localeSettingName)?.value;
 

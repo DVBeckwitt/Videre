@@ -13,7 +13,7 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
-import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/tv/components/tv_expandable_text.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -82,12 +82,15 @@ class TvChannelScreen extends StatelessWidget {
                                 if (server == null) {
                                   return const SizedBox.shrink();
                                 }
-                                final url = invidiousImageUrl(
-                                    ImageObject.getBestThumbnail(
-                                                channel.channel?.authorBanners)
-                                            ?.url ??
-                                        '',
-                                    server);
+                                final url = ImageObject
+                                        .getThumbnailUrlsByPreferredOrder(
+                                            channel.channel?.authorBanners)
+                                    .map((source) =>
+                                        invidiousImageUrl(source, server))
+                                    .whereType<String>()
+                                    .where((source) => source.trim().isNotEmpty)
+                                    .firstOrNull;
+                                if (url == null) return const SizedBox.shrink();
                                 return CachedNetworkImage(
                                   imageUrl: url,
                                   cacheKey: invidiousImageCacheKey(url, server),
@@ -136,20 +139,13 @@ class TvChannelScreen extends StatelessWidget {
                                                   mainAxisSize:
                                                       MainAxisSize.min,
                                                   children: [
-                                                    Thumbnail(
+                                                    ChannelAvatar(
+                                                      name: channel.channel
+                                                              ?.author ??
+                                                          '',
                                                       images: channel.channel
                                                           ?.authorThumbnails,
-                                                      thumbnails: ImageObject
-                                                          .getThumbnailUrlsByPreferredOrder(
-                                                              channel.channel
-                                                                  ?.authorThumbnails),
-                                                      width: 70,
-                                                      height: 70,
-                                                      decoration: BoxDecoration(
-                                                          borderRadius:
-                                                              BorderRadius
-                                                                  .circular(
-                                                                      35)),
+                                                      size: 70,
                                                     ),
                                                     Padding(
                                                       padding:

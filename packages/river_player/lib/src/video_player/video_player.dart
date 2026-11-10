@@ -209,6 +209,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   bool _isDisposed = false;
   double? _temporarySpeed;
   int _playPauseGeneration = 0;
+  int _sourceGeneration = 0;
+  int _seekRevision = 0;
   late Completer<void> _initializingCompleter;
   StreamSubscription<dynamic>? _eventSubscription;
 
@@ -431,6 +433,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       return;
     }
 
+    ++_sourceGeneration;
+    _timer?.cancel();
+    _seekPosition = null;
+
     value = VideoPlayerValue(
       duration: null,
       isLooping: value.isLooping,
@@ -511,10 +517,15 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           if (_isDisposed) {
             return;
           }
+          final sourceGeneration = _sourceGeneration;
+          final seekRevision = _seekRevision;
           final Duration? newPosition = await position;
           final DateTime? newAbsolutePosition = await absolutePosition;
-          // ignore: invariant_booleans
-          if (_isDisposed) {
+          // A sample started before a source change or seek belongs to the
+          // previous position and must not update or release the new target.
+          if (_isDisposed ||
+              sourceGeneration != _sourceGeneration ||
+              seekRevision != _seekRevision) {
             return;
           }
           _updatePosition(newPosition, absolutePosition: newAbsolutePosition);
@@ -575,6 +586,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     if (_isDisposed) {
       return;
     }
+    final sourceGeneration = _sourceGeneration;
+    final seekRevision = ++_seekRevision;
     _timer?.cancel();
     final int positionInMs = value.position.inMilliseconds;
     final int durationInMs = value.duration?.inMilliseconds ?? 0;
@@ -592,7 +605,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     _seekPosition = positionToSeek;
 
     await _videoPlayerPlatform.seekTo(_textureId, positionToSeek);
-    if (_isDisposed) return;
+    // A source change or newer seek owns the current position and play intent.
+    // The previous native request may finish after either has been replaced.
+    if (_isDisposed ||
+        sourceGeneration != _sourceGeneration ||
+        seekRevision != _seekRevision) {
+      return;
+    }
     _updatePosition(position);
 
     // A pause or play requested while the native seek was pending wins over

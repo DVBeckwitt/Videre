@@ -33,7 +33,8 @@ class _ValidationService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) async {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
     checked.add(serverOverride!);
     return Video(videoId: videoId, videoThumbnails: thumbnails);
   }
@@ -198,9 +199,14 @@ void main() {
       service = Service();
     });
 
-    for (final legacyHeader in [false, true]) {
+    for (final (scheme, legacyHeader) in [
+      ('http', false),
+      ('http', true),
+      ('https', false),
+      ('https', true),
+    ]) {
       test(
-          'HTTP onion without SOCKS rejects before credentials or requests '
+          '$scheme onion without SOCKS rejects before credentials or requests '
           '(legacyHeader=$legacyHeader)', () async {
         await NetworkProxy.instance
             .initialize(saved: '{}', configureNative: false);
@@ -215,7 +221,7 @@ void main() {
         addTearDown(() => messenger.setMockMethodCallHandler(access, null));
         final validator = _ValidationService()..response.complete();
         service = validator;
-        cubit.urlController.text = 'http://$nerdVpnOnionHost';
+        cubit.urlController.text = '$scheme://$nerdVpnOnionHost';
         const key = 'nvpn_0123456789abcdefghijklmnopqrstuv';
         if (legacyHeader) {
           await cubit.addHeader(nerdVpnKeyHeader, key);
@@ -254,6 +260,42 @@ void main() {
 
     test('advanced validation rejects unusable thumbnail URLs', () async {
       service = _ValidationService(thumbnails: [
+        ImageObject('default', 'file:///cache/default.jpg', 120, 90),
+      ])
+        ..response.complete();
+      cubit.urlController.text = 'https://inv.example';
+      cubit.setAdvancedTest(true);
+
+      await expectLater(
+          cubit.validateServer(), throwsA(isA<WrongThumbnailUrl>()));
+      expect(cubit.state.loading, isFalse);
+    });
+
+    test(
+        'advanced validation permits artwork intentionally omitted for privacy',
+        () async {
+      final validator = _ValidationService(thumbnails: [
+        ImageObject('maxres',
+            'https://i.ytimg.com/an_webp/video/mqdefault_6s.webp', 800, 450),
+        ImageObject('default', 'https://yt4.ggpht.com/avatar', 120, 90),
+      ])
+        ..response.complete();
+      service = validator;
+      cubit.urlController.text = 'https://inv.example';
+      cubit.setAdvancedTest(true);
+
+      final server = await cubit.validateServer();
+
+      expect(server?.url, 'https://inv.example');
+      expect(validator.checked.map((request) => request.url),
+          ['https://inv.example', 'https://inv.example']);
+      expect(cubit.state.loading, isFalse);
+    });
+
+    test('omitted artwork does not mask remaining malformed thumbnail URLs',
+        () async {
+      service = _ValidationService(thumbnails: [
+        ImageObject('maxres', 'https://yt4.ggpht.com/avatar', 800, 450),
         ImageObject('default', 'file:///cache/default.jpg', 120, 90),
       ])
         ..response.complete();

@@ -207,6 +207,63 @@ void main() {
     expect(recovered.backendPlayback!.retryIndex, 1);
   });
 
+  for (final entryPoint in [
+    'normal',
+    'interactive',
+    'explicit server',
+    'manual backend',
+    'backend recovery',
+    'same-route refresh',
+  ]) {
+    test('$entryPoint rejects metadata for another video without retrying',
+        () async {
+      final routes = <String?>[];
+      var wrongVideo = false;
+      respond((request) async {
+        routes.add(requestCookieValue(request.headers, 'ROUTE'));
+        return wrongVideo
+            ? http.Response(
+                _videoJson.replaceFirst('test-video', 'other-video'), 200,
+                headers: {'content-type': 'application/json'})
+            : ok();
+      });
+      final initial = await api.getVideo('test-video');
+      routes.clear();
+      wrongVideo = true;
+      final Future<Object?> result;
+      switch (entryPoint) {
+        case 'normal':
+          result = api.getVideo('test-video');
+        case 'interactive':
+          result = api.getVideo('test-video',
+              loadObserver: VideoLoadObserver(
+                  isCurrent: () => true,
+                  onRetry: () => fail('Wrong video is not transient')));
+        case 'explicit server':
+          result = api.getVideo('test-video', serverOverride: instance);
+        case 'manual backend':
+          result = api.getVideoForBackend(
+              'test-video', BackendPlayback.manual(instance, '1'));
+        case 'backend recovery':
+          result = api.retryVideoBackend(initial, isCurrent: () => true);
+        case 'same-route refresh':
+          result = api.refreshPlaybackVideo(initial, isCurrent: () => true);
+        default:
+          throw StateError('Unknown fixture entry point');
+      }
+      await expectLater(result, throwsA(isA<FormatException>()));
+      expect(routes, [
+        if (entryPoint == 'manual backend' || entryPoint == 'backend recovery')
+          '1'
+        else
+          '0',
+      ]);
+      expect((await db.getCurrentlySelectedServer()).customHeaders,
+          instance.customHeaders);
+      expect(initial.videoId, 'test-video');
+    });
+  }
+
   test('a server change during failed metadata stops retries', () async {
     var calls = 0;
     respond((_) async {
@@ -281,7 +338,12 @@ void main() {
   test(
       'transport classification excludes TLS, malformed data and unknown errors',
       () {
-    expect(isBackendRetryable(const SocketException('unreachable')), isTrue);
+    expect(
+        isBackendRetryable(const SocketException('unreachable',
+            osError: OSError('Host unreachable', 10065))),
+        isTrue);
+    expect(
+        isBackendRetryable(const SocketException('Policy refused')), isFalse);
     expect(isBackendRetryable(TimeoutException('timeout')), isTrue);
     expect(
         isBackendRetryable(const HandshakeException('certificate')), isFalse);
@@ -293,10 +355,27 @@ void main() {
     test(
         'DASH classifier preserves ordinary fallback and identifies HTTP $status',
         () async {
-      respond((_) async => failed(status));
+      var requests = 0;
+      respond((_) async {
+        requests++;
+        return failed(status);
+      });
       final resolver = DashManifestResolver(client);
       const manifest =
           'https://instance.example/api/manifest/dash/id/test-video';
+      if ([403, 429].contains(status)) {
+        final refusal = throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'original status', status));
+        await expectLater(
+            resolver.resolve(manifest, 'test-video', instance), refusal);
+        expect(requests, 1);
+        await expectLater(
+            resolver.resolve(manifest, 'test-video', instance,
+                throwRetryable: true),
+            refusal);
+        expect(requests, 2);
+        return;
+      }
       expect(await resolver.resolve(manifest, 'test-video', instance), isNull);
       if ([502, 503, 504].contains(status)) {
         await expectLater(

@@ -4,14 +4,18 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -153,6 +157,55 @@ void main() {
     expect(preferredVideoQualityIndex([360, 1080], 0), isNull);
   });
 
+  test('selecting captions lazily uses the playing backend snapshot', () async {
+    final requests = <http.Request>[];
+    service.httpClient.close();
+    service = Service(httpClient: MockClient((request) async {
+      requests.add(request);
+      return http.Response(
+        '{"transcript":{"body":[{"type":"regular","startMs":0,'
+        '"endMs":20000,"line":"Selected backend captions"}]}}',
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    }));
+    final selector = BackendSelector('COMPANION_ID', [
+      const BackendOption('2', 'Preferred'),
+      const BackendOption('7', 'Playing'),
+    ]);
+    final preferred = selector.withSelection(
+        const Server(url: 'https://instance.example'), '2');
+    await db.upsertServer(preferred);
+    await db.useServer(preferred);
+    final playback = BackendPlayback.manual(preferred, '7');
+    final video = create(_video('captioned').copyWith(
+      captions: [
+        Caption('English', 'en',
+            'https://music.youtube.com/untrusted-caption-location'),
+      ],
+      backendPlayback: playback,
+    ));
+    try {
+      await video.playVideo(false);
+      await _flush();
+      expect(requests, isEmpty);
+      expect(video.getSubtitles(), contains('English'));
+      video.selectSubtitle(video.getSubtitles().indexOf('English'));
+      await _flush();
+      expect(requests, hasLength(1));
+      expect(requests.single.url.origin, preferred.url);
+      expect(requests.single.url.path, '/api/v1/transcripts/captioned');
+      expect(requests.single.headers['Cookie'], 'COMPANION_ID=7');
+      expect(video.videoController!.subtitlesLines.single.texts,
+          ['Selected backend captions']);
+      expect(video.state.subtitleFailed, isFalse);
+      expect(
+          selector.selectedValue(await db.getCurrentlySelectedServer()), '2');
+    } finally {
+      await video.close();
+    }
+  });
+
   test('offline document URIs reach the native player without file conversion',
       () async {
     const uri = 'content://documents/tree/folder/document/video.webm';
@@ -292,6 +345,39 @@ void main() {
     }
   });
 
+  for (final legacyPreference in [null, 'false']) {
+    test(
+        'official manifests are skipped with legacy use-proxy=$legacyPreference',
+        () async {
+      if (legacyPreference != null) {
+        await db.saveSetting(SettingsValue('use-proxy', legacyPreference));
+      }
+      await settings.setUseDash(true);
+      final requests = <Uri>[];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request.url);
+        return http.Response('<MPD/>', 200);
+      }));
+      final video = create(_video('private', heights: [360]).copyWith(
+        hlsUrl:
+            'https://manifest.youtube.com/api/manifest/hls_playlist/id/private',
+        dashUrl:
+            'https://manifest.googlevideo.com/api/manifest/dash/id/private',
+      ));
+      try {
+        await video.playVideo(false);
+        await _flush();
+        expect(sources, ['https://instance.example/private-360.mp4']);
+        expect(requests, isEmpty,
+            reason: 'Official manifests must be rejected before probing them');
+        expect(video.selectedVideoTrack(), 0);
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
   test('adaptive startup applies saved cap before manifest tracks arrive',
       () async {
     await settings.setLastVideoQuality(720);
@@ -300,7 +386,7 @@ void main() {
     try {
       await video.playVideo(false);
       await _flush();
-      expect(sources.first, endsWith('first.m3u8'));
+      expect(sources.first, 'https://instance.example/first.m3u8?local=true');
       expect(trackHeights.last, 720);
       // Track discovery can finish after native initialization. The selected
       // row should reflect the closest available resolution to the saved cap.
@@ -316,7 +402,7 @@ void main() {
       video.switchVideo(_video('second').copyWith(
           hlsUrl: 'https://instance.example/second.m3u8', liveNow: true));
       await _flush();
-      expect(sources.last, endsWith('second.m3u8'));
+      expect(sources.last, 'https://instance.example/second.m3u8?local=true');
       expect(trackHeights.last, 0);
       expect(settings.state.lastVideoQuality, 720);
     } finally {
@@ -333,9 +419,9 @@ void main() {
     try {
       await video.playVideo(false);
       await _flush();
-      expect(sources.first, endsWith('first.dash'));
+      expect(sources.first, 'https://instance.example/first.dash?local=true');
       expect(trackHeights.last, 480);
-      failedSources.add('https://instance.example/second.dash');
+      failedSources.add('https://instance.example/second.dash?local=true');
       video.switchVideo(_video('second')
           .copyWith(dashUrl: 'https://instance.example/second.dash'));
       await _flush();

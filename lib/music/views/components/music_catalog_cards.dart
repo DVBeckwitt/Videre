@@ -1,5 +1,6 @@
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:flutter/material.dart';
 
 /// A focusable catalog item. Artwork never substitutes a video's thumbnail.
@@ -61,25 +62,27 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                 AspectRatio(
                   aspectRatio: 1,
                   child: ExcludeSemantics(
-                    child: widget.thumbnails.isEmpty
-                        ? DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: colors.surfaceContainerHighest,
-                              borderRadius: radius,
-                            ),
-                            child: Icon(
-                              widget.artist
-                                  ? Icons.person_outline_rounded
-                                  : Icons.album_outlined,
-                              size: 40,
-                              color: colors.onSurfaceVariant,
-                            ),
-                          )
-                        : Thumbnail(
-                            images: widget.thumbnails,
-                            useInvidiousProxy: false,
-                            decoration: BoxDecoration(borderRadius: radius),
-                          ),
+                    child: widget.artist
+                        ? ChannelAvatar(
+                            name: widget.title, images: widget.thumbnails)
+                        : widget.thumbnails.isEmpty
+                            ? DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: colors.surfaceContainerHighest,
+                                  borderRadius: radius,
+                                ),
+                                child: Icon(
+                                  widget.artist
+                                      ? Icons.person_outline_rounded
+                                      : Icons.album_outlined,
+                                  size: 40,
+                                  color: colors.onSurfaceVariant,
+                                ),
+                              )
+                            : Thumbnail(
+                                images: widget.thumbnails,
+                                decoration: BoxDecoration(borderRadius: radius),
+                              ),
                   ),
                 ),
                 const SizedBox(height: 10),

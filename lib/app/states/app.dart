@@ -195,11 +195,6 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       if (RegExp(r'^UC[A-Za-z0-9_-]{22}$').hasMatch(id)) {
         return MusicRoute(artistId: id);
       }
-      if (uri.pathSegments.first == 'browse' &&
-          id.length <= 200 &&
-          RegExp(r'^MPRE[A-Za-z0-9_-]+$').hasMatch(id)) {
-        return MusicRoute(albumId: id);
-      }
     } else if (uri.pathSegments.length == 1 &&
         uri.pathSegments.single == 'playlist') {
       final playlistId = uri.queryParameters['list'];
@@ -225,12 +220,69 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
     await _switchAccount(profileId: profileId);
   }
 
-  Future<Server?> _switchAccount(
-      {required String profileId, Server? server}) async {
-    if (isClosed) return null;
+  /// Remove one person's local data after leaving its runtime and revoking its
+  /// saved sign-ins. Sharing the switch queue prevents a concurrent selection
+  /// from reopening the person between the final checks and deletion.
+  Future<void> deleteProfile(String profileId) async {
+    if (isClosed) return;
     final previous = _pendingServerSwitch;
     final done = Completer<void>();
     _pendingServerSwitch = done.future;
+    try {
+      if (previous != null) await previous;
+      _requireOpen();
+      if (state.sessionRecoveryRequired) {
+        throw StateError(
+            'Recover the current session before deleting a profile');
+      }
+      final profiles = await db.getProfiles();
+      _requireOpen();
+      if (!profiles.any((profile) => profile.id == profileId)) {
+        throw StateError('Profile no longer exists');
+      }
+      if (profiles.length < 2) {
+        throw StateError('At least one profile is required');
+      }
+      final owner = db.forProfile(profileId);
+      final accounts = await owner.getServers();
+      _requireOpen();
+      if (db.profileId == profileId) {
+        final replacement =
+            profiles.firstWhere((profile) => profile.id != profileId);
+        await _switchAccount(
+            profileId: replacement.id, withinSessionOperation: true);
+        _requireOpen();
+      }
+      if (db.profileId == profileId) {
+        throw StateError('Leave this profile before deleting it');
+      }
+      setGlobalLoading(true);
+      for (final account in accounts) {
+        await service.logOutProtected(account);
+        _requireOpen();
+      }
+      // Retire background readers before removing the registry. If cleanup
+      // fails, the profile remains listed so deletion can be retried safely.
+      await _backgroundDatabase.deleteProfile(profileId);
+      _requireOpen();
+      await db.deleteProfile(profileId);
+    } finally {
+      if (!isClosed) setGlobalLoading(false);
+      if (identical(_pendingServerSwitch, done.future)) {
+        _pendingServerSwitch = null;
+      }
+      done.complete();
+    }
+  }
+
+  Future<Server?> _switchAccount(
+      {required String profileId,
+      Server? server,
+      bool withinSessionOperation = false}) async {
+    if (isClosed) return null;
+    final previous = withinSessionOperation ? null : _pendingServerSwitch;
+    final done = Completer<void>();
+    if (!withinSessionOperation) _pendingServerSwitch = done.future;
     try {
       // Settings can be reopened while the previous session check is pending.
       if (previous != null) await previous;
@@ -315,7 +367,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         Error.throwWithStackTrace(error, stackTrace);
       }
     } finally {
-      if (!isClosed) setGlobalLoading(false);
+      if (!withinSessionOperation && !isClosed) setGlobalLoading(false);
       if (identical(_pendingServerSwitch, done.future)) {
         _pendingServerSwitch = null;
       }

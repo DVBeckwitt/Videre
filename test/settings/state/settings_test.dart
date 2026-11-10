@@ -3,16 +3,21 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/player/models/video_display_mode.dart';
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/screens/video_player.dart';
+import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/motion.dart';
@@ -261,19 +266,51 @@ Future<void> main() async {
     await settingsCubit.close();
     settingsCubit = TestSettingsCubit(
         SettingsState.init().copyWith(packageInfo: info), appCubit);
-    await settingsCubit.setUseProxy(true);
+    await settingsCubit.setRememberVideoQuality(false);
     final other = await db.createProfile('Other');
     await db.useProfile(other.id);
     await fileDb.useProfile(other.id);
 
     await settingsCubit.reloadForProfile();
 
-    expect(settingsCubit.state.useProxy, isFalse);
+    expect(settingsCubit.state.rememberVideoQuality, isTrue);
     expect(settingsCubit.state.packageInfo.appName, info.appName);
     expect(settingsCubit.state.packageInfo.packageName, info.packageName);
     expect(settingsCubit.state.packageInfo.version, info.version);
     expect(settingsCubit.state.packageInfo.buildNumber, info.buildNumber);
   });
+
+  for (final (name, screen) in const [
+    ('phone', VideoPlayerSettingsScreen()),
+    ('TV', TVSettingsScreen()),
+  ]) {
+    testWidgets('$name playback settings offer no direct playback opt-out',
+        (tester) async {
+      await tester.runAsync(() => settingsCubit
+          .saveSetting(SettingsValue(useProxySettingName, 'false')));
+      tester.view.physicalSize = const Size(1280, 2200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MultiBlocProvider(
+        providers: [
+          BlocProvider<AppCubit>.value(value: appCubit),
+          BlocProvider.value(value: settingsCubit),
+        ],
+        child: MaterialApp(
+          locale: const Locale('en'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: screen,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Use DASH'), findsOneWidget);
+      expect(find.text('Skip forward/backward step'), findsOneWidget);
+      expect(find.text('Proxy videos'), findsNothing);
+    });
+  }
 
   test('disabling during a restart prevents late task registration', () async {
     await settingsCubit
@@ -510,6 +547,49 @@ Future<void> main() async {
     await settingsCubit
         .saveSetting(SettingsValue(lastVideoQualitySettingName, 'invalid'));
     expect(SettingsState.init().lastVideoQuality, isNull);
+  });
+
+  test('display mode honors the legacy toggle and persists each new choice',
+      () async {
+    expect(settingsCubit.state.videoDisplayMode, VideoDisplayMode.fit);
+    await settingsCubit.saveSetting(SettingsValue(fillFullScreen, 'false'));
+    expect(SettingsState.init().videoDisplayMode, VideoDisplayMode.fit);
+    await settingsCubit.saveSetting(SettingsValue(fillFullScreen, 'true'));
+    expect(SettingsState.init().videoDisplayMode, VideoDisplayMode.crop);
+    await settingsCubit
+        .saveSetting(SettingsValue(videoDisplayModeSettingName, 'unknown'));
+    expect(SettingsState.init().videoDisplayMode, VideoDisplayMode.crop);
+
+    for (final mode in VideoDisplayMode.values) {
+      await settingsCubit.setVideoDisplayMode(mode);
+      expect(settingsCubit.state.videoDisplayMode, mode);
+      expect(SettingsState.init().videoDisplayMode, mode);
+    }
+  });
+
+  test('pending display mode changes stay with the original profile', () async {
+    final database = db;
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final saving = settingsCubit.setVideoDisplayMode(VideoDisplayMode.crop);
+    await started.future;
+    db = database;
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    pending.complete();
+    await saving;
+
+    expect(settingsCubit.state.videoDisplayMode, VideoDisplayMode.fit);
+    expect(db.getSettings(videoDisplayModeSettingName), isNull);
+    expect(
+        database
+            .forProfile('default')
+            .getSettings(videoDisplayModeSettingName)
+            ?.value,
+        VideoDisplayMode.crop.name);
   });
 
   test('hiding watched subscriptions defaults off and persists', () async {

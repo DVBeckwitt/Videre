@@ -15,8 +15,10 @@ import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/home/views/components/content_mode_selector.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
-import 'package:clipious/music/models/music_album.dart';
-import 'package:clipious/music/models/music_discovery.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/screens/music_mode.dart';
@@ -91,8 +93,9 @@ class _TestService extends Service {
   @override
   Future<VideoTranscript> getTranscript(
     String videoId,
-    Caption caption,
-  ) async {
+    Caption caption, {
+    Server? serverOverride,
+  }) async {
     transcriptRequests.add(caption.label);
     if (caption.label == 'Spanish') {
       return const VideoTranscript(
@@ -155,7 +158,8 @@ class _TestService extends Service {
   @override
   Future<Video> getVideo(String videoId,
           {Server? serverOverride,
-          void Function(BackendPlayback request)? onBackendRequest}) async =>
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) async =>
       videos.singleWhere((video) => video.videoId == videoId);
 
   @override
@@ -220,30 +224,51 @@ class _SessionApp extends TestAppCubit {
 }
 
 class _TestMusicCatalog extends MusicCatalogService {
-  int releaseCalls = 0;
+  int trendingCalls = 0;
 
   @override
-  Future<List<MusicAlbum>> getNewReleases() async {
-    releaseCalls++;
-    return [const MusicAlbum(id: 'MPREfresh', title: 'Fresh album')];
+  Future<List<MusicTrack>> getTrendingSongs() async {
+    trendingCalls++;
+    return [const MusicTrack(videoId: 'freshsong01', title: 'Fresh song')];
   }
 
   @override
-  Future<MusicCharts> getCharts({String country = 'ZZ'}) async => MusicCharts(
-        country: country,
-        countries: const [MusicCountry(code: 'ZZ', name: 'Global')],
-        playlists: const [MusicPlaylist(id: 'PLchart', title: 'Public chart')],
-      );
-
-  @override
-  Future<List<MusicMoodCategory>> getMoodCategories() async => const [
-        MusicMoodCategory(
-            title: 'Focus', params: 'focus-public', group: 'Moods')
+  Future<List<MusicTrack>> searchSongs(String query) async => [
+        MusicTrack(
+            videoId: 'searchsong1',
+            title: 'Search result $query',
+            artists: const [
+              'Music channel'
+            ],
+            artistLinks: const [
+              MusicArtist(id: 'UCmusic', name: 'Music channel')
+            ]),
       ];
 
   @override
-  Future<List<MusicPlaylist>> getMoodPlaylists(String params) async =>
-      const [MusicPlaylist(id: 'PLfocus', title: 'Focus playlist')];
+  Future<List<MusicArtist>> searchArtists(String query) async =>
+      const [MusicArtist(id: 'UCmusic', name: 'Music channel')];
+
+  @override
+  Future<MusicTrack> getSong(String videoId,
+          {VideoLoadObserver? loadObserver}) async =>
+      MusicTrack(videoId: videoId, title: 'Fresh song');
+
+  @override
+  Future<MusicArtistPage> getArtist(String id) async => const MusicArtistPage(
+      artist: MusicArtist(id: 'UCmusic', name: 'Music channel'),
+      description: 'Channel uploads',
+      songs: [MusicTrack(videoId: 'freshsong01', title: 'Fresh song')]);
+
+  @override
+  Future<List<MusicPlaylist>> searchPlaylists(String query) async =>
+      const [MusicPlaylist(id: 'PLpublic', title: 'Public playlist')];
+
+  @override
+  Future<MusicCollection> getPlaylist(String id) async => MusicCollection(
+      id: id,
+      title: 'Public playlist',
+      tracks: const [MusicTrack(videoId: 'freshsong01', title: 'Fresh song')]);
 }
 
 Future<void> _selectHomeMode(WidgetTester tester, String label) async {
@@ -1196,33 +1221,33 @@ void main() {
     await tester.pumpAndSettle();
     final selectedIndex =
         tester.widget<NavigationBar>(navigation).selectedIndex;
-    expect((musicCatalogService as _TestMusicCatalog).releaseCalls, 0);
+    expect((musicCatalogService as _TestMusicCatalog).trendingCalls, 0);
     await _selectHomeMode(tester, 'Music');
     expect(find.byType(MusicModeScreen), findsOneWidget);
-    expect(find.text('New releases'), findsOneWidget);
+    expect(find.text('Trending music'), findsOneWidget);
     expect(
         tester
             .widget<NavigationBar>(navigation)
             .destinations
             .cast<NavigationDestination>()
             .map((item) => item.label),
-        ['Home', 'Explore', 'Library']);
+        ['Home', 'Search', 'Library']);
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    await tester.dragFrom(const Offset(290, 150), const Offset(-270, 0));
+    await tester.dragFrom(const Offset(290, 430), const Offset(-270, 0));
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
-    expect(find.byKey(const ValueKey('music-explore-charts')), findsOneWidget);
-    await tester.dragFrom(const Offset(290, 150), const Offset(-270, 0));
+    expect(find.byKey(const ValueKey('music-search')), findsOneWidget);
+    await tester.dragFrom(const Offset(290, 430), const Offset(-270, 0));
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
     expect(
         find.text(
             'Nothing saved here yet. Save music while browsing, or create a playlist.'),
         findsOneWidget);
-    await tester.tap(find.byTooltip('Search'));
+    await tester.tap(find.descendant(
+        of: find.byType(AppBar), matching: find.byTooltip('Search')));
     await tester.pumpAndSettle();
-    expect(find.text('Search songs, albums, artists, or playlists'),
-        findsOneWidget);
+    expect(find.text('Search songs, channels, or playlists'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -1237,12 +1262,12 @@ void main() {
         .tap(find.descendant(of: navigation, matching: find.text('Home')));
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    expect(find.text('Fresh album'), findsOneWidget);
+    expect(find.text('Fresh song'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('Back closes an Explore mood without changing the Music page',
+  testWidgets('Back closes Music channel detail but ignores inactive Search',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
     final navigation = find.byType(NavigationBar);
@@ -1252,23 +1277,38 @@ void main() {
     final videoTab = tester.widget<NavigationBar>(navigation).selectedIndex;
     await _selectHomeMode(tester, 'Music');
     await tester
-        .tap(find.descendant(of: navigation, matching: find.text('Explore')));
+        .tap(find.descendant(of: navigation, matching: find.text('Search')));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('music-explore-moods')));
+    await tester.enterText(
+        find.byKey(const ValueKey('music-search')), 'kept query');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Focus'));
+    await tester.tap(find.widgetWithText(TextButton, 'Music channel'));
     await tester.pumpAndSettle();
-    expect(find.text('Focus playlist'), findsOneWidget);
+    expect(find.text('Channel uploads'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
-    expect(find.text('Focus playlist'), findsNothing);
-    expect(find.text('Focus'), findsOneWidget);
+    expect(find.text('Channel uploads'), findsNothing);
+    expect(find.text('Search result kept query'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Music channel'));
+    await tester.pumpAndSettle();
     await _selectHomeMode(tester, 'Videos');
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, videoTab);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    await _selectHomeMode(tester, 'Music');
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+    expect(find.text('Channel uploads'), findsOneWidget,
+        reason:
+            'The hidden Music detail must not consume the video Back action');
+    expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('music-search')))
+            .controller!
+            .text,
+        'kept query');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -1298,12 +1338,12 @@ void main() {
             musicOnly ? findsOneWidget : findsNothing);
         final catalog = musicCatalogService as _TestMusicCatalog;
         if (musicOnly) {
-          expect(catalog.releaseCalls, greaterThan(0));
-          expect(find.text('Fresh album'), findsOneWidget);
+          expect(catalog.trendingCalls, greaterThan(0));
+          expect(find.text('Fresh song'), findsOneWidget);
           expect((globals.service as _TestService).discoveryRequests, 0);
           expect((globals.service as _TestService).feedRequests, isEmpty);
         } else {
-          expect(catalog.releaseCalls, 0);
+          expect(catalog.trendingCalls, 0);
           expect(find.text('Home'), findsWidgets);
         }
         await tester.tap(find.byIcon(Icons.settings));
@@ -1335,17 +1375,17 @@ void main() {
     await _selectHomeMode(tester, 'Music');
     final rail = find.byType(NavigationRail);
     expect(tester.widget<NavigationRail>(rail).selectedIndex, 0);
-    await tester.tap(find.descendant(of: rail, matching: find.text('Explore')));
+    await tester.tap(find.descendant(of: rail, matching: find.text('Search')));
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationRail>(rail).selectedIndex, 1);
-    await tester.dragFrom(const Offset(950, 120), const Offset(-850, 0));
+    await tester.dragFrom(const Offset(950, 420), const Offset(-850, 0));
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationRail>(rail).selectedIndex, 2);
     await _selectHomeMode(tester, 'Videos');
     expect(find.descendant(of: rail, matching: find.text('Subscriptions')),
         findsOneWidget);
-    expect(find.descendant(of: rail, matching: find.text('Explore')),
-        findsNothing);
+    expect(
+        find.descendant(of: rail, matching: find.text('Search')), findsNothing);
     await _selectHomeMode(tester, 'Music');
     expect(tester.widget<NavigationRail>(rail).selectedIndex, 2);
     expect(tester.takeException(), isNull);
@@ -1363,7 +1403,7 @@ void main() {
     expect(find.byType(ContentModeSelector), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
     await _selectHomeMode(tester, 'Music');
-    expect(find.text('Fresh album'), findsOneWidget);
+    expect(find.text('Fresh song'), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
     await _selectHomeMode(tester, 'Videos');
     expect(find.byType(ContentModeSelector), findsOneWidget);
@@ -1387,7 +1427,7 @@ void main() {
     app.restartSession();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    expect(find.text('Fresh album'), findsOneWidget);
+    expect(find.text('Fresh song'), findsOneWidget);
     await _selectHomeMode(tester, 'Videos');
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     expect(tester.takeException(), isNull);
@@ -1435,7 +1475,7 @@ void main() {
       final before = player.state;
       await _selectHomeMode(tester, 'Music');
       await tester.tap(find.descendant(
-          of: find.byType(NavigationBar), matching: find.text('Explore')));
+          of: find.byType(NavigationBar), matching: find.text('Search')));
       await tester.pumpAndSettle();
       expect(tester.element(find.byType(Player)).read<PlayerCubit>(),
           same(player));

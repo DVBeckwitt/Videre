@@ -24,7 +24,7 @@ import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/conditional_wrap.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:clipious/utils/views/components/external_link.dart';
 
 import '../../../network/nerdvpn_access.dart';
 import '../../services/gateway_auth.dart';
@@ -36,21 +36,8 @@ class AddServerScreen extends StatelessWidget {
   static const instancesUrl = 'https://docs.invidious.io/instances/';
 
   static Future<void> _openExternalUrl(
-      BuildContext context, Uri url, String title, String help) async {
-    try {
-      if (!isTv && await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        return;
-      }
-    } catch (_) {
-      // TVs and devices without a browser can still show the address.
-    }
-    if (context.mounted) {
-      await showAlertDialog(context, title, [
-        Text(help),
-        SelectableText(url.toString()),
-      ]);
-    }
-  }
+          BuildContext context, Uri url, String title, String help) =>
+      openExternalLink(context, url, title: title, help: help);
 
   static Future<void> openInstanceDirectory(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
@@ -65,14 +52,17 @@ class AddServerScreen extends StatelessWidget {
     return videoId == null || videoId.isEmpty
         ? uri
         : uri.replace(
-            path: '${uri.path}/watch', queryParameters: {'v': videoId});
+            path: '${uri.path}/watch',
+            queryParameters: {'v': videoId, 'local': 'true'});
   }
 
   static String connectionAdvice(Object error, AppLocalizations locals) {
     if (error is NerdVpnAccessRequired && error.state == 'waiting') {
       return locals.nerdVpnAccessPending;
     }
-    if (error is GatewaySignInFailed || error is NerdVpnAccessRequired) {
+    if (error is GatewayUnsupported ||
+        error is GatewaySignInFailed ||
+        error is NerdVpnAccessRequired) {
       return error.toString();
     }
     if (error is InvidiousServiceError) {
@@ -193,9 +183,9 @@ class AddServerScreen extends StatelessWidget {
                             onPressed: () => _openExternalUrl(
                                 context,
                                 browserUrl,
-                                locals.openInBrowser,
+                                locals.externalLinkTitle,
                                 locals.instanceBrowserHelp),
-                            child: Text(locals.openInBrowser)),
+                            child: Text(locals.externalLinkTitle)),
                     ],
                   ));
         });
@@ -242,7 +232,7 @@ class AddServerScreen extends StatelessWidget {
       if (e is WrongThumbnailUrl && !isTv)
         TextButton(
             onPressed: () {
-              launchUrl(Uri.parse(wikiUrl));
+              unawaited(openExternalLink(context, Uri.parse(wikiUrl)));
             },
             child: Text(locals.openWikiLink)),
       TextButton(

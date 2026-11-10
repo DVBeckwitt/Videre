@@ -112,13 +112,14 @@ void main() {
     await revokeStarted.future;
     final login = GatewayAuth.signIn(account);
     await Future<void>.delayed(Duration.zero);
-    expect(events, ['status', 'close:7', 'revoke-start']);
+    expect(events, ['status', 'close:null', 'status', 'revoke-start']);
     revokeComplete.complete();
     await logout;
     expect(await login, 'replacement-fixture-token');
     expect(events, [
       'status',
-      'close:7',
+      'close:null',
+      'status',
       'revoke-start',
       'revoke-complete',
       'close:null',
@@ -126,9 +127,7 @@ void main() {
     ]);
   });
 
-  test(
-      'logout closes a pending login with its revision and ignores its late token',
-      () async {
+  test('logout closes a pending login and ignores its late token', () async {
     final account = server('pending-login');
     final context = GatewayRequestContext.forAccount(
             account.profileId, account.accountId, account.url)!
@@ -152,7 +151,7 @@ void main() {
       expect(call.method, 'close');
       final arguments = Map<Object?, Object?>.from(call.arguments as Map);
       closes.add(arguments);
-      if (arguments['revision'] == 11) {
+      if (loginStarted.isCompleted) {
         loginResult.complete('stale-fixture-token');
       }
       return null;
@@ -164,11 +163,116 @@ void main() {
     expect(await login, isNull);
     expect(closes, [
       {'context': context},
-      {'context': context, 'revision': 11},
+      {'context': context},
     ]);
     expect(revocations, [
       {'context': context, 'revision': 11}
     ]);
+  });
+
+  for (final hadSession in [false, true]) {
+    for (final completesDuringClose in [false, true]) {
+      test(
+          '${hadSession ? 'Existing' : 'New'} account: ${completesDuringClose ? 'logout revokes a login completed after its status snapshot' : 'logout waits for a browser still installing its proxy to close'}',
+          () async {
+        final account = server(
+            'installing-login-$hadSession-$completesDuringClose',
+            gatewayEnabled: hadSession);
+        final context = GatewayRequestContext.forAccount(
+                account.profileId, account.accountId, account.url)!
+            .encoded;
+        final loginStarted = Completer<void>();
+        final loginResult = Completer<String?>();
+        final closeStarted = Completer<void>();
+        final closeResult = Completer<void>();
+        final revocations = <Map<Object?, Object?>>[];
+        var statusReads = 0;
+        messenger.setMockMethodCallHandler(sessions, (call) async {
+          if (call.method == 'status') {
+            statusReads++;
+            if (hadSession) {
+              return enabled(statusReads == 1
+                  ? 7
+                  : completesDuringClose
+                      ? 8
+                      : 9);
+            }
+            if (statusReads > 1 && completesDuringClose) return enabled(1);
+            return {
+              'supported': true,
+              'enabled': false,
+              'needsSignIn': false,
+              'revision': statusReads == 1 ? 0 : 2,
+            };
+          }
+          expect(call.method, 'signOut');
+          revocations.add(Map.from(call.arguments as Map));
+          return null;
+        });
+        messenger.setMockMethodCallHandler(browser, (call) async {
+          if (call.method == 'signIn') {
+            loginStarted.complete();
+            return loginResult.future;
+          }
+          expect(call.method, 'close');
+          expect(call.arguments, {'context': context});
+          if (loginStarted.isCompleted) {
+            // The native request can gain a revision after status returned. A
+            // pre-install revision must not prevent closing this same request.
+            closeStarted.complete();
+            await closeResult.future;
+            loginResult.complete('stale-installing-fixture-token');
+          }
+          return null;
+        });
+
+        final login = GatewayAuth.signIn(account);
+        await loginStarted.future;
+        var logoutFinished = false;
+        final logout =
+            GatewayAuth.signOut(account).then((_) => logoutFinished = true);
+        await closeStarted.future;
+        expect(logoutFinished, isFalse);
+        expect(revocations, isEmpty);
+        closeResult.complete();
+        await logout;
+        expect(await login, isNull);
+        expect(statusReads, 2);
+        expect(
+            revocations,
+            hadSession || completesDuringClose
+                ? [
+                    {
+                      'context': context,
+                      'revision':
+                          hadSession ? (completesDuringClose ? 8 : 9) : 1
+                    }
+                  ]
+                : isEmpty);
+      });
+    }
+  }
+
+  test('failure to close an installing browser prevents successful logout',
+      () async {
+    final account =
+        server('installing-browser-close-failure', gatewayEnabled: false);
+    messenger.setMockMethodCallHandler(sessions, (call) async {
+      expect(call.method, 'status');
+      return {
+        'supported': true,
+        'enabled': false,
+        'needsSignIn': false,
+        'revision': 0,
+      };
+    });
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      expect(call.method, 'close');
+      throw PlatformException(code: 'GATEWAY_UNAVAILABLE');
+    });
+
+    await expectLater(GatewayAuth.signOut(account),
+        throwsA(isA<GatewayTransportUnavailable>()));
   });
 
   test(
@@ -197,7 +301,7 @@ void main() {
       return call.method == 'status' ? enabled(13) : null;
     });
     await GatewayAuth.signOut(account);
-    expect(calls.map((call) => call.method), ['status', 'signOut']);
+    expect(calls.map((call) => call.method), ['status', 'status', 'signOut']);
     expect((calls.last.arguments as Map)['revision'], 13);
   });
 
@@ -219,6 +323,21 @@ void main() {
             (error) => error.toString(),
             'message',
             'The sign-in code expired or was already used. Sign in again.')));
+  });
+
+  test('missing WebView routing protection explains how to repair sign-in',
+      () async {
+    final account = server('missing-browser-protection');
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      if (call.method == 'signIn') {
+        throw PlatformException(code: 'GATEWAY_PROXY_UNSUPPORTED');
+      }
+      return null;
+    });
+    await expectLater(
+        GatewayAuth.signIn(account),
+        throwsA(isA<GatewayUnsupported>().having((error) => error.toString(),
+            'repair guidance', contains('Update Android System WebView'))));
   });
 
   test('onion sign-in keeps the selected origin and native context together',
@@ -298,7 +417,7 @@ void main() {
         started[context]!.complete();
         return tokens[context]!.future;
       }
-      if (arguments['revision'] == 17) {
+      if (started[context]!.isCompleted) {
         expect(context, firstContext);
         tokens[context]!.complete('stale-onion-fixture-token');
       }

@@ -18,6 +18,7 @@ mixin _$VideoState {
   BackendPlayback? get requestedBackend;
   int? get dislikes;
   dynamic get loadingVideo;
+  bool get retryingVideo;
   String get videoId;
   bool get isLoggedIn;
   bool get downloading;
@@ -45,6 +46,8 @@ mixin _$VideoState {
                 other.dislikes == dislikes) &&
             const DeepCollectionEquality()
                 .equals(other.loadingVideo, loadingVideo) &&
+            (identical(other.retryingVideo, retryingVideo) ||
+                other.retryingVideo == retryingVideo) &&
             (identical(other.videoId, videoId) || other.videoId == videoId) &&
             (identical(other.isLoggedIn, isLoggedIn) ||
                 other.isLoggedIn == isLoggedIn) &&
@@ -65,6 +68,7 @@ mixin _$VideoState {
       requestedBackend,
       dislikes,
       const DeepCollectionEquality().hash(loadingVideo),
+      retryingVideo,
       videoId,
       isLoggedIn,
       downloading,
@@ -75,7 +79,7 @@ mixin _$VideoState {
 
   @override
   String toString() {
-    return 'VideoState(video: $video, requestedBackend: $requestedBackend, dislikes: $dislikes, loadingVideo: $loadingVideo, videoId: $videoId, isLoggedIn: $isLoggedIn, downloading: $downloading, downloadProgress: $downloadProgress, downloadedVideo: $downloadedVideo, opacity: $opacity, error: $error)';
+    return 'VideoState(video: $video, requestedBackend: $requestedBackend, dislikes: $dislikes, loadingVideo: $loadingVideo, retryingVideo: $retryingVideo, videoId: $videoId, isLoggedIn: $isLoggedIn, downloading: $downloading, downloadProgress: $downloadProgress, downloadedVideo: $downloadedVideo, opacity: $opacity, error: $error)';
   }
 }
 
@@ -90,6 +94,7 @@ abstract mixin class $VideoStateCopyWith<$Res> {
       BackendPlayback? requestedBackend,
       int? dislikes,
       dynamic loadingVideo,
+      bool retryingVideo,
       String videoId,
       bool isLoggedIn,
       bool downloading,
@@ -118,6 +123,7 @@ class _$VideoStateCopyWithImpl<$Res> implements $VideoStateCopyWith<$Res> {
     Object? requestedBackend = freezed,
     Object? dislikes = freezed,
     Object? loadingVideo = freezed,
+    Object? retryingVideo = null,
     Object? videoId = null,
     Object? isLoggedIn = null,
     Object? downloading = null,
@@ -143,6 +149,10 @@ class _$VideoStateCopyWithImpl<$Res> implements $VideoStateCopyWith<$Res> {
           ? _self.loadingVideo
           : loadingVideo // ignore: cast_nullable_to_non_nullable
               as dynamic,
+      retryingVideo: null == retryingVideo
+          ? _self.retryingVideo
+          : retryingVideo // ignore: cast_nullable_to_non_nullable
+              as bool,
       videoId: null == videoId
           ? _self.videoId
           : videoId // ignore: cast_nullable_to_non_nullable
@@ -299,6 +309,7 @@ extension VideoStatePatterns on VideoState {
             BackendPlayback? requestedBackend,
             int? dislikes,
             dynamic loadingVideo,
+            bool retryingVideo,
             String videoId,
             bool isLoggedIn,
             bool downloading,
@@ -317,6 +328,7 @@ extension VideoStatePatterns on VideoState {
             _that.requestedBackend,
             _that.dislikes,
             _that.loadingVideo,
+            _that.retryingVideo,
             _that.videoId,
             _that.isLoggedIn,
             _that.downloading,
@@ -349,6 +361,7 @@ extension VideoStatePatterns on VideoState {
             BackendPlayback? requestedBackend,
             int? dislikes,
             dynamic loadingVideo,
+            bool retryingVideo,
             String videoId,
             bool isLoggedIn,
             bool downloading,
@@ -366,6 +379,7 @@ extension VideoStatePatterns on VideoState {
             _that.requestedBackend,
             _that.dislikes,
             _that.loadingVideo,
+            _that.retryingVideo,
             _that.videoId,
             _that.isLoggedIn,
             _that.downloading,
@@ -395,6 +409,7 @@ extension VideoStatePatterns on VideoState {
             BackendPlayback? requestedBackend,
             int? dislikes,
             dynamic loadingVideo,
+            bool retryingVideo,
             String videoId,
             bool isLoggedIn,
             bool downloading,
@@ -412,6 +427,7 @@ extension VideoStatePatterns on VideoState {
             _that.requestedBackend,
             _that.dislikes,
             _that.loadingVideo,
+            _that.retryingVideo,
             _that.videoId,
             _that.isLoggedIn,
             _that.downloading,
@@ -433,6 +449,7 @@ class _VideoState extends VideoState {
       this.requestedBackend,
       this.dislikes,
       this.loadingVideo = true,
+      this.retryingVideo = false,
       required this.videoId,
       required this.isLoggedIn,
       this.downloading = false,
@@ -451,6 +468,9 @@ class _VideoState extends VideoState {
   @override
   @JsonKey()
   final dynamic loadingVideo;
+  @override
+  @JsonKey()
+  final bool retryingVideo;
   @override
   final String videoId;
   @override
@@ -490,6 +510,8 @@ class _VideoState extends VideoState {
                 other.dislikes == dislikes) &&
             const DeepCollectionEquality()
                 .equals(other.loadingVideo, loadingVideo) &&
+            (identical(other.retryingVideo, retryingVideo) ||
+                other.retryingVideo == retryingVideo) &&
             (identical(other.videoId, videoId) || other.videoId == videoId) &&
             (identical(other.isLoggedIn, isLoggedIn) ||
                 other.isLoggedIn == isLoggedIn) &&
@@ -510,6 +532,7 @@ class _VideoState extends VideoState {
       requestedBackend,
       dislikes,
       const DeepCollectionEquality().hash(loadingVideo),
+      retryingVideo,
       videoId,
       isLoggedIn,
       downloading,
@@ -520,7 +543,7 @@ class _VideoState extends VideoState {
 
   @override
   String toString() {
-    return 'VideoState(video: $video, requestedBackend: $requestedBackend, dislikes: $dislikes, loadingVideo: $loadingVideo, videoId: $videoId, isLoggedIn: $isLoggedIn, downloading: $downloading, downloadProgress: $downloadProgress, downloadedVideo: $downloadedVideo, opacity: $opacity, error: $error)';
+    return 'VideoState(video: $video, requestedBackend: $requestedBackend, dislikes: $dislikes, loadingVideo: $loadingVideo, retryingVideo: $retryingVideo, videoId: $videoId, isLoggedIn: $isLoggedIn, downloading: $downloading, downloadProgress: $downloadProgress, downloadedVideo: $downloadedVideo, opacity: $opacity, error: $error)';
   }
 }
 
@@ -537,6 +560,7 @@ abstract mixin class _$VideoStateCopyWith<$Res>
       BackendPlayback? requestedBackend,
       int? dislikes,
       dynamic loadingVideo,
+      bool retryingVideo,
       String videoId,
       bool isLoggedIn,
       bool downloading,
@@ -567,6 +591,7 @@ class __$VideoStateCopyWithImpl<$Res> implements _$VideoStateCopyWith<$Res> {
     Object? requestedBackend = freezed,
     Object? dislikes = freezed,
     Object? loadingVideo = freezed,
+    Object? retryingVideo = null,
     Object? videoId = null,
     Object? isLoggedIn = null,
     Object? downloading = null,
@@ -592,6 +617,10 @@ class __$VideoStateCopyWithImpl<$Res> implements _$VideoStateCopyWith<$Res> {
           ? _self.loadingVideo
           : loadingVideo // ignore: cast_nullable_to_non_nullable
               as dynamic,
+      retryingVideo: null == retryingVideo
+          ? _self.retryingVideo
+          : retryingVideo // ignore: cast_nullable_to_non_nullable
+              as bool,
       videoId: null == videoId
           ? _self.videoId
           : videoId // ignore: cast_nullable_to_non_nullable

@@ -20,11 +20,14 @@ import 'package:url_launcher_platform_interface/link.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 class _UnavailableIssueLauncher extends UrlLauncherPlatform {
+  var calls = 0;
+
   @override
   LinkDelegate? get linkDelegate => null;
 
   @override
   Future<bool> launchUrl(String url, LaunchOptions options) async {
+    calls++;
     throw PlatformException(
         code: 'unavailable', message: 'private-platform-detail');
   }
@@ -438,10 +441,11 @@ void main() {
   });
 
   testWidgets(
-      'an unavailable issue launcher shows a notice without losing the receipt',
+      'issue receipts expose a copyable address without launching another app',
       (tester) async {
     final originalLauncher = UrlLauncherPlatform.instance;
-    UrlLauncherPlatform.instance = _UnavailableIssueLauncher();
+    final launcher = _UnavailableIssueLauncher();
+    UrlLauncherPlatform.instance = launcher;
     addTearDown(() => UrlLauncherPlatform.instance = originalLauncher);
     final controller = await pumpForm(tester);
     await fill(tester);
@@ -452,8 +456,12 @@ void main() {
     await reveal(tester, issue);
     await tester.tap(issue);
     await tester.pumpAndSettle();
-    expect(find.text('Could not open the issue. Please try again.'),
+    expect(
+        find.widgetWithText(
+            SelectableText, 'https://github.com/DVBeckwitt/Videre/issues/123'),
         findsOneWidget);
+    expect(find.text('Copy to clipboard'), findsOneWidget);
+    expect(launcher.calls, 0);
     expect(find.textContaining('private-platform-detail'), findsNothing);
     expect(controller.receipts.single.issueNumber, 123);
     expect(tester.takeException(), isNull);

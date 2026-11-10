@@ -33,7 +33,8 @@ class ProxyPolicyTest {
 
     @Test
     fun `invalid enabled settings are rejected`() {
-        listOf("", " ", "socks5://127.0.0.1", "host/path", "host@other").forEach { host ->
+        listOf("", " ", "socks5://127.0.0.1", "host/path", "host@other", "pröxy.example",
+            "proxy%2eexample", "proxy\\example").forEach { host ->
             assertThrows(IllegalArgumentException::class.java) { ProxyPolicy(true, host, 9050) }
         }
         listOf(0, -1, 65536).forEach { port ->
@@ -41,6 +42,32 @@ class ProxyPolicyTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             ProxyPolicy.fromMap(mapOf("enabled" to true, "host" to "127.0.0.1", "port" to 9050.5))
+        }
+    }
+
+    @Test
+    fun `official proxy endpoints are rejected before any connection`() {
+        listOf("music.youtube.com", "MUSIC.YOUTUBE.COM.", "music\u3002youtube\uff0ecom",
+            "www.googleapis.com", "about.youtube", "yt.be").forEach { host ->
+            assertThrows(IllegalArgumentException::class.java) { ProxyPolicy(true, host, 9050) }
+        }
+        assertEquals("::1", ProxyPolicy(true, "[::1]", 9050).canonicalHost)
+        assertEquals("proxy.example", ProxyPolicy(true, "PROXY.example", 9050).canonicalHost)
+
+        val previous = ProxySelector.getDefault()
+        ProxySelector.setDefault(object : ProxySelector() {
+            override fun select(uri: URI): List<Proxy> = listOf(Proxy(Proxy.Type.HTTP,
+                InetSocketAddress.createUnresolved("music.youtube.com", 443)))
+            override fun connectFailed(uri: URI?, address: SocketAddress?, error: IOException?) = Unit
+        })
+        val factory = PolicyCallFactory()
+        try {
+            factory.configure(ProxyPolicy())
+            val request = Request.Builder().url("https://instance.example/api/v1/stats").build()
+            assertThrows(YoutubeConnectionBlocked::class.java) { factory.newCall(request).execute() }
+        } finally {
+            factory.block()
+            ProxySelector.setDefault(previous)
         }
     }
 
@@ -69,7 +96,7 @@ class ProxyPolicyTest {
     }
 
     @Test
-    fun `official HTTP onion requires app SOCKS before any route lookup`() {
+    fun `HTTP and HTTPS onions require app SOCKS before any route lookup`() {
         val previous = ProxySelector.getDefault()
         var routeLookups = 0
         ProxySelector.setDefault(object : ProxySelector() {
@@ -82,15 +109,22 @@ class ProxyPolicyTest {
         val factory = PolicyCallFactory()
         try {
             factory.configure(ProxyPolicy())
-            val request = Request.Builder().url("http://$NERDVPN_ONION_HOST/api/v1/stats").build()
-            val error = assertThrows(NerdVpnAccessRequired::class.java) {
-                factory.newCall(request).execute()
+            for (scheme in listOf("http", "https")) {
+                val request = Request.Builder().url("$scheme://$NERDVPN_ONION_HOST/api/v1/stats").build()
+                val error = assertThrows(NerdVpnAccessRequired::class.java) {
+                    factory.newCall(request).execute()
+                }
+                assertEquals("proxyRequired", error.state)
+                val apiError = assertThrows(NerdVpnAccessRequired::class.java) {
+                    factory.newApiCall(request, ApiRedirectOptions()).execute()
+                }
+                assertEquals("proxyRequired", apiError.state)
             }
-            assertEquals("proxyRequired", error.state)
-            val apiError = assertThrows(NerdVpnAccessRequired::class.java) {
-                factory.newApiCall(request, ApiRedirectOptions()).execute()
+            for (url in listOf("http://instance.onion:8080/stats", "https://INSTANCE.ONION./stats")) {
+                val request = Request.Builder().url(url).build()
+                val error = assertThrows(IOException::class.java) { factory.newCall(request).execute() }
+                assertTrue(error.message.orEmpty().contains("Enable SOCKS5"))
             }
-            assertEquals("proxyRequired", apiError.state)
             assertEquals(0, routeLookups)
         } finally {
             factory.block()
@@ -119,7 +153,7 @@ class ProxyPolicyTest {
     }
 
     @Test
-    fun `direct local redirect cannot start a cleartext onion connection`() {
+    fun `direct local redirect cannot start an HTTPS onion connection`() {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { local ->
             val worker = Executors.newSingleThreadExecutor()
             val factory = PolicyCallFactory()
@@ -129,7 +163,7 @@ class ProxyPolicyTest {
                         socket.soTimeout = 5000
                         readHeaders(DataInputStream(socket.getInputStream()))
                         socket.getOutputStream().write(("HTTP/1.1 302 Found\r\n" +
-                            "Location: http://$NERDVPN_ONION_HOST/api/v1/stats\r\n" +
+                            "Location: https://$NERDVPN_ONION_HOST/api/v1/stats\r\n" +
                             "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
                     }
                 }

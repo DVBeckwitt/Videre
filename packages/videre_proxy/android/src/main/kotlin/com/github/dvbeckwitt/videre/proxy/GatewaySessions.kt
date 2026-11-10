@@ -6,6 +6,8 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
 import androidx.webkit.ProfileStore
+import androidx.webkit.Profile
+import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebViewFeature
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -22,13 +24,30 @@ object GatewaySessions : GatewayCookieAccess {
     private var preferences: SharedPreferences? = null
 
     @Synchronized fun initialize(context: Context) {
-        if (preferences == null) preferences = context.applicationContext
-            .getSharedPreferences("videre_gateway_sessions", Context.MODE_PRIVATE)
+        if (preferences == null) {
+            onMain {
+                if (supported()) ServiceWorkerControllerCompat.getInstance()
+                    .serviceWorkerWebSettings.blockNetworkLoads = true
+            }
+            val stored = context.applicationContext
+                .getSharedPreferences("videre_gateway_sessions", Context.MODE_PRIVATE)
+            val abandonedProfiles = recoverInterruptedGatewaySignIns(stored)
+            preferences = stored
+            if (abandonedProfiles.isNotEmpty()) main.post {
+                if (supported()) abandonedProfiles.forEach { name ->
+                    runCatching { clearProfile(name) }
+                }
+            }
+        }
         GatewayCookieAccessRegistry.provider = this
     }
 
     fun supported(): Boolean = onMain {
-        runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) }.getOrDefault(false)
+        runCatching {
+            WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) &&
+                WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
+                WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BLOCK_NETWORK_LOADS)
+        }.getOrDefault(false)
     }
 
     private fun store(): SharedPreferences = preferences ?: throw GatewaySessionUnavailable()
@@ -53,7 +72,7 @@ object GatewaySessions : GatewayCookieAccess {
             .remove("cancelledRevision_${context.key}")
             .putBoolean("pending_${context.key}", true)
             .putString("pendingProfile_${context.key}", profileName).commit())
-        ProfileStore.getInstance().getOrCreateProfile(profileName)
+        protectedProfile(profileName)
         next
     }
 
@@ -66,7 +85,7 @@ object GatewaySessions : GatewayCookieAccess {
         if (!supported() || revision(context) != expectedRevision) return@onMain false
         val profileName = signInProfileName(context, expectedRevision)
         val previous = store().getString("profile_${context.key}", null)
-        val manager = ProfileStore.getInstance().getOrCreateProfile(profileName).cookieManager
+        val manager = protectedProfile(profileName).cookieManager
         manager.flush()
         val saved = store().edit().putString("origin_${context.key}", context.origin.toString())
             .remove("cancelledRevision_${context.key}")
@@ -137,15 +156,26 @@ object GatewaySessions : GatewayCookieAccess {
     }
 
     private fun cookieManager(context: GatewayContext): CookieManager =
-        ProfileStore.getInstance().getOrCreateProfile(
+        protectedProfile(
             store().getString("profile_${context.key}", null) ?: throw GatewaySessionUnavailable()).cookieManager
+
+    /** Worker settings are process-local, so restore them for saved profiles too. */
+    private fun protectedProfile(name: String): Profile {
+        if (!supported()) throw GatewaySessionUnavailable()
+        return ProfileStore.getInstance().getOrCreateProfile(name).also {
+            it.serviceWorkerController.serviceWorkerWebSettings.blockNetworkLoads = true
+        }
+    }
 
     /** A fresh profile per login prevents asynchronous clear/relogin races. */
     private fun clearProfile(name: String): CountDownLatch {
         val cleared = CountDownLatch(1)
-        val profile = ProfileStore.getInstance().getProfile(name)
-        if (profile == null) cleared.countDown()
+        val profiles = ProfileStore.getInstance()
+        // Some Chromium versions return a non-null but unusable profile for an
+        // unknown name. An unused pending profile may not survive a restart.
+        if (name !in profiles.allProfileNames) cleared.countDown()
         else {
+            val profile = protectedProfile(name)
             profile.webStorage.deleteAllData()
             profile.cookieManager.removeAllCookies {
                 profile.cookieManager.flush()
@@ -163,6 +193,32 @@ object GatewaySessions : GatewayCookieAccess {
         if (!ready.await(10, TimeUnit.SECONDS)) throw GatewaySessionUnavailable()
         return result.get().getOrThrow()
     }
+}
+
+/** Only run on first initialization: another Flutter engine must not cancel a live sign-in. */
+internal fun recoverInterruptedGatewaySignIns(preferences: SharedPreferences): List<String> {
+    val stored = preferences.all
+    val interrupted = stored.filter { (name, value) -> name.startsWith("pending_") && value == true }
+        .keys.map { it.removePrefix("pending_") }.filter { key ->
+            !((stored["origin_$key"] as? String).isNullOrEmpty()) &&
+                !((stored["profile_$key"] as? String).isNullOrEmpty())
+        }
+    if (interrupted.isEmpty()) return emptyList()
+    val editor = preferences.edit()
+    val abandonedProfiles = mutableListOf<String>()
+    for (key in interrupted) {
+        // The previous completed profile remains authoritative, including its expiration state.
+        // Advance the revision so neither a late login nor an old response can replace it.
+        editor.remove("pending_$key").remove("pendingProfile_$key")
+            .remove("cancelledRevision_$key")
+            .putLong("revision_$key", (stored["revision_$key"] as? Long ?: 0L) + 1)
+        val pendingProfile = stored["pendingProfile_$key"] as? String
+        if (pendingProfile != null && pendingProfile != stored["profile_$key"]) {
+            abandonedProfiles.add(pendingProfile)
+        }
+    }
+    check(editor.commit())
+    return abandonedProfiles.distinct()
 }
 
 internal fun gatewayRequiresSignIn(url: HttpUrl, statusCode: Int, contentType: String?, location: String?): Boolean {

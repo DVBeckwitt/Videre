@@ -2,13 +2,13 @@ import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../main.dart';
 import '../../../network/nerdvpn_access.dart';
 import '../../../router.dart';
 import '../../../utils/motion.dart';
+import '../../../utils/views/components/external_link.dart';
 import '../../models/db/server.dart';
 import 'nerdvpn_onion_setup.dart';
 
@@ -79,42 +79,10 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
     }
     final url = Uri.parse(account.url)
         .replace(path: '/preferences', fragment: 'api-access');
-    final onion = url.host.endsWith('.onion');
-    try {
-      if (!onion &&
-          !isTv &&
-          await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        return;
-      }
-    } catch (_) {
-      // A TV or a device without a browser can show the address instead.
-    }
-    if (!mounted || widget.account != account) return;
     final locals = AppLocalizations.of(context)!;
-    await showDialog<void>(
-        context: context,
-        animationStyle: AppMotion.dialogStyle(context),
-        builder: (context) => AlertDialog(
-              title: Text(locals.nerdVpnPreferences),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (onion) ...[
-                      Text(locals.nerdVpnOnionPreferencesHelp),
-                      const SizedBox(height: 12),
-                    ],
-                    SelectableText(url.toString()),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: Text(locals.ok)),
-              ],
-            ));
+    await openExternalLink(context, url,
+        title: locals.nerdVpnPreferences,
+        isCurrent: () => mounted && widget.account == account);
   }
 
   Future<void> _enterKey() async {

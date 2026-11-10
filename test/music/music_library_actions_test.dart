@@ -119,6 +119,32 @@ void main() {
         [first.videoId, second.videoId]);
   });
 
+  test('playlist removal rejects remote destinations and stale profiles',
+      () async {
+    await MusicLibrarySession(app).createPlaylist('Music', [first, second]);
+    final originalProfile = db.profileId;
+    final playlistId = service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.title == 'Music')
+        .playlistId;
+    final session = MusicLibrarySession(app);
+    await expectLater(session.removeFromPlaylist('PLpublic', first.videoId),
+        throwsArgumentError);
+    final next = await db.createProfile('Another person');
+    await db.useProfile(next.id);
+    app.profileChanged(next.id);
+    await expectLater(session.removeFromPlaylist(playlistId, first.videoId),
+        throwsStateError);
+    expect(service.getLocalPlaylists().single.videos, isEmpty);
+    expect(
+        service
+            .getLocalPlaylists(database: db.forProfile(originalProfile))
+            .singleWhere((playlist) => playlist.playlistId == playlistId)
+            .videos
+            .map((video) => video.videoId),
+        [first.videoId, second.videoId]);
+  });
+
   test(
       'collection downloads retain track order and metadata as unique audio jobs',
       () async {
@@ -289,6 +315,62 @@ void main() {
       }
     });
   }
+
+  testWidgets('open remove menu keeps its original local playlist and song',
+      (tester) async {
+    await tester.runAsync(() async {
+      final session = MusicLibrarySession(app);
+      await session.createPlaylist('First list', [first, second]);
+      await session.createPlaylist('Second list', [first, second]);
+    });
+    final playlists = service.getLocalPlaylists();
+    final firstId = playlists
+        .singleWhere((playlist) => playlist.title == 'First list')
+        .playlistId;
+    final secondId = playlists
+        .singleWhere((playlist) => playlist.title == 'Second list')
+        .playlistId;
+    final target = ValueNotifier((playlistId: firstId, video: first));
+    addTearDown(target.dispose);
+    await show(tester,
+        body: ValueListenableBuilder<({String playlistId, Video video})>(
+            valueListenable: target,
+            builder: (context, value, _) => MusicLibraryActions(
+                videos: [value.video], localPlaylistId: value.playlistId)));
+    await tester.tap(find.byTooltip('Music actions'));
+    await tester.pumpAndSettle();
+    target.value = (playlistId: secondId, video: second);
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Remove from playlist'));
+      await tester.pumpAndSettle();
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        return service
+                .getLocalPlaylists()
+                .singleWhere(
+                  (playlist) => playlist.playlistId == firstId,
+                )
+                .videos
+                .length !=
+            1;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    final remaining = service.getLocalPlaylists();
+    expect(
+        remaining
+            .singleWhere((playlist) => playlist.playlistId == firstId)
+            .videos
+            .map((video) => video.videoId),
+        [second.videoId]);
+    expect(
+        remaining
+            .singleWhere((playlist) => playlist.playlistId == secondId)
+            .videos
+            .map((video) => video.videoId),
+        [first.videoId, second.videoId]);
+  });
 
   testWidgets(
       'collection destination stays enabled when only its first song is saved',

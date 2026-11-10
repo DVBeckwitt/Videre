@@ -9,7 +9,7 @@ const val GATEWAY_CONTEXT_HEADER = "X-Videre-Gateway-Context"
 
 /** HTTP is reserved for the official onion origin, whose transport requires SOCKS. */
 private fun isSupportedGatewayOrigin(url: HttpUrl): Boolean = url.username.isEmpty() && url.password.isEmpty() &&
-    (url.isHttps || isNerdVpnOrigin(url))
+    (url.isHttps || isNerdVpnOrigin(url)) && !isOfficialYoutubeUrl(url)
 
 /** Non-secret account identity, consumed locally and never sent over HTTP. */
 data class GatewayContext(val key: String, val origin: HttpUrl) {

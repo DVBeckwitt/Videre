@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import androidx.media3.common.C;
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl;
 import androidx.media3.exoplayer.DefaultLoadControl;
@@ -48,7 +49,6 @@ import androidx.media3.exoplayer.dash.DashMediaSource; // Deprecated
 import androidx.media3.exoplayer.hls.HlsMediaSource; // Deprecated
 import androidx.media3.exoplayer.trackselection.TrackSelectionArray;
 import androidx.media3.datasource.DataSource;
-import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.HttpDataSource;
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource;
 import androidx.media3.common.MimeTypes;
@@ -87,6 +87,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private long updatePosition;
     private long updateTime;
     private long bufferedPosition;
+    private long sourceRevision;
     private Long seekPos;
     private Result prepareResult;
     private Result playResult;
@@ -433,6 +434,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     @Override
     public void onMethodCall(final MethodCall call, final Result result) {
+        // A diagnostic probe must not create or reactivate a decoder.
+        if ("getPlaybackProgress".equals(call.method)) {
+            result.success(player == null ? null : getPlaybackProgress());
+            return;
+        }
         ensurePlayerInitialized();
 
         try {
@@ -742,10 +748,11 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             userAgent = Util.getUserAgent(context, "just_audio");
         }
         HttpDataSource.Factory httpDataSourceFactory = ProxyDataSource.factory(userAgent, stringHeaders, sourceUri);
-        return new DefaultDataSource.Factory(context, httpDataSourceFactory);
+        return ProxyDataSource.withLocalSources(context, httpDataSourceFactory);
     }
 
     private void load(final List<MediaSource> mediaSources, ShuffleOrder shuffleOrder, final long initialPosition, final Integer initialIndex, final Result result) {
+        sourceRevision++;
         currentIndex = initialIndex != null ? initialIndex : 0;
         switch (processingState) {
         case idle:
@@ -847,6 +854,25 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private void equalizerBandSetGain(int bandIndex, double gain) {
         ((Equalizer)audioEffectsMap.get("AndroidEqualizer")).setBandLevel((short)bandIndex, (short)(Math.round(gain * 100.0))); // target gain needs to be provided in milliBel, the user provides the value in deciBel
+    }
+
+    /** A fresh, read-only observation from the native player thread. */
+    private Map<String, Object> getPlaybackProgress() {
+        final Map<String, Object> progress = new HashMap<>();
+        // Do not use getCurrentPosition(), which can substitute a pending seek.
+        progress.put("positionMillis", player.getCurrentPosition());
+        progress.put("bufferedPositionMillis", player.getBufferedPosition());
+        final long duration = player.getDuration();
+        progress.put("durationMillis", duration == C.TIME_UNSET ? null : duration);
+        progress.put("sampledAtMillis", SystemClock.elapsedRealtime());
+        progress.put("sourceRevision", sourceRevision);
+        progress.put("playWhenReady", player.getPlayWhenReady());
+        progress.put("isPlaying", player.isPlaying());
+        progress.put("processingState", processingState.ordinal());
+        progress.put("suppressionReason", player.getPlaybackSuppressionReason());
+        progress.put("seekPending", seekResult != null || seekPos != null);
+        progress.put("hasError", player.getPlayerError() != null || errorCode != null);
+        return progress;
     }
 
     /// Creates an event based on the current state.

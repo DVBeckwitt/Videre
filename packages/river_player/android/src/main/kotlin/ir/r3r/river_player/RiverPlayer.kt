@@ -132,7 +132,6 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.datasource.DataSource
 
 //import com.google.android.exoplayer2.upstream.DefaultDataSource
-import androidx.media3.datasource.DefaultDataSource
 
 //import com.google.android.exoplayer2.util.Util
 import androidx.media3.common.util.Util
@@ -273,7 +272,8 @@ internal class RiverPlayer(
                 )
             }
         } else {
-            dataSourceFactory = DefaultDataSource.Factory(context)
+            dataSourceFactory = ProxyDataSource.withLocalSources(context,
+                getDataSourceFactory(userAgent, headers, dataSource))
         }
         val mediaSource = try {
             buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest)
@@ -497,12 +497,12 @@ internal class RiverPlayer(
         val mediaFactory = when (type) {
             C.TYPE_SS -> SsMediaSource.Factory(
                 DefaultSsChunkSource.Factory(mediaDataSourceFactory),
-                DefaultDataSource.Factory(context, mediaDataSourceFactory)
+                ProxyDataSource.withLocalSources(context, mediaDataSourceFactory)
             )
 
             C.TYPE_DASH -> DashMediaSource.Factory(
                 DefaultDashChunkSource.Factory(mediaDataSourceFactory),
-                DefaultDataSource.Factory(context, mediaDataSourceFactory)
+                ProxyDataSource.withLocalSources(context, mediaDataSourceFactory)
             )
 
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)

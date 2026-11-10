@@ -42,6 +42,8 @@ class _VideoPlayerState extends State<VideoPlayer> {
 
     var player = context.read<PlayerCubit>();
     var settings = context.read<SettingsCubit>();
+    final displayMode =
+        context.select((SettingsCubit cubit) => cubit.state.videoDisplayMode);
 
     return BlocProvider(
       create: (context) => VideoPlayerCubit(
@@ -70,6 +72,8 @@ class _VideoPlayerState extends State<VideoPlayer> {
                 : BetterPlayer(
                     controller: cubit.videoController!,
                     key: _betterPlayerKey,
+                    fit: displayMode.boxFit,
+                    videoAspectRatio: displayMode.aspectRatio,
                   ),
           );
         },

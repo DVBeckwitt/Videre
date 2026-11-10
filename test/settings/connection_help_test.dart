@@ -11,6 +11,7 @@ import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -34,6 +35,12 @@ class _Launcher extends UrlLauncherPlatform {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  const torChannel = MethodChannel('videre/tor_browser');
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  final torCalls = <MethodCall>[];
+  final platformCalls = <MethodCall>[];
   const server = Server(
       url: 'https://instance.example/invidious',
       customHeaders: {'Authorization': 'Basic private'},
@@ -42,6 +49,16 @@ void main() {
   late UrlLauncherPlatform originalLauncher;
 
   setUp(() async {
+    torCalls.clear();
+    platformCalls.clear();
+    messenger.setMockMethodCallHandler(torChannel, (call) async {
+      torCalls.add(call);
+      return true;
+    });
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      platformCalls.add(call);
+      return null;
+    });
     app.isTv = false;
     db = await SembastSqfDb.createInMemory();
     await db.useServer(server);
@@ -52,6 +69,8 @@ void main() {
     app.isTv = false;
     service = Service();
     UrlLauncherPlatform.instance = originalLauncher;
+    messenger.setMockMethodCallHandler(torChannel, null);
+    messenger.setMockMethodCallHandler(SystemChannels.platform, null);
     await db.close();
   });
 
@@ -152,7 +171,7 @@ void main() {
     expect(find.textContaining('video API responded'), findsNothing);
   });
 
-  testWidgets('test and browser retain the failed video and instance',
+  testWidgets('test and copied address retain the failed video and instance',
       (tester) async {
     final requests = <http.Request>[];
     service = Service(httpClient: MockClient((request) async {
@@ -169,36 +188,122 @@ void main() {
     await tester.tap(find.text('Test connection'));
     await tester.pumpAndSettle();
     expect(requests.last.url.toString(),
-        'https://instance.example/invidious/api/v1/videos/failed-video');
+        'https://instance.example/invidious/api/v1/videos/failed-video?local=true');
     expect(requests.every((request) => request.url.host == 'instance.example'),
         isTrue);
     expect(requests.last.headers['Authorization'], 'Basic private');
     expect(find.textContaining('video API responded'), findsOneWidget);
 
-    await tester.tap(find.text('Open in browser'));
+    await tester.tap(find.text('External link'));
     await tester.pumpAndSettle();
-    final opened = launcher.calls.single;
-    expect(
-        opened.url, 'https://instance.example/invidious/watch?v=failed-video');
-    expect(opened.options.mode, PreferredLaunchMode.externalApplication);
-    expect(opened.options.webViewConfiguration.headers, isEmpty);
-    expect(opened.url, isNot(contains('private')));
+    const address =
+        'https://instance.example/invidious/watch?v=failed-video&local=true';
+    expect(find.widgetWithText(SelectableText, address), findsOneWidget);
+    expect(launcher.calls, isEmpty);
+    await tester.tap(find.text('Copy to clipboard'));
+    await tester.pumpAndSettle();
+    final copied = platformCalls
+        .where((call) => call.method == 'Clipboard.setData')
+        .single;
+    expect(copied.arguments, {'text': address});
+    expect(copied.arguments.toString(), isNot(contains('private')));
+    expect(torCalls, isEmpty);
   });
+
+  testWidgets(
+      'generic onion links show the complete watch URL without launching',
+      (tester) async {
+    await tester.runAsync(() => db.useServer(const Server(
+        url: 'http://other.onion/invidious',
+        customHeaders: {'Authorization': 'Basic private'},
+        authToken: 'private-token')));
+    await pumpHelp(tester, videoId: 'failed-video');
+    expect(torCalls, isEmpty);
+    await tester.tap(find.text('External link'));
+    await tester.pumpAndSettle();
+    expect(torCalls, isEmpty);
+    expect(
+        find.widgetWithText(SelectableText,
+            'http://other.onion/invidious/watch?v=failed-video&local=true'),
+        findsOneWidget);
+    expect(launcher.calls, isEmpty);
+    expect(
+        platformCalls.where((call) => const {
+              'Clipboard.getData',
+              'Clipboard.setData'
+            }.contains(call.method)),
+        isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final failure in ['unavailable', 'rejected', 'missing']) {
+    testWidgets('onion address copying does not depend on browser $failure',
+        (tester) async {
+      await tester.runAsync(() =>
+          db.useServer(const Server(url: 'http://other.onion/invidious')));
+      messenger.setMockMethodCallHandler(torChannel, (call) async {
+        torCalls.add(call);
+        if (failure == 'rejected') {
+          throw PlatformException(code: 'UNAVAILABLE');
+        }
+        if (failure == 'missing') throw MissingPluginException();
+        return false;
+      });
+      await pumpHelp(tester, videoId: 'failed-video');
+      await tester.tap(find.text('External link'));
+      await tester.pumpAndSettle();
+      expect(torCalls, isEmpty);
+      expect(launcher.calls, isEmpty);
+      expect(
+          find.widgetWithText(SelectableText,
+              'http://other.onion/invidious/watch?v=failed-video&local=true'),
+          findsOneWidget);
+      final copy = find.widgetWithText(TextButton, 'Copy to clipboard');
+      expect(copy, findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Open Tor Browser'), findsNothing);
+      // SelectableText checks Clipboard.hasStrings for its editing toolbar;
+      // showing guidance must not read or overwrite clipboard content.
+      expect(
+          platformCalls.where((call) => const {
+                'Clipboard.getData',
+                'Clipboard.setData'
+              }.contains(call.method)),
+          isEmpty);
+
+      await tester.tap(copy);
+      await tester.pumpAndSettle();
+      expect(torCalls, isEmpty);
+      expect(launcher.calls, isEmpty);
+      expect(
+          platformCalls
+              .where((call) => call.method == 'Clipboard.setData')
+              .single
+              .arguments,
+          {
+            'text':
+                'http://other.onion/invidious/watch?v=failed-video&local=true'
+          });
+      expect(platformCalls.where((call) => call.method == 'Clipboard.getData'),
+          isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   for (final tv in [false, true]) {
     testWidgets(
-        '${tv ? 'TV' : 'missing browser'} shows a copyable safe address',
+        '${tv ? 'TV' : 'phone'} shows a copyable safe address without launching',
         (tester) async {
       app.isTv = tv;
       launcher.succeeds = false;
       await pumpHelp(tester, videoId: 'failed-video');
-      await tester.tap(find.text('Open in browser'));
+      await tester.tap(find.text('External link'));
       await tester.pumpAndSettle();
       expect(
           find.widgetWithText(SelectableText,
-              'https://instance.example/invidious/watch?v=failed-video'),
+              'https://instance.example/invidious/watch?v=failed-video&local=true'),
           findsOneWidget);
-      expect(launcher.calls, hasLength(tv ? 0 : 1));
+      expect(launcher.calls, isEmpty);
+      expect(torCalls, isEmpty);
       expect(tester.takeException(), isNull);
     });
   }
@@ -208,7 +313,7 @@ void main() {
     expect(
         AddServerScreen.instanceBrowserUrl(server, videoId: 'a&b')
             ?.queryParameters,
-        {'v': 'a&b'});
+        {'v': 'a&b', 'local': 'true'});
     for (final address in [
       'https://user:secret@instance.example',
       'https://instance.example/?token=secret',
@@ -293,7 +398,7 @@ void main() {
                 .onPressed,
             isNotNull);
       }
-      expect(find.text('Open in browser'), findsOneWidget);
+      expect(find.text('External link'), findsOneWidget);
     });
   }
 
@@ -318,7 +423,7 @@ void main() {
                 .onPressed,
             isNotNull);
       }
-      expect(find.text('Open in browser'), findsOneWidget);
+      expect(find.text('External link'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

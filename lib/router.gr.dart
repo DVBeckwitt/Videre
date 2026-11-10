@@ -595,18 +595,18 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
   MusicRoute({
     Key? key,
     String? videoId,
-    String? albumId,
     String? playlistId,
     String? artistId,
+    bool embedded = false,
     List<PageRouteInfo>? children,
   }) : super(
           MusicRoute.name,
           args: MusicRouteArgs(
             key: key,
             videoId: videoId,
-            albumId: albumId,
             playlistId: playlistId,
             artistId: artistId,
+            embedded: embedded,
           ),
           initialChildren: children,
           argsEquality: false,
@@ -623,9 +623,9 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
       return MusicScreen(
         key: args.key,
         videoId: args.videoId,
-        albumId: args.albumId,
         playlistId: args.playlistId,
         artistId: args.artistId,
+        embedded: args.embedded,
       );
     },
   );
@@ -635,24 +635,24 @@ class MusicRouteArgs {
   const MusicRouteArgs({
     this.key,
     this.videoId,
-    this.albumId,
     this.playlistId,
     this.artistId,
+    this.embedded = false,
   });
 
   final Key? key;
 
   final String? videoId;
 
-  final String? albumId;
-
   final String? playlistId;
 
   final String? artistId;
 
+  final bool embedded;
+
   @override
   String toString() {
-    return 'MusicRouteArgs{key: $key, videoId: $videoId, albumId: $albumId, playlistId: $playlistId, artistId: $artistId}';
+    return 'MusicRouteArgs{key: $key, videoId: $videoId, playlistId: $playlistId, artistId: $artistId, embedded: $embedded}';
   }
 }
 

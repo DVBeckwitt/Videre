@@ -5,6 +5,9 @@ import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
@@ -71,6 +74,20 @@ object ProxyDataSource {
         calls.newApiCall(request, ApiRedirectOptions(followRedirects = false, maxRedirects = 0)).also {
             it.timeout().timeout(30, TimeUnit.SECONDS)
         }
+
+    @JvmStatic
+    fun withLocalSources(context: Context, upstream: DataSource.Factory): DataSource.Factory {
+        val local = DefaultDataSource.Factory(context, upstream)
+        return DataSource.Factory {
+            val delegate = local.createDataSource()
+            object : DataSource by delegate {
+                override fun open(dataSpec: DataSpec): Long {
+                    requireSupportedMediaScheme(dataSpec.uri.scheme)
+                    return delegate.open(dataSpec)
+                }
+            }
+        }
+    }
 
     @JvmStatic
     fun factory(userAgent: String?, headers: Map<String, String>?, sourceUri: String?): HttpDataSource.Factory {

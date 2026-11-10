@@ -130,9 +130,7 @@ class MusicLibraryEntry {
         thumbnails: [
           if (images is List)
             for (final image in images.take(8))
-              if (_image(image, usesVideoThumbnails: usesVideoThumbnails)
-                  case final image?)
-                image,
+              if (_image(image) case final image?) image,
         ]);
   }
 
@@ -142,13 +140,13 @@ class MusicLibraryEntry {
     return clean.isEmpty ? null : String.fromCharCodes(clean.runes.take(1024));
   }
 
-  static ImageObject? _image(Object? value,
-      {required bool usesVideoThumbnails}) {
+  static ImageObject? _image(Object? value) {
     if (value is! Map || value['url'] is! String) return null;
     final url = value['url'] as String;
     final uri = Uri.tryParse(url);
-    final instanceFallback = usesVideoThumbnails &&
-        isInvidiousThumbnailUrl(url) &&
+    // Invidious catalog artists and playlists also supply instance image
+    // paths. Their bookmark kind must not discard otherwise valid artwork.
+    final instanceFallback = isInvidiousThumbnailUrl(url) &&
         uri != null &&
         ((!uri.hasScheme && !uri.hasAuthority) ||
             (uri.scheme == 'http' && uri.host.isNotEmpty));

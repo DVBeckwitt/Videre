@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -34,6 +36,7 @@ void main() {
     final factory = newDatabaseFactoryMemory();
     var connection = await factory.openDatabase('music-library');
     var store = SembastSqfDb(connection);
+    await store.getProfiles();
     var saved = MusicLibraryService.forProfile(store, store.profileId);
     await saved.save(song);
     await saved.markLocalPlaylist('local:music');
@@ -41,6 +44,7 @@ void main() {
 
     connection = await factory.openDatabase('music-library');
     store = SembastSqfDb(connection);
+    await store.getProfiles();
     saved = MusicLibraryService.forProfile(store, store.profileId);
     expect(saved.entries.single.toJson(), song.toJson());
     expect(
@@ -278,6 +282,21 @@ void main() {
     });
   }
 
+  test('catalog bookmarks still reject unrecognized relative artwork',
+      () async {
+    await library.save(MusicLibraryEntry.artist(MusicArtist(
+        id: 'UC0123456789012345678901',
+        name: 'Artist',
+        thumbnails: [
+          ImageObject(null, '/account/private-cover', 320, 180),
+          ImageObject(
+              null, 'http://private.example/account/private-cover', 320, 180),
+          ImageObject(
+              null, '//user:secret@private.example/ggpht/cover', 320, 180),
+        ])));
+    expect(library.entries.single.thumbnails, isEmpty);
+  });
+
   test('legacy protected covers retain video routing without losing labels',
       () async {
     const url = 'https://private.example/vi/abcdefghijk/default.jpg';
@@ -298,6 +317,38 @@ void main() {
     expect(restored.musicMetadata!.title, song.title);
     expect(restored.musicMetadata!.album, song.album);
   });
+
+  for (final url in [
+    '/vi/abcdefghijk/default.jpg',
+    '/ggpht/artist-portrait',
+    'http://private.example/ggpht/artist-portrait',
+  ]) {
+    test('Invidious artist and playlist bookmarks retain artwork for $url',
+        () async {
+      final thumbnails = [
+        ImageObject(null, '$url?token=secret#private', 320, 180)
+      ];
+      await library.save(MusicLibraryEntry.artist(MusicArtist(
+          id: 'UC0123456789012345678901',
+          name: 'Artist',
+          thumbnails: thumbnails)));
+      await library.save(MusicLibraryEntry.collection(
+          MusicCollection(
+              id: 'PLtest_music',
+              title: 'Playlist',
+              thumbnails: thumbnails,
+              tracks: const []),
+          album: false));
+
+      expect(library.entries, hasLength(2));
+      for (final entry in library.entries) {
+        expect(entry.thumbnails.single.url, url);
+        expect(entry.usesVideoThumbnails, isFalse);
+      }
+      expect(database.getSettings(musicLibrarySettingName)!.value,
+          isNot(contains('secret')));
+    });
+  }
 
   for (final url in [
     'https://lh3.googleusercontent.com/cover',

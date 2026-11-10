@@ -35,9 +35,15 @@ internal data class ProxyPolicy(
 ) {
     init {
         require(!enabled || (host.isNotBlank() && host == host.trim() &&
-            host.none { it.isWhitespace() || it == '/' || it == '@' || it == '?' || it == '#' } &&
+            host.none { it.code !in 33..126 || it in "/\\@?#%" } &&
             port in 1..65535)) { "A proxy host and port between 1 and 65535 are required." }
+        require(!enabled || !isOfficialYoutubeHost(canonicalHost)) {
+            "Direct YouTube connections are disabled, including proxy endpoints."
+        }
     }
+
+    val canonicalHost: String get() = HttpUrl.Builder().scheme("http")
+        .host(host.removeSurrounding("[", "]")).build().host
 
     fun toMap(): Map<String, Any> = mapOf("enabled" to enabled, "host" to host, "port" to port)
 
@@ -66,7 +72,7 @@ internal fun isLoopbackHost(input: String): Boolean {
 }
 
 internal class SocksOnlySelector(policy: ProxyPolicy) : ProxySelector() {
-    private val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress.createUnresolved(policy.host, policy.port))
+    private val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress.createUnresolved(policy.canonicalHost, policy.port))
 
     override fun select(uri: URI): List<Proxy> =
         listOf(if (isLoopbackHost(uri.host ?: "")) Proxy.NO_PROXY else proxy)
@@ -76,15 +82,24 @@ internal class SocksOnlySelector(policy: ProxyPolicy) : ProxySelector() {
     }
 }
 
-/** HTTP onion credentials may only leave through the app's explicit SOCKS
- * policy. Proxy selection runs before DNS and for every redirected origin. */
+/** Onion destinations require the app's explicit SOCKS policy. Proxy
+ * selection runs before DNS and for every redirected origin. */
 private class OnionGuardSelector(private val delegate: ProxySelector?) : ProxySelector() {
     override fun select(uri: URI): List<Proxy> {
         val url = uri.toString().toHttpUrlOrNull()
-        if (url?.scheme == "http" && isNerdVpnOrigin(url)) {
-            throw NerdVpnAccessRequired("proxyRequired")
+        if (url != null && url.host.trimEnd('.').endsWith(".onion", ignoreCase = true)) {
+            if (isNerdVpnOrigin(url)) throw NerdVpnAccessRequired("proxyRequired")
+            throw IOException("Enable SOCKS5/Orbot in Network proxy to use this onion server.")
         }
-        return delegate?.select(uri) ?: listOf(Proxy.NO_PROXY)
+        return (delegate?.select(uri) ?: listOf(Proxy.NO_PROXY)).also { proxies ->
+            for (proxy in proxies) {
+                val address = proxy.address() as? InetSocketAddress ?: continue
+                val host = runCatching {
+                    HttpUrl.Builder().scheme("http").host(address.hostString).build().host
+                }.getOrDefault(address.hostString)
+                if (isOfficialYoutubeHost(host)) throw YoutubeConnectionBlocked()
+            }
+        }
     }
 
     override fun connectFailed(uri: URI?, address: SocketAddress?, error: IOException?) {
@@ -134,8 +149,10 @@ internal class PolicyCallFactory : Call.Factory {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
+            .addInterceptor(YoutubeRequestGuard())
             .addInterceptor(ReadHeaderEofRecovery())
             .addInterceptor(NerdVpnRecoveryInterceptor())
+            .addNetworkInterceptor(YoutubeRedirectGuard())
             .addNetworkInterceptor { chain ->
                 var outgoing = chain.request()
                 val scope = outgoing.tag(SourceHeaderScope::class.java)

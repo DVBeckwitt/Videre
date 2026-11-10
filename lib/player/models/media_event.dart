@@ -21,6 +21,7 @@ enum MediaEventType {
   miniDisplayChanged,
   sponsorSkipped,
   backendRetry,
+  metadataRetry,
 }
 
 enum MediaState {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/foundation.dart';
@@ -22,6 +23,7 @@ import '../../videos/models/video.dart';
 import '../adaptive_dash_manifest.dart';
 import '../media_source.dart';
 import '../models/backend_playback.dart';
+import '../models/media_command.dart';
 import '../models/playback_pitch.dart';
 import '../models/video_quality.dart';
 import '../views/components/player_controls.dart';
@@ -76,20 +78,19 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   Video video,
   Server server, {
   required bool preferDash,
-  required bool useProxy,
   int? preferredQuality,
   String? lastSubtitle,
 }) {
   final sources = <BetterPlayerDataSource>[];
   final seen = <String>{};
   late final subtitles = video.captions.map((caption) {
-    final base =
-        Uri.parse(server.url.endsWith('/') ? server.url : '${server.url}/');
-    final url = base.resolve(caption.url).toString();
     return BetterPlayerSubtitlesSource(
-      type: BetterPlayerSubtitlesSourceType.network,
-      urls: [url],
-      headers: server.headersForUrl(url),
+      type: BetterPlayerSubtitlesSourceType.memory,
+      contentLoader: () => service.getPlaybackCaptions(
+        video.videoId,
+        caption,
+        server: server,
+      ),
       name: caption.label,
       selectedByDefault: caption.label == lastSubtitle,
     );
@@ -117,8 +118,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     final url = parseMediaUrl(value);
     return url == null
         ? null
-        : validatedMediaUrl(
-            proxyMediaUrl(url, server, useProxy, adaptive: true), server);
+        : validatedMediaUrl(proxyMediaUrl(url, server, adaptive: true), server);
   }
 
   final hls = adaptiveUrl(video.hlsUrl);
@@ -139,8 +139,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     if (stream.isLegacyHd720) continue;
     final url = parseMediaUrl(stream.url);
     if (url == null) continue;
-    final safeUrl =
-        validatedMediaUrl(proxyMediaUrl(url, server, useProxy), server);
+    final safeUrl = validatedMediaUrl(proxyMediaUrl(url, server), server);
     if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
     final resolution = _streamLabel([
       stream.resolution,
@@ -194,6 +193,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   int _playbackSourceIndex = 0;
   bool _playbackInitialized = false;
   bool _terminalErrorSent = false;
+  int? _manualRetryGeneration;
   bool _sourceFailurePending = false;
   int _playbackGeneration = 0;
   int _parentPlaybackGeneration = 0;
@@ -203,9 +203,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   Function(BetterPlayerEvent)? _videoListener;
   Duration _playbackStartAt = Duration.zero;
   Duration? _pendingSeek;
+  int _seekRevision = 0;
   bool _waitingForInitialSeek = false;
   bool _sourceBackendRetryable = false;
   bool _backendRecoveryPending = false;
+  bool _recoveringInitializedPlayback = false;
   bool _playbackOffline = false;
   bool _requestedPlaying = true;
   double _playbackSpeed = 1;
@@ -214,6 +216,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   String? _qualityVideoId;
   int? _videoQuality;
   BetterPlayerSubtitlesSource? _failedSubtitle;
+
+  bool get _shouldPlay => _requestedPlaying && player.shouldStartPlayback;
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
@@ -401,15 +405,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceBackendRetryable = _playbackInitialized
           ? retryable
           : _sourceBackendRetryable || retryable;
-      if (_playbackInitialized &&
-          (_playbackOffline ||
-              !retryable ||
-              state.video?.backendPlayback == null)) {
+      if (_playbackInitialized && (_playbackOffline || !retryable)) {
         _emitTerminalPlaybackError();
       } else if (_playbackInitialized) {
         final generation = _playbackGeneration;
         final sourceIndex = _playbackSourceIndex;
-        unawaited(_recoverBackend(generation, sourceIndex).then((recovered) {
+        unawaited(_recoverPlayback(generation, sourceIndex).then((recovered) {
           if (!recovered && _isCurrentAttempt(generation, sourceIndex)) {
             _emitTerminalPlaybackError();
           }
@@ -454,14 +455,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
               event.betterPlayerEventType == BetterPlayerEventType.progress)) {
         player.reportBackendPlaybackReady(video.videoId, video.backendPlayback,
             playing: false);
+        player.reportPlaybackRecoveryReady(video, playing: false);
       }
       if (event.betterPlayerEventType == BetterPlayerEventType.progress) {
         player.reportBackendPlaybackProgress(
             video.videoId, video.backendPlayback, nativeValue.position,
             playing: nativeValue.isPlaying && !nativeValue.isBuffering);
+        player.reportPlaybackRecoveryProgress(video, nativeValue.position,
+            playing: nativeValue.isPlaying && !nativeValue.isBuffering);
       } else if (event.betterPlayerEventType == BetterPlayerEventType.seekTo) {
         player.reportBackendPlaybackProgress(
             video.videoId, video.backendPlayback, nativeValue.position,
+            playing: false);
+        player.reportPlaybackRecoveryProgress(video, nativeValue.position,
             playing: false);
       }
     }
@@ -536,6 +542,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       videoController!.pause();
     }
     WakelockPlus.disable();
+    // Terminal state suppresses later native callbacks, including Pause.
+    // Publish it explicitly so transport controls do not claim playback.
+    player.setEvent(const MediaEvent(
+        state: MediaState.playing, type: MediaEventType.pause));
     player.setEvent(const MediaEvent(state: MediaState.error));
     final generation = _playbackGeneration;
     void pauseAfterSetup() {
@@ -590,14 +600,57 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           .invalidate(_playbackSources[sourceIndex].url, server);
     }
     if (_playbackSourceIndex + 1 >= _playbackSources.length) {
-      if (!await _recoverBackend(generation, sourceIndex) &&
-          _isCurrentAttempt(generation, sourceIndex)) {
+      final recovered = _recoveringInitializedPlayback
+          ? await _recoverPlayback(generation, sourceIndex)
+          : await _recoverBackend(generation, sourceIndex);
+      if (!recovered && _isCurrentAttempt(generation, sourceIndex)) {
         _emitTerminalPlaybackError();
       }
       return;
     }
     _playbackSourceIndex++;
     await _setupPlaybackSource();
+  }
+
+  Future<bool> _recoverPlayback(int generation, int sourceIndex) async {
+    final video = state.video;
+    final controller = videoController;
+    if (!_isCurrentAttempt(generation, sourceIndex)) return true;
+    if (_backendRecoveryPending) return true;
+    if (_playbackOffline || !_sourceBackendRetryable || video == null) {
+      return false;
+    }
+    bool active() =>
+        _isCurrentAttempt(generation, sourceIndex) &&
+        identical(state.video, video) &&
+        identical(videoController, controller) &&
+        !player.state.isAudio;
+    final resumeAt = _playbackInitialized ? position() : _playbackStartAt;
+    _backendRecoveryPending = true;
+    var tryAlternate = false;
+    try {
+      final replacement =
+          await player.refreshCurrentPlayback(video, isCurrent: active);
+      if (!active()) return true;
+      if (replacement != null) {
+        emit(state.copyWith(video: replacement));
+        _backendRecoveryPending = false;
+        await playVideo(false,
+            startAt: _pendingSeek ?? resumeAt,
+            preservePlaybackIntent: true,
+            recoveringPlayback: true);
+        return true;
+      }
+      tryAlternate = true;
+    } catch (error) {
+      if (!active()) return true;
+      // Access denials, cooldowns and privacy refusals never authorize another
+      // route. Only classified transient failures may use the existing budget.
+      tryAlternate = isBackendRetryable(error);
+    } finally {
+      if (generation == _playbackGeneration) _backendRecoveryPending = false;
+    }
+    return tryAlternate && await _recoverBackend(generation, sourceIndex);
   }
 
   Future<bool> _recoverBackend(int generation, int sourceIndex) async {
@@ -673,7 +726,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       try {
         resolved = await Future.any([
           service.dashManifestResolver.resolve(source.url, videoId, server,
-              throwRetryable: state.video?.backendPlayback != null,
+              throwRetryable: state.video?.backendPlayback != null ||
+                  _recoveringInitializedPlayback,
               onMissingCheck: () => missingCheck = true),
           cancelled.then<String?>((_) => null),
         ]);
@@ -682,7 +736,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         _sourceBackendRetryable = true;
       } catch (error) {
         if (error is! NerdVpnAccessRequired &&
-            !(error is InvidiousServiceError && error.isGatewayAccessFailure)) {
+            error is! InvidiousServiceError &&
+            error is! HandshakeException &&
+            !(error is SocketException && error.osError == null)) {
           rethrow;
         }
         if (_isCurrentAttempt(generation, sourceIndex)) {
@@ -701,7 +757,6 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           video != null &&
           video.liveNow != true) {
         final manifestUri = Uri.parse(source.url);
-        final local = manifestUri.queryParameters['local'] == 'true';
         inlineManifest = buildAdaptiveDashManifest(
           formats: video.adaptiveFormats ?? const [],
           duration: Duration(seconds: video.lengthSeconds ?? 0),
@@ -709,9 +764,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             final url = parseMediaUrl(value);
             if (url == null) return null;
             final target =
-                validatedMediaUrl(proxyMediaUrl(url, server, local), server);
+                validatedMediaUrl(proxyMediaUrl(url, server), server);
             if (target == null ||
-                (local && !sameMediaOrigin(Uri.parse(target), manifestUri))) {
+                !sameMediaOrigin(Uri.parse(target), manifestUri)) {
               return null;
             }
             return target;
@@ -786,7 +841,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       }
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
       try {
-        if (_requestedPlaying) {
+        if (_shouldPlay) {
           await videoController?.play();
         } else {
           await videoController?.pause();
@@ -796,7 +851,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             state.video != null) {
           player.reportBackendPlaybackReady(
               state.video!.videoId, state.video!.backendPlayback,
-              playing: _requestedPlaying);
+              playing: _shouldPlay);
+          player.reportPlaybackRecoveryReady(state.video!,
+              playing: _shouldPlay);
         }
       } catch (_) {
         if (_isCurrentAttempt(generation, sourceIndex)) {
@@ -839,20 +896,20 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> playVideo(bool offline,
-      {Duration? startAt, bool preservePlaybackIntent = false}) async {
+      {Duration? startAt,
+      bool preservePlaybackIntent = false,
+      bool recoveringPlayback = false}) async {
     if (player.state.isAudio) {
       return;
     }
     _endSpeedBoost?.call();
     dismissSubtitleFailure();
     _backendRecoveryPending = false;
+    _recoveringInitializedPlayback = recoveringPlayback;
     _pendingSeek = null;
     _playbackOffline = offline;
     if (!preservePlaybackIntent) {
-      _requestedPlaying =
-          !offline && state.video?.backendPlayback?.manualSelection == true
-              ? player.requestedPlaying
-              : true;
+      _requestedPlaying = player.shouldStartPlayback;
     }
     _cancelSetup();
     _setupCancellation = Completer<void>();
@@ -915,14 +972,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           return;
         }
         final playback = newState.video?.backendPlayback;
-        if (playback != null && !playback.matches(selectedServer)) {
+        final connection = playback ?? newState.video?.playbackConnection;
+        if (connection != null && !connection.matches(selectedServer)) {
           // Cached queue entries may outlive credentials or proxy changes.
           // The parent refetches these; direct decoder admission fails closed.
           _playbackSources = const [];
           _emitTerminalPlaybackError();
           return;
         }
-        final server = playback?.server ?? selectedServer;
+        final server = connection?.server ?? selectedServer;
         player.setRequestedBackend(newState.video!.videoId, playback);
         _playbackServer = server;
         _playbackVideoId = newState.video!.videoId;
@@ -930,7 +988,6 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           newState.video!,
           server,
           preferDash: isUsingDash(),
-          useProxy: service.useProxy(),
           preferredQuality: _videoQuality,
           lastSubtitle: settings.state.rememberSubtitles
               ? settings.state.lastSubtitles
@@ -951,8 +1008,6 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _waitingForInitialSeek = _playbackStartAt > Duration.zero;
 
       WakelockPlus.enable();
-
-      final fillVideo = settings.state.fillFullscreen;
 
       final reusedController = videoController != null;
       if (!reusedController) {
@@ -983,7 +1038,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             // The cubit restores play/pause intent after each source is ready.
             autoPlay: false,
             allowedScreenSleep: false,
-            fit: fillVideo ? BoxFit.cover : BoxFit.contain,
+            fit: BoxFit.contain,
             subtitlesConfiguration: BetterPlayerSubtitlesConfiguration(
                 backgroundColor: settings.state.subtitlesBackground
                     ? Colors.black.withValues(alpha: 0.8)
@@ -1010,12 +1065,62 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   @override
   void switchToOfflineVideo(DownloadedVideo v) {
     emit(state.copyWith(video: null, offlineVideo: v));
-    playVideo(true);
+    playVideo(true, startAt: player.state.startAt);
   }
 
   @override
   bool isPlaying() {
     return videoController?.isPlaying() ?? false;
+  }
+
+  @override
+  void handleCommand(MediaCommand command) {
+    if (_terminalErrorSent && command.type == MediaCommandType.pause) {
+      // A queued parent Pause may arrive after its Retry failure was shown.
+      // Stop the decoder without replacing that actionable error with Ready.
+      pause();
+      return;
+    }
+    if (command.type == MediaCommandType.play &&
+        (_terminalErrorSent ||
+            !_playbackInitialized ||
+            _backendRecoveryPending)) {
+      // The base handler publishes Play immediately. A failed or loading
+      // source must first complete admission before claiming playback.
+      play();
+      return;
+    }
+    super.handleCommand(command);
+  }
+
+  Future<void> _retryAfterFailure() async {
+    final generation = _playbackGeneration;
+    if (isClosed ||
+        player.state.isAudio ||
+        _parentPlaybackGeneration != player.backendPlaybackGeneration ||
+        _manualRetryGeneration == generation) {
+      return;
+    }
+    _manualRetryGeneration = generation;
+    final queueId = player.state.currentQueueId;
+    try {
+      final retry = player.retryCurrentVideo();
+      final parentGeneration = player.backendPlaybackGeneration;
+      await retry;
+      if (!isClosed &&
+          generation == _playbackGeneration &&
+          parentGeneration == player.backendPlaybackGeneration &&
+          queueId == player.state.currentQueueId &&
+          player.state.mediaEvent.state == MediaState.error) {
+        // A failed metadata retry keeps this decoder terminal. Re-admit only
+        // a later explicit Retry command for that same retained queue entry.
+        _parentPlaybackGeneration = parentGeneration;
+      }
+    } catch (_) {
+      // Keep the existing actionable error without exposing request details.
+    } finally {
+      if (_manualRetryGeneration == generation) _manualRetryGeneration = null;
+    }
   }
 
   @override
@@ -1027,34 +1132,42 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void play() {
+    if (_terminalErrorSent) {
+      unawaited(_retryAfterFailure());
+      return;
+    }
     _requestedPlaying = true;
-    if (!_backendRecoveryPending) videoController?.play();
+    if (_playbackInitialized && !_backendRecoveryPending && _shouldPlay) {
+      videoController?.play();
+    }
   }
 
   @override
   Future<void> seek(Duration position) async {
     final controller = videoController;
     final generation = _playbackGeneration;
+    final revision = ++_seekRevision;
+    _pendingSeek = position;
     if (_backendRecoveryPending ||
         controller?.videoPlayerController?.value.duration == null) {
       // TV remote input can arrive before native source initialization. Apply
       // only the latest position once that source is ready.
-      _pendingSeek = position;
       return;
     }
-    _pendingSeek = null;
     await controller?.seekTo(position);
     if (isClosed ||
         generation != _playbackGeneration ||
+        revision != _seekRevision ||
         !identical(videoController, controller) ||
         _terminalErrorSent ||
         _backendRecoveryPending) {
       return;
     }
+    _pendingSeek = null;
     // Native seek completion may restore the pre-seek playing value. A user
     // pause/play made while the seek was pending must take precedence.
-    if (controller?.isPlaying() != _requestedPlaying) {
-      if (_requestedPlaying) {
+    if (controller?.isPlaying() != _shouldPlay) {
+      if (_shouldPlay) {
         await controller?.play();
       } else {
         await controller?.pause();
@@ -1211,29 +1324,26 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return;
     }
     final track = tracks[index];
-    final url = videoController?.betterPlayerDataSource?.resolutions?[track];
-    if (url != null) {
-      videoController?.setResolution(url);
-      emit(state.copyWith(selectedNonDashTrack: track));
-      await _rememberVideoQuality(videoQualityHeight(track));
-      return;
-    }
-    final sourceIndex = _playbackSources
-        .indexWhere((source) => _selectedResolution(source) == track);
+    final selectedUrl =
+        videoController?.betterPlayerDataSource?.resolutions?[track];
+    final sourceIndex = _playbackSources.indexWhere((source) =>
+        selectedUrl != null
+            ? source.url == selectedUrl
+            : _selectedResolution(source) == track);
     if (sourceIndex < 0) return;
-    final wasPlaying = isPlaying();
-    final generation = _playbackGeneration;
-    _playbackStartAt = position();
+    // river_player's setResolution snapshots play intent before awaiting the
+    // new source. Use our setup path so a later pause or focus loss wins.
+    _playbackStartAt =
+        _pendingSeek ?? (_playbackInitialized ? position() : _playbackStartAt);
+    _waitingForInitialSeek = _playbackStartAt > Duration.zero;
+    _playbackGeneration++;
     _playbackSourceIndex = sourceIndex;
     _playbackInitialized = false;
     _terminalErrorSent = false;
     _sourceFailurePending = false;
+    _backendRecoveryPending = false;
     WakelockPlus.enable();
-    _setupPlaybackSource().then((_) {
-      if (!wasPlaying && !isClosed && generation == _playbackGeneration) {
-        videoController?.pause();
-      }
-    });
+    unawaited(_setupPlaybackSource());
     await _rememberVideoQuality(videoQualityHeight(track));
   }
 

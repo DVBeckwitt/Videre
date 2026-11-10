@@ -159,22 +159,32 @@ class PlaylistInList extends StatelessWidget {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.center,
                                   children: [
-                                    SizedBox(
+                                    // Allocate the title and count before
+                                    // giving the artwork its remaining space.
+                                    Flexible(
+                                      child: SizedBox(
                                         height: 140,
                                         child: PlaylistThumbnails(
                                           videos: videos,
-                                        )),
-                                    Expanded(
-                                        child: Text(
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
                                       title,
+                                      maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                       style: textTheme.titleLarge
                                           ?.copyWith(color: colors.primary),
-                                    )),
+                                    ),
                                     Padding(
-                                        padding:
-                                            const EdgeInsets.only(bottom: 8.0),
-                                        child: Text(detail)),
+                                      padding:
+                                          const EdgeInsets.only(bottom: 8.0),
+                                      child: Text(
+                                        detail,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),

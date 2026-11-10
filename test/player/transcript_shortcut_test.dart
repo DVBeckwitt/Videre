@@ -27,7 +27,8 @@ import '../test_settings_cubit.dart';
 
 class _TranscriptService extends Service {
   @override
-  Future<VideoTranscript> getTranscript(String videoId, Caption caption) async {
+  Future<VideoTranscript> getTranscript(String videoId, Caption caption,
+      {Server? serverOverride}) async {
     return const VideoTranscript(label: 'English', languageCode: 'en', lines: [
       VideoTranscriptLine(
         type: VideoTranscriptLineType.regular,

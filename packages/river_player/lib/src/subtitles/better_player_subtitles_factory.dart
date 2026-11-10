@@ -9,6 +9,8 @@ import 'better_player_subtitle.dart';
 class BetterPlayerSubtitlesFactory {
   static Future<List<BetterPlayerSubtitle>> parseSubtitles(
       BetterPlayerSubtitlesSource source) async {
+    final loader = source.contentLoader;
+    if (loader != null) return _parseString(await loader());
     switch (source.type) {
       case BetterPlayerSubtitlesSourceType.file:
         return _parseSubtitlesFromFile(source);

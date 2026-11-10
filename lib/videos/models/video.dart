@@ -131,6 +131,12 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       String? deArrowThumbnailUrl,
       @JsonKey(includeFromJson: false, includeToJson: false)
       BackendPlayback? backendPlayback,
+      // Connection admission also applies to instances without backend selectors.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      BackendPlayback? playbackConnection,
+      // Copies retain this token; fresh metadata creates a new native source.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      Object? playbackSourceId,
       String? viewCountText}) = _Video;
 
   const Video._();

@@ -5,6 +5,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/tv/components/manage_server_inner.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -23,6 +24,7 @@ class TvWelcomeWizardScreen extends StatelessWidget {
     ColorScheme colors = Theme.of(context).colorScheme;
     TextTheme textTheme = Theme.of(context).textTheme;
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       body: TvOverscan(
         child: MultiBlocProvider(
           providers: [
@@ -56,6 +58,21 @@ class TvWelcomeWizardScreen extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.all(8),
                         child: Text(locals.findPublicInstance),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: TvButton(
+                        key: const ValueKey('welcome-profiles'),
+                        onPressed: showProfilePicker,
+                        child: Padding(
+                          padding: const EdgeInsets.all(8),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            const Icon(Icons.people_outline),
+                            const SizedBox(width: 8),
+                            Text(locals.profiles),
+                          ]),
+                        ),
                       ),
                     ),
                     const Expanded(

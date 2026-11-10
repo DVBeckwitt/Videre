@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
@@ -36,6 +37,23 @@ class DashManifestResolver {
       uri.scheme == server.scheme &&
       uri.host == server.host &&
       uri.port == server.port;
+
+  Duration? _retryAfter(http.Response response) {
+    final value = response.headers['retry-after']?.trim();
+    if (value == null) return null;
+    final seconds =
+        RegExp(r'^\d+$').hasMatch(value) ? int.tryParse(value) : null;
+    if (seconds != null) {
+      final delay = Duration(seconds: seconds);
+      return delay.inSeconds == seconds ? delay : null;
+    }
+    try {
+      final delay = HttpDate.parse(value).difference(_now());
+      return delay.isNegative ? Duration.zero : delay;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<http.Response> _get(Uri uri, Server server) async {
     // Do not forward custom instance credentials through an untrusted redirect.
@@ -82,17 +100,31 @@ class DashManifestResolver {
           if (failure.isGatewayAccessFailure) throw failure;
         }
       }
-      if (throwRetryable &&
-          const [502, 503, 504].contains(response.statusCode)) {
+      if (response.statusCode < 400) return;
+      final retryAfter = _retryAfter(response);
+      final invalidRetryAfter =
+          response.headers.containsKey('retry-after') && retryAfter == null;
+      final failure = InvidiousServiceError('DASH request failed',
+          statusCode: response.statusCode,
+          retryAfter: retryAfter,
+          retryAfterIsInvalid: invalidRetryAfter);
+      // Access and cooldown refusals apply to the playback attempt, including
+      // progressive sources and other backends. Never discard them as a
+      // missing manifest or bypass them with an inline manifest.
+      if (const [401, 403, 429].contains(response.statusCode) ||
+          invalidRetryAfter ||
+          (retryAfter ?? Duration.zero) > Duration.zero) {
+        throw failure;
+      }
+      if (throwRetryable && isBackendRetryable(failure)) {
         throw const BackendPlaybackFailure();
       }
     }
 
     final instance = Uri.parse(server.url);
     final manifest = Uri.parse(url);
-    // Direct YouTube manifests are outside this Invidious-specific workaround.
-    if (!_sameOrigin(manifest, instance) ||
-        (manifest.queryParameters['check']?.isNotEmpty ?? false)) {
+    if (!_sameOrigin(manifest, instance)) return null;
+    if (manifest.queryParameters['check']?.isNotEmpty ?? false) {
       return url;
     }
 
@@ -161,7 +193,9 @@ class DashManifestResolver {
       }
     } catch (error) {
       if (error is NerdVpnAccessRequired ||
-          (error is InvidiousServiceError && error.isGatewayAccessFailure)) {
+          error is InvidiousServiceError ||
+          error is HandshakeException ||
+          (error is SocketException && error.osError == null)) {
         rethrow;
       }
       if (throwRetryable && isBackendRetryable(error)) {

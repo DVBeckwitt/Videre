@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/youtube_privacy.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -13,6 +14,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 class Thumbnail extends StatelessWidget {
   final Widget? child;
+
+  /// Decorative content to show while optional artwork is loading or missing.
+  /// Candidate retries and account-scoped caching still follow the same policy.
+  final Widget? fallback;
   final double? height;
   final double? width;
 
@@ -20,13 +25,14 @@ class Thumbnail extends StatelessWidget {
   final List<ImageObject>? images;
   final BoxDecoration decoration;
 
-  /// Public Music catalog artwork uses its original source, without instance
-  /// credentials. The app's configured network transport still applies.
+  /// Route YouTube artwork through the selected instance. Independent public
+  /// image providers can opt out; official YouTube hosts are still excluded.
   final bool useInvidiousProxy;
 
   const Thumbnail(
       {super.key,
       this.child,
+      this.fallback,
       this.thumbnails,
       this.images,
       this.useInvidiousProxy = true,
@@ -44,7 +50,10 @@ class Thumbnail extends StatelessWidget {
     ColorScheme colors = Theme.of(context).colorScheme;
     return useInvidiousProxy && server == null
         ? Container(
-            decoration: decoration, width: width, height: height, child: child)
+            decoration: decoration,
+            width: width,
+            height: height,
+            child: fallback ?? child)
         : LayoutBuilder(builder: (context, constraints) {
             final ratio = MediaQuery.devicePixelRatioOf(context);
             final physicalWidth =
@@ -62,16 +71,19 @@ class Thumbnail extends StatelessWidget {
             // prevents later sizes from being tried.
             final seen = <String>{};
             final urls = candidates.where((url) {
+              if (url.trim().isEmpty) return false;
               if (server == null) {
                 final uri = Uri.tryParse(url);
                 if (uri == null ||
                     !const {'http', 'https'}.contains(uri.scheme) ||
-                    uri.host.isEmpty) {
+                    uri.host.isEmpty ||
+                    isOfficialYoutubeUrl(uri)) {
                   return false;
                 }
               }
-              return seen
-                  .add(server == null ? url : invidiousImageUrl(url, server));
+              final resolved =
+                  server == null ? url : invidiousImageUrl(url, server);
+              return resolved != null && seen.add(resolved);
             }).toList();
             return BlocProvider(
               key: ValueKey(Object.hash(server, Object.hashAll(urls))),
@@ -80,13 +92,16 @@ class Thumbnail extends StatelessWidget {
                   builder: (context, state) {
                 if (state.selected == null) {
                   return _ErrorWidget(
-                      decoration: decoration, width: width, height: height);
+                      decoration: decoration,
+                      width: width,
+                      height: height,
+                      fallback: fallback);
                 } else {
                   final cubit = context.read<ThumbnailCubit>();
 
                   final url = server == null
                       ? state.selected!
-                      : invidiousImageUrl(state.selected!, server);
+                      : invidiousImageUrl(state.selected!, server)!;
                   final cacheKey = server == null
                       ? url
                       : invidiousImageCacheKey(url, server);
@@ -151,6 +166,7 @@ class Thumbnail extends StatelessWidget {
                         decoration: decoration,
                         width: width,
                         height: height,
+                        fallback: fallback,
                       );
                     },
                     progressIndicatorBuilder: (context, url, progress) =>
@@ -161,13 +177,14 @@ class Thumbnail extends StatelessWidget {
                       decoration:
                           decoration.copyWith(color: colors.secondaryContainer),
                       // duration: animationDuration,
-                      child: const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: MotionLoadingIndicator(
-                              child: CircularProgressIndicator(
-                            strokeWidth: 1,
-                          ))),
+                      child: fallback ??
+                          const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: MotionLoadingIndicator(
+                                  child: CircularProgressIndicator(
+                                strokeWidth: 1,
+                              ))),
                     ),
                   );
                 }
@@ -181,8 +198,10 @@ class _ErrorWidget extends StatelessWidget {
   final double? height;
   final double? width;
   final BoxDecoration decoration;
+  final Widget? fallback;
 
-  const _ErrorWidget({this.height, this.width, required this.decoration});
+  const _ErrorWidget(
+      {this.height, this.width, required this.decoration, this.fallback});
 
   @override
   Widget build(BuildContext context) {
@@ -193,13 +212,14 @@ class _ErrorWidget extends StatelessWidget {
       alignment: Alignment.center,
       decoration: decoration.copyWith(color: colors.secondaryContainer),
       // duration: animationDuration,
-      child: SizedBox(
-          height: 20,
-          width: 20,
-          child: Icon(
-            Icons.error_outline,
-            color: colors.onSecondaryContainer.withValues(alpha: 0.5),
-          )),
+      child: fallback ??
+          SizedBox(
+              height: 20,
+              width: 20,
+              child: Icon(
+                Icons.error_outline,
+                color: colors.onSecondaryContainer.withValues(alpha: 0.5),
+              )),
     );
   }
 }

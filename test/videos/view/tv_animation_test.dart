@@ -29,6 +29,10 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache;
 import 'package:flutter_test/flutter_test.dart';
 
 class _Service extends Service {
+  final List<ImageObject>? banners;
+
+  _Service({this.banners});
+
   @override
   Future<bool> isLoggedIn() async => false;
 
@@ -40,7 +44,7 @@ class _Service extends Service {
       'A channel',
       channelId,
       '/channel/$channelId',
-      [ImageObject(null, '/banner', 1060, 175)],
+      banners ?? [ImageObject(null, '/banner', 1060, 175)],
       [],
       100,
       1000,
@@ -77,6 +81,7 @@ class _Service extends Service {
   @override
   Future<Video> getVideo(String videoId,
           {Server? serverOverride,
+          VideoLoadObserver? loadObserver,
           void Function(BackendPlayback request)? onBackendRequest}) async =>
       Video(
           videoId: videoId,
@@ -88,11 +93,14 @@ class _Service extends Service {
 }
 
 class _CacheManager implements cache.BaseCacheManager {
+  final requests = <String>[];
+
   @override
   Stream<cache.FileResponse> getFileStream(String url,
       {String? key,
       Map<String, String>? headers,
       bool withProgress = false}) async* {
+    requests.add(url);
     yield cache.FileInfo(const LocalFileSystem().file('assets/icon.png'),
         cache.FileSource.Cache, DateTime.utc(2100), url);
   }
@@ -135,6 +143,7 @@ void main() {
   CachedNetworkImageProvider.defaultCacheManager = _CacheManager();
   late Service originalService;
   late cache.BaseCacheManager originalCache;
+  late _CacheManager imageCache;
   late _Downloads downloads;
 
   setUp(() async {
@@ -143,7 +152,8 @@ void main() {
     db = await SembastSqfDb.createInMemory();
     await db.upsertServer(const Server(url: 'https://instance.example'));
     originalCache = CachedNetworkImageProvider.defaultCacheManager;
-    CachedNetworkImageProvider.defaultCacheManager = _CacheManager();
+    CachedNetworkImageProvider.defaultCacheManager =
+        imageCache = _CacheManager();
     downloads = _Downloads();
   });
 
@@ -222,6 +232,49 @@ void main() {
     expect(tv.state.showBackground, isFalse);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+      'TV banner skips unsupported artwork and retains instance headers',
+      (tester) async {
+    service = _Service(banners: [
+      ImageObject(null, 'https://yt4.ggpht.com/unsupported', 2000, 400),
+      ImageObject(null, 'https://yt3.ggpht.com/banner=s1000', 1000, 200),
+    ]);
+    await tester.runAsync(() => db.upsertServer(const Server(
+        url: 'https://instance.example',
+        customHeaders: {'X-Image-Access': 'fixture-access'})));
+    await mount(tester, const TvChannelScreen(channelId: 'channel'),
+        const Size(1280, 900));
+
+    expect(find.byType(CachedNetworkImage), findsOneWidget);
+    final image =
+        tester.widget<CachedNetworkImage>(find.byType(CachedNetworkImage));
+    expect(image.imageUrl, 'https://instance.example/ggpht/banner=s1000');
+    expect(image.httpHeaders?['X-Image-Access'], 'fixture-access');
+    expect(
+        imageCache.requests, ['https://instance.example/ggpht/banner=s1000']);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final banners in <List<ImageObject>>[
+    [],
+    [ImageObject(null, '', 1000, 200)],
+    [ImageObject(null, 'https://yt4.ggpht.com/unsupported', 1000, 200)],
+  ]) {
+    testWidgets(
+        'TV omits missing or unsupported banner (${banners.firstOrNull?.url})',
+        (tester) async {
+      service = _Service(banners: banners);
+      await mount(tester, const TvChannelScreen(channelId: 'channel'),
+          const Size(1280, 900));
+
+      expect(find.byType(CachedNetworkImage), findsNothing);
+      expect(imageCache.requests, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   testWidgets('TV video blur preserves its content between animation ticks',
       (tester) async {

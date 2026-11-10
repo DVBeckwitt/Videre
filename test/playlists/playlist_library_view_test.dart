@@ -328,6 +328,48 @@ void main() {
     });
   }
 
+  testWidgets('narrow TV grid shows and opens the empty Watch Later card',
+      (tester) async {
+    tester.view.physicalSize = const Size(1080, 540);
+    tester.view.devicePixelRatio = 1.5;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final router = _Router();
+    addTearDown(router.dispose);
+    const watchLater = Playlist(
+      playlistId: localWatchLaterId,
+      title: 'Watch later',
+      author: '',
+      videoCount: 0,
+    );
+    await tester.pumpWidget(host(StackRouterScope(
+      controller: router,
+      stateHash: 0,
+      child: TvPlaylistGridScreen(
+        playlistList: FixedItemList([watchLater]),
+        includeSavedPlaylists: true,
+      ),
+    )));
+    await tester.pumpAndSettle();
+
+    final title = find.text('Watch Later');
+    Focus.of(tester.element(title)).requestFocus();
+    await tester.pumpAndSettle();
+    final bounds = tester.getRect(find.byType(PlaylistInList));
+    final titleBounds = tester.getRect(title);
+    final details = tester.getRect(find.text('On this device · No videos'));
+    expect(titleBounds.height, greaterThan(0));
+    expect(details.bottom, lessThanOrEqualTo(bounds.bottom));
+    expect(tester.takeException(), isNull);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    expect(router.pushed?.routeName, TvPlaylistRoute.name);
+    final args = router.pushed!.args as TvPlaylistRouteArgs;
+    expect(args.playlist.playlistId, localWatchLaterId);
+    router.returned.complete();
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('TV search cards open without a playlist library provider',
       (tester) async {
     final router = _Router();

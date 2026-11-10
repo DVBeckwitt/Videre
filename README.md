@@ -27,12 +27,12 @@ Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Vid
 - **SponsorBlock.** Skip community-marked sponsor segments by default.
 - **Dislike Counts.** Estimates from Return YouTube Dislike, enabled by default.
 - **Local Library.** Save subscriptions, Watch Later, playlists, and history on your device without an account.
-- **People and Accounts.** Keep separate local libraries for each person, with multiple saved accounts on the same instance.
+- **People and Accounts.** Add, rename, and delete local profiles, each with its own library and saved accounts. Profiles remain accessible from Welcome before adding a server. Deletion keeps downloaded media files and protects the last profile. See [profile management](./docs/profiles-and-authentication.md#manage-profiles).
 - **Watched Status.** Mark videos watched or unwatched on phone and TV; signed-in accounts retry pending changes to server history.
-- **Protected Servers.** Sign in through an Authentik gateway with an isolated browser session for each account.
+- **Protected Servers.** HTML form-based gateways use an isolated, protected browser session for each account. Page JavaScript is disabled; gateways that require it are unsupported.
 - **NerdVPN API access.** Browser sign-in retrieves your API key when eligible, keeps it encrypted on Android, and shows the instance's waiting or disabled-access status.
 - **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
-- **Music.** Use the top Videos/Music switch on phones, tablets, and TVs. Music has Home, Explore, and Library for public new releases, country charts, moods and genres, search, local bookmarks and playlists, and audio downloads on phones and tablets. The artwork player includes queue controls and saved-session resume. Choose Videos and Music, Videos only, or Music only under **Settings → Browsing → Home experience** or in the home customizer. Catalog browsing uses YouTube Music without a Google login; playback uses your Invidious backend. See [Music browsing, playback, and local library](./docs/music.md).
+- **Music.** Use the top Videos/Music switch on phones, tablets, and TVs. Home shows your selected Invidious instance's full music trending feed; Search finds songs, channels, and public playlists. Library keeps saved songs and channels, public bookmarks, and local playlists you can create, edit, play, and resume, with audio downloads on phones and tablets. The artwork player includes queue controls and saved-session resume. Choose Videos and Music, Videos only, or Music only under **Settings → Browsing → Home experience** or in the home customizer. Music does not contact YouTube Music directly. YouTube Music's exclusive catalog pages are removed; legacy album bookmarks remain stored and backed up but hidden from Library. See [Music browsing, playback, and local library](./docs/music.md).
 - **Watch Offline.** Video, audio, and playlist downloads on phones and tablets, with pause, resume, retry, and Wi-Fi-only mode.
 - **Saved Playback.** Remember playback positions when reopening videos on phone or TV.
 - **Export/Import Profiles.** Back up and restore your local library and preferences as JSON, or import NewPipe subscriptions.
@@ -56,7 +56,7 @@ For `invidious.nerdvpn.de`, adding the instance opens browser sign-in. Your acco
 
 The official NerdVPN onion address also supports this API-key flow. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, then add the onion instance. Sign-in opens inside Videre through that proxy. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
 
-For playback problems, **Connection help** checks the video API and lets you switch instances or open the video in a browser.
+For playback problems, **Connection help** checks the video API and lets you switch instances or copy the instance's video address. Transient video-detail failures receive one automatic same-route retry with visible feedback. Server cooldowns and access/privacy refusals are respected; manual Retry remains available after recovery is exhausted.
 
 This README describes the current source. Check release notes for your APK's features.
 
@@ -68,13 +68,13 @@ Suggested hosts from the [official Invidious directory](https://docs.invidious.i
 |---|---|---|---|
 | [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
 | [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* | 9 October 2026 |
-| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Sign-in verified; API key required† | 8 November 2026 |
+| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Android playback verified; API key required† | 10 November 2026 |
 
 Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
 
 \* Source checks cover search, video data, and a media sample. Full Android playback is unverified; availability may change.
 
-† NerdVPN browser sign-in, saved login after restart, and eligibility checks passed on Android. Successful key issuance and playback remain unverified with the new test account while its waiting period is active.
+† NerdVPN saved login after cold boot, authenticated API access, video and Music playback, captions, background controls, and downloaded audio playback passed on the Android test emulator. Availability depends on the instance; a transient video-metadata error recovered on Retry. See the [acceptance record](./docs/verification/nerdvpn-default-privacy.md) for coverage and limits.
 
 For self-hosting, see the [Invidious project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
 
@@ -88,7 +88,7 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Download folder.** Choose a folder with **Settings → Download folder** or the folder button in **Downloads**. New downloads use that folder; existing files stay where they are. Videre temporarily assembles media in app storage, then saves the finished file in your chosen folder for offline playback and access from other apps. App storage remains the default. Folder permissions are device-specific and excluded from backups. If removable storage is disconnected or access is revoked, reconnect it or choose the same folder again before retrying. Deleting a download also deletes its saved file; files in a chosen folder otherwise survive uninstalling Videre.
 
-**SOCKS5 / Orbot.** Open **Settings → Network proxy**, select **Use Orbot preset**, and start Orbot with its SOCKS listener enabled. The editable preset is `127.0.0.1:9050`; Orbot VPN mode is not required. Save proxy settings before adding your first server; once a server is selected, use **Test connection**. Applying a change stops playback and pauses unfinished downloads; resume them afterward. Saving unchanged settings does not interrupt them. Internet requests fail when the enabled proxy is unavailable. External browser sign-in uses the browser's connection; protected-server sign-in follows the configured proxy and requires WebView proxy-override support. Phone/TV remote control stays on the LAN. Native and full-app Orbot playback have been checked on a Pixel 8 Pro; public-instance video availability remains separate. See [coverage and verification limits](./docs/socks-proxy.md).
+**SOCKS5 / Orbot.** Open **Settings → Network proxy**, select **Use Orbot preset**, and start Orbot with its SOCKS listener enabled. The editable preset is `127.0.0.1:9050`; Orbot VPN mode is not required. Save proxy settings before adding your first server; once a server is selected, use **Test connection**. Applying a change stops playback and pauses unfinished downloads; resume them afterward. Saving unchanged settings does not interrupt them. Internet requests fail when the enabled proxy is unavailable. Protected-server sign-in follows the configured proxy and requires WebView proxy-override support. External links, including onion preferences, are copy-only; open a copied onion address yourself in Tor Browser to obtain an API key. Phone/TV remote control stays on the LAN. Native and full-app Orbot playback have been checked on a Pixel 8 Pro; public-instance video availability remains separate. See [coverage and verification limits](./docs/socks-proxy.md).
 
 **Subscriptions.** Enable **Settings → Browsing → Hide watched subscription videos** to hide watched videos from subscription feeds, including home sections and TV. This uses the current person's watched status. Manual choices take priority; local playback counts as watched at 90% completion, and imported server history counts when no local playback state exists. Partly played videos stay visible unless manually marked watched. Turn the setting off to show everything again. When a page is entirely hidden, use **Load more** to reach older videos.
 
@@ -112,7 +112,7 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Moving from Clipious.** Videre (`com.github.dvbeckwitt.videre`) and Clipious (`com.github.lamarios.clipious`) install separately. Set up Videre before removing Clipious: Android does not transfer their data, and Videre cannot import Clipious app storage directly.
 
-**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, and video thumbnails use the selected Invidious instance's image proxy, including notification and download artwork. This is independent of the video-stream proxy and SOCKS5 settings; image failures do not retry the original Google URL. Music catalog artwork loads from its original public image URLs through the configured network transport, like Music catalog requests, without Invidious credentials or Google login cookies. Third-party artwork such as DeArrow still uses its own service. Playback may connect directly to YouTube/Google when media proxying is off. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
+**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, video thumbnails, and saved Music covers use the selected Invidious instance's image proxy, including notification and download artwork. Unsupported Google artwork is skipped; image failures do not retry the original Google URL. Music browsing and search use the selected Invidious server without contacting YouTube Music directly. Third-party artwork such as DeArrow still uses its own service. Video, audio, and downloads always use the selected Invidious media proxy. Direct YouTube/Google playback is unavailable, including through old preferences or a server redirect; if the instance cannot proxy a stream, playback fails without a direct fallback. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
 
 ## Contributing
 
@@ -163,6 +163,47 @@ nix-shell --run './submodules/flutter/bin/flutter test'
 ```
 
 This starts local Invidious with login `test` / `test`.
+
+### Persistent NerdVPN test emulator
+
+On Windows, use the existing **Videre_NerdVPN_Test** AVD for native acceptance.
+Its persistent home is `%LOCALAPPDATA%\Videre\testing\avd-home`, outside the
+checkout and temporary build folders. The device reuses its saved NerdVPN
+account data, app settings, local library, and downloads between test sessions.
+Current authentication and API access still depend on the server; check them
+in the running app.
+
+```powershell
+pwsh -NoProfile -File .\tools\start_test_emulator.ps1
+# Optional update of a compatible APK, retaining the installed app's data:
+pwsh -NoProfile -File .\tools\start_test_emulator.ps1 -ApkPath .\build\app\outputs\flutter-apk\app-debug.apk
+```
+
+The default device is `emulator-5596`. The launcher reuses it when its AVD name
+matches, or cold-boots the registered AVD without loading or saving snapshots.
+The normal data disk remains persistent. It never creates, wipes, uninstalls,
+resets, or replaces a device occupying the requested port. An APK update uses
+only `adb install -r`; a signing mismatch fails without uninstalling the app.
+No APK is installed unless `-ApkPath` is supplied.
+
+SDK discovery uses `ANDROID_HOME`, then `%LOCALAPPDATA%\Android\Sdk`.
+`-SdkRoot`, `-AvdHome`, `-AvdName`, `-Port`, and `-BootTimeoutSeconds` override
+those defaults. Boot polling stops after 300 seconds by default and leaves a
+slow device running. If the AVD is absent, provision or restore the intended
+persistent test device separately: its `<AvdName>.ini` must be in `AvdHome`,
+contain an absolute `path=` to the existing AVD directory, and that directory
+must contain `config.ini`. The launcher reports missing setup instead of
+silently creating a fresh, signed-out device. Keep the AVD and account data
+local; never add credentials, device disks, or credential exports to Git.
+
+Use the installed app's existing NerdVPN account for runtime checks. Do not
+clear its data or remove its account as test cleanup. Offline validation and CI
+remain independent of this machine's AVD and sign-in. The launcher's safety
+tests use fake SDK/process runners and do not start an emulator:
+
+```powershell
+pwsh -NoProfile -File .\tools\start_test_emulator.Tests.ps1
+```
 
 Code map: `lib/` by feature; `lib/utils/` for Sembast/SQLite storage; `lib/service.dart` for Invidious API calls.
 

@@ -402,7 +402,8 @@ class _DeferredVideoService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) {
     requestedAccount = serverOverride;
     started.complete();
     return result.future;

@@ -21,89 +21,73 @@ void main() {
 
   tearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
-  test('opens only the separate app without sending a URL or credentials',
+  test('an installed Tor Browser cannot be launched outside the privacy guard',
       () async {
-    expect(await browser.openApp(), isTrue);
-    expect(calls, hasLength(1));
-    expect(calls.single.method, 'openApp');
-    expect(calls.single.arguments, isNull);
+    expect(await browser.openApp(), isFalse);
+    expect(calls, isEmpty);
   });
 
-  test('reports a missing app without falling back to another browser',
-      () async {
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      calls.add(call);
-      return false;
+  for (final address in [
+    'http://other.onion/watch?v=video123456&local=true#chapter',
+    'https://other.onion:8443/invidious/preferences?theme=dark',
+    'http://OTHER.ONION./channel/UCexample?next=a%2Bb%20c',
+    'https://instance.example/watch?v=video123456',
+    'http://other.onion.example/watch',
+    'http://onion/watch',
+    'ftp://other.onion/watch',
+    'javascript:alert(1)',
+    '//other.onion/watch',
+    '/watch?v=video123456',
+    'http://user:password@other.onion/watch',
+    'https://user@other.onion/preferences',
+  ]) {
+    test('cannot delegate a URL to an unguarded browser: $address', () async {
+      expect(await browser.openOnionUrl(Uri.parse(address)), isFalse);
+      expect(calls, isEmpty);
     });
-    expect(await browser.openApp(), isFalse);
-    expect(calls, hasLength(1));
-  });
+  }
 
   for (final origin in [
     'http://$nerdVpnOnionHost',
     'http://$nerdVpnOnionHost:80/',
     'https://$nerdVpnOnionHost',
     'https://$nerdVpnOnionHost:443/',
+    '',
+    'not a URL',
+    'https://invidious.nerdvpn.de',
+    'http://other.onion',
+    'https://$nerdVpnOnionHost.example',
+    'http://$nerdVpnOnionHost:443',
+    'https://$nerdVpnOnionHost:80',
+    'http://user:password@$nerdVpnOnionHost',
+    'http://@$nerdVpnOnionHost',
+    'http://$nerdVpnOnionHost/preferences',
+    'http://$nerdVpnOnionHost/?key=secret',
+    'http://$nerdVpnOnionHost/#secret',
+    'http://$nerdVpnOnionHost/?',
+    'http://$nerdVpnOnionHost/#',
   ]) {
-    test('opens preferences using only the validated origin: $origin',
+    test('preferences remain copy-only without a platform call: $origin',
         () async {
-      expect(await browser.openNerdVpnPreferences(origin), isTrue);
-      expect(calls, hasLength(1));
-      expect(calls.single.method, 'openNerdVpnPreferences');
-      expect(calls.single.arguments, {'serverUrl': Uri.parse(origin).origin});
+      expect(await browser.openNerdVpnPreferences(origin), isFalse);
+      expect(calls, isEmpty);
     });
   }
 
-  test('rejects other origins and URLs carrying paths or credentials',
-      () async {
+  test('onion address recognition retains host boundaries and trailing dots',
+      () {
     for (final url in [
-      '',
-      'not a URL',
-      'https://invidious.nerdvpn.de',
-      'http://other.onion',
-      'https://$nerdVpnOnionHost.example',
-      'http://$nerdVpnOnionHost:443',
-      'https://$nerdVpnOnionHost:80',
-      'http://user:password@$nerdVpnOnionHost',
-      'http://@$nerdVpnOnionHost',
-      'http://$nerdVpnOnionHost/preferences',
-      'http://$nerdVpnOnionHost/?key=secret',
-      'http://$nerdVpnOnionHost/#secret',
-      'http://$nerdVpnOnionHost/?',
-      'http://$nerdVpnOnionHost/#',
+      'http://instance.onion/watch',
+      'https://INSTANCE.ONION./watch',
     ]) {
-      expect(await browser.openNerdVpnPreferences(url), isFalse, reason: url);
+      expect(TorBrowser.isOnionAddress(Uri.parse(url)), isTrue);
     }
-    expect(calls, isEmpty);
-  });
-
-  test('reports unavailable without another browser attempt', () async {
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      calls.add(call);
-      return false;
-    });
-    expect(await browser.openNerdVpnPreferences('http://$nerdVpnOnionHost'),
-        isFalse);
-    expect(calls, hasLength(1));
-  });
-
-  test('reports missing native support as unavailable', () async {
-    messenger.setMockMethodCallHandler(channel, null);
-    expect(await browser.openNerdVpnPreferences('http://$nerdVpnOnionHost'),
-        isFalse);
-  });
-
-  test('reports a failed native handoff as unavailable', () async {
-    messenger.setMockMethodCallHandler(channel, (_) async {
-      throw PlatformException(code: 'UNAVAILABLE');
-    });
-    expect(await browser.openNerdVpnPreferences('http://$nerdVpnOnionHost'),
-        isFalse);
-  });
-
-  test('an empty native result is not a successful launch', () async {
-    messenger.setMockMethodCallHandler(channel, (_) async => null);
-    expect(await browser.openNerdVpnPreferences('http://$nerdVpnOnionHost'),
-        isFalse);
+    for (final url in [
+      'https://onion/watch',
+      'https://instance.onion.example/watch',
+      'https://instance.example/onion',
+    ]) {
+      expect(TorBrowser.isOnionAddress(Uri.parse(url)), isFalse);
+    }
   });
 }

@@ -10,6 +10,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/views/components/content_mode_selector.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
+import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
@@ -213,10 +214,7 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                       if (music)
                                         ...[
                                           (locals.home, Icons.home_outlined),
-                                          (
-                                            locals.musicExplore,
-                                            Icons.explore_outlined
-                                          ),
+                                          (locals.search, Icons.search),
                                           (
                                             locals.musicLibrary,
                                             Icons.library_music
@@ -460,9 +458,7 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                           key:
                                               const ValueKey('tv-music-search'),
                                           tooltip: locals.search,
-                                          onPressed: () =>
-                                              AutoRouter.of(context)
-                                                  .push(MusicRoute()),
+                                          onPressed: () => _openMusicPage(1),
                                           icon: const Icon(Icons.search),
                                         ),
                                     ],
@@ -614,23 +610,26 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                                     child: TickerMode(
                                                       enabled:
                                                           index == _musicPage,
-                                                      child: _visitedMusicPages
-                                                              .contains(index)
-                                                          ? switch (index) {
-                                                              0 => MusicHomePage(
-                                                                  onExplore: () =>
-                                                                      _openMusicPage(
-                                                                          1),
-                                                                  onLibrary: () =>
-                                                                      _openMusicPage(
-                                                                          2)),
-                                                              1 =>
-                                                                const MusicExplorePage(),
-                                                              _ =>
-                                                                const MusicLibraryPage(),
-                                                            }
-                                                          : const SizedBox
-                                                              .shrink(),
+                                                      child:
+                                                          _visitedMusicPages
+                                                                  .contains(
+                                                                      index)
+                                                              ? switch (index) {
+                                                                  0 => MusicHomePage(
+                                                                      onSearch: () =>
+                                                                          _openMusicPage(
+                                                                              1),
+                                                                      onLibrary:
+                                                                          () =>
+                                                                              _openMusicPage(2)),
+                                                                  1 => const MusicScreen(
+                                                                      embedded:
+                                                                          true),
+                                                                  _ =>
+                                                                    const MusicLibraryPage(),
+                                                                }
+                                                              : const SizedBox
+                                                                  .shrink(),
                                                     ),
                                                   ),
                                               ],

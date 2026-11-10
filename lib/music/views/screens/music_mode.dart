@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../utils.dart';
 import '../../../utils/motion.dart';
+import 'music.dart';
 import 'music_discovery.dart';
 import 'music_library.dart';
 
@@ -40,10 +41,10 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final phone = getDeviceType() == DeviceType.phone;
-    final labels = [locals.home, locals.musicExplore, locals.musicLibrary];
+    final labels = [locals.home, locals.search, locals.musicLibrary];
     const icons = [
       Icons.home_outlined,
-      Icons.explore_outlined,
+      Icons.search,
       Icons.library_music_outlined
     ];
     return Scaffold(
@@ -81,10 +82,11 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
                   _RetainedMusicPage(
                     active: _page == 0,
                     child: MusicHomePage(
-                        onExplore: () => _show(1), onLibrary: () => _show(2)),
+                        onSearch: () => _show(1), onLibrary: () => _show(2)),
                   ),
                   _RetainedMusicPage(
-                      active: _page == 1, child: const MusicExplorePage()),
+                      active: _page == 1,
+                      child: const MusicScreen(embedded: true)),
                   _RetainedMusicPage(
                       active: _page == 2, child: const MusicLibraryPage()),
                 ],

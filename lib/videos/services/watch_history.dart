@@ -108,6 +108,7 @@ class WatchRepository {
   Future<void> saveSessionIfCurrent(
           String videoId, int revision, SettingsValue session) =>
       database.db.transaction((txn) async {
+        await database.ensureProfileExists(txn);
         final current =
             WatchStatus.fromJson(await states.record(videoId).get(txn));
         if (current.revision != revision) return;
@@ -118,6 +119,7 @@ class WatchRepository {
 
   Future<int> beginPlayback(String videoId) async {
     final revision = await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
       final record = states.record(videoId);
       final old = WatchStatus.fromJson(await record.get(txn));
       // History deletion removes per-video state. A profile-wide sequence
@@ -154,6 +156,7 @@ class WatchRepository {
       throw StateError('Watch account belongs to another profile');
     }
     await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
       final record = states.record(videoId);
       final old = WatchStatus.fromJson(await record.get(txn));
       await record.put(
@@ -206,6 +209,7 @@ class WatchRepository {
   Future<bool> recordPlayback(String videoId, double progress, int revision,
       {Server? account, int? positionSeconds, int? durationSeconds}) async {
     final result = await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
       final record = states.record(videoId);
       final old = WatchStatus.fromJson(await record.get(txn));
       if (old.revision != revision) return (accepted: false, changed: false);
@@ -257,6 +261,7 @@ class WatchRepository {
 
   Future<void> acknowledge(PendingWatchChange change) async {
     await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
       final key = _key(change.accountId, change.videoId);
       final record = outbox.record(key);
       final current = await record.get(txn);
@@ -276,6 +281,7 @@ class WatchRepository {
   Future<void> mergeRemote(String accountId, Set<String> ids,
       {required bool complete}) async {
     await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
       final changes = await outbox.find(txn,
           finder: Finder(filter: Filter.equals('accountId', accountId)));
       final pendingIds =
@@ -299,13 +305,18 @@ class WatchRepository {
     playbackHistoryRevision.value++;
   }
 
-  Future<int> historyEditRevision() => database.db.transaction((txn) async =>
-      (await syncState.record('sequence').get(txn))?['value'] as int? ?? 0);
+  Future<int> historyEditRevision() => database.db.transaction((txn) async {
+        await database.ensureProfileExists(txn);
+        return (await syncState.record('sequence').get(txn))?['value']
+                as int? ??
+            0;
+      });
 
   /// Server-only deletion preserves local watched choices and newer intent.
   Future<void> acknowledgeHistoryDeletion(String accountId, int revision,
       {String? videoId}) async {
     await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
       final filter = Filter.and([
         Filter.equals('accountId', accountId),
         if (videoId != null) Filter.equals('videoId', videoId),
@@ -333,10 +344,13 @@ class WatchRepository {
 
   Future<void> setSyncStatus(String accountId, String state,
       {DateTime? retryAt, int attempts = 0}) async {
-    await syncState.record('account:$accountId').put(database.db, {
-      'state': state,
-      'attempts': attempts,
-      if (retryAt != null) 'retryAt': retryAt.millisecondsSinceEpoch,
+    await database.db.transaction((txn) async {
+      await database.ensureProfileExists(txn);
+      await syncState.record('account:$accountId').put(txn, {
+        'state': state,
+        'attempts': attempts,
+        if (retryAt != null) 'retryAt': retryAt.millisecondsSinceEpoch,
+      });
     });
     playbackHistoryRevision.value++;
   }
@@ -374,7 +388,8 @@ class WatchHistorySync {
       : now = now ?? DateTime.now;
 
   Future<void> run(Server account, {bool force = false, bool pull = true}) {
-    if (account.profileId != repository.database.profileId ||
+    if (!repository.database.isProfileAvailable ||
+        account.profileId != repository.database.profileId ||
         !hasHistoryAccount(account)) {
       return Future.value();
     }
@@ -396,6 +411,17 @@ class WatchHistorySync {
     }
     return _running.putIfAbsent(account.accountId,
         () => _runWithQueuedFlushes(account, force: force, pull: pull));
+  }
+
+  Future<bool> _accountIsCurrent(Server account) async {
+    if (!repository.database.isProfileAvailable) return false;
+    try {
+      final current = await accountIsCurrent(account);
+      return current && repository.database.isProfileAvailable;
+    } on StateError {
+      if (!repository.database.isProfileAvailable) return false;
+      rethrow;
+    }
   }
 
   static Future<void> _settled(Future<void>? future) async {
@@ -424,7 +450,7 @@ class WatchHistorySync {
       // edit rather than issue DELETE while an earlier POST can still finish.
       final writes = List<Future<void>>.of(_pendingWrites[id] ?? {});
       await Future.wait(writes.map(_settled)).timeout(requestTimeout);
-      if (!await accountIsCurrent(account)) {
+      if (!await _accountIsCurrent(account)) {
         throw StateError('Account changed before history deletion');
       }
       await deleteRemote();
@@ -434,7 +460,9 @@ class WatchHistorySync {
         .whenComplete(() {
       if (identical(_historyEdits[id], operation)) {
         _historyEdits.remove(id);
-        if (succeeded && repository.pending(id).isNotEmpty) {
+        if (succeeded &&
+            repository.database.isProfileAvailable &&
+            repository.pending(id).isNotEmpty) {
           unawaited(_settled(run(account, pull: false)));
         }
       }
@@ -476,6 +504,8 @@ class WatchHistorySync {
         force = false;
         pull = false;
       }
+    } on StateError {
+      if (repository.database.isProfileAvailable) rethrow;
     } finally {
       _running.remove(account.accountId);
       _queuedFlushes.remove(account.accountId);
@@ -495,7 +525,7 @@ class WatchHistorySync {
       return 0;
     }
     if (_historyEdits.containsKey(account.accountId) ||
-        !await accountIsCurrent(account)) {
+        !await _accountIsCurrent(account)) {
       return 0;
     }
     var sent = 0;
@@ -505,10 +535,10 @@ class WatchHistorySync {
         if (_historyEdits.containsKey(account.accountId)) return sent;
         final pending = repository.pending(account.accountId).firstOrNull;
         if (pending == null) break;
-        if (!await accountIsCurrent(account)) return sent;
+        if (!await _accountIsCurrent(account)) return sent;
         sent++;
         await _write(account, pending);
-        if (!await accountIsCurrent(account)) return sent;
+        if (!await _accountIsCurrent(account)) return sent;
         await repository.acknowledge(pending);
       }
       if (pull) {
@@ -518,7 +548,7 @@ class WatchHistorySync {
         try {
           for (var page = 1; page <= 10; page++) {
             if (_historyEdits.containsKey(account.accountId)) return sent;
-            if (!await accountIsCurrent(account)) return sent;
+            if (!await _accountIsCurrent(account)) return sent;
             final values = await readPage(account, page, size)
                 .timeout(const Duration(seconds: 15));
             ids.addAll(values);
@@ -528,14 +558,14 @@ class WatchHistorySync {
             }
           }
         } catch (_) {
-          if (ids.isNotEmpty && await accountIsCurrent(account)) {
+          if (ids.isNotEmpty && await _accountIsCurrent(account)) {
             await repository.mergeRemote(account.accountId, ids,
                 complete: false);
           }
           rethrow;
         }
         if (_historyEdits.containsKey(account.accountId) ||
-            !await accountIsCurrent(account)) {
+            !await _accountIsCurrent(account)) {
           return sent;
         }
         await repository.mergeRemote(account.accountId, ids,
@@ -544,7 +574,7 @@ class WatchHistorySync {
       await repository.setSyncStatus(account.accountId,
           repository.pending(account.accountId).isEmpty ? 'synced' : 'pending');
     } catch (error) {
-      if (!await accountIsCurrent(account)) return sent;
+      if (!await _accountIsCurrent(account)) return sent;
       final auth = error is GatewayAuthenticationRequired ||
           error is InvidiousServiceError &&
               (error.statusCode == 401 ||

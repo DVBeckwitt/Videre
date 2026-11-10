@@ -2,10 +2,11 @@ import 'package:clipious/channels/models/channel.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:flutter/material.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:clipious/utils/views/components/external_link.dart';
 
 import '../../../subscription_management/view/components/subscribe_button.dart';
 import '../../../utils/models/image_object.dart';
@@ -27,16 +28,8 @@ class ChannelInfo extends StatelessWidget {
       Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Thumbnail(
-              images: channel.authorThumbnails,
-              width: 50,
-              height: 50,
-              thumbnails: ImageObject.getThumbnailUrlsByPreferredOrder(
-                  channel.authorThumbnails),
-              decoration: BoxDecoration(
-                color: colors.secondaryContainer,
-                shape: BoxShape.circle,
-              )),
+          ChannelAvatar(
+              name: channel.author, images: channel.authorThumbnails, size: 50),
           const SizedBox(
             width: 8,
           ),
@@ -62,8 +55,7 @@ class ChannelInfo extends StatelessWidget {
             text: channel.description,
             linkStyle: TextStyle(
                 color: colors.primary, decoration: TextDecoration.none),
-            onOpen: (link) => launchUrl(Uri.parse(link.url),
-                mode: LaunchMode.externalApplication),
+            onOpen: (link) => openExternalLink(context, Uri.parse(link.url)),
             options: const LinkifyOptions(humanize: true, removeWww: true)),
       ),
       Padding(

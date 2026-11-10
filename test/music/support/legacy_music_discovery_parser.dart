@@ -1,4 +1,4 @@
-part of 'music_catalog_service.dart';
+part of 'legacy_music_catalog.dart';
 
 // Shapes checked against ytmusicapi 1.12.3 explore/charts and anonymous public
 // responses. See test/music/fixtures/discovery/README.md for captured evidence.
@@ -55,7 +55,9 @@ List<Map<String, dynamic>> _discoveryContainers(Map<String, dynamic> data,
 MusicAlbum? _discoveryAlbum(Map<String, dynamic> item) {
   final id = _browseId(item['navigationEndpoint']);
   final title = _text(item['title']);
-  if (!MusicCatalogService._albumId.hasMatch(id) || title.isEmpty) return null;
+  if (!LegacyMusicCatalogFixture._albumId.hasMatch(id) || title.isEmpty) {
+    return null;
+  }
   return MusicAlbum(
     id: id,
     title: title,
@@ -71,7 +73,7 @@ MusicPlaylist? _discoveryPlaylist(Map<String, dynamic> item) {
   final target = browseId.isNotEmpty ? browseId : titleId;
   final id = target.startsWith('VL') ? target.substring(2) : target;
   final title = _text(item['title']);
-  if (!MusicCatalogService._playlistId.hasMatch(id) || title.isEmpty) {
+  if (!LegacyMusicCatalogFixture._playlistId.hasMatch(id) || title.isEmpty) {
     return null;
   }
   return MusicPlaylist(
@@ -89,7 +91,8 @@ MusicCharts _discoveryCharts(Map<String, dynamic> data, String requested) {
       in _maps(data['frameworkUpdates'], 'musicFormBooleanChoice')) {
     final code = _string(choice['opaqueToken']);
     final id = _string(choice['id']);
-    if (MusicCatalogService._countryCode.hasMatch(code) && id.isNotEmpty) {
+    if (LegacyMusicCatalogFixture._countryCode.hasMatch(code) &&
+        id.isNotEmpty) {
       choices[id] = choice;
     }
   }
@@ -156,7 +159,7 @@ List<MusicMoodCategory> _discoveryMoods(Map<String, dynamic> data) {
       final params = _string(endpoint?['params']);
       if (endpoint?['browseId'] != 'FEmusic_moods_and_genres_category' ||
           title.isEmpty ||
-          !MusicCatalogService._browseParams.hasMatch(params)) {
+          !LegacyMusicCatalogFixture._browseParams.hasMatch(params)) {
         continue;
       }
       categories.putIfAbsent(params,

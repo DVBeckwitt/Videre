@@ -29,6 +29,7 @@ import 'package:clipious/player/views/components/player.dart' as widgets;
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
@@ -52,6 +53,7 @@ class FakeService extends Service {
   @override
   Future<Video> getVideo(String videoId,
           {Server? serverOverride,
+          VideoLoadObserver? loadObserver,
           void Function(BackendPlayback request)? onBackendRequest}) async =>
       Video(videoId: videoId, adaptiveFormats: [], formatStreams: []);
 
@@ -68,6 +70,7 @@ class FailingVideoService extends FakeService {
   @override
   Future<Video> getVideo(String videoId,
           {Server? serverOverride,
+          VideoLoadObserver? loadObserver,
           void Function(BackendPlayback request)? onBackendRequest}) async =>
       throw StateError('Instance unavailable');
 }
@@ -81,14 +84,17 @@ class MetadataStatusPlayerCubit extends TestPlayerCubit {
 class ControlledMetadataService extends FakeService {
   final responses = <Completer<Video>>[];
   final observers = <void Function(BackendPlayback)?>[];
+  final loadObservers = <VideoLoadObserver?>[];
 
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
+      VideoLoadObserver? loadObserver,
       void Function(BackendPlayback request)? onBackendRequest}) {
     final response = Completer<Video>();
     responses.add(response);
     observers.add(onBackendRequest);
+    loadObservers.add(loadObserver);
     return response.future;
   }
 }
@@ -289,7 +295,7 @@ Video _videoWithFallback(
 }) =>
     Video(
       videoId: '$name-video',
-      dashUrl: 'https://r1.googlevideo.com/$name.mpd',
+      dashUrl: 'https://inv.example/$name.mpd',
       formatStreams: [
         _stream('https://r1.googlevideo.com/$name.mp4', resolution,
             itag: '18', qualityLabel: qualityLabel),
@@ -430,6 +436,55 @@ void main() {
           expect(video.state.video?.videoId, 'metadata-status');
         });
       }
+
+      test('retry state follows only the current pending metadata load',
+          () async {
+        final oldObserver = metadata.loadObservers.single!;
+        expect(oldObserver.isCurrent(), isTrue);
+        expect(video.state.retryingVideo, isFalse);
+        oldObserver.onRetry();
+        expect(video.state.retryingVideo, isTrue);
+        expect(video.state.loadingVideo, isTrue);
+
+        metadata.observers.single!(initialRequest.next()!);
+        expect(video.state.retryingVideo, isFalse);
+        oldObserver.onRetry();
+        final retry = video.onReady();
+        expect(video.state.retryingVideo, isFalse);
+        expect(oldObserver.isCurrent(), isFalse);
+        oldObserver.onRetry();
+        expect(video.state.retryingVideo, isFalse);
+        metadata.responses.first.complete(Video(videoId: 'old-result'));
+        final currentObserver = metadata.loadObservers.last!;
+        currentObserver.onRetry();
+        expect(video.state.retryingVideo, isTrue);
+        metadata.responses.last.complete(Video(videoId: 'metadata-status'));
+        await retry;
+        expect(video.state.retryingVideo, isFalse);
+        expect(video.state.video?.videoId, 'metadata-status');
+        currentObserver.onRetry();
+        expect(video.state.retryingVideo, isFalse);
+
+        final failure = video.onReady();
+        metadata.loadObservers.last!.onRetry();
+        expect(video.state.retryingVideo, isTrue);
+        metadata.responses.last.completeError(StateError('Unavailable'));
+        await failure;
+        expect(video.state.retryingVideo, isFalse);
+        expect(video.state.error, coulnotLoadVideos);
+
+        final pending = video.onReady();
+        final finalObserver = metadata.loadObservers.last!;
+        final snapshot = video.state;
+        final closing = video.close();
+        expect(finalObserver.isCurrent(), isFalse);
+        finalObserver.onRetry();
+        expect(video.state, same(snapshot));
+        await closing;
+        metadata.responses.last.complete(Video(videoId: 'metadata-status'));
+        await pending;
+        expect(video.state, same(snapshot));
+      });
 
       test('old loads and disposal cannot publish request snapshots', () async {
         final oldObserver = metadata.observers.single!;
@@ -685,6 +740,8 @@ void main() {
       const server = Server(url: 'https://inv.example');
       await db.upsertServer(server);
       await db.useServer(server);
+      service = Service(
+          httpClient: MockClient((_) async => http.Response('<MPD/>', 200)));
       settings = TestSettingsCubit(
           SettingsState.init(), TestAppCubit(AppState(0, null, HomeLayout())));
       player =
@@ -696,7 +753,7 @@ void main() {
           key: GlobalKey(),
           video: Video(
             videoId: 'video-id',
-            dashUrl: 'https://r1.googlevideo.com/manifest.mpd',
+            dashUrl: 'https://inv.example/manifest.mpd',
             formatStreams: [
               _stream('https://r1.googlevideo.com/video.mp4', '360p',
                   itag: '18'),
@@ -708,8 +765,8 @@ void main() {
       );
       controller = RecordingPlayerController();
       cubit.videoController = controller;
-      final initialSource =
-          controller.waitForSource('https://r1.googlevideo.com/manifest.mpd');
+      final initialSource = controller
+          .waitForSource('https://inv.example/manifest.mpd?local=true');
       final initialSetup = cubit.waitForSeekCount(1);
       cubit.playVideo(false);
       await initialSource;
@@ -752,9 +809,10 @@ void main() {
           startAt: const Duration(seconds: 20));
       await controller.waitForSource(signed);
       await cubit.waitForSeekCount(2);
-      expect(controller.sourceUrls, isNot(contains(original)));
+      expect(controller.sourceUrls, isNot(contains('$original?local=true')));
       expect(controller.sources.last.videoFormat, BetterPlayerVideoFormat.dash);
       expect(requests, hasLength(3));
+      expect(requests.first.queryParameters['local'], 'true');
       expect(cubit.seekPositions.last, const Duration(seconds: 20));
     });
 
@@ -767,7 +825,7 @@ void main() {
         return request.url.path == '/watch'
             ? http.Response('''<video id="player"><source
                 type="application/dash+xml"
-                src="/api/manifest/dash/id/broken?check=rejected"></video>''',
+                src="/api/manifest/dash/id/broken?local=true&check=rejected"></video>''',
                 200)
             : http.Response('No check ID.', 400);
       }));
@@ -779,7 +837,7 @@ void main() {
       await controller.waitForSource('https://inv.example/fallback.mp4');
       expect(calls, 3);
       expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
+        'https://inv.example/manifest.mpd?local=true',
         'https://inv.example/fallback.mp4'
       ]);
       expect(player.errorEvents, isEmpty);
@@ -789,7 +847,8 @@ void main() {
         () async {
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
       addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      const dash = 'https://inv.example/api/manifest/dash/id/adaptive';
+      const dash =
+          'https://inv.example/api/manifest/dash/id/adaptive?local=true';
       const progressive = 'https://inv.example/fallback.mp4';
       const hd = 'https://r1.googlevideo.com/videoplayback?itag=137';
       const audio = 'https://r1.googlevideo.com/videoplayback?itag=140';
@@ -826,8 +885,16 @@ void main() {
       expect(source.url, dash);
       expect(source.videoFormat, BetterPlayerVideoFormat.dash);
       expect(source.useAsmsAudioTracks, isFalse);
-      expect(source.inlineDashManifest, contains(hd));
-      expect(source.inlineDashManifest, contains(audio));
+      expect(
+          source.inlineDashManifest,
+          contains(
+              'https://inv.example/videoplayback?itag=137&amp;host=r1.googlevideo.com'));
+      expect(
+          source.inlineDashManifest,
+          contains(
+              'https://inv.example/videoplayback?itag=140&amp;host=r1.googlevideo.com'));
+      expect(source.inlineDashManifest,
+          isNot(contains('https://r1.googlevideo.com')));
       expect(source.inlineDashManifest, isNot(contains('elsewhere.example')));
       expect(controller.sourceUrls, isNot(contains(progressive)));
       expect(requests, ['/api/manifest/dash/id/adaptive', '/watch']);
@@ -840,8 +907,9 @@ void main() {
         requested.complete();
         return pending.future;
       }));
-      const dash = 'https://inv.example/api/manifest/dash/id/redirected';
-      const hls = 'https://inv.example/live.m3u8';
+      const dash =
+          'https://inv.example/api/manifest/dash/id/redirected?local=true';
+      const hls = 'https://inv.example/live.m3u8?local=true';
       cubit.switchVideo(Video(
         videoId: 'redirected',
         hlsUrl: hls,
@@ -883,18 +951,23 @@ void main() {
           () async {
         final requested = Completer<void>();
         final pending = Completer<http.Response>();
-        service = Service(httpClient: MockClient((_) {
+        service = Service(httpClient: MockClient((request) {
+          if (request.url.path != '/api/manifest/dash/id/old') {
+            return Future.value(http.Response('<MPD/>', 200));
+          }
           requested.complete();
           return pending.future;
         }));
-        const oldUrl = 'https://inv.example/api/manifest/dash/id/old';
+        const oldUrl =
+            'https://inv.example/api/manifest/dash/id/old?local=true';
         cubit.switchVideo(Video(videoId: 'old', dashUrl: oldUrl));
         await requested.future;
         if (close) {
           await cubit.close();
         } else {
           cubit.switchVideo(_videoWithFallback('new'));
-          await controller.waitForSource('https://r1.googlevideo.com/new.mpd');
+          await controller
+              .waitForSource('https://inv.example/new.mpd?local=true');
         }
         pending.complete(http.Response('<MPD/>', 200));
         await _waitForDeferredFallback();
@@ -1073,25 +1146,57 @@ void main() {
     test('preserves HLS live and remembered subtitle configuration', () async {
       await settings.setRememberSubtitles(true);
       await settings.setLastSubtitle('English');
-      const expected = 'https://manifest.youtube.com/live.m3u8';
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.url.path.startsWith('/api/v1/transcripts/')) {
+          return http.Response('Unavailable', 404);
+        }
+        return http.Response(
+            'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nLive caption\n\n', 200,
+            headers: {'content-type': 'text/vtt'});
+      });
+      addTearDown(client.close);
+      service = Service(httpClient: client);
+      const expected = 'https://inv.example/live.m3u8?local=true';
+      const fallback = 'https://r1.googlevideo.com/live-fallback.mp4';
+      const proxiedFallback =
+          'https://inv.example/live-fallback.mp4?host=r1.googlevideo.com';
+      controller.failingUrls.add(expected);
       final started = controller.waitForSource(expected);
 
       cubit.switchVideo(Video(
         videoId: 'live-video',
-        hlsUrl: expected,
+        hlsUrl: 'https://inv.example/live.m3u8',
         liveNow: true,
+        formatStreams: [_stream(fallback, '360p')],
         captions: [Caption('English', 'en', '/captions/en.vtt')],
       ));
       await started;
 
       final source = controller.sources.last;
-      expect(source.headers, isNull);
+      expect(source.headers,
+          (await db.getCurrentlySelectedServer()).headersForUrl(expected));
       expect(source.videoFormat, BetterPlayerVideoFormat.hls);
       expect(source.liveStream, isTrue);
-      expect(source.subtitles!.single.urls,
-          ['https://inv.example/captions/en.vtt']);
+      expect(requests, isEmpty);
+      expect(await source.subtitles!.single.contentLoader!(),
+          contains('Live caption'));
+      expect(requests.map((request) => request.url.path),
+          ['/api/v1/transcripts/live-video', '/captions/en.vtt']);
+      expect(
+          requests
+              .every((request) => request.url.origin == 'https://inv.example'),
+          isTrue);
+      expect(
+          requests.last.url.toString(), 'https://inv.example/captions/en.vtt');
       expect(source.subtitles!.single.selectedByDefault, isTrue);
       expect(source.useAsmsSubtitles, isFalse);
+      await controller.waitForSource(proxiedFallback);
+      expect(controller.sources.last.subtitles!.single,
+          same(source.subtitles!.single));
+      expect(
+          controller.sources.last.subtitles!.single.selectedByDefault, isTrue);
     });
 
     test('forwards custom headers only to same-origin media', () async {
@@ -1101,8 +1206,7 @@ void main() {
       );
       await db.upsertServer(server);
       await db.useServer(server);
-      await settings.setUseProxy(true);
-      const expected = 'https://inv.example/video.mp4';
+      const expected = 'https://inv.example/video.mp4?host=r1.googlevideo.com';
       final started = controller.waitForSource(expected);
 
       cubit.switchVideo(Video(
@@ -1129,8 +1233,23 @@ void main() {
           customHeaders: {'X-Proxy-Token': 'caption-token'});
       await db.upsertServer(server);
       await db.useServer(server);
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.url.path.startsWith('/api/v1/transcripts/')) {
+          return http.Response('Unavailable', 404);
+        }
+        return http.Response(
+            'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nProtected caption\n\n',
+            200,
+            headers: {'content-type': 'text/vtt'});
+      });
+      addTearDown(client.close);
+      service = Service(httpClient: client);
       const sourceUrl = 'https://r1.googlevideo.com/captioned.mp4';
-      final started = controller.waitForSource(sourceUrl);
+      const proxiedSource =
+          'https://inv.example/captioned.mp4?host=r1.googlevideo.com';
+      final started = controller.waitForSource(proxiedSource);
       cubit.switchVideo(Video(videoId: 'caption-context', formatStreams: [
         _stream(sourceUrl, '360p')
       ], captions: [
@@ -1139,24 +1258,41 @@ void main() {
       ]));
       await started;
       final subtitles = controller.sources.last.subtitles!;
-      expect(subtitles.first.headers,
-          server.headersForUrl('https://inv.example/captions/en.vtt'));
-      expect(subtitles.first.headers?['X-Proxy-Token'], 'caption-token');
-      expect(subtitles.first.headers?['X-Videre-Gateway-Context'], isNotEmpty);
-      expect(subtitles.last.headers, isNull);
-      expect(controller.sources.last.headers, isNull);
+      expect(requests, isEmpty);
+      expect(await subtitles.first.contentLoader!(),
+          contains('Protected caption'));
+      expect(
+          await subtitles.last.contentLoader!(), contains('Protected caption'));
+      expect(requests.map((request) => request.url.path), [
+        '/api/v1/transcripts/caption-context',
+        '/captions/en.vtt',
+        '/api/v1/transcripts/caption-context',
+        '/api/v1/captions/caption-context',
+      ]);
+      final expectedHeaders = server.headersForUrl(server.url)!;
+      for (final request in requests) {
+        expect(request.url.origin, server.url);
+        expect(request.headers['X-Proxy-Token'], 'caption-token');
+        expect(request.headers['X-Videre-Gateway-Context'],
+            expectedHeaders['X-Videre-Gateway-Context']);
+      }
+      expect(requests.last.url.queryParameters['label'], 'Untrusted');
+      expect(
+          controller.sources.last.headers, server.headersForUrl(proxiedSource));
     });
 
     test('uses quality when optional progressive labels are absent', () async {
       await settings.toggleDash(false);
-      const expected = 'https://r1.googlevideo.com/optional.mp4';
+      const upstream = 'https://r1.googlevideo.com/optional.mp4';
+      const expected =
+          'https://inv.example/optional.mp4?host=r1.googlevideo.com';
       final started = controller.waitForSource(expected);
 
       cubit.switchVideo(Video(
         videoId: 'optional-label-video',
         formatStreams: [
           FormatStream(
-            expected,
+            upstream,
             '18',
             'video/mp4',
             'medium',
@@ -1178,7 +1314,11 @@ void main() {
         for (var index = 0; index < 20; index++)
           'https://r$index.googlevideo.com/video.mp4',
       ];
-      controller.failingUrls.addAll(urls);
+      final proxiedUrls = [
+        for (var index = 0; index < 20; index++)
+          'https://inv.example/video.mp4?host=r$index.googlevideo.com',
+      ];
+      controller.failingUrls.addAll(proxiedUrls);
       player.events.clear();
       final failed = player.waitForError();
 
@@ -1191,21 +1331,23 @@ void main() {
       ));
       await failed;
 
-      expect(controller.sourceUrls.skip(1), urls.reversed.take(10));
+      expect(controller.sourceUrls.skip(1), proxiedUrls.reversed.take(10));
     });
 
     test('keeps duplicate resolution fallbacks selectable', () async {
       await settings.toggleDash(false);
-      const preferred = 'https://r1.googlevideo.com/preferred.mp4';
-      const fallback = 'https://r1.googlevideo.com/fallback.mp4';
+      const preferred =
+          'https://inv.example/preferred.mp4?host=r1.googlevideo.com';
+      const fallback =
+          'https://inv.example/fallback.mp4?host=r1.googlevideo.com';
       controller.failingUrls.add(preferred);
       final started = controller.waitForSource(fallback);
 
       cubit.switchVideo(Video(
         videoId: 'duplicate-resolution-video',
         formatStreams: [
-          _stream(fallback, '360p'),
-          _stream(preferred, '360p'),
+          _stream('https://r1.googlevideo.com/fallback.mp4', '360p'),
+          _stream('https://r1.googlevideo.com/preferred.mp4', '360p'),
         ],
       ));
       await started;
@@ -1214,16 +1356,30 @@ void main() {
       expect(controller.sources[controller.sources.length - 2].resolutions,
           {'360p': preferred});
       expect(controller.sources.last.resolutions, {'360p': fallback});
-      cubit.selectVideoTrack(0);
-      expect(controller.resolutionUrls, [fallback]);
+      expect(cubit.getVideoTracks(), ['360p']);
+      final sourceCount = controller.sources.length;
+      final selected = cubit.waitForSeekCount(cubit.seekPositions.length + 1);
+      await cubit.selectVideoTrack(0);
+      await selected;
+      await controller.waitForIdle();
+      expect(controller.sourceUrls.skip(sourceCount), [fallback]);
+      expect(controller.sources.last.resolutions, {'360p': fallback});
+      expect(cubit.getVideoTracks(), ['360p']);
+      expect(cubit.selectedVideoTrack(), 0);
+      expect(controller.maxActiveSetups, 1);
+      expect(controller.resolutionUrls, isEmpty);
     });
 
     test('exposes only retained progressive quality tracks', () async {
-      const hls = 'https://r1.googlevideo.com/live.m3u8';
-      const dash = 'https://r1.googlevideo.com/manifest-2.mpd';
+      const hls = 'https://inv.example/live.m3u8?local=true';
+      const dash = 'https://inv.example/manifest-2.mpd?local=true';
       final urls = [
         for (var index = 0; index < 20; index++)
           'https://r$index.googlevideo.com/video.mp4',
+      ];
+      final proxiedUrls = [
+        for (var index = 0; index < 20; index++)
+          'https://inv.example/video.mp4?host=r$index.googlevideo.com',
       ];
       final started = controller.waitForSource(hls);
 
@@ -1241,15 +1397,15 @@ void main() {
       expect(cubit.getVideoTracks(), [
         for (var index = 12; index < 20; index++) '${index}p',
       ]);
-      final selected = controller.waitForSource(urls[12]);
+      final selected = controller.waitForSource(proxiedUrls[12]);
       cubit.selectVideoTrack(0);
       await selected;
-      expect(controller.sources.last.url, urls[12]);
+      expect(controller.sources.last.url, proxiedUrls[12]);
       expect(cubit.selectedVideoTrack(), 0);
     });
 
     test('deduplicates fragment variants before falling back', () async {
-      const hls = 'https://r1.googlevideo.com/media#hls';
+      const hls = 'https://inv.example/media?local=true#hls';
       controller.failingUrls.add(hls);
       player.events.clear();
       final failed = player.waitForError();
@@ -1257,7 +1413,7 @@ void main() {
       cubit.switchVideo(Video(
         videoId: 'fragment-video',
         hlsUrl: hls,
-        dashUrl: 'https://r1.googlevideo.com/media#dash',
+        dashUrl: 'https://inv.example/media?local=true#dash',
       ));
       await failed;
 
@@ -1266,8 +1422,8 @@ void main() {
 
     test('revalidates proxied URLs and preserves repeated query values',
         () async {
-      await settings.setUseProxy(true);
-      const expected = 'https://inv.example/video.mp4?sig=one&sig=two';
+      const expected =
+          'https://inv.example/video.mp4?sig=one&sig=two&host=googlevideo.com';
       final started = controller.waitForSource(expected);
 
       cubit.switchVideo(Video(
@@ -1284,18 +1440,43 @@ void main() {
           (await db.getCurrentlySelectedServer()).headersForUrl(expected));
     });
 
+    test('saved legacy use-proxy=false cannot enable direct playback',
+        () async {
+      await db.saveSetting(SettingsValue(useProxySettingName, 'false'));
+      const hls = 'https://inv.example/legacy.m3u8?local=true';
+      const progressive =
+          'https://inv.example/legacy.mp4?host=r1.googlevideo.com';
+      controller.failingUrls.add(hls);
+      final started = controller.waitForSource(progressive);
+
+      cubit.switchVideo(Video(
+        videoId: 'legacy-proxy-setting',
+        hlsUrl: 'https://inv.example/legacy.m3u8?local=false',
+        formatStreams: [
+          _stream('https://r1.googlevideo.com/legacy.mp4', '360p'),
+        ],
+      ));
+      await started;
+
+      expect(controller.sourceUrls.skip(1), [hls, progressive]);
+      expect(
+          controller.sources.skip(1).every((source) =>
+              Uri.parse(source.url).origin == 'https://inv.example'),
+          isTrue);
+    });
+
     test('defers fallback until exception dispatch finishes', () async {
-      final fallback =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final fallback = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
 
-      expect(
-          controller.sourceUrls, ['https://r1.googlevideo.com/manifest.mpd']);
+      expect(controller.sourceUrls,
+          ['https://inv.example/manifest.mpd?local=true']);
 
       await fallback;
       expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
-        'https://r1.googlevideo.com/video.mp4',
+        'https://inv.example/manifest.mpd?local=true',
+        'https://inv.example/video.mp4?host=r1.googlevideo.com',
       ]);
     });
 
@@ -1306,17 +1487,17 @@ void main() {
       await cubit.close();
       await _waitForDeferredFallback();
 
-      expect(
-          controller.sourceUrls, ['https://r1.googlevideo.com/manifest.mpd']);
+      expect(controller.sourceUrls,
+          ['https://inv.example/manifest.mpd?local=true']);
       expect(controller.disposed, isTrue);
       expect(controller.listeners, isEmpty);
       expect(cubit.videoController, isNull);
     });
 
     test('waits for a failed setup before starting its fallback', () async {
-      final slow = controller.hold('https://r1.googlevideo.com/slow.mpd');
+      final slow = controller.hold('https://inv.example/slow.mpd?local=true');
       final slowStarted =
-          controller.waitForSource('https://r1.googlevideo.com/slow.mpd');
+          controller.waitForSource('https://inv.example/slow.mpd?local=true');
       cubit.switchVideo(_videoWithFallback('slow'));
       await slowStarted;
 
@@ -1325,22 +1506,22 @@ void main() {
           .where((source) => source.url.contains('/slow.'))
           .map((source) => source.url)
           .toList();
-      final fallback =
-          controller.waitForSource('https://r1.googlevideo.com/slow.mp4');
+      final fallback = controller.waitForSource(
+          'https://inv.example/slow.mp4?host=r1.googlevideo.com');
       slow.completeError(StateError('Rejected slow source'));
       await fallback;
 
       expect(attemptsBeforeFailureCompleted,
-          ['https://r1.googlevideo.com/slow.mpd']);
+          ['https://inv.example/slow.mpd?local=true']);
       expect(controller.maxActiveSetups, 1);
-      expect(
-          controller.sources.last.url, 'https://r1.googlevideo.com/slow.mp4');
+      expect(controller.sources.last.url,
+          'https://inv.example/slow.mp4?host=r1.googlevideo.com');
     });
 
     test('keeps an initialized source after an earlier exception', () async {
-      final slow = controller.hold('https://r1.googlevideo.com/slow.mpd');
+      final slow = controller.hold('https://inv.example/slow.mpd?local=true');
       final slowStarted =
-          controller.waitForSource('https://r1.googlevideo.com/slow.mpd');
+          controller.waitForSource('https://inv.example/slow.mpd?local=true');
       cubit.switchVideo(_videoWithFallback('slow'));
       await slowStarted;
 
@@ -1351,8 +1532,9 @@ void main() {
       await settled;
 
       expect(
-          controller.sources.where(
-              (source) => source.url == 'https://r1.googlevideo.com/slow.mp4'),
+          controller.sources.where((source) =>
+              source.url ==
+              'https://inv.example/slow.mp4?host=r1.googlevideo.com'),
           isEmpty);
     });
 
@@ -1361,19 +1543,20 @@ void main() {
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.initialized));
       await _waitForDeferredFallback();
 
-      expect(
-          controller.sourceUrls, ['https://r1.googlevideo.com/manifest.mpd']);
+      expect(controller.sourceUrls,
+          ['https://inv.example/manifest.mpd?local=true']);
     });
 
     test('keeps an initialized fallback after a duplicate old exception',
         () async {
-      final fallback = controller.hold('https://r1.googlevideo.com/video.mp4');
-      final fallbackStarted =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final fallback = controller
+          .hold('https://inv.example/video.mp4?host=r1.googlevideo.com');
+      final fallbackStarted = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
       await fallbackStarted;
-      expect(
-          controller.sources.last.url, 'https://r1.googlevideo.com/video.mp4');
+      expect(controller.sources.last.url,
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
 
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.initialized));
@@ -1386,13 +1569,14 @@ void main() {
     });
 
     test('ignores a held setup failure after close', () async {
-      final fallback = controller.hold('https://r1.googlevideo.com/video.mp4');
-      final fallbackStarted =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final fallback = controller
+          .hold('https://inv.example/video.mp4?host=r1.googlevideo.com');
+      final fallbackStarted = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
       await fallbackStarted;
-      expect(
-          controller.sources.last.url, 'https://r1.googlevideo.com/video.mp4');
+      expect(controller.sources.last.url,
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
 
       await cubit.close();
       final idle = controller.waitForIdle();
@@ -1407,16 +1591,16 @@ void main() {
           BetterPlayerEvent(BetterPlayerEventType.initialized));
       cubit.onVideoListener(BetterPlayerEvent(BetterPlayerEventType.exception));
 
-      expect(
-          controller.sourceUrls, ['https://r1.googlevideo.com/manifest.mpd']);
+      expect(controller.sourceUrls,
+          ['https://inv.example/manifest.mpd?local=true']);
       expect(player.errorEvents, hasLength(1));
       expect(controller.pauseCalls, 1);
     });
 
     test('emits one terminal error after every candidate fails', () async {
       final exception = BetterPlayerEvent(BetterPlayerEventType.exception);
-      final fallback =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final fallback = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
 
       cubit.onVideoListener(exception);
       await fallback;
@@ -1431,17 +1615,18 @@ void main() {
     });
 
     test('starts a new video without waiting for obsolete setup', () async {
-      final oldSetup = controller.hold('https://r1.googlevideo.com/slow.mpd');
+      final oldSetup =
+          controller.hold('https://inv.example/slow.mpd?local=true');
       addTearDown(() {
         if (!oldSetup.isCompleted) oldSetup.complete();
       });
       cubit.switchVideo(_videoWithFallback('slow'));
-      await controller.waitForSource('https://r1.googlevideo.com/slow.mpd');
+      await controller.waitForSource('https://inv.example/slow.mpd?local=true');
 
       final replacement = RecordingPlayerController();
       cubit.replacementController = replacement;
       final nextStarted =
-          replacement.waitForSource('https://r1.googlevideo.com/next.mpd');
+          replacement.waitForSource('https://inv.example/next.mpd?local=true');
 
       cubit.switchVideo(_videoWithFallback('next'));
       await nextStarted;
@@ -1449,21 +1634,23 @@ void main() {
       expect(oldSetup.isCompleted, isFalse);
       expect(controller.disposed, isTrue);
       expect(controller.listeners, isEmpty);
-      expect(replacement.sourceUrls, ['https://r1.googlevideo.com/next.mpd']);
+      expect(
+          replacement.sourceUrls, ['https://inv.example/next.mpd?local=true']);
       expect(controller.maxActiveSetups, 1);
       expect(replacement.maxActiveSetups, 1);
 
       final oldIdle = controller.waitForIdle();
       oldSetup.complete();
       await oldIdle;
-      expect(replacement.sourceUrls, ['https://r1.googlevideo.com/next.mpd']);
+      expect(
+          replacement.sourceUrls, ['https://inv.example/next.mpd?local=true']);
       expect(player.errorEvents, isEmpty);
     });
 
     test('ignores a listener captured before switching videos', () async {
       final staleListener = controller.listeners.single;
       final nextStarted =
-          controller.waitForSource('https://r1.googlevideo.com/next.mpd');
+          controller.waitForSource('https://inv.example/next.mpd?local=true');
       cubit.switchVideo(_videoWithFallback('next'));
       await nextStarted;
       final attemptsAfterSwitch = controller.sources.length;
@@ -1471,14 +1658,14 @@ void main() {
       staleListener(BetterPlayerEvent(BetterPlayerEventType.exception));
 
       expect(controller.sources, hasLength(attemptsAfterSwitch));
-      expect(
-          controller.sources.last.url, 'https://r1.googlevideo.com/next.mpd');
+      expect(controller.sources.last.url,
+          'https://inv.example/next.mpd?local=true');
     });
 
     test('resets fallback attempts when switching videos', () async {
       final exception = BetterPlayerEvent(BetterPlayerEventType.exception);
-      final initialFallback =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final initialFallback = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
       final initialFallbackSettled =
           cubit.waitForSeekCount(cubit.seekPositions.length + 1);
       cubit.onVideoListener(exception);
@@ -1486,35 +1673,35 @@ void main() {
       await initialFallbackSettled;
 
       final next =
-          controller.waitForSource('https://r1.googlevideo.com/next.mpd');
+          controller.waitForSource('https://inv.example/next.mpd?local=true');
       final nextSettled =
           cubit.waitForSeekCount(cubit.seekPositions.length + 1);
       cubit.switchVideo(_videoWithFallback('next'));
       await next;
       await nextSettled;
-      final nextFallback =
-          controller.waitForSource('https://r1.googlevideo.com/next.mp4');
+      final nextFallback = controller.waitForSource(
+          'https://inv.example/next.mp4?host=r1.googlevideo.com');
       cubit.onVideoListener(exception);
       await nextFallback;
 
       expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
-        'https://r1.googlevideo.com/video.mp4',
-        'https://r1.googlevideo.com/next.mpd',
-        'https://r1.googlevideo.com/next.mp4',
+        'https://inv.example/manifest.mpd?local=true',
+        'https://inv.example/video.mp4?host=r1.googlevideo.com',
+        'https://inv.example/next.mpd?local=true',
+        'https://inv.example/next.mp4?host=r1.googlevideo.com',
       ]);
     });
 
     test('rebuilds source order after toggling DASH preference', () async {
-      final rebuilt =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final rebuilt = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
       cubit.toggleDash();
       await rebuilt;
 
       expect(settings.state.useDash, isFalse);
       expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
-        'https://r1.googlevideo.com/video.mp4',
+        'https://inv.example/manifest.mpd?local=true',
+        'https://inv.example/video.mp4?host=r1.googlevideo.com',
       ]);
     });
 
@@ -1536,18 +1723,18 @@ void main() {
 
     test('keeps fallback track state after synchronous setup failure',
         () async {
-      controller.failingUrls.add('https://r1.googlevideo.com/next.mpd');
-      final fallback =
-          controller.waitForSource('https://r1.googlevideo.com/next.mp4');
+      controller.failingUrls.add('https://inv.example/next.mpd?local=true');
+      final fallback = controller.waitForSource(
+          'https://inv.example/next.mp4?host=r1.googlevideo.com');
 
       cubit.switchVideo(_videoWithFallback('next',
           resolution: '640x360', qualityLabel: 'Medium'));
       await fallback;
 
       expect(controller.sourceUrls, [
-        'https://r1.googlevideo.com/manifest.mpd',
-        'https://r1.googlevideo.com/next.mpd',
-        'https://r1.googlevideo.com/next.mp4',
+        'https://inv.example/manifest.mpd?local=true',
+        'https://inv.example/next.mpd?local=true',
+        'https://inv.example/next.mp4?host=r1.googlevideo.com',
       ]);
       expect(cubit.state.selectedNonDashTrack, '640x360');
     });
@@ -1569,9 +1756,10 @@ void main() {
 
     test('stops an old setup again after invalid replacement metadata',
         () async {
-      final fallback = controller.hold('https://r1.googlevideo.com/video.mp4');
-      final fallbackStarted =
-          controller.waitForSource('https://r1.googlevideo.com/video.mp4');
+      final fallback = controller
+          .hold('https://inv.example/video.mp4?host=r1.googlevideo.com');
+      final fallbackStarted = controller.waitForSource(
+          'https://inv.example/video.mp4?host=r1.googlevideo.com');
       controller.dispatch(BetterPlayerEvent(BetterPlayerEventType.exception));
       await fallbackStarted;
 
@@ -1596,8 +1784,8 @@ void main() {
 
     test('keeps terminal error last when every setup throws', () async {
       controller.failingUrls.addAll({
-        'https://r1.googlevideo.com/bad.mpd',
-        'https://r1.googlevideo.com/bad.mp4',
+        'https://inv.example/bad.mpd?local=true',
+        'https://inv.example/bad.mp4?host=r1.googlevideo.com',
       });
       player.events.clear();
       final failed = player.waitForError();
@@ -1609,8 +1797,7 @@ void main() {
       expect(player.events.last.state, MediaState.error);
     });
 
-    test('does not mix authenticated and cross-origin quality tracks',
-        () async {
+    test('routes quality tracks through the authenticated instance', () async {
       const authenticatedServer = Server(
         url: 'https://inv.example',
         customHeaders: {'Authorization': 'Basic secret'},
@@ -1625,6 +1812,7 @@ void main() {
         formatStreams: [
           _stream('https://r1.googlevideo.com/240.mp4', '240p', itag: '36'),
           _stream('https://inv.example/360.mp4', '360p', itag: '18'),
+          _stream('https://outside.example/480.mp4', '480p', itag: '35'),
         ],
       ));
       await started;
@@ -1633,6 +1821,7 @@ void main() {
         authenticatedServer.headersForUrl('https://inv.example/360.mp4'),
       );
       expect(controller.sources.last.resolutions, {
+        '240p': 'https://inv.example/240.mp4?host=r1.googlevideo.com',
         '360p': 'https://inv.example/360.mp4',
       });
     });
@@ -1664,7 +1853,7 @@ void main() {
 
     test('retains adaptive 720p while omitting the retired progressive stream',
         () async {
-      const manifest = 'https://r1.googlevideo.com/adaptive.mpd';
+      const manifest = 'https://inv.example/adaptive.mpd?local=true';
       controller.adaptiveTracks.add(BetterPlayerAsmsTrack(
           '720', 1280, 720, 2000000, 30, 'avc1', 'video/mp4'));
       final started = controller.waitForSource(manifest);

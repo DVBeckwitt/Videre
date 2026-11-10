@@ -21,7 +21,7 @@ class MiniPlayer extends StatelessWidget {
               ? Row(children: [
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.all(4.0),
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: Builder(builder: (context) {
                         return Builder(builder: (context) {
                           DownloadedVideo? offlineVid = context.select(
@@ -35,12 +35,24 @@ class MiniPlayer extends StatelessWidget {
                               vid?.author ?? offlineVid?.author ?? '';
 
                           return Column(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
-                              Text(
-                                '$title - $author',
-                                overflow: TextOverflow.ellipsis,
-                                style: textTheme.bodySmall,
+                              Flexible(
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) => FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: SizedBox(
+                                      width: constraints.maxWidth,
+                                      child: Text(
+                                        '$title - $author',
+                                        maxLines: 1,
+                                        textAlign: TextAlign.center,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: textTheme.bodySmall,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                               const MiniPlayerControls(),
                               const MiniPlayerProgress(),

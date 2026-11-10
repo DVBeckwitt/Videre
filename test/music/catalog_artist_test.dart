@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'support/legacy_music_catalog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -26,13 +27,13 @@ Map<String, dynamic> _grid(Map<String, dynamic> page) =>
             ['tabRenderer']['content']['sectionListRenderer']['contents'][0]
         ['gridRenderer'] as Map<String, dynamic>;
 
-MusicCatalogService _catalog({
+LegacyMusicCatalogFixture _catalog({
   Map<String, dynamic>? artist,
   Map<String, dynamic>? albums,
   Map<String, dynamic>? singles,
   List<Map<String, dynamic>>? requests,
 }) =>
-    MusicCatalogService(httpClient: MockClient((request) async {
+    LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config);
       final body = jsonDecode(request.body) as Map<String, dynamic>;
       requests?.add(body);
@@ -47,7 +48,8 @@ MusicCatalogService _catalog({
 void main() {
   test('artist and playlist search parse live identities and playlist authors',
       () async {
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config);
       final body = jsonDecode(request.body);
       return _response(_fixture(
@@ -171,7 +173,8 @@ void main() {
       }
     };
     final bodies = <Map>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config);
       final body = jsonDecode(request.body) as Map;
       bodies.add(body);
@@ -206,7 +209,8 @@ void main() {
       }
     ];
     var requests = 0;
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config);
       requests++;
       final body = jsonDecode(request.body);
@@ -218,7 +222,7 @@ void main() {
   });
 
   test('empty searches and invalid artist IDs make no requests', () async {
-    final catalog = MusicCatalogService(httpClient: MockClient((_) async {
+    final catalog = LegacyMusicCatalogFixture(httpClient: MockClient((_) async {
       fail('No request expected');
     }));
     expect(await catalog.searchArtists(' '), isEmpty);
@@ -230,7 +234,8 @@ void main() {
   test(
       'catalog tracks and albums keep artist navigation IDs and existing labels',
       () async {
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config);
       final body = jsonDecode(request.body);
       final fixture = body['browseId'] != null ? 'album' : body['query'];
@@ -261,7 +266,7 @@ void main() {
                 ['browseEndpointContextSupportedConfigs']
             ['browseEndpointContextMusicConfig']['pageType'] =
         'MUSIC_PAGE_TYPE_USER_CHANNEL';
-    final catalog = MusicCatalogService(
+    final catalog = LegacyMusicCatalogFixture(
         httpClient: MockClient((request) async =>
             _response(request.method == 'GET' ? _config : album)));
     final collection = await catalog.getAlbum('MPREb_K8qWMWVqXGi');

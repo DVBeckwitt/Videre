@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'support/legacy_music_catalog.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -25,7 +26,8 @@ http.Response _response(String body, int status) => http.Response(body, status,
 String _fixture(String name) =>
     File('test/music/fixtures/$name.json').readAsStringSync();
 
-MusicCatalogService _catalog(String response) => MusicCatalogService(
+LegacyMusicCatalogFixture _catalog(String response) =>
+    LegacyMusicCatalogFixture(
       httpClient: MockClient((request) async =>
           _response(request.method == 'GET' ? _config : response, 200)),
     );
@@ -101,7 +103,7 @@ void main() {
   });
 
   test('empty search makes no network request', () async {
-    final catalog = MusicCatalogService(httpClient: MockClient((_) async {
+    final catalog = LegacyMusicCatalogFixture(httpClient: MockClient((_) async {
       fail('Empty search must not access the network');
     }));
     expect(await catalog.searchSongs('   '), isEmpty);
@@ -121,7 +123,8 @@ void main() {
   test('transport remains on public origin with no credentials or redirects',
       () async {
     final requests = <http.Request>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       requests.add(request);
       return _response(
           request.method == 'GET' ? _config : _fixture('songs'), 200);
@@ -144,7 +147,8 @@ void main() {
   test('regional bootstrap reports its exit-region failure without a POST',
       () async {
     final requests = <http.Request>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       requests.add(request);
       return _response(
           request.method == 'GET' ? _regionalBootstrap : _fixture('songs'),
@@ -168,7 +172,8 @@ void main() {
   test('consent retry rejects optional cookies only on the original bootstrap',
       () async {
     final requests = <http.Request>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       requests.add(request);
       if (requests.length == 1) {
         return http.Response('', 302, headers: {
@@ -204,7 +209,7 @@ void main() {
         '(repeated=$repeated)', () async {
       var requests = 0;
       final catalog =
-          MusicCatalogService(httpClient: MockClient((request) async {
+          LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
         requests++;
         expect(request.method, 'GET');
         if (requests == 1 || repeated) {
@@ -235,7 +240,7 @@ void main() {
         () async {
       var requests = 0;
       final catalog =
-          MusicCatalogService(httpClient: MockClient((request) async {
+          LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
         requests++;
         expect(request.headers.containsKey('cookie'), isFalse);
         return http.Response('', status, headers: {'location': location});
@@ -248,7 +253,8 @@ void main() {
 
   test('catalog POST never uses the bootstrap consent retry', () async {
     var requests = 0;
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       requests++;
       expect(request.headers.containsKey('cookie'), isFalse);
       return request.method == 'GET'
@@ -266,7 +272,7 @@ void main() {
     final pending = Completer<http.Response>();
     final started = Completer<void>();
     final requests = <http.Request>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) {
+    final catalog = LegacyMusicCatalogFixture(httpClient: MockClient((request) {
       requests.add(request);
       if (requests.length == 1) {
         started.complete();
@@ -293,7 +299,7 @@ void main() {
       final pending = Completer<http.StreamedResponse>();
       final body = latePart == 'body' ? StreamController<List<int>>() : null;
       var requests = 0;
-      final catalog = MusicCatalogService(
+      final catalog = LegacyMusicCatalogFixture(
           requestTimeout: const Duration(milliseconds: 10),
           httpClient: MockClient.streaming((request, stream) {
             requests++;
@@ -325,7 +331,7 @@ void main() {
     ]) {
       final requests = <http.Request>[];
       final catalog =
-          MusicCatalogService(httpClient: MockClient((request) async {
+          LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
         requests.add(request);
         return response;
       }));
@@ -340,7 +346,8 @@ void main() {
   test('failed initialization retries and never leaks transport exception text',
       () async {
     var attempts = 0;
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET' && attempts++ == 0) {
         throw http.ClientException('proxy-user:private-password@proxy.invalid');
       }
@@ -366,7 +373,8 @@ void main() {
       final started = Completer<void>();
       var configurations = 0;
       final visitors = <String?>[];
-      final catalog = MusicCatalogService(httpClient: MockClient((request) {
+      final catalog =
+          LegacyMusicCatalogFixture(httpClient: MockClient((request) {
         if (request.method == 'GET') {
           configurations++;
           if (configurations == 1) {
@@ -411,7 +419,7 @@ void main() {
     final pending = Completer<http.Response>();
     final started = Completer<void>();
     var configurations = 0;
-    final catalog = MusicCatalogService(httpClient: MockClient((request) {
+    final catalog = LegacyMusicCatalogFixture(httpClient: MockClient((request) {
       if (request.method == 'GET') {
         configurations++;
         return Future.value(_response(_config, 200));
@@ -440,13 +448,13 @@ void main() {
       _response('<html>consent</html>', 200),
       _response('[]', 200)
     ]) {
-      final catalog = MusicCatalogService(
+      final catalog = LegacyMusicCatalogFixture(
           httpClient: MockClient((request) async =>
               request.method == 'GET' ? _response(_config, 200) : response));
       await expectLater(
           catalog.searchSongs('query'), throwsA(isA<MusicCatalogException>()));
     }
-    final consent = MusicCatalogService(
+    final consent = LegacyMusicCatalogFixture(
         httpClient:
             MockClient((_) async => _response('<html>consent</html>', 200)));
     await expectLater(
@@ -455,7 +463,7 @@ void main() {
 
   test('request deadline terminates a stalled catalog lookup', () async {
     final pending = Completer<http.Response>();
-    final catalog = MusicCatalogService(
+    final catalog = LegacyMusicCatalogFixture(
       httpClient: MockClient((_) => pending.future),
       requestTimeout: const Duration(milliseconds: 10),
     );
@@ -469,9 +477,11 @@ void main() {
     final proxy = NetworkProxy.instance;
     await proxy.initialize(saved: '{}', configureNative: false);
     addTearDown(() => proxy.initialize(saved: '{}', configureNative: false));
-    final catalog = MusicCatalogService();
-    final custom =
-        MusicCatalogService(requestTimeout: const Duration(milliseconds: 123));
+    final client =
+        MockClient((_) async => throw StateError('No request expected'));
+    final catalog = LegacyMusicCatalogFixture(httpClient: client);
+    final custom = LegacyMusicCatalogFixture(
+        httpClient: client, requestTimeout: const Duration(milliseconds: 123));
     expect(catalog.requestTimeout, const Duration(seconds: 20));
     expect(custom.requestTimeout, const Duration(milliseconds: 123));
 
@@ -486,7 +496,7 @@ void main() {
   test('a timed-out configuration cannot clear its successful retry', () async {
     final pending = Completer<http.Response>();
     var configurations = 0;
-    final catalog = MusicCatalogService(
+    final catalog = LegacyMusicCatalogFixture(
       httpClient: MockClient((request) {
         if (request.method == 'GET') {
           configurations++;
@@ -533,7 +543,7 @@ void main() {
   });
 
   test('invalid IDs never reach the network', () async {
-    final catalog = MusicCatalogService(httpClient: MockClient((_) async {
+    final catalog = LegacyMusicCatalogFixture(httpClient: MockClient((_) async {
       fail('Invalid IDs must not access the network');
     }));
     await expectLater(
@@ -585,7 +595,8 @@ void main() {
       },
     ];
     final bodies = <Map>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config, 200);
       bodies.add(jsonDecode(request.body) as Map);
       return _response(jsonEncode(pages.removeAt(0)), 200);
@@ -655,7 +666,7 @@ void main() {
       // Observe dispatch synchronously, before consuming the request stream.
       // The regular MockClient handler waits for the body first, which can
       // falsely label an already-dispatched request as using the new route.
-      final catalog = MusicCatalogService(
+      final catalog = LegacyMusicCatalogFixture(
           httpClient: MockClient.streaming((request, bodyStream) {
         if (request.method == 'GET') {
           return Future.value(streamed(_response(_config, 200)));
@@ -693,7 +704,7 @@ void main() {
       }),
       _fixture('album'),
     ];
-    final catalog = MusicCatalogService(
+    final catalog = LegacyMusicCatalogFixture(
         httpClient: MockClient((request) async => _response(
             request.method == 'GET' ? _config : pages.removeAt(0), 200)));
     final playlist = await catalog.getPlaylist('OLAK5uy_testAlbum');
@@ -727,7 +738,8 @@ void main() {
       _fixture('album'),
     ];
     final browseIds = <String>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config, 200);
       browseIds.add((jsonDecode(request.body) as Map)['browseId'] as String);
       return _response(pages.removeAt(0), 200);

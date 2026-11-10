@@ -11,7 +11,12 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 ///Widget which uses provided controller to render video player.
 class BetterPlayer extends StatefulWidget {
-  const BetterPlayer({Key? key, required this.controller}) : super(key: key);
+  const BetterPlayer({
+    Key? key,
+    required this.controller,
+    this.fit,
+    this.videoAspectRatio,
+  }) : super(key: key);
 
   factory BetterPlayer.network(
     String url, {
@@ -38,6 +43,12 @@ class BetterPlayer extends StatefulWidget {
       );
 
   final BetterPlayerController controller;
+
+  /// Overrides the fit of the video inside the player viewport.
+  final BoxFit? fit;
+
+  /// Reshapes the video before fitting it. Null uses the source proportions.
+  final double? videoAspectRatio;
 
   @override
   _BetterPlayerState createState() {
@@ -269,6 +280,8 @@ class _BetterPlayerState extends State<BetterPlayer>
           widget.controller.onPlayerVisibilityChanged(info.visibleFraction),
       child: BetterPlayerWithControls(
         controller: widget.controller,
+        fit: widget.fit,
+        videoAspectRatio: widget.videoAspectRatio,
       ),
     );
   }

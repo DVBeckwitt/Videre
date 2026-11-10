@@ -4,6 +4,25 @@ Videre separates a person on the device from an account on an Invidious instance
 Changing accounts within a person keeps that person's local library. Changing
 people changes the library, saved accounts, playback queue, and download list.
 
+## Manage profiles
+
+Open **Settings → Profiles**, or use the profile button on the home screen, on
+phone, tablet, or TV. The **Profiles** button on Welcome is also available before
+adding a server, so an empty profile can be managed or left immediately.
+**Add profile** creates a separate local library. The edit button renames a
+profile without changing its identity or saved data.
+
+The delete button asks for confirmation before removing that person's saved
+accounts, history, playlists, subscriptions, settings, and download records.
+Downloaded media files are kept in their existing storage location. At least one
+profile must remain; add another before deleting the only profile. The original
+Default profile can also be deleted when another profile exists.
+
+Deleting the active profile first stops its playback and download work and opens
+a remaining profile. Saved sign-ins and background notification data are retired
+before local records are removed. Other profiles and device-wide settings are
+preserved. If cleanup fails, the profile remains listed so deletion can be retried.
+
 ## Storage and migration
 
 The existing library stays in its original stores and becomes the `default`
@@ -100,6 +119,10 @@ remain in an account-specific native WebView profile, while transports resolve
 them for each same-origin URL. They are not attached to external video, image, or
 redirect origins. TLS certificate errors are not bypassed by the login browser.
 An Android WebView without isolated-profile support reports that limitation.
+Embedded pages disable JavaScript and service-worker networking. This prevents
+WebRTC and other page-script protocols from bypassing the protected HTTP route.
+HTML form-based authentication remains supported; JavaScript-dependent gateways
+are unsupported. A saved working session is preserved when a new sign-in fails.
 
 API requests, images, captions, native video/audio streams, downloads, and worker
 requests use the same account context. Session expiry requires sign-in; partial
@@ -127,23 +150,20 @@ manual key in account settings.
 The supported onion host is
 `nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion`,
 on HTTP port 80 or HTTPS port 443. Enable Orbot or another Tor-capable SOCKS5
-endpoint in **Network proxy** before using it. The onion setup hands off to the
-separately installed Tor Browser. On versions that reject links from other apps,
-choose **Copy address and open Tor Browser**, then paste the address into that
-browser. Sign in there, wait for API eligibility if required, enable API access,
+endpoint in **Network proxy** before using it. Copy the preferences address from
+the onion setup and open it yourself in the separately installed Tor Browser.
+Sign in there, wait for API eligibility if required, enable API access,
 and enter the key in Videre.
 Videre does not bundle Tor Browser. Its own proxy must be configured separately;
-opening Tor Browser does not route Videre's requests. HTTP onion requests are
-blocked before DNS or connection
+opening Tor Browser does not route Videre's requests. HTTP and HTTPS onion
+requests are blocked before DNS or connection
 when the app's SOCKS setting is off. HTTPS certificate checks remain mandatory.
 Other HTTP hosts, ports, and onion aliases do not gain managed API-key access.
 
-The onion preferences button explicitly targets the installed stable Tor Browser,
-never an arbitrary default browser or a private browser component. Copying its
-public preferences address requires a separate user action. If Tor Browser is
-unavailable, including on a TV,
-Videre shows installation guidance and the preferences address to open on
-another device. API keys are obscured during entry. Adding an onion server
+The onion preferences button shows a copyable public address and guidance.
+Videre does not launch another browser or application. On a TV, the address can
+be opened in Tor Browser on another device. API keys are obscured during entry.
+Adding an onion server
 checks authenticated statistics and video metadata through Videre's configured
 transport before saving it; a failed check clears the unsaved credential.
 This grants API access for browsing and playback without importing browser

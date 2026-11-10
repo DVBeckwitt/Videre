@@ -10,12 +10,14 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   Completer<void> seekReleased = Completer<void>();
   bool playing = false;
   int nextId = 0;
+  Duration duration = const Duration(minutes: 3);
 
   void reset() {
     commands.clear();
     seekStarted = Completer<void>();
     seekReleased = Completer<void>();
     playing = false;
+    duration = const Duration(minutes: 3);
   }
 
   @override
@@ -37,7 +39,7 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
     streams[textureId]!.add(VideoEvent(
       key: source.key,
       eventType: VideoEventType.initialized,
-      duration: const Duration(minutes: 3),
+      duration: duration,
     ));
   }
 
@@ -210,6 +212,48 @@ void main() {
     platform.seekReleased.complete();
     await seek;
     expect(platform.commands.last, 'seek-completed');
+  });
+
+  test('a replaced source ignores completion of its old pending seek',
+      () async {
+    final controller = BetterPlayerController(const BetterPlayerConfiguration(
+      autoPlay: false,
+      handleLifecycle: false,
+      allowedScreenSleep: true,
+    ));
+    final events = <BetterPlayerEventType>[];
+    controller
+        .addEventsListener((event) => events.add(event.betterPlayerEventType));
+    await controller.setupDataSource(BetterPlayerDataSource(
+      BetterPlayerDataSourceType.network,
+      'https://example.com/long.mp4',
+      videoFormat: BetterPlayerVideoFormat.other,
+    ));
+    final seek = controller.seekTo(const Duration(seconds: 40));
+    try {
+      await platform.seekStarted.future;
+      platform.duration = const Duration(seconds: 30);
+      await controller.setupDataSource(BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/short.mp4',
+        videoFormat: BetterPlayerVideoFormat.other,
+      ));
+      events.clear();
+      platform.commands.clear();
+      platform.seekReleased.complete();
+      await seek;
+
+      expect(events, isNot(contains(BetterPlayerEventType.finished)),
+          reason: 'An old seek must not advance the new video queue entry.');
+      expect(controller.videoPlayerController!.value.position, Duration.zero);
+      expect(events, isNot(contains(BetterPlayerEventType.seekTo)));
+      expect(platform.commands, ['seek-completed']);
+    } finally {
+      if (!platform.seekReleased.isCompleted) platform.seekReleased.complete();
+      await seek;
+      controller.dispose();
+      await Future<void>.delayed(Duration.zero);
+    }
   });
 
   for (final pauseDuringSeek in [false, true]) {

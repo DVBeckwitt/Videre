@@ -7,6 +7,9 @@ import '../../../player/views/components/backend_request_indicator.dart';
 import '../../../player/views/components/backend_retry_notice.dart';
 import '../../states/video.dart';
 
+bool showVideoMetadataRetry(VideoState state) =>
+    state.retryingVideo && (state.requestedBackend?.retryIndex ?? 0) == 0;
+
 /// Retains the metadata request, then follows active playback of this video.
 class VideoBackendStatus extends StatelessWidget {
   final VideoState state;

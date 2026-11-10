@@ -46,6 +46,7 @@ class _DislikeService extends Service {
   @override
   Future<Video> getVideo(String videoId,
           {Server? serverOverride,
+          VideoLoadObserver? loadObserver,
           void Function(BackendPlayback request)? onBackendRequest}) async =>
       _video;
 }

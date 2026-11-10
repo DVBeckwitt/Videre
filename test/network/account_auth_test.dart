@@ -311,9 +311,16 @@ void main() {
     });
     final statusStarted = Completer<void>();
     final statusResponse = Completer<Map<String, Object>>();
+    var statusReads = 0;
     messenger.setMockMethodCallHandler(_gatewaySessions, (call) {
-      statusStarted.complete();
-      return statusResponse.future;
+      expect(call.method, 'status');
+      if (statusReads++ == 0) {
+        statusStarted.complete();
+        return statusResponse.future;
+      }
+      // Closing an installing gateway browser is followed by a fresh status
+      // read. The native session remains disabled after this ordinary login.
+      return Future.value(_disabledGateway);
     });
     messenger.setMockMethodCallHandler(_webAuth,
         (call) async => _tokenCallback(_callback(call), 'newer-login'));
@@ -324,6 +331,7 @@ void main() {
     statusResponse.complete(_disabledGateway);
     await loggingOut;
 
+    expect(statusReads, 2);
     expect(database.getServer(account.accountId)!.authToken, 'newer-login');
     expect(
         (await fileDb.getCurrentlySelectedServer()).authToken, 'newer-login');

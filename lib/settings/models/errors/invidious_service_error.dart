@@ -3,6 +3,7 @@ class InvidiousServiceError extends Error {
   final int? statusCode;
   final bool responseWasHtml;
   final Duration? retryAfter;
+  final bool retryAfterIsInvalid;
   final String? errorCode;
   final bool isGatewayResponse;
 
@@ -11,6 +12,7 @@ class InvidiousServiceError extends Error {
     this.statusCode,
     this.responseWasHtml = false,
     this.retryAfter,
+    this.retryAfterIsInvalid = false,
     this.errorCode,
     this.isGatewayResponse = false,
   });

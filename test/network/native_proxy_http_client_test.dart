@@ -80,6 +80,21 @@ void main() {
     expect(result.headers['location'], '/next');
   });
 
+  test('official destinations are rejected before invoking native transport',
+      () async {
+    var requests = 0;
+    messenger.setMockMethodCallHandler(channel, (_) async {
+      requests++;
+      return response();
+    });
+    await expectLater(
+        client.post(Uri.parse('https://music.youtube.com/youtubei/v1/search'),
+            body: '{}'),
+        throwsA(isA<http.ClientException>().having((e) => e.message,
+            'privacy failure', contains('Direct YouTube connections'))));
+    expect(requests, 0);
+  });
+
   test('platform failures never expose native messages or use a fallback',
       () async {
     var calls = 0;

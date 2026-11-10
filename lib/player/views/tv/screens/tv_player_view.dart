@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/video_player.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -61,38 +62,44 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
             LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
           },
           child: Scaffold(
-            body: BlocBuilder<PlayerCubit, PlayerState>(
-              builder: (context, state) {
-                if (widget.receiveRemote && !_openedReceiver) {
-                  _openedReceiver = true;
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (context.mounted)
-                      RemoteControlButton.show(
-                          context, context.read<PlayerCubit>(),
-                          startReceiving: true);
-                  });
-                }
-                if (!state.hasVideo) {
-                  return Center(
-                      child: RemoteControlButton(
-                          player: context.read<PlayerCubit>()));
-                }
-                return SizedBox.expand(
-                  child: state.isAudio
-                      ? MusicScreen.tvAudio(
-                          video: state.currentlyPlaying,
-                          offlineVideo: state.offlineCurrentlyPlaying,
-                        )
-                      : VideoPlayer(
-                          video: state.currentlyPlaying,
-                          offlineVideo: state.offlineCurrentlyPlaying,
-                          startAt: state.startAt,
-                          miniPlayer: false,
-                          playNow: true,
-                          disableControls: true,
-                        ),
-                );
-              },
+            body: Stack(
+              fit: StackFit.passthrough,
+              children: [
+                BlocBuilder<PlayerCubit, PlayerState>(
+                  builder: (context, state) {
+                    if (widget.receiveRemote && !_openedReceiver) {
+                      _openedReceiver = true;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (context.mounted)
+                          RemoteControlButton.show(
+                              context, context.read<PlayerCubit>(),
+                              startReceiving: true);
+                      });
+                    }
+                    if (!state.hasVideo) {
+                      return Center(
+                          child: RemoteControlButton(
+                              player: context.read<PlayerCubit>()));
+                    }
+                    return SizedBox.expand(
+                      child: state.isAudio
+                          ? MusicScreen.tvAudio(
+                              video: state.currentlyPlaying,
+                              offlineVideo: state.offlineCurrentlyPlaying,
+                            )
+                          : VideoPlayer(
+                              video: state.currentlyPlaying,
+                              offlineVideo: state.offlineCurrentlyPlaying,
+                              startAt: state.startAt,
+                              miniPlayer: false,
+                              playNow: true,
+                              disableControls: true,
+                            ),
+                    );
+                  },
+                ),
+                const Positioned.fill(child: PlayerRetryIndicator()),
+              ],
             ),
           ),
         ),

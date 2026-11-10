@@ -20,6 +20,7 @@ import 'package:path/path.dart' as p;
 import 'package:clipious/network/network_proxy.dart';
 
 import '../../player/states/player.dart';
+import '../../player/media_source.dart';
 import '../../network/gateway_session_bridge.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
@@ -381,7 +382,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             token.whenCancel.then((error) => throw error),
           ]);
           if (token.isCancelled) throw token.cancelError!;
-          final formats = DownloadFormats(vid.adaptiveFormats);
+          // Admit routes before ranking tracks, so an unsupported high-bitrate
+          // URL cannot hide a usable track from the selected instance.
+          final mediaUrls = <AdaptiveFormat, String>{};
+          for (final format in vid.adaptiveFormats ?? <AdaptiveFormat>[]) {
+            final parsed = parseMediaUrl(format.url);
+            if (parsed == null) continue;
+            final url =
+                validatedMediaUrl(proxyMediaUrl(parsed, server), server);
+            if (url != null) mediaUrls[format] = url;
+          }
+          final formats = DownloadFormats(mediaUrls.keys.toList());
           // A saved document already has a container. Old jobs saved WebM.
           final savedContainer = video.container ??
               (video.storageUri == null ? null : DownloadContainer.webm);
@@ -417,27 +428,32 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final videoPath = '$staging.video.part';
           final steps = video.audioOnly ? 2 : 3;
           Future<void> transfer(AdaptiveFormat format, String path, int step) {
+            final url = mediaUrls[format]!;
             final size = int.tryParse(format.clen);
-            return downloadResumable(dio, format.url, path,
+            return downloadResumable(dio, url, path,
                 cancelToken: token,
                 identity: '${format.itag}:${format.clen}:${format.lmt}',
                 expectedSize: size != null && size > 0 ? size : null,
-                headers: server.headersForUrl(format.url),
+                headers: server.headersForUrl(url),
                 onProgress: (count, total) =>
                     update(count, total, step, steps));
           }
 
-          final musicThumbnails = music?.thumbnails ?? const [];
-          final useInvidiousProxy = musicThumbnails.isEmpty;
-          final thumb = ImageObject.getBestThumbnail(
-                  useInvidiousProxy ? vid.videoThumbnails : musicThumbnails)
-              ?.url;
+          String? privateThumbnail(List<ImageObject>? images) =>
+              ImageObject.getBestThumbnail(images?.where((image) {
+                final url = invidiousImageUrl(image.url, server);
+                return url != null && url.isNotEmpty;
+              }).toList())
+                  ?.url;
+          // An unsupported preferred cover must not hide a usable smaller
+          // image or the video's instance-proxied thumbnail.
+          final thumb = privateThumbnail(music?.thumbnails) ??
+              privateThumbnail(vid.videoThumbnails);
           if (thumb != null && thumb.isNotEmpty) {
             unawaited(token.whenCancel.then(artworkToken.cancel));
             // Optional artwork must not delay the first media request. Keep it
             // part of this job so pause, delete and proxy changes can join it.
-            artwork = _downloadArtwork(dio, video, thumb, server, artworkToken,
-                useInvidiousProxy: useInvidiousProxy);
+            artwork = _downloadArtwork(dio, video, thumb, server, artworkToken);
           }
           await transfer(audio, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
@@ -593,8 +609,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<void> _downloadArtwork(Dio dio, DownloadedVideo video, String thumb,
-      Server server, CancelToken token,
-      {required bool useInvidiousProxy}) async {
+      Server server, CancelToken token) async {
     final deadline = Timer(const Duration(seconds: 5),
         () => token.cancel('Artwork download deadline'));
     File? partial;
@@ -602,12 +617,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       final target = File(await video.thumbnailPath);
       partial = File('${target.path}.part');
       if (token.isCancelled || await target.exists()) return;
-      final url = invidiousImageUrl(thumb, server,
-          useInvidiousProxy: useInvidiousProxy);
+      final url = invidiousImageUrl(thumb, server);
+      if (url == null) return;
       await dio.download(url, partial.path,
           cancelToken: token,
           options: Options(
-              headers: useInvidiousProxy ? server.headersForUrl(url) : null,
+              headers: server.headersForUrl(url),
               // Covers are optional; do not try to decode an error response
               // whose body may not match its advertised content type.
               receiveDataWhenStatusError: false));

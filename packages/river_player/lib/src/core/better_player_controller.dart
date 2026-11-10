@@ -82,6 +82,8 @@ class BetterPlayerController {
       _betterPlayerSubtitlesSourceList;
   BetterPlayerSubtitlesSource? _betterPlayerSubtitlesSource;
   int _subtitleLoadGeneration = 0;
+  int _sourceGeneration = 0;
+  int _seekRevision = 0;
 
   ///Currently used subtitles source.
   BetterPlayerSubtitlesSource? get betterPlayerSubtitlesSource =>
@@ -236,6 +238,7 @@ class BetterPlayerController {
 
   ///Setup new data source in Better Player.
   Future setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+    ++_sourceGeneration;
     ++_subtitleLoadGeneration;
     _betterPlayerSubtitlesSource = null;
     subtitlesLines.clear();
@@ -692,7 +695,16 @@ class BetterPlayerController {
       throw StateError("The video has not been initialized yet.");
     }
 
-    await videoPlayerController!.seekTo(moment);
+    final sourceGeneration = _sourceGeneration;
+    final seekRevision = ++_seekRevision;
+    final controller = videoPlayerController!;
+    await controller.seekTo(moment);
+    if (_disposed ||
+        sourceGeneration != _sourceGeneration ||
+        seekRevision != _seekRevision ||
+        !identical(controller, videoPlayerController)) {
+      return;
+    }
 
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.seekTo,
         parameters: <String, dynamic>{_durationParameter: moment}));

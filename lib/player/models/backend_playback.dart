@@ -15,9 +15,13 @@ class BackendPlaybackFailure implements Exception {
 bool isBackendRetryable(Object error) =>
     error is BackendPlaybackFailure ||
     error is TimeoutException ||
-    error is SocketException ||
+    (error is SocketException && error.osError != null) ||
     (error is InvidiousServiceError &&
         !error.isGatewayAccessFailure &&
+        // A cooldown belongs to the instance, including its other backends.
+        // Invalid values must not become permission to dispatch immediately.
+        !error.retryAfterIsInvalid &&
+        (error.retryAfter ?? Duration.zero) <= Duration.zero &&
         const [502, 503, 504].contains(error.statusCode));
 
 class _BackendRetryBudget {

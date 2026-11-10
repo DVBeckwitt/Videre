@@ -6,7 +6,7 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.FileDataSource
 import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
-import androidx.media3.datasource.DefaultDataSource
+import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 
 internal class CacheDataSourceFactory(
     private val context: Context,
@@ -14,7 +14,7 @@ internal class CacheDataSourceFactory(
     private val maxFileSize: Long,
     upstreamDataSource: DataSource.Factory?
 ) : DataSource.Factory {
-    private var defaultDatasourceFactory: DefaultDataSource.Factory? = null
+    private var defaultDatasourceFactory: DataSource.Factory? = null
     override fun createDataSource(): CacheDataSource {
         val betterPlayerCache = RiverPlayerCache.createCache(context, maxCacheSize)
             ?: throw IllegalStateException("Cache can't be null.")
@@ -32,8 +32,10 @@ internal class CacheDataSourceFactory(
     init {
         val bandwidthMeter = DefaultBandwidthMeter.Builder(context).build()
         upstreamDataSource?.let {
-            defaultDatasourceFactory = DefaultDataSource.Factory(context, upstreamDataSource)
-            defaultDatasourceFactory?.setTransferListener(bandwidthMeter)
+            val sources = ProxyDataSource.withLocalSources(context, upstreamDataSource)
+            defaultDatasourceFactory = DataSource.Factory {
+                sources.createDataSource().apply { addTransferListener(bandwidthMeter) }
+            }
         }
     }
 }

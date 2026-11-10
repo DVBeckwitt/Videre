@@ -47,6 +47,8 @@ class _DownloadTestBinding extends AutomatedTestWidgetsFlutterBinding {
   bool get overrideHttpClient => false;
 }
 
+class _DirectHttpOverrides extends HttpOverrides {}
+
 class _DownloadService extends Service {
   final Future<Video> Function(String) fetch;
   final void Function(Server?)? onServer;
@@ -58,7 +60,8 @@ class _DownloadService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) {
     onServer?.call(serverOverride);
     return fetch(videoId);
   }
@@ -150,14 +153,11 @@ void main() {
   Future<Video> audioVideo(String videoId,
       {void Function(HttpRequest)? onRequest}) async {
     const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
-    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     mediaServer!.listen((request) async {
       onRequest?.call(request);
       request.response.add(bytes);
       await request.response.close();
     });
-    await db.upsertServer(
-        const Server(url: 'https://instance.invalid', inUse: true));
     return Video(videoId: videoId, title: 'Resolved title', adaptiveFormats: [
       AdaptiveFormat(
           null,
@@ -182,7 +182,6 @@ void main() {
     Duration audioDelay = Duration.zero,
   }) async {
     const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
-    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     mediaServer!.listen((request) async {
       try {
         if (request.uri.path.startsWith('/vi/')) {
@@ -198,8 +197,10 @@ void main() {
       }
     });
     final origin = 'http://127.0.0.1:${mediaServer!.port}';
-    await db.useServer(Server(
-        url: origin, customHeaders: {'X-Instance-Key': 'artwork-instance'}));
+    final server = Server(
+        url: origin, customHeaders: {'X-Instance-Key': 'artwork-instance'});
+    await db.upsertServer(server);
+    await db.useServer(server);
     return Video(
         videoId: video.videoId,
         title: 'Resolved title',
@@ -229,12 +230,12 @@ void main() {
     originalService = service;
     documentsDirectory =
         await Directory.systemTemp.createTemp('videre-download-manager-test-');
-    mediaServer = null;
+    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     messenger.setMockMethodCallHandler(
         pathProvider, (_) async => documentsDirectory.path);
     db = await SembastSqfDb.createInMemory();
     await db.upsertServer(
-        const Server(url: 'https://instance.invalid', inUse: true));
+        Server(url: 'http://127.0.0.1:${mediaServer!.port}', inUse: true));
     await db.saveSetting(SettingsValue('downloads-wifi-only', 'true'));
     await db.upsertDownload(video);
     await openManager();
@@ -332,7 +333,6 @@ void main() {
     const mp4 = '$folder/document/primary%3AVidere%2Fvideo.mp4';
     const mediaBytes = [1, 2, 3, 4];
     final requests = <String>[];
-    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     mediaServer!.listen((request) async {
       requests.add(request.uri.path);
       request.response.add(mediaBytes);
@@ -990,6 +990,7 @@ void main() {
     final nextServer = Server(
         url: 'http://localhost:${mediaServer!.port}',
         customHeaders: {'X-Instance-Key': 'next-instance'});
+    await db.upsertServer(originalServer);
     await db.useServer(originalServer);
     final metadata = Completer<Video>();
     final metadataStarted = Completer<void>();
@@ -1016,17 +1017,121 @@ void main() {
         [0, 1, 2, 3, 4, 5, 6, 7]);
   });
 
+  for (final proxyVideos in [false, true]) {
+    test('download ignores legacy proxy=$proxyVideos and stays on its instance',
+        () async {
+      final audio = video.copyWith(audioOnly: true);
+      await db.upsertDownload(audio);
+      final received = <(String, Uri, String?)>[];
+      final remote = await audioVideo(audio.videoId, onRequest: (request) {
+        received.add(
+            ('instance', request.uri, request.headers.value('X-Instance-Key')));
+      });
+      const source = 'https://r1---sn-test.googlevideo.com/videoplayback'
+          '?sig=signed%2Bvalue&itag=251&duplicate=first&duplicate=second';
+      remote.adaptiveFormats!.single.url = source;
+      final original = Server(
+          url: 'http://127.0.0.1:${mediaServer!.port}/proxy',
+          customHeaders: {'X-Instance-Key': 'original-instance'});
+      final other = Server(
+          url: 'http://localhost:${mediaServer!.port}/other',
+          customHeaders: {'X-Instance-Key': 'other-instance'});
+      await db.useServer(original);
+      await db.saveSetting(
+          SettingsValue(useProxySettingName, proxyVideos.toString()));
+      service = _DownloadService((_) async {
+        await db.useServer(other);
+        return remote;
+      });
+
+      final destinations = <Uri>[];
+      await HttpOverrides.runZoned(() async {
+        await manager.setWifiOnly(false);
+        await waitFor((state) =>
+            state.videos.single.downloadComplete ||
+            state.videos.single.downloadFailed);
+      }, createHttpClient: (context) {
+        return _DirectHttpOverrides().createHttpClient(context)
+          ..connectionFactory = (uri, _, __) {
+            destinations.add(uri);
+            // A legacy direct setting must not reach a Google connection at
+            // all. Never resolve or open an official endpoint in this test.
+            expect(uri.host, '127.0.0.1');
+            return Socket.startConnect(
+                InternetAddress.loopbackIPv4, mediaServer!.port);
+          };
+      });
+
+      expect(manager.state.videos.single.downloadComplete, isTrue);
+      expect(destinations, hasLength(1));
+      expect(received, hasLength(1));
+      expect(received.single.$1, 'instance');
+      expect(received.single.$3, 'original-instance');
+      expect(destinations.single.host, '127.0.0.1');
+      expect(received.single.$2.path, '/proxy/videoplayback');
+      expect(received.single.$2.queryParameters['sig'], 'signed+value');
+      expect(received.single.$2.queryParametersAll['duplicate'],
+          ['first', 'second']);
+      expect(received.single.$2.queryParameters['host'],
+          'r1---sn-test.googlevideo.com');
+      expect(await File(await audio.downloadPath).readAsBytes(),
+          [0, 1, 2, 3, 4, 5, 6, 7]);
+    });
+  }
+
+  test('download rejects an unrelated media origin before opening a connection',
+      () async {
+    await db.upsertDownload(video.copyWith(audioOnly: true));
+    var requests = 0;
+    final remote =
+        await audioVideo(video.videoId, onRequest: (_) => requests++);
+    remote.adaptiveFormats!.single.url =
+        'http://localhost:${mediaServer!.port}/unrelated';
+    service = _DownloadService((_) async => remote);
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete ||
+        state.videos.single.downloadFailed);
+    expect(manager.state.videos.single.downloadFailed, isTrue);
+    expect(requests, 0);
+  });
+
+  test('download ranks only tracks that can use the selected instance',
+      () async {
+    await db.upsertDownload(video.copyWith(audioOnly: true));
+    final requests = <String>[];
+    final remote = await audioVideo(video.videoId,
+        onRequest: (request) => requests.add(request.uri.path));
+    final mixed = remote.copyWith(adaptiveFormats: [
+      ...remote.adaptiveFormats!,
+      AdaptiveFormat(null, '256000', null, 'https://unrelated.example/audio',
+          '252', 'audio/webm', '8', '1', '', 'webm', 'opus', null, null),
+    ]);
+    service = _DownloadService((_) async => mixed);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete ||
+        state.videos.single.downloadFailed);
+    expect(manager.state.videos.single.downloadComplete, isTrue);
+    expect(requests, ['/audio']);
+    expect(
+        await File(await video.copyWith(audioOnly: true).downloadPath)
+            .readAsBytes(),
+        [0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
   test('a queued download retains its account after a same-server switch',
       () async {
     await manager.deleteVideo(video);
     final remote = await audioVideo(video.videoId);
-    const original = Server(
+    final original = Server(
         id: 'first-account',
-        url: 'https://instance.invalid',
+        url: 'http://127.0.0.1:${mediaServer!.port}',
         authToken: 'first');
-    const other = Server(
+    final other = Server(
         id: 'second-account',
-        url: 'https://instance.invalid',
+        url: 'http://127.0.0.1:${mediaServer!.port}',
         authToken: 'second');
     await db.useServer(original);
     await manager.addDownload(video.videoId, audioOnly: true);
@@ -1050,13 +1155,13 @@ void main() {
   test('download retries cannot move to a different account on the same server',
       () async {
     final remote = await audioVideo(video.videoId);
-    const original = Server(
+    final original = Server(
         id: 'retry-original',
-        url: 'https://instance.invalid',
+        url: 'http://127.0.0.1:${mediaServer!.port}',
         authToken: 'first');
-    const other = Server(
+    final other = Server(
         id: 'retry-other',
-        url: 'https://instance.invalid',
+        url: 'http://127.0.0.1:${mediaServer!.port}',
         authToken: 'second');
     await db.useServer(original);
     await db.upsertDownload(video.copyWith(audioOnly: true));
@@ -1084,11 +1189,12 @@ void main() {
         () async {
       await manager.deleteVideo(video);
       final remote = await audioVideo(video.videoId);
-      const original =
-          Server(url: 'https://instance.invalid', authToken: 'legacy-account');
-      const replacement = Server(
+      final original = Server(
+          url: 'http://127.0.0.1:${mediaServer!.port}',
+          authToken: 'legacy-account');
+      final replacement = Server(
           id: 'replacement-account',
-          url: 'https://instance.invalid',
+          url: 'http://127.0.0.1:${mediaServer!.port}',
           authToken: 'replacement-account');
       await db.upsertServer(original);
       await db.useServer(original);
@@ -1306,7 +1412,6 @@ void main() {
     });
     final ranges = <String?>[];
     var originalRequests = 0;
-    mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     mediaServer!.listen((request) async {
       try {
         if (request.uri.queryParameters['person'] != 'default') {
@@ -1368,7 +1473,7 @@ void main() {
     await db.useServer(Server(
         profileId: person.id,
         id: 'other-download-account',
-        url: 'https://instance.invalid'));
+        url: 'http://127.0.0.1:${mediaServer!.port}'));
     await manager.reloadForProfile();
     await manager.addDownload(video.videoId, audioOnly: true);
     await waitFor((state) => state.videos.single.downloadComplete)
@@ -1423,7 +1528,7 @@ void main() {
     expect(await File('$cover.part').exists(), isFalse);
   });
 
-  test('music audio download saves its catalog cover without instance headers',
+  test('music audio download saves its proxied cover with instance headers',
       () async {
     const coverPath = '/vi/music-cover/cover.jpg';
     final requests = <(String, String?)>[];
@@ -1434,7 +1539,7 @@ void main() {
     }, onAudio: (request) {
       requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
     });
-    final cover = 'http://127.0.0.1:${mediaServer!.port}$coverPath';
+    const cover = 'https://i.ytimg.com/vi/music-cover/cover.jpg';
     final audio = video.copyWith(
         audioOnly: true,
         musicMetadata: MusicMetadata(
@@ -1448,10 +1553,113 @@ void main() {
     await manager.setWifiOnly(false);
     await waitFor((state) => state.videos.single.downloadComplete);
 
-    expect(requests,
-        unorderedEquals([(coverPath, null), ('/audio', 'artwork-instance')]));
+    expect(
+        requests,
+        unorderedEquals(
+            [(coverPath, 'artwork-instance'), ('/audio', 'artwork-instance')]));
     expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
   });
+
+  test('unsupported Google cover is skipped without delaying audio download',
+      () async {
+    final remote = await audioVideoWithArtwork(onArtwork: (_) async {
+      fail('Unsupported artwork must not start a transfer');
+    });
+    final audio = video.copyWith(
+        audioOnly: true,
+        musicMetadata:
+            MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+          ImageObject(null, 'https://s.ytimg.com/yts/img/cover.png', 500, 500)
+        ]));
+    await db.upsertDownload(audio);
+    manager.setVideos();
+    service =
+        _DownloadService((_) async => remote.copyWith(videoThumbnails: []));
+    final destinations = <Uri>[];
+    await HttpOverrides.runZoned(() async {
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.single.downloadComplete ||
+          state.videos.single.downloadFailed);
+    },
+        createHttpClient: (context) => _DirectHttpOverrides()
+            .createHttpClient(context)
+          ..connectionFactory = (uri, _, __) {
+            destinations.add(uri);
+            if (uri.host != '127.0.0.1') {
+              throw const SocketException('Unexpected artwork connection');
+            }
+            return Socket.startConnect(InternetAddress.loopbackIPv4, uri.port);
+          });
+    expect(manager.state.videos.single.downloadComplete, isTrue);
+    expect(destinations.map((uri) => uri.path), ['/audio']);
+    expect(await File(await audio.thumbnailPath).exists(), isFalse);
+  });
+
+  for (final source in ['music', 'video', 'video fallback']) {
+    test('download chooses usable artwork from $source', () async {
+      final paths = <String>[];
+      final audioPaths = <String>[];
+      final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+        paths.add(request.uri.path);
+        expect(request.headers.value('X-Instance-Key'), 'artwork-instance');
+        request.response.add([10, 11, 12]);
+        await request.response.close();
+      }, onAudio: (request) {
+        audioPaths.add(request.uri.path);
+        expect(request.headers.value('X-Instance-Key'), 'artwork-instance');
+      });
+      final unsupported = ImageObject(
+          null, 'https://s.ytimg.com/yts/img/cover.png', 1000, 1000);
+      final supported = ImageObject(
+          null, 'https://i.ytimg.com/vi/music-cover/cover.jpg', 100, 100);
+      final audio = video.copyWith(
+          audioOnly: true,
+          musicMetadata: source == 'video'
+              ? null
+              : MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+                  unsupported,
+                  if (source == 'music') supported,
+                ]));
+      await db.upsertDownload(audio);
+      manager.setVideos();
+      service = _DownloadService((_) async => source == 'video'
+          ? remote.copyWith(videoThumbnails: [unsupported, supported])
+          : remote);
+      final destinations = <Uri>[];
+
+      await HttpOverrides.runZoned(() async {
+        await manager.setWifiOnly(false);
+        await waitFor((state) =>
+            state.videos.single.downloadComplete ||
+            state.videos.single.downloadFailed);
+      },
+          createHttpClient: (context) => _DirectHttpOverrides()
+              .createHttpClient(context)
+            ..connectionFactory = (uri, _, __) {
+              destinations.add(uri);
+              if (uri.host != '127.0.0.1') {
+                throw const SocketException('Unexpected artwork connection');
+              }
+              return Socket.startConnect(
+                  InternetAddress.loopbackIPv4, uri.port);
+            });
+
+      expect(manager.state.videos.single.downloadComplete, isTrue);
+      expect(paths, [
+        source == 'video fallback'
+            ? '/vi/${video.videoId}/default.jpg'
+            : '/vi/music-cover/cover.jpg'
+      ]);
+      expect(audioPaths, ['/audio']);
+      // Both HTTP transfers may share one loopback keep-alive connection.
+      expect(destinations, isNotEmpty);
+      expect(destinations.every((uri) => uri.host == '127.0.0.1'), isTrue);
+      expect(await File(await audio.downloadPath).readAsBytes(),
+          [0, 1, 2, 3, 4, 5, 6, 7]);
+      expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+    });
+  }
 
   for (final relative in [false, true]) {
     test('old queued Music fallback retains cover access (relative=$relative)',

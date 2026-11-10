@@ -56,7 +56,8 @@ class _GuestService extends Service {
   @override
   Future<Video> getVideo(String id,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) async {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
     requestedVideoIds.add(id);
     return metadataFails
         ? throw StateError('Metadata unavailable')
@@ -508,6 +509,32 @@ void main() {
       expect(player.state.currentlyPlaying!.musicMetadata!.title, 'Song');
       expect(player.state.mediaEvent.state, isNot(MediaState.error));
     });
+
+    for (final requested in [Duration.zero, const Duration(seconds: 37)]) {
+      test('failed song retains requested $requested for visible Retry',
+          () async {
+        player.audioSession = await AudioSession.instance;
+        app_main.mediaHandler = MediaHandler(player);
+        player.seedState(player.state.copyWith(
+            position: const Duration(minutes: 4, seconds: 13),
+            currentlyPlaying: const Video(videoId: 'previous-video')));
+        (service as _GuestService).metadataFails = true;
+        const song = Video(
+            videoId: 'song',
+            lengthSeconds: 253,
+            musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+        await player.playVideo([song], audio: true, startAt: requested);
+        expect(player.state.mediaEvent.state, MediaState.error);
+        expect(player.state.position, requested);
+        expect(player.state.startAt, requested);
+
+        (service as _GuestService).metadataFails = false;
+        // Match the position passed by MusicPlayer's visible Retry button.
+        await player.switchToVideo(player.state.currentlyPlaying!,
+            startAt: player.state.position);
+        expect(player.state.startAt, requested);
+      });
+    }
 
     test(
         'downloaded song selection starts over and forwards explicit resume to its decoder',
