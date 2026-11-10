@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -11,6 +13,7 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -194,6 +197,43 @@ void main() {
       await db.close();
       service = Service();
     });
+
+    for (final legacyHeader in [false, true]) {
+      test(
+          'HTTP onion without SOCKS rejects before credentials or requests '
+          '(legacyHeader=$legacyHeader)', () async {
+        await NetworkProxy.instance
+            .initialize(saved: '{}', configureNative: false);
+        const access = MethodChannel('videre/nerdvpn_access');
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final calls = <String>[];
+        messenger.setMockMethodCallHandler(access, (call) async {
+          calls.add(call.method);
+          return {'state': 'ready'};
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(access, null));
+        final validator = _ValidationService()..response.complete();
+        service = validator;
+        cubit.urlController.text = 'http://$nerdVpnOnionHost';
+        const key = 'nvpn_0123456789abcdefghijklmnopqrstuv';
+        if (legacyHeader) {
+          await cubit.addHeader(nerdVpnKeyHeader, key);
+        } else {
+          cubit.apiKeyController.text = key;
+        }
+
+        await expectLater(
+            cubit.validateServer(),
+            throwsA(isA<NerdVpnAccessRequired>()
+                .having((error) => error.state, 'state', 'proxyRequired')));
+
+        expect(calls, isEmpty);
+        expect(validator.checked, isEmpty);
+        expect(await db.getServers(), isEmpty);
+        expect(cubit.state.loading, isFalse);
+      });
+    }
 
     test('advanced validation accepts usable relative thumbnails', () async {
       service = _ValidationService(thumbnails: [

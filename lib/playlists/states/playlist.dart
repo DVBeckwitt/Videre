@@ -1,120 +1,251 @@
+import 'dart:async';
+
 import 'package:bloc/bloc.dart';
-import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:clipious/player/states/player.dart';
-import 'package:logging/logging.dart';
 
 import '../../globals.dart';
+import '../../player/states/player.dart';
+import '../../settings/models/db/server.dart';
+import '../../utils/interfaces/db.dart';
+import '../../videos/models/video.dart';
 import '../models/playlist.dart';
+import '../models/playlist_reference.dart';
+import '../services/playlist_load_session.dart';
+import '../services/playlist_progress.dart';
 
 part 'playlist.freezed.dart';
 
-final log = Logger('PlaylistController');
+class PlaylistPlaybackRequest {
+  final List<Video> videos;
+  final PlaylistReference reference;
+  final PlaylistLoadSession loader;
+  final int startIndex;
+  final Duration? startAt;
+  final bool? audio;
+
+  const PlaylistPlaybackRequest(this.videos, this.reference, this.loader,
+      {required this.startIndex, this.startAt, this.audio});
+}
 
 class PlaylistCubit extends Cubit<PlaylistState> {
-  ScrollController scrollController = ScrollController();
+  final ScrollController scrollController = ScrollController();
   final PlayerCubit player;
+  final PlaylistReference? bookmarkOwner;
+  late final IDbClient _database;
+  late final PlaylistLoadSession loader;
+  late final StreamSubscription<PlaylistLoadSnapshot> _loading;
 
-  PlaylistCubit(super.initialState, this.player) {
+  PlaylistCubit(PlaylistState initialState, this.player,
+      {PlaylistReference? reference,
+      this.bookmarkOwner,
+      PlaylistLoadSession? loadSession})
+      : super(initialState.copyWith(
+            playlist: initialState.playlist.copyWith(
+                videos:
+                    assignPlaylistEntryIds(initialState.playlist.videos)))) {
+    _database = db.forProfile(db.profileId);
+    loader = loadSession ??
+        PlaylistLoadSession(
+            playlist: initialState.playlist,
+            database: _database,
+            reference: reference);
+    _loading = loader.changes.listen((_) => _syncLoader());
     onReady();
   }
 
-  void onReady() {
-    getAllVideos();
+  PlaylistReference? get reference => loader.reference;
+  bool get canPlayEntries =>
+      !isClosed &&
+      _database.profileId == db.profileId &&
+      loader.hasPlayableSnapshot;
+  List<Video> get playableVideos => canPlayEntries
+      ? state.playlist.videos
+          .where((video) =>
+              !video.filtered && !video.filterHide && video.isUpcoming != true)
+          .toList()
+      : [];
+
+  PlaylistCheckpoint? get checkpoint {
+    final source = reference;
+    return source == null
+        ? null
+        : PlaylistProgressService.forProfile(_database, _database.profileId)
+            .get(source);
   }
 
-  void refreshPlaylist({required bool userPlaylist}) async {
-    if (userPlaylist) {
-      emit(state.copyWith(loading: true));
-      final playlist = await service.getUserPlaylist(state.playlist.playlistId);
-      if (isClosed) return;
-      emit(state.copyWith(playlist: playlist));
-      await getAllVideos();
+  PlaylistResumeTarget? get resumeTarget {
+    if (!canPlayEntries) return null;
+    final target = checkpoint?.resolve(state.playlist.videos);
+    // A later page may still contain the original item. Do not offer a fallback
+    // until the server has supplied the whole current playlist.
+    return target?.missing == true && !loader.complete ? null : target;
+  }
+
+  Duration get resumePosition {
+    final target = resumeTarget;
+    return target == null || target.missing || checkpoint?.completed == true
+        ? Duration.zero
+        : _database
+            .getVideoPlaybackProgress(target.video.videoId)
+            .resumePosition(durationSeconds: target.video.lengthSeconds);
+  }
+
+  void onReady() => loader.retain();
+
+  void _syncLoader() {
+    if (isClosed) return;
+    // Broadcast delivery may lag behind an awaited refresh. Read the current
+    // snapshot so an older queued notification cannot resurrect deleted rows.
+    final playlist = loader.playlist;
+    final total = playlist.videoCount;
+    emit(state.copyWith(
+        playlist: playlist,
+        loading: loader.loading,
+        loadingProgress:
+            total > 0 ? (playlist.videos.length / total).clamp(0.0, 1.0) : 0,
+        error: loader.error?.toString() ?? ''));
+  }
+
+  Future<void> refreshPlaylist({required bool userPlaylist}) async {
+    if (!isClosed && userPlaylist) {
+      await loader.refresh();
+      _syncLoader();
     }
   }
 
-  deletePlaylist() async {
-    await service.deleteUserPlaylist(state.playlist.playlistId);
+  Future<void> deletePlaylist() async {
+    if (isClosed) return;
+    final server = await _assertCanMutate(bookmarkDeletion: true);
+    await service.deleteUserPlaylist(reference!.playlistId,
+        database: _database, serverOverride: server);
   }
 
-  Future<bool> removeVideoFromPlayList(Video v) async {
-    if (isClosed) return false;
+  Future<Server?> _assertCanMutate({bool bookmarkDeletion = false}) async {
+    await loader.ready;
+    final source = bookmarkDeletion ? bookmarkOwner ?? reference : reference;
+    if (isClosed ||
+        _database.profileId != db.profileId ||
+        source == null ||
+        source.profileId != _database.profileId ||
+        source.playlistId != reference?.playlistId ||
+        source.kind == PlaylistSourceKind.public) {
+      throw StateError('The playlist is no longer editable');
+    }
+    if (source.kind == PlaylistSourceKind.account) {
+      final captured = source.resolveServer(_database);
+      final current = await _database.getCurrentlySelectedServer();
+      if (isClosed ||
+          db.profileId != _database.profileId ||
+          current.accountId != captured?.accountId ||
+          Uri.tryParse(current.url)?.origin != source.origin) {
+        throw StateError('The playlist account has changed');
+      }
+      return captured;
+    }
+    return null;
+  }
+
+  Future<void> removeVideoFromPlayList(Video video) async {
+    if (isClosed) return;
+    final server = await _assertCanMutate();
     emit(state.copyWith(loading: true));
     try {
-      await service.deleteUserPlaylistVideo(state.playlist.playlistId,
-          state.playlist.isLocal ? v.videoId : v.indexId ?? '');
-      if (isClosed) return false;
-      final videos = List<Video>.from(state.playlist.videos)..remove(v);
-      emit(state.copyWith(
-          playlist: state.playlist
-              .copyWith(videos: videos, videoCount: videos.length)));
+      await service.deleteUserPlaylistVideo(reference!.playlistId,
+          state.playlist.isLocal ? video.videoId : video.indexId ?? '',
+          database: _database, serverOverride: server);
+      if (isClosed) return;
+      // Replace the loader's snapshot as well as the visible state. This also
+      // invalidates any page that was already in flight before the deletion.
+      await loader.refresh();
     } finally {
-      if (!isClosed) emit(state.copyWith(loading: false));
+      _syncLoader();
     }
-    return false;
   }
 
-  play(bool? isAudio) {
-    player.playVideo(state.playlist.videos, audio: isAudio);
+  Future<PlaylistPlaybackRequest?> playbackRequest(
+      {Video? video,
+      bool resume = false,
+      bool acceptMissing = false,
+      bool fromBeginning = false,
+      bool? audio}) async {
+    await loader.ready;
+    if (!canPlayEntries) return null;
+    final source = reference;
+    if (source == null) return null;
+    var entries = state.playlist.videos;
+    final target = resume ? resumeTarget : null;
+    if (resume && (target == null || (target.missing && !acceptMissing))) {
+      return null;
+    }
+    final selected = target?.video ?? video ?? playableVideos.firstOrNull;
+    if (selected == null ||
+        selected.filtered ||
+        selected.filterHide ||
+        selected.isUpcoming == true) {
+      return null;
+    }
+    final index = entries.indexWhere((entry) =>
+        entry.videoId == selected.videoId &&
+        ((selected.queueEntryId != null &&
+                entry.queueEntryId == selected.queueEntryId) ||
+            identical(entry, selected)));
+    if (index < 0) return null;
+    final original = entries[index];
+    if (original.filterHide || original.isUpcoming == true) return null;
+    // Revealing a filtered row is an explicit choice for this occurrence only.
+    // Keep the source metadata and all other entries' filter decisions intact.
+    if (original.filtered) {
+      if (video == null || video.filtered) return null;
+      entries = [...entries];
+      entries[index] = original.copyWith(filtered: false);
+    }
+    return PlaylistPlaybackRequest(entries, source, loader,
+        startIndex: index,
+        startAt: resume
+            ? resumePosition
+            : fromBeginning
+                ? Duration.zero
+                : null,
+        audio: audio ?? (resume ? checkpoint?.audio : null));
   }
 
-  getAllVideos() async {
-    if (state.playlist.videoCount > 0 &&
-        state.playlist.videos.length < state.playlist.videoCount) {
-      int page = 1;
-      int totalFiltered = 0;
-      // something is not right, let's get the full playlist
-      Playlist pl;
-      do {
-        pl = state.playlist.type == invidiousPlaylist
-            ? await service.getUserPlaylist(state.playlist.playlistId,
-                page: page)
-            : await service.getPublicPlaylists(state.playlist.playlistId,
-                page: page);
+  Future<void> _play(PlaylistPlaybackRequest? request) async {
+    if (request == null) return;
+    await player.playPlaylist(request.videos,
+        reference: request.reference,
+        startIndex: request.startIndex,
+        startAt: request.startAt,
+        audio: request.audio,
+        playlistLoader: request.loader);
+  }
 
-        var toAdd = pl.videos
-            .where((v) =>
-                state.playlist.videos
-                    .indexWhere((v2) => v2.videoId == v.videoId) ==
-                -1)
-            .toList();
+  Future<void> play(bool? isAudio) async =>
+      _play(await playbackRequest(fromBeginning: true, audio: isAudio));
 
-        var playlist = state.playlist;
-        List<Video> videos = List.from(playlist.videos);
-        videos.addAll(toAdd);
-        playlist = playlist.copyWith(videos: videos);
+  Future<void> playEntry(Video video, {bool? audio}) async =>
+      _play(await playbackRequest(video: video, audio: audio));
 
-        totalFiltered += pl.removedByFilter;
-        log.fine(
-            'filtered removed ${pl.removedByFilter} videos,adding ${pl.videos.length}');
-        page++;
+  Future<void> resume({bool acceptMissing = false}) async =>
+      _play(await playbackRequest(resume: true, acceptMissing: acceptMissing));
 
-        var loadingProgress = (state.playlist.videos.length + totalFiltered) /
-            state.playlist.videoCount;
-        if (!isClosed) {
-          emit(state.copyWith(
-              loadingProgress: loadingProgress, playlist: playlist));
-        } else {
-          return;
-        }
-      } while (!isClosed &&
-          state.playlist.videos.length + totalFiltered <
-              state.playlist.videoCount &&
-          (pl.videos.isNotEmpty || pl.removedByFilter > 0));
-    }
-    if (!isClosed) emit(state.copyWith(loading: false));
+  Future<void> getAllVideos() async {
+    await loader.retry();
+    _syncLoader();
   }
 
   @override
-  Future<void> close() {
+  Future<void> close() async {
+    await _loading.cancel();
+    loader.release();
     scrollController.dispose();
-    return super.close();
+    await super.close();
   }
 
-  void setShowImage(bool bool) {
-    scrollController.jumpTo(0);
-    emit(state.copyWith(showImage: bool));
+  void setShowImage(bool showImage) {
+    if (state.showImage == showImage) return;
+    if (scrollController.hasClients) scrollController.jumpTo(0);
+    if (!isClosed) emit(state.copyWith(showImage: showImage));
   }
 }
 
@@ -124,7 +255,7 @@ sealed class PlaylistState with _$PlaylistState {
     @Default(0) double loadingProgress,
     required Playlist playlist,
     @Default(true) bool loading,
-    required double playlistItemHeight,
+    @Default('') String error,
     @Default(true) bool showImage,
   }) = _PlaylistState;
 }

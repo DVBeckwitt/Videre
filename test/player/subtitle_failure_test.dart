@@ -230,6 +230,98 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final scenario in [
+    (name: 'short drag', distance: 35.0, cancel: false, mini: true),
+    (name: 'long drag', distance: 260.0, cancel: false, mini: false),
+    // Flutter ends an already accepted drag when its pointer is cancelled.
+    (name: 'cancelled drag', distance: 260.0, cancel: true, mini: false),
+  ]) {
+    testWidgets('expanding the video preview preserves a ${scenario.name}',
+        (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      app_main.darkColorScheme = const ColorScheme.dark();
+      const clip = Video(videoId: 'gesture-test', lengthSeconds: 60);
+      final gesturePlayer = TestPlayerCubit(
+        PlayerState.init([clip]).copyWith(
+          currentlyPlaying: clip,
+          isMini: true,
+          isHidden: false,
+          isPlaying: true,
+        ),
+        settings,
+      );
+      final gestureVideo = _VideoWithoutNative(
+        VideoPlayerState(
+          video: clip,
+          colors: const ColorScheme.dark(),
+          overFlowTextColor: Colors.white,
+          key: GlobalKey(),
+        ),
+        gesturePlayer,
+        settings,
+      );
+      addTearDown(gestureVideo.close);
+      addTearDown(gesturePlayer.close);
+      await tester.pumpWidget(MultiBlocProvider(
+        providers: [
+          BlocProvider<PlayerCubit>.value(value: gesturePlayer),
+          BlocProvider<SettingsCubit>.value(value: settings),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: BlocBuilder<PlayerCubit, PlayerState>(
+              builder: (context, state) => Align(
+                alignment: Alignment.bottomLeft,
+                child: SizedBox(
+                  width: state.isMini ? 117 : 390,
+                  height: state.isMini ? 66 : 220,
+                  child: SubtitleFailureOverlay(
+                    player: gestureVideo,
+                    child: PlayerControls(mediaPlayerCubit: gestureVideo),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump(const Duration(seconds: 4));
+      final controls = tester.element(find.byType(PlayerControls));
+      final gesture = await tester
+          .startGesture(tester.getCenter(find.byType(PlayerControls)));
+      await gesture.moveBy(const Offset(0, -25));
+      await tester.pump();
+      await gesture.moveBy(const Offset(0, -10));
+      await tester.pump();
+      expect(gesturePlayer.state.isDragging, isTrue);
+      expect(gesturePlayer.state.isMini, isFalse);
+      expect(tester.element(find.byType(PlayerControls)), same(controls));
+      if (scenario.distance > 35) {
+        await gesture.moveBy(Offset(0, 35 - scenario.distance));
+        await tester.pump();
+      }
+      if (scenario.cancel) {
+        await gesture.cancel();
+      } else {
+        await gesture.up();
+      }
+      await tester.pump();
+      expect(gesturePlayer.state.isDragging, isFalse);
+      expect(gesturePlayer.state.isMini, scenario.mini);
+      expect(gesturePlayer.state.top, scenario.mini ? isNull : 0);
+      expect(gesturePlayer.state.isHidden, isFalse);
+      expect(gesturePlayer.state.isPlaying, isTrue);
+      expect(tester.element(find.byType(PlayerControls)), same(controls));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   testWidgets('TV failure takes remote focus and restores it after dismissal',
       (tester) async {
     final playbackFocus = FocusNode();

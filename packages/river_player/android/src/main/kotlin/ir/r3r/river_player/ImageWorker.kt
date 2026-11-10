@@ -5,14 +5,14 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
+import androidx.media3.datasource.DataSourceInputStream
+import androidx.media3.datasource.DataSpec
 import androidx.work.Data
 import androidx.work.WorkerParameters
 import androidx.work.Worker
+import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.lang.Exception
-import java.net.HttpURLConnection
-import java.net.URL
 
 class ImageWorker(
     context: Context,
@@ -28,14 +28,16 @@ class ImageWorker(
                 getBitmapFromInternalURL(imageUrl)
             }
             val fileName = imageUrl.hashCode().toString() + IMAGE_EXTENSION
-            val filePath = applicationContext.cacheDir.absolutePath + fileName
+            val file = File(applicationContext.cacheDir, fileName)
             if (bitmap == null) {
                 return Result.failure()
             }
-            val out = FileOutputStream(filePath)
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            val written = FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            if (!written) return Result.failure()
             val data =
-                Data.Builder().putString(RiverPlayerPlugin.FILE_PATH_PARAMETER, filePath).build()
+                Data.Builder().putString(RiverPlayerPlugin.FILE_PATH_PARAMETER, file.absolutePath).build()
             Result.success(data)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -44,31 +46,27 @@ class ImageWorker(
     }
 
     private fun getBitmapFromExternalURL(src: String): Bitmap? {
-        var inputStream: InputStream? = null
         return try {
-            val url = URL(src)
-            var connection = url.openConnection() as HttpURLConnection
-            inputStream = connection.inputStream
+            // Artwork must obey the same SOCKS policy as the media request,
+            // including redirects, refused proxies and settings changes.
+            val factory = DataSourceUtils.getDataSourceFactory(
+                DataSourceUtils.getUserAgent(null), null, src)
+            val dataSpec = DataSpec(Uri.parse(src))
             val options = BitmapFactory.Options()
             options.inJustDecodeBounds = true
-            BitmapFactory.decodeStream(inputStream, null, options)
-            inputStream.close()
-            connection = url.openConnection() as HttpURLConnection
-            inputStream = connection.inputStream
+            DataSourceInputStream(factory.createDataSource(), dataSpec).use {
+                BitmapFactory.decodeStream(it, null, options)
+            }
             options.inSampleSize = calculateBitmapInSampleSize(
                 options
             )
             options.inJustDecodeBounds = false
-            BitmapFactory.decodeStream(inputStream, null, options)
-        } catch (exception: Exception) {
-            Log.e(TAG, "Failed to get bitmap from external url: $src")
-            null
-        } finally {
-            try {
-                inputStream?.close()
-            } catch (exception: Exception) {
-                Log.e(TAG, "Failed to close bitmap input stream/")
+            DataSourceInputStream(factory.createDataSource(), dataSpec).use {
+                BitmapFactory.decodeStream(it, null, options)
             }
+        } catch (exception: Exception) {
+            Log.e(TAG, "Failed to load notification artwork")
+            null
         }
     }
 
@@ -94,12 +92,6 @@ class ImageWorker(
 
     private fun getBitmapFromInternalURL(src: String): Bitmap? {
         return try {
-            val options = BitmapFactory.Options()
-            options.inJustDecodeBounds = true
-            options.inSampleSize = calculateBitmapInSampleSize(
-                options
-            )
-            options.inJustDecodeBounds = false
             BitmapFactory.decodeFile(src)
         } catch (exception: Exception) {
             Log.e(TAG, "Failed to get bitmap from internal url: $src")

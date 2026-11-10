@@ -1569,22 +1569,31 @@ class Service {
     handleResponse(response);
   }
 
-  Future<void> deleteUserPlaylist(String playListId) async {
+  Future<void> deleteUserPlaylist(String playListId,
+      {IDbClient? database, Server? serverOverride}) async {
+    final owner = database ?? db.forProfile(db.profileId);
     if (playListId.startsWith('local:')) {
       if (playListId == localWatchLaterId) return;
-      await _updateLocalPlaylists((playlists) =>
-          playlists.removeWhere((p) => p.playlistId == playListId));
+      await _updateLocalPlaylists(
+          (playlists) =>
+              playlists.removeWhere((p) => p.playlistId == playListId),
+          database: owner);
       return;
     }
     var req = await buildRequest(urlDeleteUserPlaylist,
-        pathParams: {":id": playListId}, authenticated: true, forceJson: true);
+        pathParams: {":id": playListId},
+        authenticated: true,
+        forceJson: true,
+        serverOverride:
+            serverOverride ?? await owner.getCurrentlySelectedServer());
 
     final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
-  Future<void> deleteUserPlaylistVideo(
-      String playListId, String indexId) async {
+  Future<void> deleteUserPlaylistVideo(String playListId, String indexId,
+      {IDbClient? database, Server? serverOverride}) async {
+    final owner = database ?? db.forProfile(db.profileId);
     if (playListId.startsWith('local:')) {
       await _updateLocalPlaylists((playlists) {
         final index = playlists.indexWhere((p) => p.playlistId == playListId);
@@ -1593,13 +1602,15 @@ class Service {
             playlists[index].videos.where((v) => v.videoId != indexId).toList();
         playlists[index] = playlists[index]
             .copyWith(videos: videos, videoCount: videos.length);
-      });
+      }, database: owner);
       return;
     }
     final req = await buildRequest(urlDeleteUserPlaylistVideo,
         pathParams: {':id': playListId, ':index': indexId},
         authenticated: true,
-        forceJson: true);
+        forceJson: true,
+        serverOverride:
+            serverOverride ?? await owner.getCurrentlySelectedServer());
 
     final response = await httpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);

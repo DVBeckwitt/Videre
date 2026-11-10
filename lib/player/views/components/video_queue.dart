@@ -11,6 +11,7 @@ import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 
 import '../../../globals.dart';
+import 'playlist_loading_notice.dart';
 
 class VideoQueue extends StatefulWidget {
   const VideoQueue({super.key});
@@ -109,6 +110,7 @@ class _VideoQueueState extends State<VideoQueue> {
                 previous.offlineCurrentlyPlaying !=
                     current.offlineCurrentlyPlaying,
             builder: (context, state) => ReorderableListView.builder(
+                footer: const PlaylistLoadingNotice(),
                 scrollController: _scrollController,
                 itemCount: state.videos.isNotEmpty
                     ? state.videos.length

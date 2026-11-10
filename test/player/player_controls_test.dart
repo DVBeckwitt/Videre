@@ -4,6 +4,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
@@ -234,7 +235,7 @@ void main() {
 
     expect(slider, findsOneWidget);
     final left = await tester.startGesture(pointAt(.15));
-    await tester.pump(kLongPressTimeout - const Duration(milliseconds: 1));
+    await tester.pump(const Duration(milliseconds: 199));
     expect(videoPlayer.speedChanges, isEmpty);
     expect(indicator, findsNothing);
     await tester.pump(const Duration(milliseconds: 1));
@@ -246,17 +247,18 @@ void main() {
     expect(slider, findsNothing);
     expect(indicator, findsOneWidget);
     await left.up();
-    await tester.pump();
+    // Restoring speed must not wait for another frame or a release timer.
     expect(videoPlayer.speedChanges, [2, 1.37]);
+    await tester.pump();
     expect(indicator, findsNothing);
 
     final right = await tester.startGesture(pointAt(.85));
-    await tester.pump(kLongPressTimeout);
+    await tester.pump(const Duration(milliseconds: 200));
     expect(videoPlayer.speedChanges, [2, 1.37, 2]);
     expect(indicator, findsOneWidget);
     await right.cancel();
-    await tester.pump();
     expect(videoPlayer.speedChanges, [2, 1.37, 2, 1.37]);
+    await tester.pump();
     expect(indicator, findsNothing);
 
     final center = await tester.startGesture(pointAt(.5));
@@ -265,6 +267,89 @@ void main() {
     await tester.pump();
     expect(videoPlayer.speedChanges, [2, 1.37, 2, 1.37]);
     expect(indicator, findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('quick taps, double-tap seeking and drags do not boost speed',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pump(const Duration(seconds: 4));
+    final controls = tester
+        .element(find.byType(LayoutBuilder).last)
+        .read<PlayerControlsCubit>();
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    final point =
+        bounds.topLeft + Offset(bounds.width * .85, bounds.height * .25);
+
+    await tester.tapAt(point);
+    await tester.pump(kDoubleTapTimeout);
+    expect(controls.state.displayControls, isTrue);
+    expect(videoPlayer.speedChanges, isEmpty);
+
+    controls.hideControls();
+    await tester.pumpAndSettle();
+    await tester.tapAt(point);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(point);
+    await tester.pump();
+    expect(controls.state.justDoubleTappedSkip, isTrue);
+    expect(videoPlayer.speedChanges, isEmpty);
+
+    controls.hideControls();
+    await tester.pump(const Duration(seconds: 1));
+    final drag = await tester.startGesture(point);
+    await drag.moveBy(const Offset(0, 50));
+    await drag.moveBy(const Offset(0, 25));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(player.state.isDragging, isTrue);
+    expect(videoPlayer.speedChanges, isEmpty);
+    await drag.cancel();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a deliberate center-button press still pauses playback',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    final press =
+        await tester.startGesture(tester.getCenter(find.byIcon(Icons.pause)));
+    await tester.pump(const Duration(milliseconds: 300));
+    await press.up();
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+    expect(videoPlayer.speedChanges, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('speed hold preserves the device touch movement tolerance',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(MediaQuery(
+      data: const MediaQueryData(
+          gestureSettings: DeviceGestureSettings(touchSlop: 40)),
+      child: SizedBox(
+        width: 390,
+        height: 220,
+        child: PlayerControls(mediaPlayerCubit: videoPlayer),
+      ),
+    )));
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    final hold =
+        await tester.startGesture(bounds.topLeft + const Offset(40, 60));
+    // More than Flutter's default 18, less than this device's tolerance.
+    await hold.moveBy(const Offset(24, 0));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(videoPlayer.speedChanges, [2]);
+    await hold.up();
+    expect(videoPlayer.speedChanges, [2, 1.37]);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

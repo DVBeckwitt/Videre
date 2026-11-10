@@ -173,7 +173,7 @@ void main() {
     final json = jsonDecode(session.encode()) as Map<String, dynamic>;
     expect(PlaybackSession.decode('broken'), isNull);
     expect(PlaybackSession.decode(null), isNull);
-    expect(PlaybackSession.decode(jsonEncode({...json, 'version': 2})), isNull);
+    expect(PlaybackSession.decode(jsonEncode({...json, 'version': 3})), isNull);
     expect(
         PlaybackSession.decode(jsonEncode({...json, 'seconds': -1})), isNull);
     expect(
@@ -537,22 +537,24 @@ void main() {
       expect(decoder.startedAt, const Duration(seconds: 37));
     });
 
-    test('TV restores music audio but retains normal video session behavior',
+    test('TV restores the chosen mode for music and ordinary video sessions',
         () async {
       final previousTv = app_main.isTv;
       app_main.isTv = true;
       addTearDown(() => app_main.isTv = previousTv);
       const music = MusicMetadata(title: 'Song', artist: 'Artist');
       for (final isMusic in [true, false]) {
-        final track =
-            Video(videoId: 'song', musicMetadata: isMusic ? music : null);
-        final session = PlaybackSession(
-            videos: [track], currentId: 'song', seconds: 37, audio: true);
-        await db.saveSetting(
-            SettingsValue(playbackSessionSetting, session.encode()));
-        player.restoreSession();
-        expect(player.state.isAudio, isMusic);
-        expect(player.state.startAt, const Duration(seconds: 37));
+        for (final audio in [true, false]) {
+          final track =
+              Video(videoId: 'song', musicMetadata: isMusic ? music : null);
+          final session = PlaybackSession(
+              videos: [track], currentId: 'song', seconds: 37, audio: audio);
+          await db.saveSetting(
+              SettingsValue(playbackSessionSetting, session.encode()));
+          player.restoreSession();
+          expect(player.state.isAudio, audio);
+          expect(player.state.startAt, const Duration(seconds: 37));
+        }
       }
       const offline = DownloadedVideo(
           videoId: 'offline-song',

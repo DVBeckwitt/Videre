@@ -37,15 +37,6 @@ class _PausedBatchDownloads extends DownloadManagerCubit {
   }
 }
 
-class _Playlist extends Cubit<PlaylistState> implements PlaylistCubit {
-  _Playlist(Playlist playlist)
-      : super(PlaylistState(
-            playlist: playlist, playlistItemHeight: 0, loading: false));
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
-}
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const song = Video(
@@ -62,7 +53,7 @@ void main() {
       videoCount: 4,
       videos: [song, ordinary, hidden, song]);
   late DownloadManagerCubit downloads;
-  late _Playlist state;
+  late PlaylistCubit state;
 
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
@@ -72,7 +63,9 @@ void main() {
     await db.saveSetting(SettingsValue('downloads-wifi-only', 'true'));
     downloads = DownloadManagerCubit(const DownloadManagerState(), _Player());
     await downloads.addDownloads([]);
-    state = _Playlist(playlist);
+    state = PlaylistCubit(
+        const PlaylistState(playlist: playlist, loading: false), _Player());
+    await state.loader.ready;
   });
 
   tearDown(() async {

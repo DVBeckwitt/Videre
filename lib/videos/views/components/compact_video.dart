@@ -10,6 +10,7 @@ import 'package:clipious/videos/views/components/video_thumbnail.dart';
 
 import 'offline_video_thumbnail.dart';
 import 'video_duration_badge.dart';
+import 'video_watch_progress.dart';
 
 const double compactVideoHeight = 70;
 
@@ -111,13 +112,26 @@ class CompactVideo extends StatelessWidget {
                                                   video?.videoThumbnails),
                                       child: video!.isUpcoming == true
                                           ? null
-                                          : Align(
-                                              alignment: Alignment.bottomRight,
-                                              child: VideoDurationBadge(
-                                                lengthSeconds:
-                                                    video!.lengthSeconds,
-                                                compact: true,
-                                              ),
+                                          : Stack(
+                                              fit: StackFit.expand,
+                                              children: [
+                                                Align(
+                                                  alignment:
+                                                      Alignment.bottomRight,
+                                                  child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            bottom: 4),
+                                                    child: VideoDurationBadge(
+                                                      lengthSeconds:
+                                                          video!.lengthSeconds,
+                                                      compact: true,
+                                                    ),
+                                                  ),
+                                                ),
+                                                VideoWatchProgress(
+                                                    videoId: videoId),
+                                              ],
                                             ))
                                   : offlineVideo != null
                                       ? OfflineVideoThumbnail(

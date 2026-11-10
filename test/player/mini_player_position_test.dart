@@ -144,6 +144,56 @@ void main() {
     }
   });
 
+  testWidgets('tapping the mini-player restores it inside the viewport',
+      (tester) async {
+    final decoder = await pumpPlayer(tester);
+    final native = decoder.audioPlayer;
+    final docked = tester.getRect(positioned);
+    expect(docked.top, greaterThan(window.height / 2));
+    await tester.tap(find.text('Position test - Artist'));
+    await tester.pump();
+    expect(player.state.isMini, isFalse);
+    expect(player.state.isHidden, isFalse);
+    expect(player.state.isClosing, isFalse);
+    for (var frame = 0; frame < 6; frame++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      final rect = tester.getRect(positioned);
+      expect(rect.top, greaterThanOrEqualTo(0));
+      expect(rect.bottom, lessThanOrEqualTo(window.height));
+      expect(rect.height, greaterThan(targetHeight));
+      expect(tester.takeException(), isNull);
+    }
+    expect(tester.getRect(positioned).top, closeTo(0, 0.01));
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+  });
+
+  testWidgets('restoring a repeatedly minimized player keeps its bounds',
+      (tester) async {
+    await pumpPlayer(tester);
+    for (final delay in [300, 50, 300]) {
+      player.showBigPlayer();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byIcon(Icons.expand_more));
+      await tester.pump();
+      await tester.pump(Duration(milliseconds: delay));
+      expect(player.state.isMini, isTrue);
+      await tester.tap(find.text('Position test - Artist'));
+      await tester.pump();
+      for (var frame = 0; frame < 6; frame++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        final rect = tester.getRect(positioned);
+        expect(rect.top, greaterThanOrEqualTo(0));
+        expect(rect.bottom, lessThanOrEqualTo(window.height));
+        expect(tester.takeException(), isNull);
+      }
+      expect(player.state.isMini, isFalse);
+      expect(tester.getRect(positioned).top, closeTo(0, 0.01));
+    }
+  });
+
   testWidgets(
       'keyboard show and hide keep mini-player visible without remounting',
       (tester) async {

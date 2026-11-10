@@ -32,6 +32,12 @@ the application. No external browser traffic is configured by this plugin.
 Policy updates cancel calls, including responses whose media bodies are still
 being read, and evict old pooled connections. Invalid stored configuration blocks
 network requests rather than selecting a direct route.
+If an implicitly closed pooled connection ends before response headers arrive,
+a bodyless GET or HEAD may retry once through the same proxy and credential
+policy. This covers HTTP/1.0 origins that close without an explicit close header,
+including a media range request at the end of a file. Writes, canceled calls,
+responses whose headers have arrived, streaming body failures, and TLS failures
+are not replayed. Automatic general connection recovery remains disabled.
 The method channel uses Flutter's serial background task queue: committing proxy
 preferences and closing idle TLS sockets can perform I/O, including TLS shutdown,
 and must not run on Android's main thread. Configuration calls retain their order.
@@ -68,6 +74,12 @@ HTTPS video URL:
 `-Pandroid.testInstrumentationRunnerArguments.orbotPort=PORT` overrides 9050. This
 test establishes native HTTPS video playback through the Orbot listener, while
 the full app still needs its UI, background and download acceptance checks.
+
+For audio-only acceptance, supply `orbotAudioUrl` instead of `orbotMediaUrl`.
+Choose a seekable external HTTPS audio recording longer than five seconds. The
+separate optional test requires decoded audio buffers and playhead advancement,
+checks pause, seeks to 4.5 seconds, and verifies resumed audio without video
+frames. Both live tests are skipped when their corresponding URL is absent.
 
 `android/src/androidTest/assets/socks_fixture.mp4` is a six-second synthetic
 160×90 H.264 baseline/AAC clip generated with the following FFmpeg command; it

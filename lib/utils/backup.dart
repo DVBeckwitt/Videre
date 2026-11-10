@@ -4,6 +4,8 @@ import '../music/models/music_library_entry.dart';
 
 import '../offline_subscriptions/models/offline_subscription.dart';
 import '../playlists/models/playlist.dart';
+import '../playlists/models/playlist_reference.dart';
+import '../playlists/models/saved_playlist.dart';
 import '../settings/models/db/settings.dart';
 import '../settings/models/db/video_filter.dart';
 import '../videos/models/db/history_video_cache.dart';
@@ -35,7 +37,8 @@ class UserBackup {
     'progress',
     'history',
     'playlists',
-    'watchState'
+    'watchState',
+    'savedPlaylists'
   ];
 
   String encode() => jsonEncode({
@@ -59,15 +62,31 @@ class UserBackup {
       }
       final sections = <String, List<Map<String, dynamic>>>{};
       for (final name in sectionNames) {
-        // Older v1 libraries predate manual watched state.
-        final rows =
-            (name == 'watchState' ? data[name] ?? [] : data[name]) as List;
+        // These additions remain optional in existing version 1 libraries.
+        final rows = (const ['watchState', 'savedPlaylists'].contains(name)
+            ? data[name] ?? []
+            : data[name]) as List;
         if (rows.length > 50000) {
           throw const FormatException('Too many entries.');
         }
         sections[name] = rows.map((row) {
           final value = Map<String, dynamic>.from(row as Map);
           switch (name) {
+            case 'savedPlaylists':
+              final saved = SavedPlaylist.tryParse({
+                ...value,
+                'reference': {
+                  'kind': PlaylistSourceKind.public.name,
+                  'playlistId': value['playlistId'],
+                  'profileId': 'portable',
+                },
+              });
+              if (saved == null ||
+                  saved.reference.playlistId.startsWith('IVP') ||
+                  saved.reference.playlistId.startsWith('local:')) {
+                throw const FormatException('Invalid saved playlist.');
+              }
+              return portablePlaylist(saved);
             case 'watchState':
               final videoId = value['videoId'];
               final manual = value['manualWatched'];
@@ -100,6 +119,15 @@ class UserBackup {
               }
               return sub.toJson();
             case 'progress':
+              for (final field in ['positionSeconds', 'durationSeconds']) {
+                final seconds = value[field];
+                if (seconds != null &&
+                    (seconds is! int ||
+                        seconds < 0 ||
+                        seconds > maximumPlaybackSeconds)) {
+                  throw const FormatException('Invalid playback position.');
+                }
+              }
               final progress = Progress.fromJson(value);
               if (!_videoId.hasMatch(progress.videoId) ||
                   !progress.progress.isFinite ||
@@ -230,6 +258,12 @@ class UserBackup {
               artist: music.artist,
               album: music.album,
               thumbnails: _safeThumbnails(music.thumbnails));
+
+  /// Account access and profile ownership are never part of a portable save.
+  static Map<String, dynamic> portablePlaylist(SavedPlaylist playlist) {
+    final value = playlist.toJson()..remove('reference');
+    return {'playlistId': playlist.reference.playlistId, ...value};
+  }
 
   static List<ImageObject> _safeThumbnails(List<ImageObject> thumbnails,
           {bool videoArtwork = false}) =>

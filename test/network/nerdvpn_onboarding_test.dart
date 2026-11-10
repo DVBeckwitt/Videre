@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -91,6 +92,8 @@ void main() {
 
   setUp(() async {
     db = database = await SembastSqfDb.createInMemory();
+    await NetworkProxy.instance
+        .initialize(saved: '{"enabled":true}', configureNative: false);
     api = _OnboardingService();
     service = api;
     cubit = AddServerCubit(const AddServerState());
@@ -114,6 +117,7 @@ void main() {
 
   tearDown(() async {
     if (!cubit.isClosed) await cubit.close();
+    await NetworkProxy.instance.initialize(saved: '{}', configureNative: false);
     await database.close();
     service = Service();
     messenger.setMockMethodCallHandler(_access, null);

@@ -33,6 +33,45 @@ void main() {
   tearDown(() async => database.close());
 
   group('local watched decisions', () {
+    test('manual watched preserves exact time and unwatched clears it',
+        () async {
+      final revision = await repository.beginPlayback('video');
+      await repository.recordPlayback('video', 1, revision,
+          positionSeconds: 95, durationSeconds: 100);
+      await repository.mark('video', true);
+      expect(database.getVideoPlaybackProgress('video').positionSeconds, 95);
+      await repository.mark('video', false);
+      expect(database.getVideoPlaybackProgress('video').resumePosition(),
+          Duration.zero);
+      expect(
+          await repository.recordPlayback('video', 1, revision,
+              positionSeconds: 96, durationSeconds: 100),
+          isFalse);
+      expect(
+          database.getVideoPlaybackProgress('video').positionSeconds, isNull);
+    });
+
+    test('mark unwatched resets a duplicated current queue occurrence',
+        () async {
+      await database.saveSetting(SettingsValue(
+          playbackSessionSetting,
+          PlaybackSession(
+            videos: [
+              Video(videoId: 'video'),
+              Video(videoId: 'video', queueEntryId: 'video#1'),
+            ],
+            currentId: 'video#1',
+            seconds: 80,
+            played: const ['video'],
+          ).encode()));
+      await repository.mark('video', false);
+      final saved = PlaybackSession.decode(
+          database.getSettings(playbackSessionSetting)?.value)!;
+      expect(saved.seconds, 0);
+      expect(saved.currentId, 'video#1');
+      expect(saved.played, ['video']);
+    });
+
     test('mark watched preserves a real partial resume position', () async {
       await database.saveProgress(Progress(0.4, 'partial'));
       await repository.mark('partial', true, account: account);

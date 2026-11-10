@@ -104,7 +104,8 @@ class _TvHomeContentState extends State<_TvHomeContent> {
 
   void openPlaylists(BuildContext context) {
     AutoRouter.of(context).push(TvPlaylistGridRoute(
-        playlistList: SingleEndpointList(service.getUserPlaylists)));
+        playlistList: SingleEndpointList(service.getUserPlaylists),
+        includeSavedPlaylists: true));
   }
 
   void openHistory(BuildContext context) {

@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../globals.dart';
 import '../../network/nerdvpn_access.dart';
+import '../../network/network_proxy.dart';
 import '../../utils/invidious_image.dart';
 import '../models/db/server.dart';
 import '../models/errors/invidious_service_error.dart';
@@ -140,6 +141,13 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
       if (manualKey != null) {
+        // Match the transport's fail-closed HTTP onion policy before creating
+        // an unsaved native credential or starting either validation request.
+        if (onionManualSetup &&
+            Uri.parse(serverUrl).scheme == 'http' &&
+            !NetworkProxy.instance.config.enabled) {
+          throw const NerdVpnAccessRequired('proxyRequired');
+        }
         server = server.copyWith(
             customHeaders: Map<String, String>.from(headers)
               ..removeWhere((name, _) => NerdVpnAccess.isKeyHeader(name)));

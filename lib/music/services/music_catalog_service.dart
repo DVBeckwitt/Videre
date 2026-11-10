@@ -9,6 +9,8 @@ import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_discovery.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:http/http.dart' as http;
 
@@ -26,18 +28,31 @@ class MusicCatalogException implements Exception {
   String toString() => message;
 }
 
+class MusicCatalogRegionUnavailable extends MusicCatalogException {
+  const MusicCatalogRegionUnavailable()
+      : super('YouTube Music is unavailable from this connection\'s region.');
+}
+
 /// Public, unauthenticated YouTube Music metadata; playback still uses Invidious.
 /// Search filters and renderer shapes were checked against dart_ytmusic_api
 /// 1.3.7 and live public responses. Keep this unofficial endpoint boundary here.
 class MusicCatalogService {
   final http.Client? _httpClient;
-  final Duration requestTimeout;
+  final Duration? _requestTimeout;
   Future<Map<String, String>>? _configuration;
+  SocksProxyConfig? _configurationProxy;
 
   MusicCatalogService({
     http.Client? httpClient,
-    this.requestTimeout = const Duration(seconds: 20),
-  }) : _httpClient = httpClient;
+    Duration? requestTimeout,
+  })  : _httpClient = httpClient,
+        _requestTimeout = requestTimeout;
+
+  // Tor circuits can take longer to return a catalog page. Keep a bounded
+  // deadline and preserve explicit caller deadlines, including short tests.
+  Duration get requestTimeout =>
+      _requestTimeout ??
+      Duration(seconds: NetworkProxy.instance.config.enabled ? 60 : 20);
 
   // Borrow the app transport so changes to its configured proxy also apply here.
   // Do not use Service's instance request builder: its credentials are unrelated.
@@ -101,6 +116,7 @@ class MusicCatalogService {
   Future<List<T>> _discoveryBrowse<T>(Map<String, Object?> body,
       T? Function(Map<String, dynamic>) parse, String Function(T) identity,
       {bool onlyGrids = false}) async {
+    final policy = NetworkProxy.instance.config;
     final items = <String, T>{};
     final pending = <Map<String, Object?>>[body];
     final seenContinuations = <String>{};
@@ -109,7 +125,8 @@ class MusicCatalogService {
     for (var pageNumber = 0;
         pageNumber < 10 && pending.isNotEmpty;
         pageNumber++) {
-      final data = await _request('browse', pending.removeAt(0));
+      final data =
+          await _request('browse', pending.removeAt(0), sourcePolicy: policy);
       for (final container
           in _discoveryContainers(data, onlyGrids: onlyGrids)) {
         final rows = container['items'] ?? container['contents'];
@@ -161,7 +178,9 @@ class MusicCatalogService {
     if (!_artistId.hasMatch(id)) {
       throw const MusicCatalogException('Invalid music artist.');
     }
-    final data = await _request('browse', {'browseId': id});
+    final policy = NetworkProxy.instance.config;
+    final data =
+        await _request('browse', {'browseId': id}, sourcePolicy: policy);
     final header =
         _maps(data['header'], 'musicImmersiveHeaderRenderer').firstOrNull ??
             _maps(data['header'], 'musicVisualHeaderRenderer').firstOrNull;
@@ -206,8 +225,8 @@ class MusicCatalogService {
       }
     }
     final releases = await Future.wait([
-      _artistReleases(albums, artist),
-      _artistReleases(singles, artist),
+      _artistReleases(albums, artist, policy),
+      _artistReleases(singles, artist, policy),
     ]);
     final description = _text(header['description']);
     return MusicArtistPage(
@@ -219,8 +238,8 @@ class MusicCatalogService {
     );
   }
 
-  Future<List<MusicAlbum>> _artistReleases(
-      Map<String, dynamic>? shelf, MusicArtist artist) async {
+  Future<List<MusicAlbum>> _artistReleases(Map<String, dynamic>? shelf,
+      MusicArtist artist, SocksProxyConfig policy) async {
     if (shelf == null) return [];
     final header =
         _maps(shelf['header'], 'musicCarouselShelfBasicHeaderRenderer')
@@ -239,10 +258,13 @@ class MusicCatalogService {
       throw const MusicCatalogException(
           'The music catalog returned an invalid response.');
     }
-    Object? page = await _request('browse', {
-      'browseId': browseId,
-      if (more['params'] is String) 'params': more['params'],
-    });
+    Object? page = await _request(
+        'browse',
+        {
+          'browseId': browseId,
+          if (more['params'] is String) 'params': more['params'],
+        },
+        sourcePolicy: policy);
     final releases = <String, MusicAlbum>{};
     final seenContinuations = <String>{};
     for (var pageNumber = 0; pageNumber < 50; pageNumber++) {
@@ -266,7 +288,8 @@ class MusicCatalogService {
         return releases.values.toList();
       }
       if (!seenContinuations.add(continuation)) break;
-      page = await _request('browse', {'continuation': continuation});
+      page = await _request('browse', {'continuation': continuation},
+          sourcePolicy: policy);
     }
     throw const MusicCatalogException(
         'The artist releases could not finish loading.');
@@ -311,7 +334,9 @@ class MusicCatalogService {
 
   Future<MusicCollection> _collection(String id,
       {required bool isAlbum}) async {
-    final data = await _request('browse', {'browseId': isAlbum ? id : 'VL$id'});
+    final policy = NetworkProxy.instance.config;
+    final data = await _request('browse', {'browseId': isAlbum ? id : 'VL$id'},
+        sourcePolicy: policy);
     var header = _maps(data, 'musicResponsiveHeaderRenderer').firstOrNull ??
         _maps(data, 'musicDetailHeaderRenderer').firstOrNull;
     // Album playlist links can omit their header while supplying album links on
@@ -322,7 +347,8 @@ class MusicCatalogService {
           .whereType<String>()
           .firstOrNull;
       if (albumId != null) {
-        final album = await _request('browse', {'browseId': albumId});
+        final album = await _request('browse', {'browseId': albumId},
+            sourcePolicy: policy);
         header = _maps(album, 'musicResponsiveHeaderRenderer').firstOrNull ??
             _maps(album, 'musicDetailHeaderRenderer').firstOrNull;
       }
@@ -375,19 +401,38 @@ class MusicCatalogService {
             tracks: tracks);
       }
       if (!seenContinuations.add(continuation)) break;
-      page = await _request('browse', {'continuation': continuation});
+      page = await _request('browse', {'continuation': continuation},
+          sourcePolicy: policy);
     }
     // Avoid silently saving or playing a truncated playlist.
     throw const MusicCatalogException(
         'The music collection could not finish loading.');
   }
 
-  Future<Map<String, String>> _loadConfiguration() async {
-    final response = await _send(http.Request('GET', _origin)
-      ..headers.addAll({
-        'user-agent': _userAgent,
-        'accept-language': 'en-US,en;q=0.9',
-      }));
+  void _checkProxy(SocksProxyConfig policy) {
+    if (NetworkProxy.instance.isChanging ||
+        !identical(policy, NetworkProxy.instance.config)) {
+      throw const MusicCatalogException(
+          'The network proxy changed. Retry the music request.');
+    }
+  }
+
+  Future<Map<String, String>> _loadConfiguration(
+      SocksProxyConfig policy) async {
+    final response = await _send(
+        http.Request('GET', _origin)
+          ..headers.addAll({
+            'user-agent': _userAgent,
+            'accept-language': 'en-US,en;q=0.9',
+          }),
+        policy,
+        retryConsent: true);
+    if (RegExp(
+            r'<title>\s*YouTube Music is not available in your area\s*</title>',
+            caseSensitive: false)
+        .hasMatch(response)) {
+      throw const MusicCatalogRegionUnavailable();
+    }
     final result = <String, String>{};
     for (final key in [
       'INNERTUBE_CLIENT_VERSION',
@@ -405,14 +450,29 @@ class MusicCatalogService {
   }
 
   Future<Map<String, dynamic>> _request(
-      String endpoint, Map<String, Object?> body) async {
+      String endpoint, Map<String, Object?> body,
+      {SocksProxyConfig? sourcePolicy}) async {
+    // Continuation tokens and related browse IDs came from the originating
+    // route too. A proxy switch must restart the whole lookup, not just obtain
+    // a new visitor and send an old route's continuation under that identity.
+    final policy = sourcePolicy ?? NetworkProxy.instance.config;
+    _checkProxy(policy);
+    // Public visitor data belongs to the route that obtained it. Never carry
+    // that identity from a direct connection into Tor, or between proxies.
+    if (!identical(_configurationProxy, policy)) {
+      _configurationProxy = policy;
+      _configuration = null;
+    }
+    final pending = _configuration ??= _loadConfiguration(policy);
     Map<String, String> config;
     try {
-      config = await (_configuration ??= _loadConfiguration());
+      config = await pending;
     } catch (_) {
-      _configuration = null; // A failed initialization must be retryable.
+      // A late failure from an old route cannot clear newer configuration.
+      if (identical(_configuration, pending)) _configuration = null;
       rethrow;
     }
+    _checkProxy(policy);
     final request = http.Request(
         'POST',
         _origin.replace(path: 'youtubei/v1/$endpoint', queryParameters: {
@@ -441,35 +501,67 @@ class MusicCatalogService {
         },
         ...body,
       });
-    final response = await _send(request);
     try {
+      final response = await _send(request, policy);
       final decoded = jsonDecode(response);
       if (decoded is! Map<String, dynamic> || decoded.containsKey('error')) {
         throw const FormatException();
       }
       return decoded;
     } on FormatException {
-      _configuration = null;
+      if (identical(_configuration, pending)) _configuration = null;
       throw const MusicCatalogException(
           'The music catalog returned an invalid response.');
+    } catch (_) {
+      if (identical(_configuration, pending)) _configuration = null;
+      rethrow;
     }
   }
 
-  Future<String> _send(http.Request request) async {
+  Future<String> _send(http.Request request, SocksProxyConfig policy,
+      {bool retryConsent = false}) async {
     // No Google account cookies, Invidious access headers, or redirects.
     request.followRedirects = false;
+    var expired = false;
     try {
       return await (() async {
+        _checkProxy(policy);
         final response = await _client.send(request);
+        final redirect = Uri.tryParse(response.headers['location'] ?? '');
+        if (retryConsent &&
+            request.method == 'GET' &&
+            request.url == _origin &&
+            response.statusCode == 302 &&
+            redirect?.scheme == 'https' &&
+            redirect?.host == 'consent.youtube.com' &&
+            redirect?.port == 443 &&
+            redirect?.userInfo == '' &&
+            redirect?.path == '/m') {
+          await response.stream.drain<void>();
+          // Future.timeout does not cancel a late response or its body drain.
+          // Neither may dispatch a new request after the caller's deadline.
+          if (expired) throw TimeoutException('Music request expired.');
+          // NewPipe's anonymous default rejects non-necessary cookies. Retry
+          // only our original bootstrap, never the redirect or its cookies.
+          // The outer deadline still bounds both attempts; no cookie is kept.
+          return _send(
+              http.Request('GET', _origin)
+                ..headers.addAll({...request.headers, 'cookie': 'SOCS=CAE='}),
+              policy);
+        }
         if (response.statusCode != 200) {
           await response.stream.drain<void>();
-          _configuration = null;
           throw const MusicCatalogException(
               'The music catalog is unavailable.');
         }
-        return utf8.decode(await response.stream.toBytes());
+        final bytes = await response.stream.toBytes();
+        _checkProxy(policy);
+        return utf8.decode(bytes);
       })()
-          .timeout(requestTimeout);
+          .timeout(requestTimeout, onTimeout: () {
+        expired = true;
+        throw TimeoutException('Music request expired.');
+      });
     } on MusicCatalogException {
       rethrow;
     } catch (_) {

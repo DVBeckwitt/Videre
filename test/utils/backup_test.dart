@@ -6,6 +6,11 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/models/saved_playlist.dart';
+import 'package:clipious/playlists/services/playlist_library_service.dart';
+import 'package:clipious/playlists/services/playlist_progress.dart';
+import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
@@ -17,12 +22,208 @@ import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   late SembastSqfDb source, target;
   const id = 'abcdefghijk';
   const channel = 'UCabcdefghijklmnopqrstuv';
+
+  test('precise playback survives backup after the watched threshold',
+      () async {
+    await source.saveProgress(
+        Progress(1, id, positionSeconds: 95, durationSeconds: 100));
+    final backup = UserBackup.parse((await source.exportBackup()).encode());
+    await target.restoreBackup(backup);
+    expect(target.getVideoPlaybackProgress(id).resumePosition(),
+        const Duration(seconds: 95));
+    await target.saveProgress(
+        Progress(0.5, id, positionSeconds: 50, durationSeconds: 100));
+    await target.restoreBackup(backup);
+    expect(target.getVideoPlaybackProgress(id).positionSeconds, 50);
+    await target.restoreBackup(backup, replace: true);
+    expect(target.getVideoPlaybackProgress(id).positionSeconds, 95);
+  });
+
+  test('old progress remains readable and malformed precise time is rejected',
+      () async {
+    final raw = jsonDecode((await source.exportBackup()).encode())
+        as Map<String, dynamic>;
+    raw.remove('savedPlaylists');
+    await target.restoreBackup(UserBackup.parse(jsonEncode(raw)));
+    expect(
+        target
+            .getVideoPlaybackProgress(id)
+            .resumePosition(durationSeconds: 100),
+        const Duration(seconds: 40));
+    for (final value in [-1, 1.5, '95', maximumPlaybackSeconds + 1]) {
+      for (final field in ['positionSeconds', 'durationSeconds']) {
+        raw['progress'] = [
+          {'videoId': id, 'progress': 0.4, field: value}
+        ];
+        expect(() => UserBackup.parse(jsonEncode(raw)), throwsFormatException);
+      }
+    }
+  });
+
+  for (final clearAll in [false, true]) {
+    for (final replace in [false, true]) {
+      test(
+          'restore after history ${clearAll ? 'clear' : 'deletion'} does not revive an old playback revision (replace=$replace)',
+          () async {
+        final sourceWatch = WatchRepository(source);
+        final sourceRevision = await sourceWatch.beginPlayback(id);
+        await sourceWatch.recordPlayback(id, 1, sourceRevision,
+            positionSeconds: 95, durationSeconds: 100);
+        final backup = await source.exportBackup();
+        final targetWatch = WatchRepository(target);
+        final oldRevision = await targetWatch.beginPlayback(id);
+        if (clearAll) {
+          await target.clearLocalHistory();
+        } else {
+          await target.deleteLocalHistory(id);
+        }
+        await target.restoreBackup(backup, replace: replace);
+        final importedRevision = targetWatch.status(id).revision;
+        expect(importedRevision, greaterThan(oldRevision));
+        expect(
+            await targetWatch.recordPlayback(id, 0.96, oldRevision,
+                positionSeconds: 96, durationSeconds: 100),
+            isFalse);
+        expect(target.getVideoPlaybackProgress(id).positionSeconds, 95);
+        await targetWatch.saveSessionIfCurrent(
+            id,
+            oldRevision,
+            SettingsValue(
+                playbackSessionSetting,
+                const PlaybackSession(
+                        videos: [Video(videoId: id)],
+                        currentId: id,
+                        seconds: 96)
+                    .encode()));
+        expect(target.getSettings(playbackSessionSetting), isNull);
+        final checkpoints =
+            PlaylistProgressService.forProfile(target, target.profileId);
+        final reference = PlaylistReference(
+            kind: PlaylistSourceKind.public,
+            playlistId: 'PLrestored',
+            profileId: target.profileId);
+        expect(
+            await checkpoints.save(reference, const Video(videoId: id),
+                watchRevision: oldRevision),
+            isFalse);
+        expect(checkpoints.get(reference), isNull);
+        final newRevision = await targetWatch.beginPlayback(id);
+        expect(newRevision, greaterThan(importedRevision));
+        expect(
+            await targetWatch.recordPlayback(id, 0.2, newRevision,
+                positionSeconds: 20, durationSeconds: 100),
+            isTrue);
+      });
+    }
+  }
+
+  test('saved playlist backups remap public saves and exclude account access',
+      () async {
+    final library = PlaylistLibraryService.forProfile(source, source.profileId);
+    final saved = SavedPlaylist(
+      reference: PlaylistReference(
+          kind: PlaylistSourceKind.public,
+          playlistId: 'PLpublic',
+          profileId: source.profileId),
+      title: 'Public collection',
+      videoCount: 2,
+      previews: const [Video(videoId: id, title: 'First video')],
+    );
+    await library.save(saved);
+    await library.save(SavedPlaylist(
+      reference: PlaylistReference(
+          kind: PlaylistSourceKind.account,
+          playlistId: 'IVPLprivate',
+          profileId: source.profileId,
+          accountId: 'private-account',
+          origin: 'https://private-instance.example'),
+      title: 'Private collection',
+      videoCount: 1,
+    ));
+    final encoded = (await source.exportBackup()).encode();
+    expect(encoded, isNot(contains('private-account')));
+    expect(encoded, isNot(contains('private-instance')));
+    expect(encoded, isNot(contains('IVPLprivate')));
+    final person = await target.createProfile('Playlist destination');
+    final destination = target.forProfile(person.id);
+    await destination.restoreBackup(UserBackup.parse(encoded));
+    final restored =
+        PlaylistLibraryService.forProfile(target, person.id).entries.single;
+    expect(restored.reference.profileId, person.id);
+    expect(restored.reference.playlistId, saved.reference.playlistId);
+    expect(restored.title, saved.title);
+    expect(restored.previews.single.videoId, id);
+    expect(PlaylistLibraryService.forProfile(target, target.profileId).entries,
+        isEmpty);
+  });
+
+  test('saved playlist merge retains existing titles and replace imports saves',
+      () async {
+    SavedPlaylist bookmark(String title, String playlistId) => SavedPlaylist(
+          reference: PlaylistReference(
+              kind: PlaylistSourceKind.public,
+              playlistId: playlistId,
+              profileId: source.profileId),
+          title: title,
+          videoCount: 0,
+        );
+    final from = PlaylistLibraryService.forProfile(source, source.profileId);
+    final to = PlaylistLibraryService.forProfile(target, target.profileId);
+    await from.save(bookmark('Incoming title', 'PLsame'));
+    await from.save(bookmark('Incoming second', 'PLsecond'));
+    await to.save(bookmark('Existing title', 'PLsame'));
+    final backup = await source.exportBackup();
+    await target.restoreBackup(backup);
+    expect(to.entries.map((entry) => entry.title),
+        ['Existing title', 'Incoming second']);
+    await target.restoreBackup(backup, replace: true);
+    expect(to.entries.map((entry) => entry.title),
+        ['Incoming second', 'Incoming title']);
+  });
+
+  test('saved playlist backup preserves the displayed duplicate metadata',
+      () async {
+    SavedPlaylist bookmark(String playlistId, String title, int count) =>
+        SavedPlaylist(
+            reference: PlaylistReference(
+                kind: PlaylistSourceKind.public,
+                playlistId: playlistId,
+                profileId: source.profileId),
+            title: title,
+            author: '$title creator',
+            videoCount: count,
+            previews: [Video(videoId: id, title: '$title preview')]);
+    final old = bookmark('PLsame', 'Old title', 1);
+    final other = bookmark('PLother', 'Other playlist', 2);
+    final updated = bookmark('PLsame', 'Updated title', 3);
+    await source.saveSetting(SettingsValue(
+        playlistLibrarySettingName,
+        jsonEncode({
+          'version': 1,
+          'entries': [old.toJson(), other.toJson(), updated.toJson()],
+        })));
+    final displayed =
+        PlaylistLibraryService.forProfile(source, source.profileId).entries;
+    expect(displayed.map((entry) => entry.title),
+        ['Updated title', 'Other playlist']);
+    final backup = UserBackup.parse((await source.exportBackup()).encode());
+    expect(backup.sections['savedPlaylists'],
+        displayed.map(UserBackup.portablePlaylist).toList());
+    await target.restoreBackup(backup);
+    expect(
+        PlaylistLibraryService.forProfile(target, target.profileId)
+            .entries
+            .map((entry) => entry.toJson())
+            .toList(),
+        displayed.map((entry) => entry.toJson()).toList());
+  });
 
   test('Music mode survives backup with only supported values', () async {
     for (final mode in ['videos', 'music']) {

@@ -13,6 +13,8 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/services/playlist_load_session.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -56,6 +58,16 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   Future<void> playVideo(List<Video> videos,
           {bool? audio, Duration? startAt, bool? playing}) async =>
       online.addAll(videos);
+
+  @override
+  Future<void> playPlaylist(List<Video> entries,
+          {required PlaylistReference reference,
+          int startIndex = 0,
+          Duration? startAt,
+          bool? audio,
+          bool? playing,
+          PlaylistLoadSession? playlistLoader}) async =>
+      online.addAll(entries);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();

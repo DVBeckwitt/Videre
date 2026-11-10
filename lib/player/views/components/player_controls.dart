@@ -20,6 +20,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -419,9 +420,14 @@ class PlayerControls extends StatelessWidget {
                                                         details, constraints);
                                                   }
                                                 : null,
-                                        onVerticalDragEnd: (details) {
-                                          cubit.stopBrightnessAdjustments();
-                                        },
+                                        // Outside fullscreen, let the outer
+                                        // player drag recognizer own this drag.
+                                        onVerticalDragEnd:
+                                            playerState.fullScreenState ==
+                                                    FullScreenState.fullScreen
+                                                ? (_) => cubit
+                                                    .stopBrightnessAdjustments()
+                                                : null,
                                         onTap: playerState.justDoubleTappedSkip
                                             ? cubit.doubleTapRewind
                                             : playerState.displayControls
@@ -454,9 +460,12 @@ class PlayerControls extends StatelessWidget {
                                                         details, constraints);
                                                   }
                                                 : null,
-                                        onVerticalDragEnd: (details) {
-                                          cubit.stopVolumeAdjustments();
-                                        },
+                                        onVerticalDragEnd: playerState
+                                                    .fullScreenState ==
+                                                FullScreenState.fullScreen
+                                            ? (_) =>
+                                                cubit.stopVolumeAdjustments()
+                                            : null,
                                         onTap: playerState.justDoubleTappedSkip
                                             ? cubit.doubleTapFastForward
                                             : playerState.displayControls
@@ -969,10 +978,6 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
   VoidCallback? _restoreSpeed;
 
   void _startSpeedBoost(LongPressStartDetails details) {
-    final width = context.size!.width;
-    final x = details.localPosition.dx;
-    if (x >= width / 3 && x <= width * 2 / 3) return;
-
     final restore = widget.speedBoostPlayer?.startSpeedBoost(onEnded: () {
       if (mounted && _restoreSpeed != null) {
         setState(() => _restoreSpeed = null);
@@ -1009,39 +1014,63 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
   Widget build(BuildContext context) {
     // Keep the recognizer above the overlays so auto-hide cannot end the hold.
     final canBoost = widget.speedBoostPlayer != null;
-    return GestureDetector(
+    return RawGestureDetector(
       behavior: HitTestBehavior.translucent,
-      onVerticalDragStart: widget.onVerticalDragStart,
-      onVerticalDragUpdate: widget.onVerticalDragUpdate,
-      onVerticalDragEnd: widget.onVerticalDragEnd,
-      onVerticalDragCancel: widget.onVerticalDragCancel,
-      onLongPressStart: canBoost ? _startSpeedBoost : null,
-      onLongPressEnd: canBoost ? (_) => _endSpeedBoost() : null,
-      onLongPressCancel: canBoost ? _endSpeedBoost : null,
-      child: Stack(
-        fit: StackFit.passthrough,
-        children: [
-          widget.child,
-          if (_restoreSpeed != null)
-            const Positioned.fill(
-              child: IgnorePointer(
-                child: Align(
-                  alignment: Alignment(0, -0.55),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.all(Radius.circular(20)),
-                    ),
-                    child: Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      child: Text('2×', style: TextStyle(color: Colors.white)),
+      gestures: {
+        if (canBoost)
+          LongPressGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+            // A deliberate hold should respond sooner than the platform's
+            // 500 ms context-menu gesture, without stealing taps or drags.
+            () => LongPressGestureRecognizer(
+                duration: const Duration(milliseconds: 200)),
+            (recognizer) => recognizer
+              ..gestureSettings = MediaQuery.maybeGestureSettingsOf(context)
+              ..onLongPressDown = (details) {
+                final width = context.size!.width;
+                final x = details.localPosition.dx;
+                // Reject before the deadline can take a center-button tap.
+                if (x >= width / 3 && x <= width * 2 / 3) {
+                  recognizer.resolve(GestureDisposition.rejected);
+                }
+              }
+              ..onLongPressStart = _startSpeedBoost
+              ..onLongPressUp = _endSpeedBoost
+              ..onLongPressCancel = _endSpeedBoost,
+          ),
+      },
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onVerticalDragStart: widget.onVerticalDragStart,
+        onVerticalDragUpdate: widget.onVerticalDragUpdate,
+        onVerticalDragEnd: widget.onVerticalDragEnd,
+        onVerticalDragCancel: widget.onVerticalDragCancel,
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            widget.child,
+            if (_restoreSpeed != null)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: Align(
+                    alignment: Alignment(0, -0.55),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.all(Radius.circular(20)),
+                      ),
+                      child: Padding(
+                        padding:
+                            EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        child:
+                            Text('2×', style: TextStyle(color: Colors.white)),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

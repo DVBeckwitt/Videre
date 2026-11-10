@@ -10,6 +10,7 @@ import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/sleep_timer.dart';
+import 'package:clipious/player/views/components/playlist_loading_notice.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -297,6 +298,7 @@ class MusicQueue extends StatelessWidget {
         state.videos.isNotEmpty ? state.videos : state.offlineVideos;
     final currentId = state.currentQueueId;
     return ReorderableListView.builder(
+      footer: const PlaylistLoadingNotice(),
       padding: const EdgeInsets.symmetric(horizontal: 8),
       itemCount: videos.length,
       onReorder: player.onQueueReorder,

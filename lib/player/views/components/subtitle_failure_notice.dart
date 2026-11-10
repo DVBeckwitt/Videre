@@ -26,10 +26,10 @@ class SubtitleFailureOverlay extends StatelessWidget {
     final fullscreen = context.select((PlayerCubit? cubit) =>
         cubit?.state.fullScreenState == FullScreenState.fullScreen);
     return LayoutBuilder(builder: (context, constraints) {
-      // Keep the failure available when the user expands the mini player.
-      if (constraints.maxWidth < 280 || constraints.maxHeight < 100) {
-        return child;
-      }
+      // Keep the controls mounted as the preview grows during a drag. Replacing
+      // their parent here discards the gesture before it can settle the player.
+      final showNotice =
+          constraints.maxWidth >= 280 && constraints.maxHeight >= 100;
       return Stack(
         fit: StackFit.expand,
         children: [
@@ -39,7 +39,9 @@ class SubtitleFailureOverlay extends StatelessWidget {
             buildWhen: (previous, current) =>
                 previous.subtitleFailed != current.subtitleFailed,
             builder: (context, state) {
-              if (!state.subtitleFailed) return const SizedBox.shrink();
+              if (!showNotice || !state.subtitleFailed) {
+                return const SizedBox.shrink();
+              }
               // The fullscreen and TV controls use the bottom of the viewport
               // for seeking and playback buttons.
               final bottomClearance = isTv ? 120.0 : (fullscreen ? 64.0 : 0.0);

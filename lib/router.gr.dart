@@ -741,6 +741,8 @@ class PlaylistViewRoute extends PageRouteInfo<PlaylistViewRouteArgs> {
     Key? key,
     required Playlist playlist,
     required bool canDeleteVideos,
+    PlaylistReference? reference,
+    PlaylistReference? bookmarkOwner,
     List<PageRouteInfo>? children,
   }) : super(
           PlaylistViewRoute.name,
@@ -748,6 +750,8 @@ class PlaylistViewRoute extends PageRouteInfo<PlaylistViewRouteArgs> {
             key: key,
             playlist: playlist,
             canDeleteVideos: canDeleteVideos,
+            reference: reference,
+            bookmarkOwner: bookmarkOwner,
           ),
           initialChildren: children,
           argsEquality: false,
@@ -763,6 +767,8 @@ class PlaylistViewRoute extends PageRouteInfo<PlaylistViewRouteArgs> {
         key: args.key,
         playlist: args.playlist,
         canDeleteVideos: args.canDeleteVideos,
+        reference: args.reference,
+        bookmarkOwner: args.bookmarkOwner,
       );
     },
   );
@@ -773,6 +779,8 @@ class PlaylistViewRouteArgs {
     this.key,
     required this.playlist,
     required this.canDeleteVideos,
+    this.reference,
+    this.bookmarkOwner,
   });
 
   final Key? key;
@@ -781,9 +789,13 @@ class PlaylistViewRouteArgs {
 
   final bool canDeleteVideos;
 
+  final PlaylistReference? reference;
+
+  final PlaylistReference? bookmarkOwner;
+
   @override
   String toString() {
-    return 'PlaylistViewRouteArgs{key: $key, playlist: $playlist, canDeleteVideos: $canDeleteVideos}';
+    return 'PlaylistViewRouteArgs{key: $key, playlist: $playlist, canDeleteVideos: $canDeleteVideos, reference: $reference, bookmarkOwner: $bookmarkOwner}';
   }
 }
 
@@ -1432,6 +1444,10 @@ class TvPlayerRoute extends PageRouteInfo<TvPlayerRouteArgs> {
     required List<Video> videos,
     bool resumeSession = false,
     Duration? startAt,
+    PlaylistReference? playlistReference,
+    PlaylistLoadSession? playlistLoader,
+    int startIndex = 0,
+    bool? audio,
     bool receiveRemote = false,
     List<PageRouteInfo>? children,
   }) : super(
@@ -1441,6 +1457,10 @@ class TvPlayerRoute extends PageRouteInfo<TvPlayerRouteArgs> {
             videos: videos,
             resumeSession: resumeSession,
             startAt: startAt,
+            playlistReference: playlistReference,
+            playlistLoader: playlistLoader,
+            startIndex: startIndex,
+            audio: audio,
             receiveRemote: receiveRemote,
           ),
           initialChildren: children,
@@ -1458,6 +1478,10 @@ class TvPlayerRoute extends PageRouteInfo<TvPlayerRouteArgs> {
         videos: args.videos,
         resumeSession: args.resumeSession,
         startAt: args.startAt,
+        playlistReference: args.playlistReference,
+        playlistLoader: args.playlistLoader,
+        startIndex: args.startIndex,
+        audio: args.audio,
         receiveRemote: args.receiveRemote,
       );
     },
@@ -1470,6 +1494,10 @@ class TvPlayerRouteArgs {
     required this.videos,
     this.resumeSession = false,
     this.startAt,
+    this.playlistReference,
+    this.playlistLoader,
+    this.startIndex = 0,
+    this.audio,
     this.receiveRemote = false,
   });
 
@@ -1481,11 +1509,19 @@ class TvPlayerRouteArgs {
 
   final Duration? startAt;
 
+  final PlaylistReference? playlistReference;
+
+  final PlaylistLoadSession? playlistLoader;
+
+  final int startIndex;
+
+  final bool? audio;
+
   final bool receiveRemote;
 
   @override
   String toString() {
-    return 'TvPlayerRouteArgs{key: $key, videos: $videos, resumeSession: $resumeSession, startAt: $startAt, receiveRemote: $receiveRemote}';
+    return 'TvPlayerRouteArgs{key: $key, videos: $videos, resumeSession: $resumeSession, startAt: $startAt, playlistReference: $playlistReference, playlistLoader: $playlistLoader, startIndex: $startIndex, audio: $audio, receiveRemote: $receiveRemote}';
   }
 }
 
@@ -1496,6 +1532,7 @@ class TvPlaylistGridRoute extends PageRouteInfo<TvPlaylistGridRouteArgs> {
     Key? key,
     required PaginatedList<Playlist> playlistList,
     String? tags,
+    bool includeSavedPlaylists = false,
     List<PageRouteInfo>? children,
   }) : super(
           TvPlaylistGridRoute.name,
@@ -1503,6 +1540,7 @@ class TvPlaylistGridRoute extends PageRouteInfo<TvPlaylistGridRouteArgs> {
             key: key,
             playlistList: playlistList,
             tags: tags,
+            includeSavedPlaylists: includeSavedPlaylists,
           ),
           initialChildren: children,
           argsEquality: false,
@@ -1518,6 +1556,7 @@ class TvPlaylistGridRoute extends PageRouteInfo<TvPlaylistGridRouteArgs> {
         key: args.key,
         playlistList: args.playlistList,
         tags: args.tags,
+        includeSavedPlaylists: args.includeSavedPlaylists,
       );
     },
   );
@@ -1528,6 +1567,7 @@ class TvPlaylistGridRouteArgs {
     this.key,
     required this.playlistList,
     this.tags,
+    this.includeSavedPlaylists = false,
   });
 
   final Key? key;
@@ -1536,9 +1576,11 @@ class TvPlaylistGridRouteArgs {
 
   final String? tags;
 
+  final bool includeSavedPlaylists;
+
   @override
   String toString() {
-    return 'TvPlaylistGridRouteArgs{key: $key, playlistList: $playlistList, tags: $tags}';
+    return 'TvPlaylistGridRouteArgs{key: $key, playlistList: $playlistList, tags: $tags, includeSavedPlaylists: $includeSavedPlaylists}';
   }
 }
 
@@ -1549,6 +1591,8 @@ class TvPlaylistRoute extends PageRouteInfo<TvPlaylistRouteArgs> {
     Key? key,
     required Playlist playlist,
     required bool canDeleteVideos,
+    PlaylistReference? reference,
+    PlaylistReference? bookmarkOwner,
     List<PageRouteInfo>? children,
   }) : super(
           TvPlaylistRoute.name,
@@ -1556,6 +1600,8 @@ class TvPlaylistRoute extends PageRouteInfo<TvPlaylistRouteArgs> {
             key: key,
             playlist: playlist,
             canDeleteVideos: canDeleteVideos,
+            reference: reference,
+            bookmarkOwner: bookmarkOwner,
           ),
           initialChildren: children,
           argsEquality: false,
@@ -1571,6 +1617,8 @@ class TvPlaylistRoute extends PageRouteInfo<TvPlaylistRouteArgs> {
         key: args.key,
         playlist: args.playlist,
         canDeleteVideos: args.canDeleteVideos,
+        reference: args.reference,
+        bookmarkOwner: args.bookmarkOwner,
       );
     },
   );
@@ -1581,6 +1629,8 @@ class TvPlaylistRouteArgs {
     this.key,
     required this.playlist,
     required this.canDeleteVideos,
+    this.reference,
+    this.bookmarkOwner,
   });
 
   final Key? key;
@@ -1589,9 +1639,13 @@ class TvPlaylistRouteArgs {
 
   final bool canDeleteVideos;
 
+  final PlaylistReference? reference;
+
+  final PlaylistReference? bookmarkOwner;
+
   @override
   String toString() {
-    return 'TvPlaylistRouteArgs{key: $key, playlist: $playlist, canDeleteVideos: $canDeleteVideos}';
+    return 'TvPlaylistRouteArgs{key: $key, playlist: $playlist, canDeleteVideos: $canDeleteVideos, reference: $reference, bookmarkOwner: $bookmarkOwner}';
   }
 }
 

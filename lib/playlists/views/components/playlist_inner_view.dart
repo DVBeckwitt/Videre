@@ -1,17 +1,18 @@
-import 'package:clipious/utils/motion.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/states/player.dart';
+import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_swipe_action_cell/core/cell.dart';
 import 'package:clipious/playlists/views/components/playlist_thumbnail.dart';
-import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 
 import '../../../globals.dart';
-import '../../../videos/views/components/add_to_queue_button.dart';
-import '../../../videos/views/components/play_button.dart';
 import '../../states/playlist.dart';
+import 'playlist_playback_actions.dart';
 
 class PlaylistInnerView extends StatelessWidget {
   final bool canDeleteVideos;
@@ -25,109 +26,82 @@ class PlaylistInnerView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ColorScheme colors = Theme.of(context).colorScheme;
-    return Builder(builder: (context) {
-      final cubit = context.watch<PlaylistCubit>();
-      final playlistState = cubit.state;
-      return Center(
-        child: Container(
-          constraints: BoxConstraints(maxWidth: tabletMaxVideoWidth),
-          child: Column(
-            children: [
-              Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          height: 250,
-                          child: PlaylistThumbnails(
-                            videos: playlistState.playlist.videos,
-                            children: playlistState.loading
-                                ? [
-                                    Center(
-                                        child: Container(
-                                      padding: const EdgeInsets.all(5),
-                                      decoration: BoxDecoration(
-                                          color: colors.surface
-                                              .withValues(alpha: 0.5),
-                                          shape: BoxShape.circle),
-                                      child: TweenAnimationBuilder(
-                                        tween: Tween<double>(
-                                            begin: 0,
-                                            end: playlistState.loadingProgress),
-                                        duration: AppMotion.duration(context),
-                                        curve: Curves.easeInOutQuad,
-                                        builder: (context, value, child) =>
-                                            MotionLoadingIndicator(
-                                                child:
-                                                    CircularProgressIndicator(
-                                          value: value > 0 && value < 1
-                                              ? value
-                                              : null,
-                                        )),
-                                      ),
-                                    ))
-                                  ]
-                                : [
-                                    PlayButton(
-                                      onPressed: (isAudio) =>
-                                          cubit.play(isAudio),
-                                    ),
-                                    Builder(builder: (context) {
-                                      return Positioned(
-                                          right: 5,
-                                          bottom: 3,
-                                          child: AddToQueueButton(
-                                            videos:
-                                                playlistState.playlist.videos,
-                                          ));
-                                    })
-                                  ],
-                          ),
-                        )
-                      ])),
-              Expanded(
-                  child: Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: innerHorizontalPadding),
-                child: ListView(
-                  controller: cubit.scrollController,
-                  children: [
-                    ...playlistState.playlist.videos
-                        .where((element) => !element.filterHide)
-                        .map((v) => SwipeActionCell(
-                            key: ValueKey('swipe-${v.videoId}'),
-                            trailingActions: canDeleteVideos
-                                ? [
-                                    SwipeAction(
-                                      icon: const Icon(Icons.delete,
-                                          color: Colors.white),
-                                      performsFirstActionWithFullSwipe: true,
-                                      onTap: (handler) async {
-                                        await handler(true);
-                                        if (context.mounted) {
-                                          removeVideoFromPlaylist(context, v);
-                                        }
-                                      },
-                                    )
-                                  ]
-                                : null,
-                            child: CompactVideo(
-                              video: v,
-                              onTap: () => openVideo(context, v),
-                              key: ValueKey(v.videoId),
-                            ))),
-                    if (playlistState.loading)
-                      ...repeatWidget(() => const CompactVideoPlaceHolder(),
-                          count: 5)
+    final cubit = context.watch<PlaylistCubit>();
+    final state = cubit.state;
+    final videos = state.playlist.videos.where((v) => !v.filterHide).toList();
+    final current = context.select((PlayerCubit player) =>
+        (player.playlistReference, player.state.currentQueueId));
+    final locals = AppLocalizations.of(context)!;
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: tabletMaxVideoWidth),
+        // Let the header scroll with the entries on short or landscape screens.
+        child: ListView.builder(
+          controller: cubit.scrollController,
+          padding:
+              const EdgeInsets.symmetric(horizontal: innerHorizontalPadding),
+          itemCount: videos.length + 1 + (state.loading ? 3 : 0),
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PlaylistThumbnails(videos: state.playlist.videos),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: PlaylistPlaybackActions(),
+                  ),
+                ],
+              );
+            }
+            if (index > videos.length) return const CompactVideoPlaceHolder();
+            final video = videos[index - 1];
+            final entryId = playbackQueueId(video);
+            final playing =
+                current.$1 == cubit.reference && current.$2 == entryId;
+            return SwipeActionCell(
+              key: ValueKey('swipe-$entryId'),
+              trailingActions: canDeleteVideos
+                  ? [
+                      SwipeAction(
+                        icon: const Icon(Icons.delete, color: Colors.white),
+                        performsFirstActionWithFullSwipe: false,
+                        onTap: (handler) async {
+                          // Keep the row visible until the server confirms removal.
+                          await handler(false);
+                          if (context.mounted) {
+                            await removeVideoFromPlaylist(context, video);
+                          }
+                        },
+                      ),
+                    ]
+                  : null,
+              child: Semantics(
+                selected: playing,
+                label: playing ? locals.musicNowPlaying : null,
+                child: CompactVideo(
+                  key: ValueKey(entryId),
+                  video: video,
+                  highlighted: playing,
+                  onTap: !cubit.canPlayEntries ||
+                          video.filtered ||
+                          video.isUpcoming == true
+                      ? null
+                      : () => openVideo(context, video),
+                  trailing: [
+                    PlaylistEntryMenu(
+                      video: video,
+                      onRemove: canDeleteVideos
+                          ? () async => removeVideoFromPlaylist(context, video)
+                          : null,
+                    ),
                   ],
                 ),
-              ))
-            ],
-          ),
+              ),
+            );
+          },
         ),
-      );
-    });
+      ),
+    );
   }
 }
