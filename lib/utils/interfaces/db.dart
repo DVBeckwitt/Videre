@@ -111,6 +111,9 @@ abstract class IDbClient {
 
   double getVideoProgress(String videoId);
 
+  Progress getVideoPlaybackProgress(String videoId) =>
+      Progress(getVideoProgress(videoId), videoId);
+
   saveProgress(Progress progress);
 
   List<Progress> getAllProgress() =>

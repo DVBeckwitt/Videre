@@ -134,6 +134,7 @@ enum HomeDataSource {
           height: compactHeight,
           child: PlaylistList(
             canDeleteVideos: true,
+            includeSavedPlaylists: true,
             small: small,
             paginatedList: SingleEndpointList(service.getUserPlaylists),
           )),

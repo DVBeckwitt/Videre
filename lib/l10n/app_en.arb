@@ -1637,6 +1637,7 @@
   "musicSearchStart": "Search for a song, album, artist, or public playlist.",
   "musicNoResults": "No results found.",
   "musicCatalogError": "Could not load music. Check your connection and try again.",
+  "musicRegionUnavailable": "YouTube Music is unavailable from this connection’s region. If you use Tor or a VPN, try another region or circuit.",
   "musicPlayAll": "Play all",
   "musicPlaybackError": "Could not start this song. Try again or choose another backend.",
   "musicEmptyCollection": "No playable songs in this collection.",
@@ -1695,5 +1696,27 @@
   "homeExperience": "Home experience",
   "homeExperienceVideosAndMusic": "Videos and Music",
   "homeExperienceVideosOnly": "Videos only",
-  "homeExperienceMusicOnly": "Music only"
+  "homeExperienceMusicOnly": "Music only",
+  "watchedStatus": "Watched",
+  "videoWatchProgress": "{percent}% watched",
+  "@videoWatchProgress": {
+    "placeholders": {
+      "percent": { "type": "int" }
+    }
+  },
+  "playlistSave": "Save playlist",
+  "playlistSaved": "Saved",
+  "playlistRemoveSaved": "Remove saved playlist",
+  "playlistSaveError": "Could not update saved playlists. Try again.",
+  "playlistSavedOnDevice": "Saved on this device",
+  "playlistLoadingMore": "Loading more playlist videos…",
+  "playlistLoadingFailed": "Could not load the rest of this playlist.",
+  "playlistResume": "Resume playlist",
+  "playlistPlayFromBeginning": "Play from beginning",
+  "playlistContinueNext": "Continue with next available",
+  "playlistResumeUnavailable": "The video you last played is no longer available in this playlist.",
+  "playlistLoading": "Loading playlist…",
+  "playlistLoadFailed": "Could not load the rest of this playlist. Loaded videos are still available.",
+  "playlistViewDetails": "View details",
+  "playlistPlayAudio": "Play audio from beginning"
 }

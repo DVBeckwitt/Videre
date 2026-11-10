@@ -17,6 +17,8 @@ import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/services/playlist_load_session.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -130,6 +132,17 @@ class _Player extends TestPlayerCubit {
       {bool? audio, Duration? startAt, bool? playing}) async {
     calls.add((videos: videos, audio: audio, startAt: startAt));
   }
+
+  @override
+  Future<void> playPlaylist(List<Video> entries,
+      {required PlaylistReference reference,
+      int startIndex = 0,
+      Duration? startAt,
+      bool? audio,
+      bool? playing,
+      PlaylistLoadSession? playlistLoader}) async {
+    calls.add((videos: entries, audio: audio, startAt: startAt));
+  }
 }
 
 void main() {
@@ -214,6 +227,49 @@ void main() {
     catalog.responses.last.complete([]);
     await tester.pumpAndSettle();
     expect(find.text('No results found.'), findsOneWidget);
+  });
+
+  testWidgets(
+      'regional search error gives connection guidance and resets on retry',
+      (tester) async {
+    const regionMessage =
+        'YouTube Music is unavailable from this connection’s region. '
+        'If you use Tor or a VPN, try another region or circuit.';
+    await show(tester);
+    await search(tester, 'song');
+    catalog.responses.single
+        .completeError(const MusicCatalogRegionUnavailable());
+    await tester.pumpAndSettle();
+    expect(find.text(regionMessage), findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(find.text(regionMessage), findsNothing);
+    catalog.responses.last.completeError(StateError('offline'));
+    await tester.pumpAndSettle();
+    expect(find.text(regionMessage), findsNothing);
+    expect(
+        find.text('Could not load music. Check your connection and try again.'),
+        findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    catalog.responses.last.complete([first]);
+    await tester.pumpAndSettle();
+    expect(find.text('First song'), findsOneWidget);
+  });
+
+  testWidgets('profile changes clear a regional catalog error', (tester) async {
+    await show(tester);
+    await search(tester, 'song');
+    catalog.responses.single
+        .completeError(const MusicCatalogRegionUnavailable());
+    await tester.pumpAndSettle();
+    expect(
+        find.textContaining('try another region or circuit'), findsOneWidget);
+    app.setGlobalLoading(true);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('try another region or circuit'), findsNothing);
   });
 
   testWidgets(

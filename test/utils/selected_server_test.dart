@@ -145,4 +145,72 @@ void main() {
     expect(find.text('${first.url}|private'), findsNothing);
     expect(database.selectedReads, 0);
   });
+
+  testWidgets('an explicit unavailable scope never falls back to selection',
+      (tester) async {
+    final app = _App(second);
+    addTearDown(app.close);
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: MaterialApp(
+            home: ServerScope(server: null, child: serverLabel()))));
+    await tester.pump();
+    expect(find.text('null|null'), findsOneWidget);
+    expect(database.selectedReads, 0);
+  });
+
+  testWidgets(
+      'a scoped owner reads fresh credentials without changing selection',
+      (tester) async {
+    final app = _App(second);
+    addTearDown(app.close);
+    late StateSetter rebuild;
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: MaterialApp(home: StatefulBuilder(builder: (context, setState) {
+          rebuild = setState;
+          return ServerScope(server: first, child: serverLabel());
+        }))));
+    expect(find.text('${first.url}|null'), findsOneWidget);
+    await tester.runAsync(() => database
+        .upsertServer(first.copyWith(customHeaders: {'X-Test': 'refreshed'})));
+    rebuild(() {});
+    await tester.pump();
+    expect(find.text('${first.url}|refreshed'), findsOneWidget);
+    expect(app.state.server?.accountId, second.accountId);
+    expect(database.selectedReads, 0);
+  });
+
+  for (final change in ['removed', 'origin replaced', 'profile switched']) {
+    testWidgets('a mounted scope fails closed after its owner is $change',
+        (tester) async {
+      final app = _App(second);
+      addTearDown(app.close);
+      late StateSetter rebuild;
+      await tester.pumpWidget(BlocProvider<AppCubit>.value(
+          value: app,
+          child:
+              MaterialApp(home: StatefulBuilder(builder: (context, setState) {
+            rebuild = setState;
+            return ServerScope(server: first, child: serverLabel());
+          }))));
+      expect(find.text('${first.url}|null'), findsOneWidget);
+      await tester.runAsync(() async {
+        if (change == 'removed') {
+          await database.deleteServerById(first);
+        } else if (change == 'origin replaced') {
+          await database.upsertServer(first.copyWith(
+              id: first.accountId, url: 'https://moved.example'));
+        } else {
+          final profile = await database.createProfile('Another person');
+          await database.useProfile(profile.id);
+        }
+      });
+      rebuild(() {});
+      await tester.pump();
+      expect(find.text('null|null'), findsOneWidget);
+      expect(find.text('${second.url}|null'), findsNothing);
+      expect(database.selectedReads, 0);
+    });
+  }
 }

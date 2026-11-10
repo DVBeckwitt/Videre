@@ -8,11 +8,13 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:clipious/videos/views/components/video_duration_badge.dart';
 import 'package:clipious/videos/views/components/video_in_list.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
+import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -90,6 +92,65 @@ void main() {
     expectThumbnailDuration(tester, '1:02:03');
     expect(tester.getSize(find.byType(VideoThumbnailView)).height,
         compactVideoHeight);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('compact playlist progress updates without hiding its duration',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.runAsync(() => db.saveProgress(
+        Progress(0.35, 'partial', positionSeconds: 70, durationSeconds: 200)));
+    await show(
+        tester,
+        const CompactVideo(
+            video: Video(videoId: 'partial', lengthSeconds: 200)),
+        width: 280);
+    final indicator =
+        find.byKey(const ValueKey('video-watch-progress-partial'));
+    expect(tester.widget<LinearProgressIndicator>(indicator).value, 0.35);
+    expect(find.bySemanticsLabel(RegExp(r'35% watched')), findsOneWidget);
+    expectThumbnailDuration(tester, '03:20');
+    await tester.runAsync(() => db.saveProgress(
+        Progress(0.5, 'partial', positionSeconds: 100, durationSeconds: 200)));
+    await tester.pump();
+    expect(tester.widget<LinearProgressIndicator>(indicator).value, 0.5);
+    expect(find.bySemanticsLabel(RegExp(r'50% watched')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    semantics.dispose();
+  });
+
+  testWidgets('compact watched decisions use the shared history state',
+      (tester) async {
+    final repository = WatchRepository.forDatabase(db)!;
+    await tester.runAsync(() => db.saveProgress(Progress(0.3, 'watched')));
+    await show(
+        tester,
+        const CompactVideo(
+            video: Video(videoId: 'watched', lengthSeconds: 100)));
+    final badge = find.byKey(const ValueKey('video-watched-watched'));
+    expect(badge, findsNothing);
+    await tester.runAsync(() => repository.mark('watched', true));
+    await tester.pump();
+    expect(badge, findsOneWidget);
+    expect(db.getVideoProgress('watched'), 0.3);
+    await tester.runAsync(() => repository.mark('watched', false));
+    await tester.pump();
+    expect(badge, findsNothing);
+    expect(find.byKey(const ValueKey('video-watch-progress-watched')),
+        findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('upcoming compact videos do not show playback progress',
+      (tester) async {
+    await tester.runAsync(() => db.saveProgress(Progress(1, 'upcoming')));
+    await show(
+        tester,
+        const CompactVideo(
+            video: Video(videoId: 'upcoming', isUpcoming: true)));
+    expect(find.byKey(const ValueKey('video-watch-progress-upcoming')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('video-watched-upcoming')), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

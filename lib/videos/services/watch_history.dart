@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:sembast/sembast.dart';
 
 import '../../player/models/playback_session.dart';
+import '../../player/models/playback_queue.dart';
+import '../../playlists/services/playlist_progress.dart';
 import '../../network/gateway_session_bridge.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
@@ -117,12 +120,18 @@ class WatchRepository {
     final revision = await database.db.transaction((txn) async {
       final record = states.record(videoId);
       final old = WatchStatus.fromJson(await record.get(txn));
+      // History deletion removes per-video state. A profile-wide sequence
+      // prevents a new session from reusing an old session's revision afterward.
+      final sequence = syncState.record('playback-revision');
+      final previous = (await sequence.get(txn))?['value'] as int? ?? 0;
+      final revision = max(previous, old.revision) + 1;
+      await sequence.put(txn, {'value': revision});
       final next = WatchStatus(
           manualWatched: old.manualWatched == false ? null : old.manualWatched,
           localPlayback: true,
           completed: old.completed ||
               database.getVideoProgress(videoId) >= watchedProgressThreshold,
-          revision: old.revision + 1);
+          revision: revision);
       await record.put(txn, next.toJson());
       return next.revision;
     });
@@ -163,14 +172,28 @@ class WatchRepository {
             database.settingsStore.record(playbackSessionSetting);
         final saved = await sessionRecord.get(txn);
         final session = PlaybackSession.decode(saved?['value'] as String?);
-        if (session?.currentId == videoId) {
-          final value = jsonDecode(session!.encode()) as Map<String, dynamic>;
+        if (session != null &&
+            (session.currentId == videoId ||
+                session.videos.any((video) =>
+                    video.videoId == videoId &&
+                    playbackQueueId(video) == session.currentId))) {
+          final value = jsonDecode(session.encode()) as Map<String, dynamic>;
           value['seconds'] = 0;
           await sessionRecord.put(
               txn,
               SettingsValue(playbackSessionSetting, jsonEncode(value))
                   .toJson());
         }
+        final checkpointRecord =
+            database.settingsStore.record(playlistProgressSettingName);
+        final checkpoints = await checkpointRecord.get(txn);
+        await checkpointRecord.put(
+            txn,
+            SettingsValue(
+                    playlistProgressSettingName,
+                    resetPlaylistProgress(checkpoints?['value'] as String?,
+                        videoId: videoId))
+                .toJson());
       }
       if (account != null && hasHistoryAccount(account)) {
         await _enqueue(txn, account.accountId, videoId, watched);
@@ -181,14 +204,20 @@ class WatchRepository {
 
   /// The revision rejects late events after a manual change or another session.
   Future<bool> recordPlayback(String videoId, double progress, int revision,
-      {Server? account}) async {
+      {Server? account, int? positionSeconds, int? durationSeconds}) async {
     final result = await database.db.transaction((txn) async {
       final record = states.record(videoId);
       final old = WatchStatus.fromJson(await record.get(txn));
       if (old.revision != revision) return (accepted: false, changed: false);
       final completed = old.completed || progress >= watchedProgressThreshold;
-      await database.progressStore.record(videoId).put(
-          txn, Progress.named(progress: progress, videoId: videoId).toJson());
+      final progressRecord = database.progressStore.record(videoId);
+      final previous = await progressRecord.get(txn);
+      final current = Progress.named(
+          progress: progress,
+          videoId: videoId,
+          positionSeconds: positionSeconds,
+          durationSeconds: durationSeconds);
+      await progressRecord.put(txn, current.toJson());
       await record.put(
           txn,
           WatchStatus(
@@ -207,7 +236,12 @@ class WatchRepository {
           await _enqueue(txn, account.accountId, videoId, true);
         }
       }
-      return (accepted: true, changed: old.completed != completed);
+      return (
+        accepted: true,
+        changed: old.completed != completed ||
+            progressDisplayChanged(
+                previous == null ? null : Progress.fromJson(previous), current)
+      );
     });
     if (result.changed) playbackHistoryRevision.value++;
     return result.accepted;

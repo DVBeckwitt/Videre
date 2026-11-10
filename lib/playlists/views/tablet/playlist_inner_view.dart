@@ -1,18 +1,17 @@
-import 'package:clipious/utils/motion.dart';
+import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/states/player.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/playlists/views/components/playlist_thumbnail.dart';
 import 'package:clipious/utils.dart';
-import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
-import 'package:clipious/videos/views/components/video_list.dart';
+import 'package:clipious/videos/views/components/video_in_list.dart';
+import 'package:clipious/videos/states/video_in_list.dart';
 
 import '../../../globals.dart';
-import '../../../videos/views/components/add_to_queue_button.dart';
-import '../../../videos/views/components/play_button.dart';
 import '../../states/playlist.dart';
+import '../components/playlist_playback_actions.dart';
 
 class TabletPlaylistInnerView extends StatelessWidget {
   final bool canDeleteVideos;
@@ -25,130 +24,96 @@ class TabletPlaylistInnerView extends StatelessWidget {
       required this.removeVideoFromPlaylist,
       required this.openVideo});
 
-  void showVideoModalSheet(BuildContext parentContext, Video video) {
-    showSafeModalBottomSheet<void>(
-        context: parentContext,
-        showDragHandle: true,
-        builder: (BuildContext context) {
-          var locals = AppLocalizations.of(context)!;
-          return FractionallySizedBox(
-            widthFactor: 1,
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(right: 16.0),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton.filledTonal(
-                            onPressed: () async {
-                              await removeVideoFromPlaylist(
-                                  parentContext, video);
-                              if (context.mounted) {
-                                Navigator.of(context).pop();
-                              }
-                            },
-                            icon: const Icon(Icons.delete)),
-                        Text(locals.removeFromPlayList)
-                      ],
-                    ),
-                  )
-                ],
-              ),
-            ),
-          );
-        });
+  void showVideoModalSheet(BuildContext context, Video video) {
+    video = context.read<VideoInListCubit>().state.video ?? video;
+    showPlaylistEntryActions(context, video,
+        onRemove: canDeleteVideos
+            ? () async => removeVideoFromPlaylist(context, video)
+            : null);
   }
 
   @override
   Widget build(BuildContext context) {
-    ColorScheme colors = Theme.of(context).colorScheme;
-    return OrientationBuilder(builder: (context, widgetOrientation) {
-      final deviceOrientation = getOrientation();
-      return BlocBuilder<PlaylistCubit, PlaylistState>(
-          builder: (context, playlistState) {
-        final cubit = context.read<PlaylistCubit>();
-        final videos = playlistState.playlist.videos
-            .where((element) => !element.filterHide)
-            .toList();
-
-        return Row(
-          children: [
-            Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: deviceOrientation == Orientation.landscape
-                            ? 375
-                            : 275,
-                        child: PlaylistThumbnails(
-                          videos: playlistState.playlist.videos,
-                          children: playlistState.loading
-                              ? [
-                                  Center(
-                                      child: Container(
-                                    padding: const EdgeInsets.all(5),
-                                    decoration: BoxDecoration(
-                                        color: colors.surface
-                                            .withValues(alpha: 0.5),
-                                        shape: BoxShape.circle),
-                                    child: TweenAnimationBuilder(
-                                      tween: Tween<double>(
-                                          begin: 0,
-                                          end: playlistState.loadingProgress),
-                                      duration: AppMotion.duration(context),
-                                      curve: Curves.easeInOutQuad,
-                                      builder: (context, value, child) =>
-                                          MotionLoadingIndicator(
-                                              child: CircularProgressIndicator(
-                                        value: value > 0 && value < 1
-                                            ? value
-                                            : null,
-                                      )),
-                                    ),
-                                  ))
-                                ]
-                              : [
-                                  PlayButton(
-                                    onPressed: (isAudio) => cubit.play(isAudio),
-                                  ),
-                                  Builder(builder: (context) {
-                                    return Positioned(
-                                        right: 5,
-                                        bottom: 3,
-                                        child: AddToQueueButton(
-                                          videos: playlistState.playlist.videos,
-                                        ));
-                                  })
-                                ],
-                        ),
-                      )
-                    ])),
-            if (playlistState.loading)
-              Expanded(
-                  child: VideoGridPlaceHolder(
-                      scrollController: cubit.scrollController)),
-            if (!playlistState.loading)
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(right: innerHorizontalPadding),
-                  child: VideoList(
-                    paginatedVideoList: FixedItemList(videos),
-                    showMetrics: false,
-                    showVideoModalSheet: showVideoModalSheet,
-                    allowModalSheet: canDeleteVideos,
-                    openVideoOverride: openVideo,
-                  ),
+    final colors = Theme.of(context).colorScheme;
+    final cubit = context.watch<PlaylistCubit>();
+    final state = cubit.state;
+    final videos = state.playlist.videos.where((v) => !v.filterHide).toList();
+    final current = context.select((PlayerCubit player) =>
+        (player.playlistReference, player.state.currentQueueId));
+    return LayoutBuilder(builder: (context, constraints) {
+      final headerWidth = (constraints.maxWidth * 0.38).clamp(240.0, 375.0);
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: headerWidth,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PlaylistThumbnails(videos: state.playlist.videos),
+                  const PlaylistPlaybackActions(),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: LayoutBuilder(builder: (context, listConstraints) {
+              final columns =
+                  (listConstraints.maxWidth / 260).floor().clamp(1, 4);
+              return GridView.builder(
+                controller: cubit.scrollController,
+                padding: const EdgeInsets.only(right: innerHorizontalPadding),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                  childAspectRatio: getGridAspectRatio(context),
                 ),
-              )
-          ],
-        );
-      });
+                itemCount: videos.length + (state.loading ? columns : 0),
+                itemBuilder: (context, index) {
+                  if (index >= videos.length) {
+                    return const VideoListItemPlaceHolder();
+                  }
+                  final video = videos[index];
+                  final entryId = playbackQueueId(video);
+                  final playing =
+                      current.$1 == cubit.reference && current.$2 == entryId;
+                  return DecoratedBox(
+                    key: ValueKey(entryId),
+                    decoration: BoxDecoration(
+                      color: playing ? colors.secondaryContainer : null,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Semantics(
+                      selected: playing,
+                      child: VideoListItem(
+                        key: ValueKey('video-$entryId'),
+                        video: video,
+                        showMetrics: false,
+                        showVideoModalSheet: showVideoModalSheet,
+                        allowModalSheet: true,
+                        openVideoOverride: (context, video) {
+                          final row = context.read<VideoInListCubit>();
+                          final selected = row.state.video;
+                          if (!cubit.canPlayEntries || selected == null) return;
+                          if (selected.filtered) {
+                            row.showVideoDetails();
+                          } else if (!selected.filterHide &&
+                              selected.isUpcoming != true) {
+                            openVideo(context, selected);
+                          }
+                        },
+                      ),
+                    ),
+                  );
+                },
+              );
+            }),
+          ),
+        ],
+      );
     });
   }
 }

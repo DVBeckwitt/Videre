@@ -7,12 +7,15 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -30,11 +33,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   _LibraryFilter _filter = _LibraryFilter.playlists;
   String? _playlistId;
 
-  Future<void> _play(List<Video> videos) async {
+  Future<void> _play(List<Video> videos,
+      {PlaylistReference? reference,
+      int startIndex = 0,
+      Duration startAt = Duration.zero}) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent || videos.isEmpty) return;
     try {
-      await MusicScreen.playTracks(context, videos);
+      await MusicScreen.playTracks(context, videos,
+          reference: reference, startIndex: startIndex, startAt: startAt);
     } catch (_) {
       if (mounted && session.isCurrent) _error();
     }
@@ -135,6 +142,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final locals = AppLocalizations.of(context)!;
     final songs =
         playlist.videos.where((video) => video.musicMetadata != null).toList();
+    final reference = PlaylistReference.forPlaylist(playlist, db);
     return Column(children: [
       ListTile(
         leading: IconButton(
@@ -151,9 +159,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Wrap(spacing: 8, runSpacing: 8, children: [
             FilledButton.icon(
-                onPressed: () => _play(songs),
+                onPressed: () => _play(songs, reference: reference),
                 icon: const Icon(Icons.play_arrow),
                 label: Text(locals.musicPlayAll)),
+            MusicPlaylistResume(
+                reference: reference,
+                videos: songs,
+                onPlay: (index, position) => _play(songs,
+                    reference: reference,
+                    startIndex: index,
+                    startAt: position)),
             MusicLibraryActions(videos: songs, compact: false),
           ]),
         ),
@@ -166,15 +181,22 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   final song = songs[index];
                   final music = song.musicMetadata!;
                   return ListTile(
-                      leading: _artwork(
-                          music.thumbnails.isNotEmpty
-                              ? music.thumbnails
-                              : song.videoThumbnails,
-                          useInvidiousProxy: music.thumbnails.isEmpty),
+                      leading: SizedBox.square(
+                        dimension: 52,
+                        child: Stack(fit: StackFit.expand, children: [
+                          _artwork(
+                              music.thumbnails.isNotEmpty
+                                  ? music.thumbnails
+                                  : song.videoThumbnails,
+                              useInvidiousProxy: music.thumbnails.isEmpty),
+                          VideoWatchProgress(videoId: song.videoId),
+                        ]),
+                      ),
                       title: Text(music.title),
                       subtitle: Text(music.artist),
                       trailing: MusicLibraryActions(videos: [song]),
-                      onTap: () => _play(songs.skip(index).toList()));
+                      onTap: () => _play(songs,
+                          reference: reference, startIndex: index));
                 }),
       ),
     ]);

@@ -9,9 +9,6 @@ part of 'progress.dart';
 Progress _$ProgressFromJson(Map<String, dynamic> json) => Progress(
       (json['progress'] as num).toDouble(),
       json['videoId'] as String,
+      positionSeconds: (json['positionSeconds'] as num?)?.toInt(),
+      durationSeconds: (json['durationSeconds'] as num?)?.toInt(),
     );
-
-Map<String, dynamic> _$ProgressToJson(Progress instance) => <String, dynamic>{
-      'progress': instance.progress,
-      'videoId': instance.videoId,
-    };

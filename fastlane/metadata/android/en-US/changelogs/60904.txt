@@ -1,0 +1,6 @@
+Save playlists and resume at the saved item and timestamp.
+Improve watch progress, profile isolation and backup handling.
+Reduce 2x hold/release delay and fix mini-player restoration.
+Improve Music proxy changes, consent handling and regional errors.
+Remove unused repository assets.
+Tor service availability still varies; latest Music checks were region-blocked. See release notes.

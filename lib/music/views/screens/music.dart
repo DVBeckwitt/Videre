@@ -13,18 +13,22 @@ import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/player/views/components/playlist_loading_notice.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
+import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -41,16 +45,32 @@ class MusicScreen extends StatefulWidget {
   const MusicScreen(
       {super.key, this.videoId, this.albumId, this.playlistId, this.artistId});
 
-  static Future<void> playTracks(
-      BuildContext context, List<Video> videos) async {
+  static Widget tvAudio({Video? video, DownloadedVideo? offlineVideo}) =>
+      _MusicTvAudio(video: video, offlineVideo: offlineVideo);
+
+  static Future<void> playTracks(BuildContext context, List<Video> videos,
+      {PlaylistReference? reference,
+      int startIndex = 0,
+      Duration startAt = Duration.zero}) async {
     if (videos.isEmpty) return;
+    if (reference != null && reference.profileId != db.profileId) return;
     if (isTv) {
-      await Navigator.of(context).push<void>(
-          MaterialPageRoute(builder: (_) => _MusicTvPlayer(videos: videos)));
+      await Navigator.of(context).push<void>(MaterialPageRoute(
+          builder: (_) => _MusicTvPlayer(
+              videos: videos,
+              reference: reference,
+              startIndex: startIndex,
+              startAt: startAt)));
+    } else if (reference != null) {
+      await context.read<PlayerCubit>().playPlaylist(videos,
+          reference: reference,
+          startIndex: startIndex,
+          audio: true,
+          startAt: startAt);
     } else {
       await context
           .read<PlayerCubit>()
-          .playVideo(videos, audio: true, startAt: Duration.zero);
+          .playVideo(videos, audio: true, startAt: startAt);
     }
   }
 
@@ -71,7 +91,7 @@ class _MusicScreenState extends State<MusicScreen> {
   final _browseHistory =
       <({MusicCollection? collection, MusicArtistPage? artist, bool album})>[];
   bool _loading = false;
-  bool _failed = false;
+  Object? _failure;
   bool _searched = false;
   bool _starting = false;
   int _generation = 0;
@@ -132,7 +152,7 @@ class _MusicScreenState extends State<MusicScreen> {
     _generation++;
     setState(() {
       _loading = false;
-      _failed = false;
+      _failure = null;
       _searched = false;
       _starting = false;
       _songs = [];
@@ -165,13 +185,15 @@ class _MusicScreenState extends State<MusicScreen> {
     final generation = ++_generation;
     setState(() {
       _loading = true;
-      _failed = false;
+      _failure = null;
       _retry = retry;
     });
     try {
       await operation(generation, session);
-    } catch (_) {
-      if (_active(generation, session)) setState(() => _failed = true);
+    } catch (error) {
+      if (_active(generation, session)) {
+        setState(() => _failure = error);
+      }
     } finally {
       if (_active(generation, session)) setState(() => _loading = false);
     }
@@ -267,13 +289,17 @@ class _MusicScreenState extends State<MusicScreen> {
     }, () => _openSong(id));
   }
 
-  Future<void> _play(List<MusicTrack> tracks) async {
+  Future<void> _play(List<MusicTrack> tracks,
+      {PlaylistReference? reference,
+      int startIndex = 0,
+      Duration startAt = Duration.zero}) async {
     final session = context.read<AppCubit>().state;
     if (_starting || tracks.isEmpty || !_sameSession(session)) return;
     final videos = tracks.map((track) => track.toVideo()).toList();
     setState(() => _starting = true);
     try {
-      await MusicScreen.playTracks(context, videos);
+      await MusicScreen.playTracks(context, videos,
+          reference: reference, startIndex: startIndex, startAt: startAt);
     } catch (_) {
       if (!mounted) return;
       if (_sameSession(session)) {
@@ -298,7 +324,7 @@ class _MusicScreenState extends State<MusicScreen> {
         _artistPage = null;
       }
       _loading = false;
-      _failed = false;
+      _failure = null;
       _retry = null;
     });
   }
@@ -406,12 +432,18 @@ class _MusicScreenState extends State<MusicScreen> {
       trailing: const Icon(Icons.chevron_right),
       onTap: () => _openCollection(album.id, album: true));
 
-  Widget _song(MusicTrack track, {int? index, List<MusicTrack>? queue}) {
+  Widget _song(MusicTrack track,
+      {int? index, List<MusicTrack>? queue, PlaylistReference? reference}) {
     return ListTile(
       key: ValueKey('music-song-${index ?? 'search'}-${track.videoId}'),
       leading: index == null
           ? _artwork(track.thumbnails)
-          : SizedBox(width: 36, child: Center(child: Text('${index + 1}'))),
+          : SizedBox.square(
+              dimension: 36,
+              child: Stack(fit: StackFit.expand, children: [
+                Center(child: Text('${index + 1}')),
+                VideoWatchProgress(videoId: track.videoId),
+              ])),
       title: Text(track.title, maxLines: 2, overflow: TextOverflow.ellipsis),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -431,21 +463,27 @@ class _MusicScreenState extends State<MusicScreen> {
       trailing: MusicLibraryActions(videos: [track.toVideo()]),
       onTap: _starting
           ? null
-          : () => _play(index == null || queue == null
-              ? [track]
-              : queue.skip(index).toList()),
+          : () => reference != null && queue != null && index != null
+              ? _play(queue, reference: reference, startIndex: index)
+              : _play(index == null || queue == null
+                  ? [track]
+                  : queue.skip(index).toList()),
     );
   }
 
   Widget _results() {
     final locals = AppLocalizations.of(context)!;
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_failed) {
+    if (_failure != null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(locals.musicCatalogError, textAlign: TextAlign.center),
+            Text(
+                _failure is MusicCatalogRegionUnavailable
+                    ? locals.musicRegionUnavailable
+                    : locals.musicCatalogError,
+                textAlign: TextAlign.center),
             const SizedBox(height: 12),
             FilledButton.icon(
                 onPressed: _retry,
@@ -514,6 +552,12 @@ class _MusicScreenState extends State<MusicScreen> {
 
   Widget _collectionResults(MusicCollection collection) {
     final locals = AppLocalizations.of(context)!;
+    final reference = _collectionIsAlbum
+        ? null
+        : PlaylistReference(
+            kind: PlaylistSourceKind.public,
+            playlistId: collection.id,
+            profileId: db.profileId);
     return ListView(children: [
       Padding(
         padding: const EdgeInsets.all(16),
@@ -527,9 +571,19 @@ class _MusicScreenState extends State<MusicScreen> {
               key: const ValueKey('music-play-all'),
               onPressed: _starting || collection.tracks.isEmpty
                   ? null
-                  : () => _play(collection.tracks),
+                  : () => _play(collection.tracks, reference: reference),
               icon: const Icon(Icons.play_arrow),
               label: Text(locals.musicPlayAll)),
+          if (reference != null)
+            MusicPlaylistResume(
+                reference: reference,
+                videos:
+                    collection.tracks.map((track) => track.toVideo()).toList(),
+                enabled: !_starting,
+                onPlay: (index, position) => _play(collection.tracks,
+                    reference: reference,
+                    startIndex: index,
+                    startAt: position)),
           const SizedBox(height: 8),
           MusicBookmarkButton(
               entry: MusicLibraryEntry.collection(collection,
@@ -545,7 +599,8 @@ class _MusicScreenState extends State<MusicScreen> {
             padding: const EdgeInsets.all(24),
             child: Text(locals.musicEmptyCollection)),
       for (var i = 0; i < collection.tracks.length; i++)
-        _song(collection.tracks[i], index: i, queue: collection.tracks),
+        _song(collection.tracks[i],
+            index: i, queue: collection.tracks, reference: reference),
     ]);
   }
 
@@ -722,20 +777,28 @@ class _MusicScreenState extends State<MusicScreen> {
 class _MusicTvPlayer extends StatelessWidget {
   final List<Video> videos;
   final bool resumeSession;
+  final PlaylistReference? reference;
+  final int startIndex;
+  final Duration startAt;
 
-  const _MusicTvPlayer({required this.videos, this.resumeSession = false});
+  const _MusicTvPlayer(
+      {required this.videos,
+      this.resumeSession = false,
+      this.reference,
+      this.startIndex = 0,
+      this.startAt = Duration.zero});
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
       create: (context) => PlayerCubit(
           PlayerState.init(resumeSession ? null : videos).copyWith(
-              isAudio: true,
-              isMini: false,
-              isHidden: false,
-              startAt: Duration.zero),
+              isAudio: true, isMini: false, isHidden: false, startAt: startAt),
           context.read<SettingsCubit>(),
-          resume: resumeSession),
+          resume: resumeSession,
+          playlistReference: reference,
+          startIndex: startIndex,
+          playlistAudio: true),
       child: Shortcuts(
         shortcuts: {
           LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
@@ -751,8 +814,14 @@ class _MusicTvPlayer extends StatelessWidget {
                   return _MusicPlaybackFailure(
                       onRetry: resumeSession
                           ? player.resumeSession
-                          : () => player.playVideo(videos,
-                              audio: true, startAt: Duration.zero));
+                          : () => reference == null
+                              ? player.playVideo(videos,
+                                  audio: true, startAt: startAt)
+                              : player.playPlaylist(videos,
+                                  reference: reference!,
+                                  startIndex: startIndex,
+                                  audio: true,
+                                  startAt: startAt));
                 }
                 if (state.currentlyPlaying == null &&
                     state.offlineCurrentlyPlaying == null) {
@@ -868,6 +937,7 @@ class _MusicTvAudio extends StatelessWidget {
                 if (audio.loading) const LinearProgressIndicator(),
                 if (state.backendRecovery case final recovery?)
                   BackendRecoveryNotice(recovery: recovery, compact: true),
+                const PlaylistLoadingNotice(),
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                   IconButton(
                       tooltip: locals.musicPrevious,

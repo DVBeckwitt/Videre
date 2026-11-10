@@ -75,7 +75,8 @@ class VideoScreen extends StatelessWidget {
       ],
       child: BlocConsumer<VideoCubit, VideoState>(
         listenWhen: (previous, current) =>
-            settings.state.autoplayVideoOnLoad &&
+            (playNow ?? settings.state.autoplayVideoOnLoad) &&
+            current.video != null &&
             previous.video != current.video,
         listener: (context, state) {
           AutoRouter.of(context).maybePop();

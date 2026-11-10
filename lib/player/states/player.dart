@@ -24,6 +24,10 @@ import 'package:logging/logging.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
 
 import '../../downloads/models/downloaded_video.dart';
+import '../../playlists/models/playlist.dart';
+import '../../playlists/models/playlist_reference.dart';
+import '../../playlists/services/playlist_load_session.dart';
+import '../../playlists/services/playlist_progress.dart';
 import '../../main.dart';
 import '../../media_handler.dart';
 import '../../settings/models/db/settings.dart';
@@ -64,6 +68,28 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   String? _speedVideoId;
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
+  final PlaylistReference? _initialPlaylistReference;
+  final PlaylistLoadSession? _initialPlaylistLoader;
+  final int _initialPlaylistIndex;
+  final bool? _initialPlaylistAudio;
+  PlaylistReference? _playlistReference;
+  PlaylistLoadSession? _playlistLoader;
+  StreamSubscription<PlaylistLoadSnapshot>? _playlistLoadSubscription;
+  final _playlistEntries = LinkedHashMap<String, Video>();
+  int _playlistGeneration = 0;
+  bool _waitingForPlaylist = false;
+  bool _playlistSourceComplete = true;
+  bool _sessionTransitionPending = false;
+  String? _playlistCheckpointSignature;
+  final playlistLoadingRevision = ValueNotifier(0);
+
+  PlaylistReference? get playlistReference => _playlistReference;
+  int get playlistGeneration => _playlistGeneration;
+  bool get isPlaylistLoading => _playlistLoader?.loading ?? false;
+  bool get playlistComplete =>
+      _playlistReference == null ||
+      (_playlistLoader?.complete ?? _playlistSourceComplete);
+  Object? get playlistLoadingError => _playlistLoader?.error;
   late IDbClient _profileDatabase;
   WatchRepository? _watchRepository;
   Server? _watchAccount;
@@ -114,8 +140,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static const _pipChannel = MethodChannel('videre/pip');
   SimplePip? _pip;
 
-  PlayerCubit(super.initialState, this.settings, {bool resume = false})
-      : _resumeOnReady = resume {
+  PlayerCubit(super.initialState, this.settings,
+      {bool resume = false,
+      PlaylistReference? playlistReference,
+      PlaylistLoadSession? playlistLoader,
+      int startIndex = 0,
+      bool? playlistAudio})
+      : _resumeOnReady = resume,
+        _initialPlaylistReference = playlistReference,
+        _initialPlaylistLoader = playlistLoader,
+        _initialPlaylistIndex = startIndex,
+        _initialPlaylistAudio = playlistAudio {
     _profileDatabase = db.forProfile(db.profileId);
     // Metadata can be pending before any decoder mounts and registers its own
     // native teardown. The parent must invalidate that pending work as well.
@@ -145,6 +180,156 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   PlaybackSession? get savedSession => PlaybackSession.decode(
       _profileDatabase.getSettings(playbackSessionSetting)?.value);
 
+  void _bindPlaylist(PlaylistReference? reference, List<Video> entries,
+      {PlaylistLoadSession? loader,
+      Iterable<Video>? sourceEntries,
+      bool complete = true}) {
+    // A new request can reuse the loader currently owned only by this player.
+    // Retain it before releasing the previous request's ownership.
+    loader?.retain();
+    _releasePlaylistLoader();
+    final generation = _playlistGeneration;
+    _playlistLoader = loader;
+    _playlistSourceComplete = complete;
+    _playlistReference = reference;
+    _playlistCheckpointSignature = null;
+    _playlistEntries
+      ..clear()
+      ..addEntries((sourceEntries ?? entries)
+          .map((video) => MapEntry(playbackQueueId(video), video)));
+    if (reference != null && loader != null) {
+      _playlistLoadSubscription = loader.changes.listen((snapshot) {
+        if (isClosed || generation != _playlistGeneration) return;
+        appendPlaylistVideos(snapshot.playlist.videos,
+            reference: reference, generation: generation);
+        if (snapshot.complete) unawaited(_saveSession(state));
+        playlistLoadingRevision.value++;
+        if (_waitingForPlaylist &&
+            (state.playQueue.isNotEmpty || snapshot.complete)) {
+          _waitingForPlaylist = false;
+          unawaited(_playNextNow());
+        }
+      });
+    }
+    if (!_isDisposing) playlistLoadingRevision.value++;
+  }
+
+  void _releasePlaylistLoader() {
+    _playlistGeneration++;
+    _waitingForPlaylist = false;
+    unawaited(_playlistLoadSubscription?.cancel());
+    _playlistLoadSubscription = null;
+    _playlistSourceComplete = playlistComplete;
+    _playlistLoader?.release();
+    _playlistLoader = null;
+  }
+
+  /// A late page belongs only to the playback request that retained its loader.
+  /// Keep all previously seen IDs, including entries removed from the queue,
+  /// so an overlapping or retried page cannot restore a removed item.
+  bool appendPlaylistVideos(List<Video> videos,
+      {required PlaylistReference reference, required int generation}) {
+    if (isClosed ||
+        _switchingProfile ||
+        state.isClosing ||
+        generation != _playlistGeneration ||
+        _playlistReference != reference ||
+        reference.profileId != _profileDatabase.profileId) return false;
+    final additions = <Video>[];
+    final byVideo = <String, List<Video>>{};
+    for (final entry in _playlistEntries.values) {
+      byVideo.putIfAbsent(entry.videoId, () => []).add(entry);
+    }
+    final occurrences = <String, int>{};
+    for (final video in videos) {
+      final occurrence = occurrences.update(video.videoId, (value) => value + 1,
+          ifAbsent: () => 0);
+      final candidates = byVideo[video.videoId] ?? const <Video>[];
+      final stableId = video.indexId;
+      final stable = stableId == null
+          ? null
+          : candidates.where((entry) => entry.indexId == stableId).firstOrNull;
+      final ordinal =
+          occurrence < candidates.length ? candidates[occurrence] : null;
+      // Public playlist indices shift when the source is edited. The saved
+      // queue remains a snapshot; refetching its pages must not duplicate those
+      // occurrences or resurrect a user-removed item just because its index moved.
+      if (stable != null ||
+          (ordinal != null && (stableId == null || ordinal.indexId == null)))
+        continue;
+      final id = playbackQueueId(video);
+      if (_playlistEntries.containsKey(id)) continue;
+      _playlistEntries[id] = video;
+      if (!video.filtered && !video.filterHide && video.isUpcoming != true) {
+        additions.add(video);
+      }
+    }
+    if (additions.isNotEmpty) {
+      final next = additions.map(playbackQueueId).toList();
+      if (settings.state.playerShuffleMode) next.shuffle();
+      emit(state.copyWith(
+          videos: [...state.videos, ...additions],
+          playQueue: ListQueue.of([...state.playQueue, ...next])));
+    }
+    return true;
+  }
+
+  void retryPlaylistLoading() {
+    final loader = _playlistLoader;
+    if (loader != null) unawaited(loader.retry());
+  }
+
+  Future<void> _savePlaylistCheckpoint(Video entry,
+      {required int generation,
+      required int? watchRevision,
+      required List<Video> entries,
+      required bool audio,
+      bool completed = false}) async {
+    final reference = _playlistReference;
+    if (reference == null ||
+        !_playlistEntries.containsKey(playbackQueueId(entry))) return;
+    final signature =
+        '${playbackQueueId(entry)}:$completed:$audio:${entries.length}:$watchRevision';
+    if (_playlistCheckpointSignature == signature) return;
+    final repository = _watchRepository;
+    bool active() =>
+        !isClosed &&
+        !_isDisposing &&
+        !_switchingProfile &&
+        !_sessionTransitionPending &&
+        state.isAudio == audio &&
+        generation == _playlistGeneration &&
+        reference == _playlistReference &&
+        (repository == null ||
+            watchRevision != null &&
+                repository.acceptsPlayback(entry.videoId, watchRevision));
+    if (!active()) return;
+    _playlistCheckpointSignature = signature;
+    try {
+      final accepted = await PlaylistProgressService.forProfile(
+              _profileDatabase, _profileDatabase.profileId)
+          .save(reference, entry,
+              entries: entries,
+              audio: audio,
+              completed: completed,
+              watchRevision: watchRevision,
+              isCurrent: active);
+      if (!accepted &&
+          generation == _playlistGeneration &&
+          reference == _playlistReference &&
+          _playlistCheckpointSignature == signature) {
+        _playlistCheckpointSignature = null;
+      }
+    } catch (error) {
+      if (generation == _playlistGeneration &&
+          reference == _playlistReference &&
+          _playlistCheckpointSignature == signature) {
+        _playlistCheckpointSignature = null;
+      }
+      log.warning('Could not save playlist position', error);
+    }
+  }
+
   @override
   void onChange(Change<PlayerState> change) {
     super.onChange(change);
@@ -173,7 +358,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<void> _saveSession(PlayerState snapshot) {
     final id = snapshot.currentlyPlaying?.videoId ??
         snapshot.offlineCurrentlyPlaying?.videoId;
-    if (id == null || _sessionOwner != this) return _sessionWrite;
+    if (id == null ||
+        _sessionTransitionPending ||
+        _sessionOwner != this ||
+        ![
+          ...snapshot.videos,
+          ...snapshot.offlineVideos
+        ].any((video) => playbackQueueId(video) == snapshot.currentQueueId)) {
+      return _sessionWrite;
+    }
     final queueId = snapshot.currentQueueId!;
     final database = _profileDatabase;
     final watchRepository = _watchRepository;
@@ -183,7 +376,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         PlaybackSession(
           videos: snapshot.videos
               .map((v) => playbackQueueId(v) == queueId
-                  ? snapshot.currentlyPlaying ?? v
+                  ? (snapshot.currentlyPlaying ?? v)
+                      .copyWith(index: v.index, indexId: v.indexId)
                   : v)
               .toList(),
           offlineIds: snapshot.offlineVideos.map((v) => v.videoId).toList(),
@@ -192,6 +386,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           audio: snapshot.isAudio,
           played: snapshot.playedVideos,
           next: snapshot.playQueue.toList(),
+          playlistReference: _playlistReference,
+          playlistEntries: _playlistEntries.values.toList(),
+          playlistComplete: playlistComplete,
         ).encode());
     // An older TV screen may close after its replacement has begun playing.
     return _sessionWrite = _sessionWrite.then((_) async {
@@ -211,6 +408,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void restoreSession() {
     final saved = savedSession;
     if (saved == null) return;
+    _sessionTransitionPending = false;
+    _bindPlaylist(
+        saved.playlistReference?.profileId == _profileDatabase.profileId
+            ? saved.playlistReference
+            : null,
+        saved.videos,
+        complete: saved.playlistComplete,
+        sourceEntries:
+            saved.playlistEntries.isEmpty ? null : saved.playlistEntries);
     final offline = saved.offlineIds
         .map(_profileDatabase.getDownloadByVideoId)
         .whereType<DownloadedVideo>()
@@ -220,11 +426,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       ...saved.videos.map(playbackQueueId),
       ...offline.map((v) => v.videoId)
     };
-    final musicSession = saved.videos.any((video) =>
-            playbackQueueId(video) == saved.currentId &&
-            video.musicMetadata != null) ||
-        offline.any((video) =>
-            video.videoId == saved.currentId && video.musicMetadata != null);
     // Keep the player hidden until Resume is pressed; restoring must be silent.
     _requestedBackendVideoId = null;
     _clearBackendProgress();
@@ -240,7 +441,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         isHidden: true,
         playedVideos: saved.played.where(ids.contains).toList(),
         playQueue: ListQueue.from(saved.next.where(ids.contains)),
-        isAudio: saved.audio && (!isTv || musicSession)));
+        isAudio: saved.audio));
   }
 
   Future<void> resumeSession() async {
@@ -252,6 +453,21 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final current =
         videos.where((v) => playbackQueueId(v) == saved.currentId).firstOrNull;
     if (current == null) return;
+    final reference = _playlistReference;
+    if (reference != null && !saved.playlistComplete) {
+      final sourceEntries = _playlistEntries.values.toList();
+      _bindPlaylist(reference, state.videos,
+          sourceEntries: sourceEntries,
+          loader: PlaylistLoadSession(
+              playlist: Playlist(
+                  title: reference.playlistId,
+                  playlistId: reference.playlistId,
+                  author: '',
+                  videoCount: sourceEntries.length,
+                  videos: sourceEntries),
+              database: _profileDatabase,
+              reference: reference));
+    }
     showBigPlayer();
     await _switchToVideo(current, startAt: Duration(seconds: saved.seconds));
   }
@@ -540,11 +756,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       BackButtonInterceptor.add(handleBackButton,
           name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
     } else if (startVideos.isNotEmpty && startupActive()) {
-      final switching = switchToVideo(startVideos[0], startAt: state.startAt);
+      final reference = _initialPlaylistReference;
+      final switching = reference == null
+          ? playVideo(startVideos, startAt: state.startAt)
+          : playPlaylist(startVideos,
+              reference: reference,
+              startIndex: _initialPlaylistIndex,
+              startAt: state.startAt,
+              audio: _initialPlaylistAudio,
+              playlistLoader: _initialPlaylistLoader);
       startupGeneration = _videoSwitchGeneration;
       await switching;
       if (!startupActive()) return;
-      generatePlayQueue();
     }
     // Stop and newer play requests can arrive while native services initialize.
     // Finish that setup for future explicit playback, but discard stale autoplay.
@@ -554,15 +777,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void handleMediaEvent(MediaEvent event) {
     switch (event.state) {
       case MediaState.completed:
-        unawaited(saveProgress(state.currentlyPlaying?.lengthSeconds ??
+        final length = state.currentlyPlaying?.lengthSeconds ??
             state.offlineCurrentlyPlaying?.lengthSeconds ??
-            0));
-        // A late completion must not undo a Stop already in progress.
-        if (!state.isClosing) {
-          if (settings.state.autoplayQueue) {
-            playNext();
-          } else if (_requestedPlaying != false) {
-            pause();
+            0;
+        if (_playlistReference != null) {
+          unawaited(_completePlaylistEntry(length));
+        } else {
+          unawaited(saveProgress(length));
+          // A late completion must not undo a Stop already in progress.
+          if (!state.isClosing) {
+            if (settings.state.autoplayQueue) {
+              playNext();
+            } else if (_requestedPlaying != false) {
+              pause();
+            }
           }
         }
         _setPlaying(false);
@@ -610,6 +838,34 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _completePlaylistEntry(int length) async {
+    final generation = _videoSwitchGeneration;
+    final playlistGeneration = _playlistGeneration;
+    final queueId = state.currentQueueId;
+    final profileId = _profileDatabase.profileId;
+    try {
+      // Advancing invalidates progress callbacks. Finish the source occurrence
+      // first, even when the next queued item was added manually.
+      await saveProgress(length);
+    } catch (error, stack) {
+      log.warning('Could not save completed playlist position', error, stack);
+    }
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        state.isClosing ||
+        generation != _videoSwitchGeneration ||
+        playlistGeneration != _playlistGeneration ||
+        queueId != state.currentQueueId ||
+        profileId != _profileDatabase.profileId ||
+        _requestedPlaying == false) return;
+    if (settings.state.autoplayQueue) {
+      playNext();
+    } else {
+      pause();
+    }
+  }
+
   void _setPip(bool pip) {
     if (isClosed) return;
     // Keep the same decoder running when the window closes, including offline.
@@ -637,6 +893,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _pip?.onPipEntered = null;
     _pip?.onPipExited = null;
     await _saveSession(state);
+    _bindPlaylist(null, []);
+    playlistLoadingRevision.dispose();
     if (_sessionOwner == this) _sessionOwner = null;
     playbackHistoryRevision.value++;
     BackButtonInterceptor.removeByName('miniPlayer');
@@ -676,6 +934,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _requestedBackendVideoId = null;
     _clearBackendProgress();
     unawaited(_saveSession(state));
+    _releasePlaylistLoader();
     playbackHistoryRevision.value++;
     var mediaEvent = MediaEvent(
         state: MediaState.playing,
@@ -701,6 +960,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             offlineCurrentlyPlaying: null,
             offlineVideos: [],
             isClosing: false));
+        _playlistReference = null;
         setEvent(const MediaEvent(state: MediaState.idle));
       },
     );
@@ -716,6 +976,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed) return;
     pause();
     final saved = _saveSession(state);
+    _bindPlaylist(null, []);
     _switchingProfile = true;
     _progressGeneration++;
     _videoSwitchGeneration++;
@@ -792,12 +1053,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> saveProgress(int timeInSeconds) async {
-    if (_switchingProfile) return;
+    if (isClosed || _isDisposing || _switchingProfile) return;
     final videoId = state.currentlyPlaying?.videoId ??
         state.offlineCurrentlyPlaying?.videoId;
     final length = state.currentlyPlaying?.lengthSeconds ??
         state.offlineCurrentlyPlaying?.lengthSeconds ??
         0;
+    final playlistGeneration = _playlistGeneration;
+    final audio = state.isAudio;
+    final entries = _playlistEntries.values.toList();
+    final entry = state.videos
+            .where((video) => playbackQueueId(video) == state.currentQueueId)
+            .firstOrNull ??
+        state.currentlyPlaying;
     if (videoId != null && length > 0) {
       int currentPosition = timeInSeconds;
       // saving progress
@@ -807,7 +1075,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             1; // we consider a video with 90%+ progress as watched
       }
       var progress = db_progress.Progress.named(
-          progress: currentProgress, videoId: videoId);
+          progress: currentProgress,
+          videoId: videoId,
+          positionSeconds: currentPosition.clamp(0, length),
+          durationSeconds: length);
 
       final generation = _progressGeneration;
       await _bindWatchSession(videoId);
@@ -821,7 +1092,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (repository != null && revision != null) {
         final accepted = await repository.recordPlayback(
             videoId, currentProgress, revision,
-            account: account);
+            account: account,
+            positionSeconds: progress.positionSeconds,
+            durationSeconds: length);
+        if (accepted && entry != null) {
+          await _savePlaylistCheckpoint(entry,
+              generation: playlistGeneration,
+              watchRevision: revision,
+              entries: entries,
+              audio: audio,
+              completed: currentPosition >= length);
+        }
         if (accepted &&
             account != null &&
             progress.progress > 0.1 &&
@@ -831,6 +1112,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         }
       } else {
         await database.saveProgress(progress);
+        if (entry != null) {
+          await _savePlaylistCheckpoint(entry,
+              generation: playlistGeneration,
+              watchRevision: null,
+              entries: entries,
+              audio: audio,
+              completed: currentPosition >= length);
+        }
       }
     }
   }
@@ -919,10 +1208,23 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> _playNextNow() async {
+    if (settings.state.playerRepeatMode != PlayerRepeat.repeatOne &&
+        state.playQueue.isEmpty &&
+        !playlistComplete) {
+      // The end of a loaded page is not the end of the playlist. Keep the
+      // current item until more metadata arrives or the user retries a failure.
+      _waitingForPlaylist = true;
+      playlistLoadingRevision.value++;
+      return;
+    }
     if (settings.state.playerRepeatMode == PlayerRepeat.repeatOne) {
       seek(Duration.zero);
       play();
     } else if (state.videos.isNotEmpty || state.offlineVideos.isNotEmpty) {
+      if (state.playQueue.isNotEmpty ||
+          settings.state.playerRepeatMode == PlayerRepeat.repeatAll) {
+        _sessionTransitionPending = true;
+      }
       //moving current video to played list
       final currentVideoId = state.currentQueueId;
       if (currentVideoId != null) {
@@ -962,6 +1264,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     EasyThrottle.throttle(skipToVideoThrottleName, const Duration(seconds: 1),
         () async {
       if (state.playedVideos.isNotEmpty) {
+        _sessionTransitionPending = true;
         // putting back current video in play queue
         final currentVideoId = state.currentQueueId;
         var playQueue = ListQueue<String>.from(state.playQueue);
@@ -971,15 +1274,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
         var playedVideos = List<String>.from(state.playedVideos);
         String toPlay = playedVideos.removeLast();
-        final switching = state.videos.isNotEmpty
+        emit(state.copyWith(playQueue: playQueue, playedVideos: playedVideos));
+        await (state.videos.isNotEmpty
             ? switchToVideo(state.videos
                 .firstWhere((element) => playbackQueueId(element) == toPlay))
             : switchToOfflineVideo(state.offlineVideos
-                .firstWhere((element) => playbackQueueId(element) == toPlay));
-        final generation = _videoSwitchGeneration;
-        await switching;
-        if (isClosed || generation != _videoSwitchGeneration) return;
-        emit(state.copyWith(playQueue: playQueue, playedVideos: playedVideos));
+                .firstWhere((element) => playbackQueueId(element) == toPlay)));
       } else {
         // if there's nothing to go back to, we just repeat the last video
         seek(Duration.zero);
@@ -992,45 +1292,41 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     emit(state.copyWith(isPlaying: playing));
   }
 
-  Future<void> _playVideos(List<IdedVideo> vids, {Duration? startAt}) async {
-    if (vids.isNotEmpty) {
-      bool isOffline = vids[0] is DownloadedVideo;
+  Future<void> _playVideos(List<IdedVideo> vids,
+      {Duration? startAt, int startIndex = 0}) async {
+    if (vids.isEmpty) return;
+    RangeError.checkValidIndex(startIndex, vids, 'startIndex');
+    final isOffline = vids.first is DownloadedVideo;
+    final videos =
+        isOffline ? <Video>[] : assignPlaybackQueueIds(vids.cast<Video>());
+    final offlineVideos =
+        isOffline ? List<DownloadedVideo>.from(vids) : <DownloadedVideo>[];
+    final entries = isOffline ? offlineVideos : videos;
+    final previous = settings.state.playerShuffleMode
+        ? <String>[]
+        : entries.take(startIndex).map(playbackQueueId).toList();
+    final next = entries
+        .asMap()
+        .entries
+        .where((entry) =>
+            entry.key != startIndex &&
+            (settings.state.playerShuffleMode || entry.key > startIndex))
+        .map((entry) => playbackQueueId(entry.value))
+        .toList();
+    if (settings.state.playerShuffleMode) next.shuffle();
+    emit(state.copyWith(
+        offlineVideos: offlineVideos,
+        videos: videos,
+        startAt: startAt,
+        mediaEvent: const MediaEvent(state: MediaState.loading),
+        playedVideos: previous,
+        playQueue: ListQueue.of(next),
+        selectedFullScreenIndex: vids.length > 1 ? 3 : 0,
+        top: 500));
 
-      const mediaEvent = MediaEvent(state: MediaState.loading);
-
-      late List<Video> videos;
-      late List<DownloadedVideo> offlineVideos;
-      if (isOffline) {
-        videos = [];
-        offlineVideos = List<DownloadedVideo>.from(vids, growable: true).cast();
-      } else {
-        offlineVideos = [];
-        videos = assignPlaybackQueueIds(vids.cast<Video>());
-      }
-
-      var selectedFullScreenIndex = 0;
-      if (vids.length > 1) {
-        selectedFullScreenIndex = 3;
-      }
-      emit(state.copyWith(
-          offlineVideos: offlineVideos,
-          videos: videos,
-          startAt: startAt,
-          mediaEvent: mediaEvent,
-          playedVideos: [],
-          selectedFullScreenIndex: selectedFullScreenIndex,
-          top: 500));
-
-      showBigPlayer();
-      final switching = _switchToVideo(
-          isOffline ? offlineVideos.first : videos.first,
-          startAt: startAt,
-          playing: _requestedPlaying);
-      final generation = _videoSwitchGeneration;
-      await switching;
-      if (isClosed || generation != _videoSwitchGeneration) return;
-      generatePlayQueue();
-    }
+    showBigPlayer();
+    await _switchToVideo(entries[startIndex],
+        startAt: startAt, playing: _requestedPlaying);
   }
 
   /// skip to queue video of index
@@ -1046,6 +1342,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final selectedId = playbackQueueId(listToCheckAgainst[index]);
       final currentId = state.currentQueueId;
       if (selectedId == currentId) return;
+      _sessionTransitionPending = true;
       emit(state.copyWith(
           playedVideos: [
             ...state.playedVideos,
@@ -1054,6 +1351,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           playQueue:
               ListQueue.of(state.playQueue.where((id) => id != selectedId))));
     } else {
+      _sessionTransitionPending = true;
       List<String> played = [];
       List<String> playNext = [];
       for (int i = 0; i < listToCheckAgainst.length; i++) {
@@ -1076,6 +1374,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       bool? playing,
       BackendPlayback? backendRequest}) async {
     if (isClosed || _switchingProfile) return;
+    _waitingForPlaylist = false;
+    _sessionTransitionPending = true;
     // Selecting a song, including advancing the queue, starts it over. Explicit
     // session restoration and backend recovery still supply their own position.
     if ((video is Video && video.musicMetadata != null) ||
@@ -1189,6 +1489,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
       // A drag can also begin while the replacement metadata is loading.
       videoDragCancelled();
+      // Persist only coherent queue/current/context snapshots. A new request
+      // may have changed playlist ownership or audio mode before metadata arrived.
+      _sessionTransitionPending = false;
       emit(state.copyWith(
           position: resumeAt,
           startAt: startAt,
@@ -1200,6 +1503,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           requestedBackend: currentlyPlaying?.backendPlayback,
           offlineCurrentlyPlaying: offlineCurrentlyPlaying));
       unawaited(_saveSession(state));
+      if (_playlistReference != null) {
+        await saveProgress(resumeAt.inSeconds);
+        if (!active()) return;
+      }
 
       if (currentlyPlaying != null) {
         await _profileDatabase.upsertHistoryVideo(HistoryVideoCache(
@@ -1323,24 +1630,71 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> playOfflineVideos(List<DownloadedVideo> offlineVids) async {
-    if (_switchingProfile ||
+    if (offlineVids.isEmpty ||
+        _switchingProfile ||
         offlineVids.any(
             (video) => video.profileId != _profileDatabase.profileId)) return;
     _requestedPlaying = null;
+    _sessionTransitionPending = true;
+    _bindPlaylist(null, []);
     log.fine('Playing ${offlineVids.length} offline videos');
     await _playVideos(offlineVids);
   }
 
   Future<void> playVideo(List<Video> v,
       {bool? audio, Duration? startAt, bool? playing}) async {
+    if (isClosed || _switchingProfile) return;
+    final videos = v.where((element) => !element.filtered).toList();
+    if (videos.isEmpty) return;
+    _sessionTransitionPending = true;
+    _bindPlaylist(null, []);
     _requestedPlaying = playing;
-    List<Video> videos = v.where((element) => !element.filtered).toList();
     // TODO: find how to do this with auto router
     log.fine('Playing ${videos.length} videos');
 
     setAudio(audio ?? (videos.firstOrNull?.musicMetadata != null));
 
     await _playVideos(videos, startAt: startAt);
+  }
+
+  /// Start the selected occurrence and its surrounding queue as one operation.
+  /// The index refers to the supplied playlist before filtered entries are
+  /// removed, so filtering cannot silently select a different video.
+  Future<void> playPlaylist(List<Video> entries,
+      {required PlaylistReference reference,
+      int startIndex = 0,
+      Duration? startAt,
+      bool? audio,
+      bool? playing,
+      PlaylistLoadSession? playlistLoader}) async {
+    if (isClosed || _switchingProfile) return;
+    if (reference.profileId != _profileDatabase.profileId) {
+      throw StateError('This playlist belongs to another profile.');
+    }
+    RangeError.checkValidIndex(startIndex, entries, 'startIndex');
+    final assigned = assignPlaylistEntryIds(entries);
+    final selected = assigned[startIndex];
+    if (selected.filtered ||
+        selected.filterHide ||
+        selected.isUpcoming == true) {
+      throw StateError('This playlist entry is not available for playback.');
+    }
+    final videos = assigned
+        .where((video) =>
+            !video.filtered && !video.filterHide && video.isUpcoming != true)
+        .toList();
+    final index = videos.indexWhere(
+        (video) => playbackQueueId(video) == playbackQueueId(selected));
+    _sessionTransitionPending = true;
+    _requestedPlaying = playing;
+    _bindPlaylist(reference, assigned, loader: playlistLoader);
+    setAudio(audio ?? selected.musicMetadata != null);
+    final playback = _playVideos(videos, startAt: startAt, startIndex: index);
+    if (playlistLoader != null) {
+      appendPlaylistVideos(playlistLoader.playlist.videos,
+          reference: reference, generation: _playlistGeneration);
+    }
+    await playback;
   }
 
   Future<void> switchToOfflineVideo(DownloadedVideo video) async {
@@ -1369,6 +1723,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void pause() {
+    _waitingForPlaylist = false;
     _requestedPlaying = false;
     emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
   }
@@ -1767,6 +2122,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       // The replacement decoder reads its starting position when it mounts.
       videoDragCancelled();
       emit(state.copyWith(isAudio: value, startAt: state.position));
+      if (_playlistReference != null) {
+        unawaited(saveProgress(state.position.inSeconds));
+      }
     }
   }
 

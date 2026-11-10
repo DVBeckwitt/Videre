@@ -36,8 +36,7 @@ import androidx.work.WorkInfo
 //import com.google.android.exoplayer2.drm.HttpMediaDrmCallback
 import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 
-//import com.google.android.exoplayer2.upstream.DefaultHttpDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 
 //import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
@@ -103,6 +102,7 @@ import androidx.media3.common.C
 
 //import com.google.android.exoplayer2.ExoPlayer
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
 
 //import com.google.android.exoplayer2.LoadControl
 import androidx.media3.exoplayer.LoadControl
@@ -180,7 +180,12 @@ internal class RiverPlayer(
             this.customDefaultLoadControl.bufferForPlaybackAfterRebufferMs
         )
         loadControl = loadBuilder.build()
-        exoPlayer = ExoPlayer.Builder(context)
+        // Apply rate changes at the mixer, so queued PCM does not prolong a
+        // temporary speed boost after the user releases the player surface.
+        exoPlayer = ExoPlayer.Builder(
+            context,
+            DefaultRenderersFactory(context).setEnableAudioTrackPlaybackParams(true)
+        )
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .build()
@@ -213,7 +218,8 @@ internal class RiverPlayer(
         val userAgent = getUserAgent(headers)
         if (licenseUrl != null && licenseUrl.isNotEmpty()) {
             val httpMediaDrmCallback =
-                HttpMediaDrmCallback(licenseUrl, DefaultHttpDataSource.Factory())
+                HttpMediaDrmCallback(licenseUrl,
+                    ProxyDataSource.factory(userAgent, drmHeaders, licenseUrl))
             if (drmHeaders != null) {
                 for ((drmKey, drmValue) in drmHeaders) {
                     httpMediaDrmCallback.setKeyRequestProperty(drmKey, drmValue)

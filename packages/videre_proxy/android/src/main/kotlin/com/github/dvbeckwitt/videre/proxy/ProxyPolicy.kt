@@ -1,5 +1,6 @@
 package com.github.dvbeckwitt.videre.proxy
 
+import java.io.EOFException
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -11,9 +12,11 @@ import java.net.URI
 import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Dns
+import okhttp3.Interceptor
 import okhttp3.MediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -96,6 +99,30 @@ private data class SourceHeaderScope(val origin: HttpUrl?, val names: Set<String
 private fun sameOrigin(left: HttpUrl, right: HttpUrl): Boolean =
     left.scheme == right.scheme && left.host == right.host && left.port == right.port
 
+private class ReadHeaderAttempt(var started: Boolean = false, var responseReceived: Boolean = false)
+
+/** A pooled connection can close without an explicit Connection: close header.
+ * Replay a read once only when headers never arrived. Streaming/body errors,
+ * writes and canceled calls retain their existing failure behavior. */
+private class ReadHeaderEofRecovery : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val original = chain.request()
+        if (original.method !in setOf("GET", "HEAD") || original.body != null) return chain.proceed(original)
+        val attempt = ReadHeaderAttempt()
+        val request = original.newBuilder().tag(ReadHeaderAttempt::class.java, attempt).build()
+        return try {
+            chain.proceed(request)
+        } catch (error: IOException) {
+            val causes = generateSequence<Throwable>(error) { it.cause }.take(8).toList()
+            if (!attempt.started || attempt.responseReceived || chain.call().isCanceled() ||
+                causes.none { it is EOFException } || causes.any { it is SSLException }) throw error
+            // The same policy and origin-scoped credential interceptors run
+            // again. Never create a fallback client or retry a response body.
+            chain.proceed(request)
+        }
+    }
+}
+
 /** Keeps a live policy for sources that were created before a settings change. */
 internal class PolicyCallFactory : Call.Factory {
     private val lock = Any()
@@ -107,6 +134,7 @@ internal class PolicyCallFactory : Call.Factory {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
+            .addInterceptor(ReadHeaderEofRecovery())
             .addInterceptor(NerdVpnRecoveryInterceptor())
             .addNetworkInterceptor { chain ->
                 var outgoing = chain.request()
@@ -125,6 +153,16 @@ internal class PolicyCallFactory : Call.Factory {
                 chain.proceed(outgoing)
             }
             .addNetworkInterceptor(GatewayTransportInterceptor())
+            .addNetworkInterceptor { chain ->
+                val attempt = chain.request().tag(ReadHeaderAttempt::class.java)
+                // Inside credential handlers: redirects start a fresh header
+                // read, while those handlers may inspect a returned body.
+                attempt?.started = true
+                attempt?.responseReceived = false
+                val response = chain.proceed(chain.request())
+                attempt?.responseReceived = true
+                response
+            }
         if (policy.enabled) {
             builder.proxySelector(SocksOnlySelector(policy))
             // OkHttp passes an unresolved origin address to Java's SOCKS socket.

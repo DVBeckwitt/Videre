@@ -632,7 +632,7 @@ class _CatalogSection<T> extends StatefulWidget {
 class _CatalogSectionState<T> extends State<_CatalogSection<T>> {
   T? _data;
   bool _loading = true;
-  bool _failed = false;
+  Object? _failure;
   int _generation = 0;
 
   @override
@@ -654,7 +654,7 @@ class _CatalogSectionState<T> extends State<_CatalogSection<T>> {
     final session = context.read<AppCubit>().state;
     setState(() {
       _loading = true;
-      _failed = false;
+      _failure = null;
       _data = null;
     });
     if (!_sameSession(session, session)) return;
@@ -666,10 +666,10 @@ class _CatalogSectionState<T> extends State<_CatalogSection<T>> {
           _loading = false;
         });
       }
-    } catch (_) {
+    } catch (error) {
       if (_active(generation, session)) {
         setState(() {
-          _failed = true;
+          _failure = error;
           _loading = false;
         });
       }
@@ -699,13 +699,15 @@ class _CatalogSectionState<T> extends State<_CatalogSection<T>> {
                 ),
               ),
             )
-          : _failed
+          : _failure != null
               ? Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(locals.musicLoadError),
+                      Text(_failure is MusicCatalogRegionUnavailable
+                          ? locals.musicRegionUnavailable
+                          : locals.musicLoadError),
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
                         onPressed: _load,

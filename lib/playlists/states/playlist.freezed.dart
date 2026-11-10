@@ -17,7 +17,7 @@ mixin _$PlaylistState {
   double get loadingProgress;
   Playlist get playlist;
   bool get loading;
-  double get playlistItemHeight;
+  String get error;
   bool get showImage;
 
   /// Create a copy of PlaylistState
@@ -38,19 +38,18 @@ mixin _$PlaylistState {
             (identical(other.playlist, playlist) ||
                 other.playlist == playlist) &&
             (identical(other.loading, loading) || other.loading == loading) &&
-            (identical(other.playlistItemHeight, playlistItemHeight) ||
-                other.playlistItemHeight == playlistItemHeight) &&
+            (identical(other.error, error) || other.error == error) &&
             (identical(other.showImage, showImage) ||
                 other.showImage == showImage));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, loadingProgress, playlist,
-      loading, playlistItemHeight, showImage);
+  int get hashCode => Object.hash(
+      runtimeType, loadingProgress, playlist, loading, error, showImage);
 
   @override
   String toString() {
-    return 'PlaylistState(loadingProgress: $loadingProgress, playlist: $playlist, loading: $loading, playlistItemHeight: $playlistItemHeight, showImage: $showImage)';
+    return 'PlaylistState(loadingProgress: $loadingProgress, playlist: $playlist, loading: $loading, error: $error, showImage: $showImage)';
   }
 }
 
@@ -64,7 +63,7 @@ abstract mixin class $PlaylistStateCopyWith<$Res> {
       {double loadingProgress,
       Playlist playlist,
       bool loading,
-      double playlistItemHeight,
+      String error,
       bool showImage});
 
   $PlaylistCopyWith<$Res> get playlist;
@@ -86,7 +85,7 @@ class _$PlaylistStateCopyWithImpl<$Res>
     Object? loadingProgress = null,
     Object? playlist = null,
     Object? loading = null,
-    Object? playlistItemHeight = null,
+    Object? error = null,
     Object? showImage = null,
   }) {
     return _then(_self.copyWith(
@@ -102,10 +101,10 @@ class _$PlaylistStateCopyWithImpl<$Res>
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
               as bool,
-      playlistItemHeight: null == playlistItemHeight
-          ? _self.playlistItemHeight
-          : playlistItemHeight // ignore: cast_nullable_to_non_nullable
-              as double,
+      error: null == error
+          ? _self.error
+          : error // ignore: cast_nullable_to_non_nullable
+              as String,
       showImage: null == showImage
           ? _self.showImage
           : showImage // ignore: cast_nullable_to_non_nullable
@@ -216,7 +215,7 @@ extension PlaylistStatePatterns on PlaylistState {
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
     TResult Function(double loadingProgress, Playlist playlist, bool loading,
-            double playlistItemHeight, bool showImage)?
+            String error, bool showImage)?
         $default, {
     required TResult orElse(),
   }) {
@@ -224,7 +223,7 @@ extension PlaylistStatePatterns on PlaylistState {
     switch (_that) {
       case _PlaylistState() when $default != null:
         return $default(_that.loadingProgress, _that.playlist, _that.loading,
-            _that.playlistItemHeight, _that.showImage);
+            _that.error, _that.showImage);
       case _:
         return orElse();
     }
@@ -246,14 +245,14 @@ extension PlaylistStatePatterns on PlaylistState {
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
     TResult Function(double loadingProgress, Playlist playlist, bool loading,
-            double playlistItemHeight, bool showImage)
+            String error, bool showImage)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _PlaylistState():
         return $default(_that.loadingProgress, _that.playlist, _that.loading,
-            _that.playlistItemHeight, _that.showImage);
+            _that.error, _that.showImage);
     }
   }
 
@@ -272,14 +271,14 @@ extension PlaylistStatePatterns on PlaylistState {
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
     TResult? Function(double loadingProgress, Playlist playlist, bool loading,
-            double playlistItemHeight, bool showImage)?
+            String error, bool showImage)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _PlaylistState() when $default != null:
         return $default(_that.loadingProgress, _that.playlist, _that.loading,
-            _that.playlistItemHeight, _that.showImage);
+            _that.error, _that.showImage);
       case _:
         return null;
     }
@@ -293,7 +292,7 @@ class _PlaylistState implements PlaylistState {
       {this.loadingProgress = 0,
       required this.playlist,
       this.loading = true,
-      required this.playlistItemHeight,
+      this.error = '',
       this.showImage = true});
 
   @override
@@ -305,7 +304,8 @@ class _PlaylistState implements PlaylistState {
   @JsonKey()
   final bool loading;
   @override
-  final double playlistItemHeight;
+  @JsonKey()
+  final String error;
   @override
   @JsonKey()
   final bool showImage;
@@ -328,19 +328,18 @@ class _PlaylistState implements PlaylistState {
             (identical(other.playlist, playlist) ||
                 other.playlist == playlist) &&
             (identical(other.loading, loading) || other.loading == loading) &&
-            (identical(other.playlistItemHeight, playlistItemHeight) ||
-                other.playlistItemHeight == playlistItemHeight) &&
+            (identical(other.error, error) || other.error == error) &&
             (identical(other.showImage, showImage) ||
                 other.showImage == showImage));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, loadingProgress, playlist,
-      loading, playlistItemHeight, showImage);
+  int get hashCode => Object.hash(
+      runtimeType, loadingProgress, playlist, loading, error, showImage);
 
   @override
   String toString() {
-    return 'PlaylistState(loadingProgress: $loadingProgress, playlist: $playlist, loading: $loading, playlistItemHeight: $playlistItemHeight, showImage: $showImage)';
+    return 'PlaylistState(loadingProgress: $loadingProgress, playlist: $playlist, loading: $loading, error: $error, showImage: $showImage)';
   }
 }
 
@@ -356,7 +355,7 @@ abstract mixin class _$PlaylistStateCopyWith<$Res>
       {double loadingProgress,
       Playlist playlist,
       bool loading,
-      double playlistItemHeight,
+      String error,
       bool showImage});
 
   @override
@@ -379,7 +378,7 @@ class __$PlaylistStateCopyWithImpl<$Res>
     Object? loadingProgress = null,
     Object? playlist = null,
     Object? loading = null,
-    Object? playlistItemHeight = null,
+    Object? error = null,
     Object? showImage = null,
   }) {
     return _then(_PlaylistState(
@@ -395,10 +394,10 @@ class __$PlaylistStateCopyWithImpl<$Res>
           ? _self.loading
           : loading // ignore: cast_nullable_to_non_nullable
               as bool,
-      playlistItemHeight: null == playlistItemHeight
-          ? _self.playlistItemHeight
-          : playlistItemHeight // ignore: cast_nullable_to_non_nullable
-              as double,
+      error: null == error
+          ? _self.error
+          : error // ignore: cast_nullable_to_non_nullable
+              as String,
       showImage: null == showImage
           ? _self.showImage
           : showImage // ignore: cast_nullable_to_non_nullable

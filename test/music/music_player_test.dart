@@ -7,6 +7,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
+import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -33,6 +34,8 @@ import '../test_settings_cubit.dart';
 class _Player extends TestPlayerCubit {
   int nextCalls = 0;
   int previousCalls = 0;
+  int playlistRetries = 0;
+  Object? playlistError;
   Duration? sought;
 
   _Player(super.initialState, super.settings);
@@ -47,6 +50,16 @@ class _Player extends TestPlayerCubit {
 
   @override
   void playPrevious() => previousCalls++;
+
+  @override
+  Object? get playlistLoadingError => playlistError;
+
+  @override
+  void retryPlaylistLoading() {
+    playlistRetries++;
+    playlistError = null;
+    playlistLoadingRevision.value++;
+  }
 
   @override
   void seek(Duration position) {
@@ -342,6 +355,41 @@ void main() {
       expect(decoder.audioPlayer, same(native));
       expect(decoder.isClosed, isFalse);
     }
+    await tester.runAsync(() async {
+      final closed = decoder.stream.drain<void>();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await closed.timeout(const Duration(seconds: 2));
+    });
+    expect(decoder.isClosed, isTrue);
+  });
+
+  testWidgets(
+      'TV audio can retry playlist loading without replacing its decoder',
+      (tester) async {
+    player.playlistError = StateError('next playlist page unavailable');
+    // The parent supplies the displayed track. Leave the initial decoder input
+    // empty so this UI test does not attempt to open a native media source.
+    await tester.runAsync(() => pump(tester,
+        size: const Size(1280, 720), child: MusicScreen.tvAudio()));
+    final audioBuilder =
+        find.byType(BlocBuilder<AudioPlayerCubit, AudioPlayerState>);
+    final decoder = tester.element(audioBuilder).read<AudioPlayerCubit>();
+    final native = decoder.audioPlayer;
+    expect(
+        find.text('Could not load the rest of this playlist.'), findsOneWidget);
+    final retry = find.text('Retry');
+    expect(retry, findsOneWidget);
+    expect(tester.getRect(retry).bottom, lessThan(720));
+    expect(find.byTooltip('Next song'), findsOneWidget);
+
+    await tester.tap(retry);
+    await tester.pump();
+    expect(player.playlistRetries, 1);
+    expect(retry, findsNothing);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+    expect(tester.takeException(), isNull);
     await tester.runAsync(() async {
       final closed = decoder.stream.drain<void>();
       await tester.pumpWidget(const SizedBox.shrink());

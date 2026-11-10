@@ -11,6 +11,9 @@ import 'package:clipious/router.dart';
 import 'package:clipious/utils.dart';
 
 import '../../states/playlist_list.dart';
+import '../../models/playlist_reference.dart';
+import '../../../app/states/app.dart';
+import '../../../videos/models/video.dart';
 
 const smallPlaylistAspectRatio = 1.54;
 
@@ -21,6 +24,9 @@ class PlaylistInList extends StatelessWidget {
   final bool small;
   final bool isTablet;
   final double thumbnailsHeight;
+  final PlaylistReference? reference;
+  final PlaylistReference? bookmarkOwner;
+  final bool saved;
 
   const PlaylistInList(
       {super.key,
@@ -29,19 +35,29 @@ class PlaylistInList extends StatelessWidget {
       this.isTv = false,
       this.small = false,
       this.thumbnailsHeight = 95,
-      this.isTablet = false});
+      this.isTablet = false,
+      this.reference,
+      this.bookmarkOwner,
+      this.saved = false});
 
-  openPlayList(BuildContext context) {
-    var cubit = context.read<PlaylistListCubit>();
-    AutoRouter.of(context)
-        .push(PlaylistViewRoute(
-            playlist: playlist, canDeleteVideos: canDeleteVideos))
-        .then((value) => cubit.refreshPlaylists());
-  }
-
-  openTvPlaylist(BuildContext context) {
-    AutoRouter.of(context)
-        .push(TvPlaylistRoute(playlist: playlist, canDeleteVideos: false));
+  Future<void> openPlayList(BuildContext context) async {
+    final cubit = context.read<PlaylistListCubit?>();
+    final PageRouteInfo route;
+    if (isTv) {
+      route = TvPlaylistRoute(
+          playlist: playlist,
+          reference: reference,
+          bookmarkOwner: bookmarkOwner,
+          canDeleteVideos: false);
+    } else {
+      route = PlaylistViewRoute(
+          playlist: playlist,
+          reference: reference,
+          bookmarkOwner: bookmarkOwner,
+          canDeleteVideos: canDeleteVideos);
+    }
+    await AutoRouter.of(context).push(route);
+    if (cubit != null && !cubit.isClosed) await cubit.refreshPlaylists();
   }
 
   @override
@@ -53,16 +69,35 @@ class PlaylistInList extends StatelessWidget {
         ? locals.watchLater
         : playlist.title;
     final count = locals.nVideos(playlist.videoCount);
-    final detail = playlist.isLocal
-        ? '${locals.onDevice} · $count'
-        : canDeleteVideos
-            ? '${locals.onServer} · $count'
-            : count;
+    final detail = saved
+        ? '${locals.playlistSavedOnDevice} · $count'
+        : playlist.isLocal
+            ? '${locals.onDevice} · $count'
+            : canDeleteVideos || bookmarkOwner != null
+                ? '${locals.onServer} · $count'
+                : count;
 
     return BlocProvider(
-      create: (context) => PlaylistInListCubit(playlist),
+      create: (context) => PlaylistInListCubit(playlist, reference: reference),
       child: BlocBuilder<PlaylistInListCubit, Playlist>(
         builder: (context, state) {
+          // Thumbnail transport follows the selected account. Do not send a
+          // saved private playlist's preview IDs through a different account.
+          final selectedAccount = reference?.kind == PlaylistSourceKind.account
+              ? context.watch<AppCubit>().state.server
+              : null;
+          final selectedUrl = Uri.tryParse(selectedAccount?.url ?? '');
+          final selectedOrigin = selectedUrl != null &&
+                  const ['http', 'https'].contains(selectedUrl.scheme) &&
+                  selectedUrl.host.isNotEmpty
+              ? selectedUrl.origin
+              : null;
+          final videos = reference?.kind == PlaylistSourceKind.account &&
+                  (selectedAccount?.accountId != reference?.accountId ||
+                      selectedAccount?.profileId != reference?.profileId ||
+                      selectedOrigin != reference?.origin)
+              ? const <Video>[]
+              : state.videos;
           if (isTablet) {
             return InkWell(
               borderRadius: BorderRadius.circular(10),
@@ -79,7 +114,7 @@ class PlaylistInList extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(8.0),
                           child: PlaylistThumbnails(
-                            videos: state.videos,
+                            videos: videos,
                           ),
                         )),
                     Text(
@@ -96,7 +131,7 @@ class PlaylistInList extends StatelessWidget {
           } else if (isTv) {
             return Focus(
               onKeyEvent: (node, event) =>
-                  onTvSelect(event, context, (_) => openTvPlaylist(context)),
+                  onTvSelect(event, context, (_) => openPlayList(context)),
               autofocus: false,
               child: AspectRatio(
                 aspectRatio: 16 / 13,
@@ -127,7 +162,7 @@ class PlaylistInList extends StatelessWidget {
                                     SizedBox(
                                         height: 140,
                                         child: PlaylistThumbnails(
-                                          videos: state.videos,
+                                          videos: videos,
                                         )),
                                     Expanded(
                                         child: Text(
@@ -159,7 +194,7 @@ class PlaylistInList extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     PlaylistThumbnails(
-                      videos: state.videos,
+                      videos: videos,
                     ),
                     Text(
                       title,
@@ -187,7 +222,7 @@ class PlaylistInList extends StatelessWidget {
                         child: Padding(
                           padding: const EdgeInsets.all(8.0),
                           child: PlaylistThumbnails(
-                            videos: state.videos,
+                            videos: videos,
                           ),
                         )),
                     Expanded(

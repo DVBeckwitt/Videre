@@ -249,9 +249,8 @@ void main() {
     final restored = await library.getUserPlaylist(playlist.playlistId);
     expect(restored.isLocal, isTrue);
     expect(restored.videos.single.indexId, isNull);
-    final playlistCubit = PlaylistCubit(
-        PlaylistState(playlist: restored, playlistItemHeight: 0),
-        _UnusedPlayer());
+    final playlistCubit =
+        PlaylistCubit(PlaylistState(playlist: restored), _UnusedPlayer());
     await playlistCubit.removeVideoFromPlayList(restored.videos.single);
     expect(
         (await library.getUserPlaylist(playlist.playlistId)).videos, isEmpty);
@@ -317,20 +316,23 @@ void main() {
   });
 
   test('private playlists load every page before and after refresh', () async {
+    const owner = Server(url: 'https://playlist.example', id: 'owner');
+    await db.upsertServer(owner);
     final pages = _PagedPlaylists();
     service = pages;
-    final cubit = PlaylistCubit(
-        PlaylistState(playlist: pages.first, playlistItemHeight: 0),
-        _UnusedPlayer());
+    final cubit =
+        PlaylistCubit(PlaylistState(playlist: pages.first), _UnusedPlayer());
     await cubit.stream.firstWhere((state) => !state.loading);
+    expect(cubit.state.error, isEmpty);
     expect(
         cubit.state.playlist.videos.map((v) => v.videoId), ['first', 'second']);
     expect(pages.requests, [1, 2]);
 
-    cubit.refreshPlaylist(userPlaylist: true);
-    await cubit.stream.firstWhere((state) => !state.loading);
+    await cubit.refreshPlaylist(userPlaylist: true);
+    expect(cubit.state.error, isEmpty);
     expect(cubit.state.playlist.videos.length, 2);
-    expect(pages.requests, [1, 2, null, 1, 2]);
+    expect(pages.requests, [1, 2, 1, 2]);
+    expect(pages.owners, everyElement(owner.accountId));
     await cubit.close();
   });
 
@@ -363,6 +365,7 @@ void main() {
 
 class _PagedPlaylists extends Service {
   final requests = <int?>[];
+  final owners = <String?>[];
   final first = const Playlist(
       type: invidiousPlaylist,
       title: 'Private',
@@ -375,6 +378,7 @@ class _PagedPlaylists extends Service {
   Future<Playlist> getUserPlaylist(String playlistId,
       {int? page, Server? serverOverride}) async {
     requests.add(page);
+    owners.add(serverOverride?.accountId);
     return page == 2
         ? first.copyWith(videos: [const Video(videoId: 'second')])
         : first;

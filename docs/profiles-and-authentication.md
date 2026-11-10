@@ -33,6 +33,36 @@ adds manual watched decisions. Restore affects the current person. Account
 credentials, gateway cookies, remote history observations, and pending sync
 operations are not portable library data.
 
+## Saved playlists and resume
+
+Playlist rows start playback at the selected occurrence, keeping the surrounding
+playlist in the queue. Duplicate videos remain separate entries. Further pages
+continue loading while either the detail screen or player owns the playlist;
+partial failures keep loaded entries available and offer Retry.
+
+Each person has a separate checkpoint for each playlist. **Resume playlist**
+uses that occurrence and the video's saved timestamp. **Play from beginning**
+starts the first available entry at zero. Music selections normally start at
+zero; explicit Resume uses the saved timestamp. Resume also retains the
+playlist's last audio/video playback mode. The existing watched badge at
+90% does not discard the exact resume time or advance the playlist checkpoint.
+Actual playback completion advances it. When the last entry is no longer
+available, continuing with a known successor requires an explicit choice.
+
+**Save playlist** keeps a reference and cached display metadata on this device.
+It does not copy the videos or create an editable playlist. Public bookmarks
+use the current backend and its network policy. Account-owned playlists retain
+their original profile, account, and instance; they cannot silently open under
+another account. The Invidious token API does not expose the website's external
+playlist subscription action, so this save action does not promise account sync.
+
+Portable version 1 backups include an optional `savedPlaylists` section for
+public bookmarks and optional exact seconds in existing progress records.
+Older backups still import. Credentials, private/account playlist references,
+and playlist checkpoints are excluded; imported public bookmarks belong to the
+receiving person. Deleting history clears the corresponding local checkpoint
+and prevents a late playback callback from recreating it.
+
 ## Watched status and synchronization
 
 Manual watched state is separate from playback position. Marking a video watched
@@ -128,10 +158,34 @@ with "Web Crypto API is disabled". Chromium restricts Web Crypto to
 This browser/gateway compatibility failure is separate from account eligibility.
 The same test account subsequently signed in successfully through the separately
 installed Tor Browser 16.0 on Android. Its onion preferences reported a six-hour
-minimum account age, which the test account had not yet reached. No API key was
-available during the check, so live authenticated API requests and onion playback remain
-unverified. The local fixture acceptance below establishes client behavior, not
-the live gateway's compatibility with API-key requests.
+minimum account age.
+
+A later check that day used a supplied, enabled API key on an isolated Android 16
+emulator with Tor 0.4.9.15. Tor's check API confirmed the route. Authenticated HTTP
+onion statistics, search, and video metadata returned HTTP 200. Videre added the
+server, rendered video, and continued audio in the background with advancing
+playback position and no media-session error. These playback checks used
+**Proxy videos** off with **Network proxy** on. A transient connection close
+during setup cleared after one explicit retry.
+
+The HTTPS onion connection failed, and the HTTPS public instance timed out
+through the same Tor setup. Later HTTP onion requests also timed out, including
+an independent client; the attempt with **Proxy videos** on could not load fresh
+metadata. These are bounded observations, not availability guarantees. Certificate
+verification remained enabled. Public YouTube Music discovery uses a separate
+endpoint and can be unavailable in the Tor exit's region even while onion
+playback works.
+
+A further bounded check late on November 9, 2026 (November 10 UTC) verified Tor
+routing with separate US and DE exit constraints. On the US route, HTTP and
+HTTPS onion probes failed to connect, while an independent authenticated HTTPS
+public-instance statistics request returned HTTP 200 in 14.07 seconds. This
+does not establish native account setup or playback. On the DE route,
+independent public-instance statistics and video probes reached their 20-second
+connection deadlines, and Videre's setup reached its 15-second request deadline.
+No fresh playback was established. These results describe those routes and
+attempts, not a universal onion-service outage; the earlier HTTP onion playback
+success remains valid.
 
 API keys and the native recovery credential are encrypted with Android Keystore
 and scoped to the local profile, account, and exact origin (scheme, host, port).

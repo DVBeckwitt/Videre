@@ -132,6 +132,56 @@ The local fixture is synthetic H.264/AAC media; its source command is recorded i
 
 ## Observed verification and limits
 
+The 9 November 2026 issue #24 audit found that Music already used the shared
+SOCKS transport, but retained public catalog visitor data when the proxy changed.
+The repair refreshes that configuration on a changed route and rejects late
+responses. A separate regression reproduced a timed-out catalog request clearing
+a successful retry; cache invalidation now belongs to the request's own
+configuration. Both regressions failed before the repair and passed afterward.
+
+Real-client local SOCKS tests also cover API calls, Dio downloads, cached artwork,
+and HTTPS Music discovery/search with **Proxy videos** on and off, including
+endpoint changes and refused-proxy failures. The network audit covered background
+workers, captions/manifests, feedback, embedded browsers, and native media. Two
+unused river_player branches (native notification artwork and DRM licenses) still
+used direct HTTP clients; both now use the shared native transport. No active
+SOCKS bypass was reproduced. This audit is not a packet-capture proof of every
+possible request.
+
+Fresh Android 16 emulator checks passed the five local SOCKS playback tests and
+a new optional audio-only test through Tor 0.4.9.15: decoded audio, pause, seek to
+4.5 seconds, and resumed playback. This used an isolated Tor daemon and a public
+HTTPS audio sample, not the Orbot app or the full Videre UI. The first sample
+host returned HTTP 403 to the native player; the second sample passed. Separate
+live Music checks verified Tor routing and loaded discovery, searches, albums,
+artists, playlists, and artwork with both media-proxy choices. Direct catalog
+checks passed too. Actual song playback through public Invidious was not
+established: the tested instances returned HTTP 403 and 530 for track metadata.
+A later Tor rerun reproduced unavailable Music sections: after a timeout, the
+startup page returned HTTP 200 with "YouTube Music is not available in your
+area" instead of catalog configuration. Changing the locale and testing public
+catalog requests without startup data did not recover the feed; the browse API
+also reported country unavailability. No such fallback was adopted. Music now
+identifies this page and explains the regional problem, and permits a 60-second
+catalog deadline with SOCKS enabled. The earlier successful Tor run and the later
+regional failure are both retained as evidence; they do not establish universal
+catalog or playback availability for every exit or instance.
+
+Final Windows checks passed with the pinned Flutter 3.35.3 / Dart 3.9.2 and JDK
+21: canonical formatting/analysis, 1,912 offline tests (four opt-in live checks
+skipped), 70 native JVM tests, and the Windows release-helper safety tests.
+Existing source analyzer diagnostics remain permitted by the configured gate.
+Profile APKs built for ARM64, ARMv7, and x86_64 after the final UI edit. Hosted
+Linux CI and the full live Invidious integration suite were not run for this
+uncommitted patch. Temporary Tor daemons and device forwarding were removed;
+the existing Android apps and their data were preserved.
+
+Use `orbotAudioUrl=HTTPS_AUDIO_URL` with the instrumentation runner to enable
+the optional audio-only test, and `orbotPort` for its SOCKS listener. The source
+must be seekable and longer than five seconds. See [Music's network boundary and
+live checks](./music.md#network-boundary) for the distinction between SOCKS and
+the Invidious media-proxy setting.
+
 Verification on 27–28 October 2026 used Flutter 3.35.3 / Dart 3.9.2 and JDK 21 on
 Windows. Canonical formatting/analysis and all 367 offline tests in the isolated
 1.22.29 release checkout passed, along

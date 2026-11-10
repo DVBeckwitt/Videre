@@ -25,6 +25,7 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URI
 import java.net.UnknownHostException
 import java.util.Collections
 import java.util.Locale
@@ -299,6 +300,44 @@ class SocksPlaybackDeviceTest {
         }
     }
 
+    /** Supply a seekable HTTPS audio-only recording longer than five seconds. */
+    @Test(timeout = 120000)
+    fun optionalRealOrbotHttpsAudioPlaybackPauseSeekAndResume() {
+        val arguments = InstrumentationRegistry.getArguments()
+        val source = arguments.getString("orbotAudioUrl")
+        assumeTrue("Pass orbotAudioUrl to run real Tor audio acceptance", source != null)
+        val uri = URI(source!!)
+        require(uri.scheme == "https" && uri.host != null && !isLoopbackHost(uri.host)) {
+            "Tor audio fixture must use an external HTTPS origin"
+        }
+        val port = arguments.getString("orbotPort")?.toInt() ?: 9050
+        ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", port).toMap())
+        PlayerProbe(source).use { probe ->
+            probe.await("real Tor HTTPS audio decoding", timeoutMs = 90000) {
+                probe.audioBuffers() > 0 && probe.position() >= 700
+            }
+            main {
+                assertTrue("The fixture must contain audio only", probe.player.videoFormat == null)
+                assertTrue("The audio fixture must be seekable", probe.player.isCurrentMediaItemSeekable)
+                assertTrue("The audio fixture must exceed five seconds", probe.player.duration > 5000)
+                probe.player.pause()
+            }
+            val paused = probe.position()
+            SystemClock.sleep(350)
+            assertTrue("Paused audio playhead moved", probe.position() <= paused + 100)
+            val previousBuffers = probe.audioBuffers()
+            main {
+                probe.player.seekTo(4500)
+                probe.player.play()
+            }
+            probe.await("real Tor audio after seeking and resuming", timeoutMs = 15000) {
+                probe.seekPosition.get() >= 4450 && probe.position() >= 4700 &&
+                    probe.audioBuffers() > previousBuffers
+            }
+            assertEquals("Audio-only fixture rendered video", 0, probe.videoFrames.get())
+        }
+    }
+
     private fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
 
     private inner class PlayerProbe(source: String, headers: Map<String, String>? = null) : AutoCloseable {
@@ -364,7 +403,8 @@ class SocksPlaybackDeviceTest {
                 if (condition()) return
                 SystemClock.sleep(50)
             }
-            throw AssertionError("Timed out waiting for $label; frames=${videoFrames.get()}, position=${position()}")
+            throw AssertionError("Timed out waiting for $label; frames=${videoFrames.get()}, " +
+                "audioBuffers=${audioBuffers()}, position=${position()}")
         }
 
         override fun close() {

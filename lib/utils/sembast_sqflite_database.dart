@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -23,6 +24,10 @@ import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:uuid/uuid.dart';
 
 import '../settings/states/settings.dart';
+import '../playlists/services/playlist_progress.dart';
+import '../playlists/services/playlist_library_service.dart';
+import '../playlists/models/playlist_reference.dart';
+import '../playlists/models/saved_playlist.dart';
 import 'backup.dart';
 
 const maxLogs = 1000;
@@ -395,8 +400,13 @@ class SembastSqfDb extends IDbClient {
 
   @override
   double getVideoProgress(String videoId) {
-    var v = progressStore.record(videoId).getSync(db);
-    return v != null ? Progress.fromJson(v).progress : 0;
+    return getVideoPlaybackProgress(videoId).progress;
+  }
+
+  @override
+  Progress getVideoPlaybackProgress(String videoId) {
+    final value = progressStore.record(videoId).getSync(db);
+    return value == null ? Progress(0, videoId) : Progress.fromJson(value);
   }
 
   @override
@@ -429,6 +439,7 @@ class SembastSqfDb extends IDbClient {
       }
       // Remove the deleted video from any saved playback session as well.
       await settingsStore.record('playback-session').delete(txn);
+      await _resetPlaylistProgress(txn, videoId: videoId);
     });
   }
 
@@ -444,7 +455,21 @@ class SembastSqfDb extends IDbClient {
         await stringMapStoreFactory.store('$name:$profileId').delete(txn);
       }
       await settingsStore.record('playback-session').delete(txn);
+      await _resetPlaylistProgress(txn);
     });
+  }
+
+  Future<void> _resetPlaylistProgress(DatabaseClient txn,
+      {String? videoId}) async {
+    final record = settingsStore.record(playlistProgressSettingName);
+    final stored = await record.get(txn);
+    await record.put(
+        txn,
+        SettingsValue(
+                playlistProgressSettingName,
+                resetPlaylistProgress(stored?['value'] as String?,
+                    videoId: videoId))
+            .toJson());
   }
 
   @override
@@ -466,6 +491,12 @@ class SembastSqfDb extends IDbClient {
           getAllProgress().map((progress) => progress.toJson()).toList(),
       'history': getLocalHistory().map((video) => video.toJson()).toList(),
       'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
+      'savedPlaylists': [
+        for (final saved in SavedPlaylist.decodeLibrary(
+            getSettings(playlistLibrarySettingName)?.value, profileId))
+          if (saved.reference.kind == PlaylistSourceKind.public)
+            UserBackup.portablePlaylist(saved),
+      ],
       'watchState': stringMapStoreFactory
           .store('watchState:$profileId')
           .findSync(db)
@@ -540,6 +571,11 @@ class SembastSqfDb extends IDbClient {
         final oldWatched = {
           for (final row in await watchedStore.find(txn)) row.key: row.value
         };
+        final playbackSequence = stringMapStoreFactory
+            .store('watchSync:$profileId')
+            .record('playback-revision');
+        var playbackRevision =
+            (await playbackSequence.get(txn))?['value'] as int? ?? 0;
         if (replace) {
           await watchedStore.delete(txn);
           await outboxStore.delete(txn);
@@ -549,10 +585,13 @@ class SembastSqfDb extends IDbClient {
           final videoId = row['videoId'] as String;
           final previous = oldWatched[videoId];
           if (!replace && previous != null) continue;
-          final revision = (previous?['revision'] as int? ?? 0) + 1;
+          // Clearing history removes the video's row but not the profile's
+          // sequence. Imported state must not revive an old callback revision.
+          playbackRevision =
+              max(playbackRevision, previous?['revision'] as int? ?? 0) + 1;
           await watchedStore
               .record(videoId)
-              .put(txn, {...row, 'revision': revision});
+              .put(txn, {...row, 'revision': playbackRevision});
           // Imported library state is local. Cancel superseded intents rather
           // than uploading the imported data to any saved account.
           if (!replace) {
@@ -560,6 +599,7 @@ class SembastSqfDb extends IDbClient {
                 finder: Finder(filter: Filter.equals('videoId', videoId)));
           }
         }
+        await playbackSequence.put(txn, {'value': playbackRevision});
         final old = replace
             ? <dynamic>[]
             : jsonDecode(getSettings('local-playlists')?.value ?? '[]') as List;
@@ -589,9 +629,45 @@ class SembastSqfDb extends IDbClient {
             txn,
             SettingsValue('local-playlists', jsonEncode(lists.values.toList()))
                 .toJson());
+        final storedBookmarks =
+            await settingsStore.record(playlistLibrarySettingName).get(txn);
+        final bookmarks = <String, SavedPlaylist>{
+          for (final saved in SavedPlaylist.decodeLibrary(
+              storedBookmarks?['value'] as String?, profileId))
+            if (!replace || saved.reference.kind == PlaylistSourceKind.account)
+              saved.reference.key: saved,
+        };
+        for (final row in backup.sections['savedPlaylists'] ??
+            const <Map<String, dynamic>>[]) {
+          final saved = SavedPlaylist.tryParse({
+            ...row,
+            'reference': PlaylistReference(
+              kind: PlaylistSourceKind.public,
+              playlistId: row['playlistId'] as String,
+              profileId: profileId,
+            ).toJson(),
+          });
+          if (saved == null) {
+            throw const FormatException('Invalid saved playlist.');
+          }
+          bookmarks.putIfAbsent(saved.reference.key, () => saved);
+        }
+        final bookmarkValue = jsonEncode({
+          'version': 1,
+          'entries': bookmarks.values.map((saved) => saved.toJson()).toList(),
+        });
+        if (bookmarks.length > playlistLibraryMaximumEntries ||
+            utf8.encode(bookmarkValue).length > playlistLibraryMaximumBytes) {
+          throw const FormatException('The saved playlist library is full.');
+        }
+        await settingsStore.record(playlistLibrarySettingName).put(txn,
+            SettingsValue(playlistLibrarySettingName, bookmarkValue).toJson());
         await settingsStore.record('playback-session').delete(txn);
+        if (replace) await _resetPlaylistProgress(txn);
       }
     });
+    PlaylistLibraryService.notifyProfileChanged(this, profileId);
+    playbackHistoryRevision.value++;
   }
 
   @override
@@ -615,17 +691,16 @@ class SembastSqfDb extends IDbClient {
     if (_fixedProfileId == null) {
       return forProfile(profileId).saveProgress(progress);
     }
-    // Compare and write together: overlapping playback/seek updates must not
-    // miss a watched-status transition by reading the same previous value.
-    final watchedChanged = await db.transaction((txn) async {
+    // Compare and write together so overlapping playback/seek updates cannot
+    // lose a visible progress or watched-status transition.
+    final displayChanged = await db.transaction((txn) async {
       final record = progressStore.record(progress.videoId);
       final previous = await record.get(txn);
-      final wasWatched = previous != null &&
-          Progress.fromJson(previous).progress >= watchedProgressThreshold;
       await record.put(txn, progress.toJson());
-      return wasWatched != (progress.progress >= watchedProgressThreshold);
+      return progressDisplayChanged(
+          previous == null ? null : Progress.fromJson(previous), progress);
     });
-    if (watchedChanged) {
+    if (displayChanged) {
       playbackHistoryRevision.value++;
     }
   }

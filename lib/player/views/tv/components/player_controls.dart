@@ -1,4 +1,5 @@
 import 'package:clipious/utils/motion.dart';
+import 'package:clipious/player/views/components/playlist_loading_notice.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
@@ -440,6 +441,7 @@ class TvPlayerControls extends StatelessWidget {
                                                   ctx, cubit, video),
                                           paginatedVideoList:
                                               FixedItemList(videos)),
+                                      const PlaylistLoadingNotice(),
                                     ],
                                   ),
                                 ))

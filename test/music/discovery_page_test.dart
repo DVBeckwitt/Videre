@@ -165,6 +165,43 @@ void main() {
     expect(catalog.moodCalls, 1);
   });
 
+  testWidgets('Home explains regional failures and retry clears the guidance',
+      (tester) async {
+    catalog.releases =
+        () => Future.error(const MusicCatalogRegionUnavailable());
+    await show(tester);
+    await tester.pumpAndSettle();
+    expect(
+        find.textContaining('try another region or circuit'), findsOneWidget);
+    expect(find.text('Public chart'), findsOneWidget);
+
+    final retry = Completer<List<MusicAlbum>>();
+    catalog.releases = () => retry.future;
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(find.textContaining('try another region or circuit'), findsNothing);
+    retry.completeError(StateError('offline'));
+    await tester.pumpAndSettle();
+    expect(find.text('Could not load this section.'), findsOneWidget);
+    expect(find.textContaining('try another region or circuit'), findsNothing);
+  });
+
+  testWidgets('a new session reloads shelves after a regional failure',
+      (tester) async {
+    catalog.releases =
+        () => Future.error(const MusicCatalogRegionUnavailable());
+    await show(tester);
+    await tester.pumpAndSettle();
+    expect(
+        find.textContaining('try another region or circuit'), findsOneWidget);
+    catalog.releases = () async => [_album];
+    app.change(
+        app.state.copyWith(sessionRevision: app.state.sessionRevision + 1));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('try another region or circuit'), findsNothing);
+    expect(find.text('Fresh album'), findsOneWidget);
+  });
+
   testWidgets('Home opens the real album and playlist IDs', (tester) async {
     await show(tester);
     await tester.pumpAndSettle();
