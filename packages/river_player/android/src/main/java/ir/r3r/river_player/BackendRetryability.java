@@ -4,6 +4,7 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.ExoPlaybackException;
 import com.github.dvbeckwitt.videre.proxy.NerdVpnAccessRequired;
+import com.github.dvbeckwitt.videre.proxy.NativeHttpRetryPolicy;
 import java.io.InterruptedIOException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -51,8 +52,10 @@ final class BackendRetryability {
                 return false;
             }
             if (cause instanceof HttpDataSource.InvalidResponseCodeException) {
-                int code = ((HttpDataSource.InvalidResponseCodeException) cause).responseCode;
-                if (code != 502 && code != 503 && code != 504) return false;
+                HttpDataSource.InvalidResponseCodeException response =
+                        (HttpDataSource.InvalidResponseCodeException) cause;
+                int code = response.responseCode;
+                if (!NativeHttpRetryPolicy.allowsTransientResponse(code, response.headerFields)) return false;
                 status = code;
             }
             // OkHttp cancellation may surface as a plain IOException or closed

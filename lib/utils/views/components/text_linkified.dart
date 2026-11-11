@@ -8,10 +8,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../globals.dart';
 import '../../models/timestamp_linkifier.dart';
+import 'external_link.dart';
 
 class TextLinkified extends StatelessWidget {
   final String text;
@@ -52,7 +52,7 @@ class TextLinkified extends StatelessWidget {
           AutoRouter.of(context).push(VideoRoute(videoId: videoId));
         }
       } else {
-        launchUrl(Uri.parse(link.url), mode: LaunchMode.externalApplication);
+        unawaited(openExternalLink(context, uri));
       }
     } else if (link is TimestampElement) {
       var split = link.url.split(':');

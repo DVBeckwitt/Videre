@@ -35,7 +35,7 @@ const singleId = 1;
 
 class SembastSqfDb extends IDbClient {
   final log = Logger('SembastSqfLDB');
-  final Database db;
+  final Database _database;
   final String? _fixedProfileId;
   final _profilesStore = stringMapStoreFactory.store('personProfiles');
   final _profileStateStore = stringMapStoreFactory.store('personProfileState');
@@ -74,33 +74,77 @@ class SembastSqfDb extends IDbClient {
   StoreRef<String, Map<String, Object?>> get offlineSubscriptions =>
       stringMapStoreFactory.store(_storeName('offline_subscriptions'));
 
-  SembastSqfDb(this.db) : _fixedProfileId = null;
+  SembastSqfDb(this._database) : _fixedProfileId = null;
 
-  SembastSqfDb._forProfile(this.db, this._fixedProfileId);
+  SembastSqfDb._forProfile(this._database, this._fixedProfileId);
+
+  Database get db {
+    _checkFixedProfile();
+    return _database;
+  }
+
+  /// Background work may check cancellation without reading a deleted library.
+  bool get isProfileAvailable => profileExists(_fixedProfileId ?? profileId);
+
+  bool profileExists(String id) =>
+      _profilesStore.record(id).getSync(_database) != null;
+
+  void _checkFixedProfile() {
+    final id = _fixedProfileId;
+    if (id != null && _profilesStore.record(id).getSync(_database) == null) {
+      throw StateError('Profile no longer exists');
+    }
+  }
+
+  /// Recheck inside a queued transaction: a captured view may have been
+  /// deleted after the transaction was requested but before it acquired the DB.
+  Future<void> ensureProfileExists(DatabaseClient transaction) async {
+    final id = _fixedProfileId ?? profileId;
+    if (!await _profilesStore.record(id).exists(transaction)) {
+      throw StateError('Profile no longer exists');
+    }
+  }
+
+  Future<T> _writeProfile<T>(
+      Future<T> Function(SembastSqfDb owner, Transaction txn) write) {
+    final owner = forProfile(profileId);
+    return owner.db.transaction((txn) async {
+      await owner.ensureProfileExists(txn);
+      return write(owner, txn);
+    });
+  }
 
   @override
-  String get profileId =>
-      _fixedProfileId ??
-      (_profileStateStore.record('active').getSync(db)?['id'] as String?) ??
-      PersonProfile.defaultId;
+  String get profileId {
+    _checkFixedProfile();
+    return _fixedProfileId ??
+        (_profileStateStore.record('active').getSync(_database)?['id']
+            as String?) ??
+        _profilesStore.findFirstSync(_database)?.key ??
+        PersonProfile.defaultId;
+  }
 
   @override
   SembastSqfDb forProfile(String id) {
-    if (id != PersonProfile.defaultId &&
-        _profilesStore.record(id).getSync(db) == null) {
+    if (_profilesStore.record(id).getSync(db) == null) {
       throw StateError('Profile no longer exists');
     }
     return _fixedProfileId == id ? this : SembastSqfDb._forProfile(db, id);
   }
 
   Future<void> _initializeProfiles() => db.transaction((txn) async {
-        final record = _profilesStore.record(PersonProfile.defaultId);
-        if (!await record.exists(txn)) {
-          await record.put(txn, PersonProfile.defaultProfile.toJson());
+        if (_fixedProfileId != null) await ensureProfileExists(txn);
+        var profiles = await _profilesStore.find(txn);
+        if (profiles.isEmpty) {
+          await _profilesStore
+              .record(PersonProfile.defaultId)
+              .put(txn, PersonProfile.defaultProfile.toJson());
+          profiles = await _profilesStore.find(txn);
         }
         final active = _profileStateStore.record('active');
-        if (!await active.exists(txn)) {
-          await active.put(txn, {'id': PersonProfile.defaultId});
+        final selected = (await active.get(txn))?['id'];
+        if (!profiles.any((profile) => profile.key == selected)) {
+          await active.put(txn, {'id': profiles.first.key});
         }
       });
 
@@ -126,7 +170,10 @@ class SembastSqfDb extends IDbClient {
     final profile =
         PersonProfile(id: const Uuid().v4(), name: _profileName(name));
     await _initializeProfiles();
-    await _profilesStore.record(profile.id).put(db, profile.toJson());
+    await db.transaction((txn) async {
+      if (_fixedProfileId != null) await ensureProfileExists(txn);
+      await _profilesStore.record(profile.id).put(txn, profile.toJson());
+    });
     return profile;
   }
 
@@ -135,6 +182,7 @@ class SembastSqfDb extends IDbClient {
     final profile = PersonProfile(id: id, name: _profileName(name));
     await _initializeProfiles();
     await db.transaction((txn) async {
+      if (_fixedProfileId != null) await ensureProfileExists(txn);
       final record = _profilesStore.record(id);
       if (!await record.exists(txn)) {
         throw StateError('Profile no longer exists');
@@ -146,6 +194,7 @@ class SembastSqfDb extends IDbClient {
   @override
   Future<void> useProfile(String id) async {
     if (_fixedProfileId != null) {
+      _checkFixedProfile();
       if (id == _fixedProfileId) return;
       throw StateError('A captured profile cannot change its owner');
     }
@@ -157,6 +206,55 @@ class SembastSqfDb extends IDbClient {
       await _profileStateStore.record('active').put(txn, {'id': id});
     });
   }
+
+  @override
+  Future<void> deleteProfile(String id) => db.transaction((txn) async {
+        if (_fixedProfileId != null) await ensureProfileExists(txn);
+        final profiles = await _profilesStore.find(txn);
+        if (!profiles.any((profile) => profile.key == id)) {
+          throw StateError('Profile no longer exists');
+        }
+        if (profiles.length <= 1) {
+          throw StateError('The last profile cannot be deleted');
+        }
+        if ((await _profileStateStore.record('active').get(txn))?['id'] == id) {
+          throw StateError(
+              'Switch to another profile before deleting this one');
+        }
+        String storeName(String name) =>
+            id == PersonProfile.defaultId ? name : 'profile:$id:$name';
+        for (final name in [
+          'downloadedVideo',
+          'searchHistory',
+          'serviers',
+          'videoFilters',
+          'historyVideoCache',
+          'progress',
+          'offline_subscriptions',
+        ]) {
+          await stringMapStoreFactory.store(storeName(name)).delete(txn);
+        }
+        await intMapStoreFactory.store(storeName('homeLayout')).delete(txn);
+        final settings = stringMapStoreFactory.store(storeName('settings'));
+        if (id == PersonProfile.defaultId) {
+          for (final record in await settings.find(txn)) {
+            if (!_deviceSettings.contains(record.key)) {
+              await settings.record(record.key).delete(txn);
+            }
+          }
+        } else {
+          await settings.delete(txn);
+        }
+        for (final name in [
+          'watchState',
+          'watchMembership',
+          'watchOutbox',
+          'watchSync',
+        ]) {
+          await stringMapStoreFactory.store('$name:$id').delete(txn);
+        }
+        await _profilesStore.record(id).delete(txn);
+      });
 
   static Future<SembastSqfDb> create() async {
     final docsDir = await getApplicationDocumentsDirectory();
@@ -188,15 +286,16 @@ class SembastSqfDb extends IDbClient {
       return forProfile(profileId).addToSearchHistory(searchHistoryItem);
     }
     searchHistoryItem.time = DateTime.now().millisecondsSinceEpoch;
-    await searchHistoryStore
+    await _writeProfile((owner, txn) => owner.searchHistoryStore
         .record(searchHistoryItem.search)
-        .put(db, searchHistoryItem.toJson());
+        .put(txn, searchHistoryItem.toJson()));
     await clearExcessSearchHistory();
   }
 
   @override
   Future<void> deleteFromSearchHistory(String search) async {
-    await searchHistoryStore.record(search).delete(db);
+    await _writeProfile(
+        (owner, txn) => owner.searchHistoryStore.record(search).delete(txn));
   }
 
   @override
@@ -211,6 +310,9 @@ class SembastSqfDb extends IDbClient {
 
   @override
   Future<void> clearExcessSearchHistory() async {
+    if (_fixedProfileId == null) {
+      return forProfile(profileId).clearExcessSearchHistory();
+    }
     final limit = int.parse(getSettings(searchHistoryLimitSettingName)?.value ??
         searchHistoryDefaultLength);
 
@@ -219,19 +321,18 @@ class SembastSqfDb extends IDbClient {
     var count = searchHistoryStore.countSync(db);
     log.fine('search history clear $count/$limit');
     if (count > limit) {
-      await searchHistoryStore.delete(db,
+      await _writeProfile((owner, txn) => owner.searchHistoryStore.delete(txn,
           finder: Finder(
               sortOrders: [SortOrder("time")],
               offset: 0,
-              limit: count - limit));
+              limit: count - limit)));
       log.fine('clearing ${count - limit} history itens');
     }
   }
 
   @override
   Future<void> clearSearchHistory() async {
-    // TODO: implement clearSearchHistory
-    await searchHistoryStore.delete(db);
+    await _writeProfile((owner, txn) => owner.searchHistoryStore.delete(txn));
   }
 
   @override
@@ -244,23 +345,27 @@ class SembastSqfDb extends IDbClient {
     if (vid.profileId != profileId) {
       throw StateError('Download belongs to a different profile');
     }
-    await downloadedVideosStore.record(vid.videoId).delete(db);
+    await _writeProfile((owner, txn) =>
+        owner.downloadedVideosStore.record(vid.videoId).delete(txn));
   }
 
   @override
   Future<void> deleteFilter(VideoFilter filter) async {
-    await videoFiltersStore.record(filter.uuid).delete(db);
+    await _writeProfile((owner, txn) =>
+        owner.videoFiltersStore.record(filter.uuid).delete(txn));
   }
 
   @override
   deleteServerById(Server server) async {
     _checkServerOwner(server);
-    await serversStore.record(server.accountId).delete(db);
+    await _writeProfile((owner, txn) =>
+        owner.serversStore.record(server.accountId).delete(txn));
   }
 
   @override
   deleteSetting(String name) async {
-    await _settingsFor(name).record(name).delete(db);
+    await _writeProfile(
+        (owner, txn) => owner._settingsFor(name).record(name).delete(txn));
   }
 
   @override
@@ -427,6 +532,7 @@ class SembastSqfDb extends IDbClient {
       return forProfile(profileId).deleteLocalHistory(videoId);
     }
     return db.transaction((txn) async {
+      await ensureProfileExists(txn);
       await historyVideoCacheStore.record(videoId).delete(txn);
       await progressStore.record(videoId).delete(txn);
       await stringMapStoreFactory
@@ -449,6 +555,7 @@ class SembastSqfDb extends IDbClient {
       return forProfile(profileId).clearLocalHistory();
     }
     return db.transaction((txn) async {
+      await ensureProfileExists(txn);
       await historyVideoCacheStore.delete(txn);
       await progressStore.delete(txn);
       for (final name in ['watchState', 'watchMembership', 'watchOutbox']) {
@@ -526,6 +633,7 @@ class SembastSqfDb extends IDbClient {
     };
     // Commit the library together; a failed restore must leave the old data usable.
     await db.transaction((txn) async {
+      await ensureProfileExists(txn);
       for (final entry in stores.entries) {
         if (backup.subscriptionsOnly && entry.key != 'subscriptions') continue;
         if (replace) {
@@ -683,7 +791,8 @@ class SembastSqfDb extends IDbClient {
       // generate new id
       filter.uuid = const Uuid().v4();
     }
-    await videoFiltersStore.record(filter.uuid).put(db, filter.toJson());
+    await _writeProfile((owner, txn) =>
+        owner.videoFiltersStore.record(filter.uuid).put(txn, filter.toJson()));
   }
 
   @override
@@ -694,6 +803,7 @@ class SembastSqfDb extends IDbClient {
     // Compare and write together so overlapping playback/seek updates cannot
     // lose a visible progress or watched-status transition.
     final displayChanged = await db.transaction((txn) async {
+      await ensureProfileExists(txn);
       final record = progressStore.record(progress.videoId);
       final previous = await record.get(txn);
       await record.put(txn, progress.toJson());
@@ -707,9 +817,10 @@ class SembastSqfDb extends IDbClient {
 
   @override
   saveSetting(SettingsValue setting) async {
-    await _settingsFor(setting.name)
+    await _writeProfile((owner, txn) => owner
+        ._settingsFor(setting.name)
         .record(setting.name)
-        .put(db, setting.toJson());
+        .put(txn, setting.toJson()));
   }
 
   @override
@@ -722,17 +833,21 @@ class SembastSqfDb extends IDbClient {
     if (vid.profileId != profileId) {
       throw StateError('Download belongs to a different profile');
     }
-    await downloadedVideosStore.record(vid.videoId).put(db, vid.toJson());
+    await _writeProfile((owner, txn) =>
+        owner.downloadedVideosStore.record(vid.videoId).put(txn, vid.toJson()));
   }
 
   @override
   Future<void> upsertHistoryVideo(HistoryVideoCache vid) async {
-    await historyVideoCacheStore.record(vid.videoId).put(db, vid.toJson());
+    await _writeProfile((owner, txn) => owner.historyVideoCacheStore
+        .record(vid.videoId)
+        .put(txn, vid.toJson()));
   }
 
   @override
   Future<void> upsertHomeLayout(HomeLayout layout) async {
-    await homeLayoutStore.record(singleId).put(db, layout.toJson());
+    await _writeProfile((owner, txn) =>
+        owner.homeLayoutStore.record(singleId).put(txn, layout.toJson()));
   }
 
   @override
@@ -741,7 +856,8 @@ class SembastSqfDb extends IDbClient {
       return forProfile(profileId).upsertServer(server);
     }
     _checkServerOwner(server);
-    await serversStore.record(server.accountId).put(db, server.toJson());
+    await _writeProfile((owner, txn) =>
+        owner.serversStore.record(server.accountId).put(txn, server.toJson()));
     await super.upsertServer(server);
   }
 
@@ -752,6 +868,7 @@ class SembastSqfDb extends IDbClient {
     final record = serversStore.record(server.accountId);
     final existed = record.getSync(db) != null;
     return db.transaction((txn) async {
+      await ensureProfileExists(txn);
       final stored = await record.get(txn);
       if (stored == null && existed) {
         throw StateError('Account no longer exists');
@@ -768,12 +885,15 @@ class SembastSqfDb extends IDbClient {
 
   @override
   Future<void> addOfflineSubscription(OfflineSubscription sub) async {
-    await offlineSubscriptions.record(sub.channelId).put(db, sub.toJson());
+    await _writeProfile((owner, txn) => owner.offlineSubscriptions
+        .record(sub.channelId)
+        .put(txn, sub.toJson()));
   }
 
   @override
   Future<void> deleteOfflineSubscription(String channelId) async {
-    await offlineSubscriptions.record(channelId).delete(db);
+    await _writeProfile((owner, txn) =>
+        owner.offlineSubscriptions.record(channelId).delete(txn));
   }
 
   @override

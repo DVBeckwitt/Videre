@@ -64,7 +64,8 @@ class _OnboardingService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) async {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
     events.add('video');
     videoServer = serverOverride;
     if (videoError != null) throw videoError!;

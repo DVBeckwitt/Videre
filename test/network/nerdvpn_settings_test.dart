@@ -321,14 +321,19 @@ void main() {
     expect(replacementSaves, isEmpty);
   });
 
-  testWidgets('HTTPS preferences retain their existing browser handoff',
+  testWidgets('HTTPS preferences show the address without a browser handoff',
       (tester) async {
     await showPanel(tester);
     await tester.tap(find.text('Open NerdVPN preferences'));
     await tester.pumpAndSettle();
+    expect(launcher.urls, isEmpty);
+    expect(browserCalls, isEmpty);
     expect(
-        launcher.urls, ['https://invidious.nerdvpn.de/preferences#api-access']);
-    expect(find.byType(AlertDialog), findsNothing);
+        find.widgetWithText(SelectableText,
+            'https://invidious.nerdvpn.de/preferences#api-access'),
+        findsOneWidget);
+    expect(find.text('Copy to clipboard'), findsOneWidget);
+    expect(find.byType(AlertDialog), findsOneWidget);
   });
 
   testWidgets('onion access without SOCKS explains how to enable Tor routing',
@@ -368,17 +373,18 @@ void main() {
 
   for (final television in [false, true]) {
     testWidgets(
-        '${television ? 'TV' : 'phone'} onion preferences open the separate Tor Browser',
+        '${television ? 'TV' : 'phone'} onion preferences show the address even when Tor Browser is installed',
         (tester) async {
       app.isTv = television;
       torBrowserAvailable = true;
       await showPanel(tester, account: _onionAccount);
       await tester.tap(find.text('Open NerdVPN preferences'));
       await tester.pumpAndSettle();
-      expect(browserCalls.single.method, 'openNerdVpnPreferences');
-      expect(browserCalls.single.arguments, {'serverUrl': _onionOrigin});
+      expect(browserCalls, isEmpty);
       expect(launcher.urls, isEmpty);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('$_onionOrigin/preferences#api-access'), findsOneWidget);
+      expect(find.text('Copy to clipboard'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
@@ -394,10 +400,9 @@ void main() {
         expect(launcher.urls, isEmpty);
         expect(find.byType(AlertDialog), findsOneWidget);
         expect(find.text('$origin/preferences#api-access'), findsOneWidget);
-        expect(
-            find.textContaining('Tor Browser cannot open this link directly'),
+        expect(find.textContaining('Copy this address and open it'),
             findsOneWidget);
-        expect(browserCalls.single.arguments, {'serverUrl': origin});
+        expect(browserCalls, isEmpty);
         expect(
             find.textContaining('https://invidious.nerdvpn.de'), findsNothing);
         expect(tester.takeException(), isNull);
@@ -612,7 +617,7 @@ void main() {
       expect(find.text(locals.nerdVpnOnionSetup), findsOneWidget);
       expect(find.text(locals.nerdVpnAccessSignIn), findsNothing);
       expect(find.text(locals.nerdVpnSignInAndAdd), findsNothing);
-      expect(find.text(locals.nerdVpnOpenTorBrowser), findsOneWidget);
+      expect(find.text(locals.nerdVpnTorAddress), findsOneWidget);
       expect(find.text(locals.nerdVpnManualKey), findsOneWidget);
       expect(find.text(locals.protectedServer), findsNothing);
       expect(find.text(locals.alsoTestServerConfig), findsNothing);

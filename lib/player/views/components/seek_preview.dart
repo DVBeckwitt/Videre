@@ -25,9 +25,7 @@ class SeekPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final board = Storyboard.select(video?.storyboards ?? const [],
-        width * MediaQuery.devicePixelRatioOf(context));
-    final frame = board?.frameAt(position, duration);
+    final boards = video?.storyboards ?? const <Storyboard>[];
     return IgnorePointer(
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -35,10 +33,21 @@ class SeekPreview extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(4),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            if (frame != null)
+            if (boards.isNotEmpty)
               SelectedServerBuilder(builder: (context, selected) {
                 final server = video?.backendPlayback?.server ?? selected;
-                return server == null
+                if (server == null) return const SizedBox.shrink();
+                // A rejected larger source must not hide a smaller storyboard
+                // that the instance can serve privately.
+                final available = boards.where((board) {
+                  final frame = board.frameAt(position, duration);
+                  return frame != null &&
+                      invidiousImageUrl(frame.url, server)?.isNotEmpty == true;
+                }).toList();
+                final board = Storyboard.select(
+                    available, width * MediaQuery.devicePixelRatioOf(context));
+                final frame = board?.frameAt(position, duration);
+                return frame == null
                     ? const SizedBox.shrink()
                     : _frame(context, frame, server);
               }),
@@ -55,6 +64,7 @@ class SeekPreview extends StatelessWidget {
   Widget _frame(BuildContext context, StoryboardFrame frame, Server server) {
     final board = frame.storyboard;
     final url = invidiousImageUrl(frame.url, server);
+    if (url == null) return const SizedBox.shrink();
     final cacheKey = invidiousImageCacheKey(url, server);
     final scale = width / board.width;
     final height = board.height * scale;

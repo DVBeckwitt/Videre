@@ -33,7 +33,8 @@ class _GuestService extends Service {
   @override
   Future<Video> getVideo(String id,
           {Server? serverOverride,
-          void Function(BackendPlayback request)? onBackendRequest}) async =>
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) async =>
       Video(videoId: id, formatStreams: const [], adaptiveFormats: const []);
 }
 

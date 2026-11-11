@@ -141,11 +141,9 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
       if (manualKey != null) {
-        // Match the transport's fail-closed HTTP onion policy before creating
+        // Match the transport's fail-closed onion policy before creating
         // an unsaved native credential or starting either validation request.
-        if (onionManualSetup &&
-            Uri.parse(serverUrl).scheme == 'http' &&
-            !NetworkProxy.instance.config.enabled) {
+        if (onionManualSetup && !NetworkProxy.instance.config.enabled) {
           throw const NerdVpnAccessRequired('proxyRequired');
         }
         server = server.copyWith(
@@ -212,14 +210,20 @@ class AddServerCubit extends Cubit<AddServerState> {
             .getVideo('dQw4w9WgXcQ', serverOverride: server)
             .timeout(const Duration(seconds: 15));
 
-        final thumbnails = video.videoThumbnails;
+        final thumbnails = video.videoThumbnails
+            .map((thumbnail) => thumbnail.url.trim().isEmpty
+                ? ''
+                : invidiousImageUrl(thumbnail.url, server))
+            .whereType<String>()
+            .toList();
         // Validate the resolved URLs that the image loader uses. One usable
         // candidate is enough because the loader tries the available sizes.
+        // Artwork deliberately omitted for privacy is optional, like an empty
+        // thumbnail list; it must not reject an otherwise usable instance.
         if (thumbnails.isNotEmpty &&
             !thumbnails.any((thumbnail) {
-              if (thumbnail.url.trim().isEmpty) return false;
-              final url =
-                  Uri.tryParse(invidiousImageUrl(thumbnail.url, server));
+              if (thumbnail.trim().isEmpty) return false;
+              final url = Uri.tryParse(thumbnail);
               return url != null &&
                   const {'http', 'https'}.contains(url.scheme) &&
                   url.host.isNotEmpty;

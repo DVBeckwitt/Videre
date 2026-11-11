@@ -7,7 +7,7 @@ selected Invidious instance and requires a JSON stats response. A local loopback
 instance cannot establish Internet proxy coverage, so that test is rejected.
 Authentication for arbitrary SOCKS servers is outside this initial implementation.
 
-This setting is separate from the Invidious **Proxy videos** setting. It applies
+Invidious media proxying is mandatory and has no opt-out. The SOCKS setting applies
 to API requests, image loading, manifests, captions, downloads, background
 notification checks, and Android video/audio HTTP data sources. Destination
 hostnames are sent through SOCKS rather than resolved locally. Certificate
@@ -15,17 +15,20 @@ verification is retained. A proxy failure does not enable a direct fallback.
 
 Internal loopback traffic (including just_audio's header-forwarding proxy) stays
 local; its upstream request uses SOCKS. Phone/TV remote control only accepts
-literal LAN addresses and refuses redirects, and remains local. External browser
-authentication and links opened in another app use that app's networking.
+literal LAN addresses and refuses redirects, and remains local. External links,
+including onion preferences, are copy-only. Videre does not launch another app
+whose redirects and networking it cannot protect. Open a copied onion address
+yourself in Tor Browser to obtain an API key. The embedded sign-in and backend
+pages use protected routing with page JavaScript and service-worker networking
+disabled. JavaScript-dependent gateways are unsupported.
 Proxy endpoints are device-specific and are excluded from exported backups.
 
-The official NerdVPN onion uses Videre's native sign-in browser, so its login,
-PKCE exchange, API-key retrieval, and recovery follow this SOCKS setting. HTTP
-requests to that managed onion require the app's explicit SOCKS policy, including
+Videre requires this SOCKS setting for HTTP and HTTPS onion requests, including
 redirects and the unsaved **Test connection** configuration. With SOCKS off,
-Videre reports the required setting before attempting destination DNS. HTTPS
-NerdVPN origins retain certificate verification even when **Skip SSL
-verification** is enabled for another server. See the supported address and
+Videre reports the required setting before attempting destination DNS. To add
+the official NerdVPN onion, get an API key through Tor Browser and enter it in
+Videre. HTTPS NerdVPN origins retain certificate verification even when **Skip
+SSL verification** is enabled for another server. See the supported address and
 credential boundaries in [NerdVPN API access](./profiles-and-authentication.md#nerdvpn-api-access).
 
 Applying changed settings aborts existing Dart connections and native media requests,

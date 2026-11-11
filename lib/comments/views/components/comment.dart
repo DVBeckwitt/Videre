@@ -3,7 +3,7 @@ import 'package:clipious/comments/states/single_comment.dart';
 import 'package:clipious/comments/views/components/comments.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/utils/views/components/text_linkified.dart';
-import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -45,14 +45,10 @@ class SingleCommentView extends StatelessWidget {
                   onTap: () => openChannel(context, state.comment.authorId),
                   child: Padding(
                     padding: const EdgeInsets.all(8.0),
-                    child: Thumbnail(
+                    child: ChannelAvatar(
+                      name: state.comment.author,
                       images: state.comment.authorThumbnails,
-                      width: 20,
-                      height: 20,
-                      thumbnails: ImageObject.getThumbnailUrlsByPreferredOrder(
-                          state.comment.authorThumbnails),
-                      decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20)),
+                      size: 20,
                     ),
                   ),
                 ),
@@ -92,15 +88,20 @@ class SingleCommentView extends StatelessWidget {
                                       Padding(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 8.0),
-                                        child: Thumbnail(
-                                          thumbnails: [
-                                            state.comment.creatorHeart
-                                                    ?.creatorThumbnail ??
-                                                '',
+                                        child: ChannelAvatar(
+                                          name: state.comment.creatorHeart
+                                                  ?.creatorName ??
+                                              '',
+                                          images: [
+                                            ImageObject(
+                                                null,
+                                                state.comment.creatorHeart
+                                                        ?.creatorThumbnail ??
+                                                    '',
+                                                0,
+                                                0),
                                           ],
-                                          decoration: const BoxDecoration(),
-                                          width: 15,
-                                          height: 15,
+                                          size: 15,
                                         ),
                                       ),
                                       Text(state.comment.creatorHeart

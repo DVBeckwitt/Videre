@@ -3,9 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/services/invidious_music_catalog_service.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/services/gateway_auth.dart';
@@ -557,6 +561,178 @@ void main() {
     expect(jsonEncode(database.getAccount(saved.accountId)!.toJson()),
         isNot(contains(manualKey)));
   });
+
+  for (final interactive in [false, true]) {
+    for (final withBackends in [false, true]) {
+      test(
+          'video load admits migrated credentials, interactive=$interactive backends=$withBackends',
+          () async {
+        const manualKey = 'nvpn_0123456789abcdefghijklmnopqrstuv';
+        var saved =
+            database.getAccount(_account.accountId)!.copyWith(customHeaders: {
+          'x-invidious-token': manualKey,
+          'X-Preference': 'retained',
+        });
+        if (withBackends) {
+          saved = BackendSelector('COMPANION_ID', const [
+            BackendOption('0', 'First'),
+            BackendOption('1', 'Second'),
+          ]).withSelection(saved, '0');
+        }
+        await database.upsertServer(saved);
+        await fileDb.useServer(saved);
+        var imports = 0;
+        messenger.setMockMethodCallHandler(_access, (call) async {
+          if (call.method == 'status') {
+            return {'state': 'missing', 'revision': 0};
+          }
+          expect(call.method, 'setKey');
+          expect((call.arguments as Map)['expectedRevision'], 0);
+          imports++;
+          return {'state': 'ready', 'revision': 1};
+        });
+        respond = (request) async => http.Response(
+            '{"videoId":"test-video","title":"Test","adaptiveFormats":[],"formatStreams":[]}',
+            200,
+            request: request,
+            headers: {'content-type': 'application/json'});
+
+        final video = await api.getVideo('test-video',
+            loadObserver: interactive
+                ? VideoLoadObserver(
+                    isCurrent: () => true,
+                    onRetry: () {
+                      fail('Credential migration must not require a retry');
+                    })
+                : null);
+
+        expect(imports, 1);
+        expect(requests, hasLength(1));
+        expect(requests.single.url.origin, saved.url);
+        expect(requests.single.url.path, '/api/v1/videos/test-video');
+        expect(requests.single.headers.keys.where(NerdVpnAccess.isKeyHeader),
+            isEmpty);
+        expect(requests.single.headers['X-Preference'], 'retained');
+        final current = await database.getCurrentlySelectedServer();
+        expect(video.playbackConnection!.matches(current), isTrue);
+        expect(video.backendPlayback != null, withBackends);
+        expect(current.customHeaders.keys.where(NerdVpnAccess.isKeyHeader),
+            isEmpty);
+        expect((await fileDb.getCurrentlySelectedServer()).customHeaders,
+            current.customHeaders);
+        expect(jsonEncode(video.toJson()), isNot(contains(manualKey)));
+      });
+    }
+  }
+
+  for (final operation in ['search', 'song', 'interactive song']) {
+    test('first Music $operation admits migrated credentials', () async {
+      const songId = 'dQw4w9WgXcQ';
+      final saved =
+          database.getAccount(_account.accountId)!.copyWith(customHeaders: {
+        'X-Invidious-Token': 'nvpn_0123456789abcdefghijklmnopqrstuv',
+        'X-Preference': 'retained',
+      });
+      await database.upsertServer(saved);
+      await fileDb.useServer(saved);
+      var imports = 0;
+      messenger.setMockMethodCallHandler(_access, (call) async {
+        if (call.method == 'status') {
+          return {'state': 'missing', 'revision': 0};
+        }
+        expect(call.method, 'setKey');
+        imports++;
+        return {'state': 'ready', 'revision': 1};
+      });
+      respond = (request) async {
+        final song = {'type': 'video', 'videoId': songId, 'title': 'Test song'};
+        return http.Response(
+            jsonEncode(operation == 'search' ? [song] : song), 200,
+            request: request, headers: {'content-type': 'application/json'});
+      };
+      final catalog = InvidiousMusicCatalogService(api: api);
+
+      final songs = operation == 'search'
+          ? await catalog.searchSongs('test')
+          : [
+              await catalog.getSong(songId,
+                  loadObserver: operation == 'interactive song'
+                      ? VideoLoadObserver(
+                          isCurrent: () => true,
+                          onRetry: () {
+                            fail(
+                                'Credential migration must not require a retry');
+                          })
+                      : null)
+            ];
+
+      expect(songs.single.videoId, songId);
+      expect(imports, 1);
+      expect(requests, hasLength(1));
+      expect(requests.single.url.origin, saved.url);
+      expect(requests.single.headers.keys.where(NerdVpnAccess.isKeyHeader),
+          isEmpty);
+      expect(requests.single.headers['X-Preference'], 'retained');
+      if (operation == 'interactive song') {
+        expect(
+            songs.single.playbackVideo!.playbackConnection!
+                .matches(await database.getCurrentlySelectedServer()),
+            isTrue);
+      }
+    });
+  }
+
+  for (final operation in ['video', 'music']) {
+    for (final change in ['proxy', 'session', 'account']) {
+      test('$operation key migration cannot admit a changed $change context',
+          () async {
+        const manualKey = 'nvpn_0123456789abcdefghijklmnopqrstuv';
+        final saved = database
+            .getAccount(_account.accountId)!
+            .copyWith(customHeaders: {'X-Invidious-Token': manualKey});
+        await database.upsertServer(saved);
+        await fileDb.useServer(saved);
+        final beforeProxy = jsonEncode(NetworkProxy.instance.config.toJson());
+        addTearDown(() => NetworkProxy.instance
+            .initialize(saved: beforeProxy, configureNative: false));
+        final started = Completer<void>();
+        final ready = Completer<void>();
+        messenger.setMockMethodCallHandler(_access, (call) async {
+          if (call.method == 'status') {
+            started.complete();
+            await ready.future;
+            return {'state': 'missing', 'revision': 0};
+          }
+          return {'state': 'ready', 'revision': 1};
+        });
+        respond = (request) async => http.Response(
+            operation == 'video'
+                ? '{"videoId":"test-video","title":"Test"}'
+                : '[]',
+            200,
+            request: request,
+            headers: {'content-type': 'application/json'});
+        final request = operation == 'video'
+            ? api.getVideo('test-video')
+            : InvidiousMusicCatalogService(api: api).searchSongs('test');
+        final rejected = expectLater(request,
+            throwsA(anyOf(isA<StateError>(), isA<MusicCatalogException>())));
+        await started.future;
+        switch (change) {
+          case 'proxy':
+            await NetworkProxy.instance
+                .initialize(saved: beforeProxy, configureNative: false);
+          case 'session':
+            api.clearSessionCaches();
+          case 'account':
+            await database.upsertServer(saved.copyWith(authToken: 'new-token'));
+        }
+        ready.complete();
+        await rejected;
+        expect(requests, isEmpty);
+      });
+    }
+  }
 
   test('a failed secure import retains the legacy key for another attempt',
       () async {

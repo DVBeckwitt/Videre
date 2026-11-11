@@ -23,6 +23,16 @@
   or TV remote/focus changes, obtain relevant Android device/emulator evidence.
   Browser results do not establish native behavior. State any unavailable runtime
   checks and distinguish model/widget tests from actual device acceptance.
+- On Windows, default native acceptance to the persistent signed-in NerdVPN AVD
+  `Videre_NerdVPN_Test` (`emulator-5596`) via
+  `pwsh -NoProfile -File ./tools/start_test_emulator.ps1`. Its AVD home is
+  `%LOCALAPPDATA%/Videre/testing/avd-home`. Reuse its saved account and data;
+  never wipe, reset, uninstall, recreate, or remove accounts as routine test
+  cleanup. Optional `-ApkPath` performs only a data-preserving `adb install -r`.
+  See README setup when the existing AVD is unavailable; report missing runtime
+  access instead of silently substituting a fresh device. Offline tests and CI
+  do not require this local AVD or NerdVPN sign-in. After launcher changes, run
+  `pwsh -NoProfile -File ./tools/start_test_emulator.Tests.ps1`.
 - Preserve unrelated changes, generated-file conventions, and existing behavior.
   Read the global CI-completion rule before an authorized push: inspect checks
   for that exact commit, investigate regressions, and report pending or blocked

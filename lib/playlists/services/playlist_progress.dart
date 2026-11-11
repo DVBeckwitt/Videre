@@ -345,6 +345,7 @@ class PlaylistProgressService {
       final database = _database;
       if (database is SembastSqfDb) {
         await database.db.transaction((transaction) async {
+          await database.ensureProfileExists(transaction);
           if (isCurrent?.call() == false) return;
           if (watchRevision != null && videoId != null) {
             final state = await stringMapStoreFactory

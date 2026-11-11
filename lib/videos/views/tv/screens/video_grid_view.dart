@@ -69,10 +69,9 @@ class TvGridScreen extends StatelessWidget {
                     child: Text(locals.nerdVpnAccessPendingShort),
                   ),
                 Expanded(
-                    child: GridView.count(
+                    child: GridView(
                   controller: cubit.scrollController,
-                  childAspectRatio: 16 / 13,
-                  crossAxisCount: 3,
+                  gridDelegate: TvVideoGridDelegate(context),
                   children: [
                     ...items.map((e) => TvVideoItem(
                         key: ValueKey(e.videoId), video: e, autoFocus: false)),

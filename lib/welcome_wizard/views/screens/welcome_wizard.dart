@@ -6,6 +6,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
 import 'package:clipious/settings/views/components/manager_server_inner.dart';
+import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/utils/views/components/app_icon.dart';
 import 'package:clipious/welcome_wizard/states/welcome_wizard.dart';
 
@@ -37,6 +38,7 @@ class WelcomeWizardScreen extends StatelessWidget {
           builder: (context, server) {
             var cubit = context.read<WelcomeWizardCubit>();
             return Scaffold(
+              resizeToAvoidBottomInset: false,
               extendBodyBehindAppBar: true,
               backgroundColor: colors.surface,
               body: SafeArea(
@@ -49,6 +51,12 @@ class WelcomeWizardScreen extends StatelessWidget {
                           'Videre',
                           style: textTheme.displaySmall
                               ?.copyWith(color: colors.primary),
+                        ),
+                        TextButton.icon(
+                          key: const ValueKey('welcome-profiles'),
+                          onPressed: () => showProfilePicker(context),
+                          icon: const Icon(Icons.people_outline),
+                          label: Text(locals.profiles),
                         ),
                         Expanded(
                           child: server == null

@@ -28,6 +28,10 @@ abstract class IDbClient {
   Future<void> renameProfile(String id, String name) async =>
       throw UnsupportedError('Profiles require the app database');
 
+  /// Delete an inactive person's local library. The last person is retained.
+  Future<void> deleteProfile(String id) async =>
+      throw UnsupportedError('Profiles require the app database');
+
   Future<void> useProfile(String id) async {
     if (id != profileId) {
       throw UnsupportedError('Profiles require the app database');

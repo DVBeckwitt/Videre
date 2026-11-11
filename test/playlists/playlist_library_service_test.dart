@@ -37,16 +37,19 @@ void main() {
   test('guest save and remove survive a database reopen', () async {
     final factory = newDatabaseFactoryMemory();
     var store = SembastSqfDb(await factory.openDatabase('saved-playlists'));
+    await store.getProfiles();
     var bookmarks = PlaylistLibraryService.forProfile(store, store.profileId);
     await bookmarks.save(saved);
     await store.close();
     store = SembastSqfDb(await factory.openDatabase('saved-playlists'));
+    await store.getProfiles();
     bookmarks = PlaylistLibraryService.forProfile(store, store.profileId);
     expect(bookmarks.entries.single.toJson(), saved.toJson());
     expect(bookmarks.contains(reference), isTrue);
     await bookmarks.remove(reference);
     await store.close();
     store = SembastSqfDb(await factory.openDatabase('saved-playlists'));
+    await store.getProfiles();
     expect(PlaylistLibraryService.forProfile(store, store.profileId).entries,
         isEmpty);
     await store.close();

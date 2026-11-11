@@ -25,8 +25,13 @@ Future<String?> showProfileNameDialog(BuildContext context,
     showDialog<String>(
       context: context,
       animationStyle: AppMotion.dialogStyle(context),
-      builder: (_) => _ProfileNameDialog(
-          title: title, label: label, initialName: initialName),
+      builder: (_) => Shortcuts(
+        shortcuts: {
+          LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+        },
+        child: _ProfileNameDialog(
+            title: title, label: label, initialName: initialName),
+      ),
     );
 
 class _ProfileNameDialog extends StatefulWidget {
@@ -58,6 +63,8 @@ class _ProfileNameDialogState extends State<_ProfileNameDialog> {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     return AlertDialog(
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 8),
       title: Text(widget.title),
       content: TextField(
           key: const ValueKey('profile-name-input'),
@@ -92,6 +99,29 @@ class _ProfilePickerState extends State<ProfilePicker> {
   List<Server> _accounts = [];
   bool _busy = true;
   bool _failed = false;
+  BuildContext? _pendingFocusRow;
+
+  void _revealFocusedRow(BuildContext row, bool focused) {
+    if (!focused) return;
+    _pendingFocusRow = row;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!identical(_pendingFocusRow, row)) return;
+      _pendingFocusRow = null;
+      if (!mounted || !row.mounted) return;
+      final primary = FocusManager.instance.primaryFocus?.context;
+      var belongsToRow = identical(primary, row);
+      primary?.visitAncestorElements((element) {
+        if (identical(element, row)) belongsToRow = true;
+        return !belongsToRow;
+      });
+      if (!belongsToRow) return;
+      // Reveal the person's name with its actions, including initial autofocus.
+      // Revealing only a focused icon can leave the deletion target clipped.
+      Scrollable.ensureVisible(row,
+          alignment: 0.5,
+          duration: AppMotion.duration(row, const Duration(milliseconds: 150)));
+    });
+  }
 
   @override
   void initState() {
@@ -131,6 +161,8 @@ class _ProfilePickerState extends State<ProfilePicker> {
       {bool closeOnSuccess = false}) async {
     if (_busy) return;
     final route = ModalRoute.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final failureMessage = AppLocalizations.of(context)!.profileActionFailed;
     setState(() {
       _busy = true;
       _failed = false;
@@ -146,11 +178,13 @@ class _ProfilePickerState extends State<ProfilePicker> {
         await _load();
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && (route?.isCurrent ?? false)) {
         setState(() {
           _busy = false;
           _failed = true;
         });
+      } else if (messenger?.mounted ?? false) {
+        messenger!.showSnackBar(SnackBar(content: Text(failureMessage)));
       }
     }
   }
@@ -177,6 +211,37 @@ class _ProfilePickerState extends State<ProfilePicker> {
     await _run(() => db.renameProfile(profile.id, name));
   }
 
+  Future<void> _delete(PersonProfile profile) async {
+    if (_busy || _profiles.length < 2) return;
+    final locals = AppLocalizations.of(context)!;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (context) => Shortcuts(
+        shortcuts: {
+          LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+        },
+        child: AlertDialog(
+          scrollable: true,
+          title: Text(locals.deleteProfile),
+          content: Text(locals.deleteProfileConfirmation(profile.name)),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(locals.cancel)),
+            FilledButton(
+                key: const ValueKey('confirm-delete-profile'),
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(locals.deleteProfile)),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final app = context.read<AppCubit>();
+    await _run(() => app.deleteProfile(profile.id));
+  }
+
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
@@ -189,62 +254,95 @@ class _ProfilePickerState extends State<ProfilePicker> {
         },
         child: AlertDialog(
           title: Text(locals.profiles),
+          scrollable: true,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 8),
           content: SizedBox(
             width: 480,
-            child: SingleChildScrollView(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Text(locals.profileLibraryHelp),
-                if (_busy)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: MotionLoadingIndicator(
-                        child: LinearProgressIndicator()),
-                  ),
-                if (_failed)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(locals.profileActionFailed,
-                        style: TextStyle(
-                            color: Theme.of(context).colorScheme.error)),
-                  ),
-                for (final profile in _profiles)
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(locals.profileLibraryHelp),
+              if (_busy)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child:
+                      MotionLoadingIndicator(child: LinearProgressIndicator()),
+                ),
+              if (_failed)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(locals.profileActionFailed,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)),
+                ),
+              for (final profile in _profiles)
+                Builder(
+                    key: ValueKey('profile-row-${profile.id}'),
+                    builder: (rowContext) => ListTile(
+                          key: ValueKey('profile-${profile.id}'),
+                          autofocus: profile.id == db.profileId,
+                          onFocusChange: (focused) =>
+                              _revealFocusedRow(rowContext, focused),
+                          leading: Icon(profile.id == db.profileId
+                              ? Icons.check_circle
+                              : Icons.person_outline),
+                          title: Text(profile.name),
+                          enabled: !_busy,
+                          onTap: () => _run(() => app.switchProfile(profile.id),
+                              closeOnSuccess: true),
+                          trailing:
+                              Row(mainAxisSize: MainAxisSize.min, children: [
+                            Focus(
+                              canRequestFocus: false,
+                              skipTraversal: true,
+                              onFocusChange: (focused) =>
+                                  _revealFocusedRow(rowContext, focused),
+                              child: IconButton(
+                                  tooltip: locals.renameProfile,
+                                  onPressed:
+                                      _busy ? null : () => _rename(profile),
+                                  icon: const Icon(Icons.edit_outlined)),
+                            ),
+                            Focus(
+                              canRequestFocus: false,
+                              skipTraversal: true,
+                              onFocusChange: (focused) =>
+                                  _revealFocusedRow(rowContext, focused),
+                              child: IconButton(
+                                  key: ValueKey('delete-profile-${profile.id}'),
+                                  tooltip: locals.deleteProfile,
+                                  onPressed: _busy || _profiles.length < 2
+                                      ? null
+                                      : () => _delete(profile),
+                                  icon:
+                                      const Icon(Icons.person_remove_outlined)),
+                            ),
+                          ]),
+                        )),
+              if (_profiles.length == 1)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(locals.lastProfileRequired),
+                ),
+              if (_accounts.isNotEmpty) ...[
+                const Divider(),
+                Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(locals.yourServers)),
+                for (final account in _accounts)
                   ListTile(
-                    key: ValueKey('profile-${profile.id}'),
-                    autofocus: profile.id == db.profileId,
-                    leading: Icon(profile.id == db.profileId
+                    key: ValueKey('account-${account.accountId}'),
+                    leading: Icon(account.inUse
                         ? Icons.check_circle
-                        : Icons.person_outline),
-                    title: Text(profile.name),
+                        : Icons.dns_outlined),
+                    title:
+                        Text(account.name.isEmpty ? account.url : account.name),
+                    subtitle: account.name.isEmpty ? null : Text(account.url),
                     enabled: !_busy,
-                    onTap: () => _run(() => app.switchProfile(profile.id),
-                        closeOnSuccess: true),
-                    trailing: IconButton(
-                        tooltip: locals.renameProfile,
-                        onPressed: _busy ? null : () => _rename(profile),
-                        icon: const Icon(Icons.edit_outlined)),
+                    onTap: () => _run(() async {
+                      await app.switchServer(account);
+                    }, closeOnSuccess: true),
                   ),
-                if (_accounts.isNotEmpty) ...[
-                  const Divider(),
-                  Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(locals.yourServers)),
-                  for (final account in _accounts)
-                    ListTile(
-                      key: ValueKey('account-${account.accountId}'),
-                      leading: Icon(account.inUse
-                          ? Icons.check_circle
-                          : Icons.dns_outlined),
-                      title: Text(
-                          account.name.isEmpty ? account.url : account.name),
-                      subtitle: account.name.isEmpty ? null : Text(account.url),
-                      enabled: !_busy,
-                      onTap: () => _run(() async {
-                        await app.switchServer(account);
-                      }, closeOnSuccess: true),
-                    ),
-                ],
-              ]),
-            ),
+              ],
+            ]),
           ),
           actions: [
             TextButton(

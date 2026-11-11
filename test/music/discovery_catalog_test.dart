@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'support/legacy_music_catalog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -24,8 +25,9 @@ List<dynamic> _sections(Map<String, dynamic> data) => data['contents']
 Map<String, dynamic> _grid(Map<String, dynamic> data) =>
     _sections(data).first['gridRenderer'] as Map<String, dynamic>;
 
-MusicCatalogService _catalog(Object response, {List<http.Request>? requests}) =>
-    MusicCatalogService(httpClient: MockClient((request) async {
+LegacyMusicCatalogFixture _catalog(Object response,
+        {List<http.Request>? requests}) =>
+    LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       requests?.add(request);
       return _response(request.method == 'GET' ? _config : response);
     }));
@@ -145,7 +147,7 @@ void main() {
 
   test('invalid countries and category params are rejected before transport',
       () async {
-    final catalog = MusicCatalogService(httpClient: MockClient((_) async {
+    final catalog = LegacyMusicCatalogFixture(httpClient: MockClient((_) async {
       fail('Invalid discovery input must not access the network');
     }));
     for (final country in ['', 'USA', '../US', 'U1', ' US']) {
@@ -201,7 +203,8 @@ void main() {
       }
     ];
     final bodies = <Map>[];
-    final catalog = MusicCatalogService(httpClient: MockClient((request) async {
+    final catalog =
+        LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
       if (request.method == 'GET') return _response(_config);
       bodies.add(jsonDecode(request.body) as Map);
       return _response(pages.removeAt(0));
@@ -218,7 +221,7 @@ void main() {
       final data = _fixture('new_releases');
       var requests = 0;
       final catalog =
-          MusicCatalogService(httpClient: MockClient((request) async {
+          LegacyMusicCatalogFixture(httpClient: MockClient((request) async {
         if (request.method == 'GET') return _response(_config);
         requests++;
         _grid(data)['continuations'] = [

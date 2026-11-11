@@ -37,6 +37,7 @@ class _Service extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
+      VideoLoadObserver? loadObserver,
       void Function(BackendPlayback request)? onBackendRequest}) {
     requestedIds.add(videoId);
     return response.future;

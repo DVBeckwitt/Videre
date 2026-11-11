@@ -49,7 +49,8 @@ class _MetadataService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) async {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
     requests.add(videoId);
     if (videoId == heldVideoId && heldMetadata != null) {
       heldRequested?.complete();

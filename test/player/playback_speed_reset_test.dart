@@ -37,6 +37,7 @@ class _VideoWithoutAutostart extends VideoPlayerCubit {
 }
 
 class _RetainedAudioPlayer implements AudioPlayer {
+  bool nativePlaying = false;
   double nativeSpeed = 1;
   double nativePitch = 1;
   Duration nativePosition = Duration.zero;
@@ -48,6 +49,9 @@ class _RetainedAudioPlayer implements AudioPlayer {
 
   @override
   double get speed => nativeSpeed;
+
+  @override
+  bool get playing => nativePlaying;
 
   @override
   Duration get position => nativePosition;
@@ -77,12 +81,13 @@ class _RetainedAudioPlayer implements AudioPlayer {
 
   @override
   Future<void> play() async {
+    nativePlaying = true;
     speedsAtPlay.add(nativeSpeed);
     pitchesAtPlay.add(nativePitch);
   }
 
   @override
-  Future<void> pause() async {}
+  Future<void> pause() async => nativePlaying = false;
 
   @override
   Future<void> dispose() async {}
@@ -153,7 +158,6 @@ void main() {
     settings = TestSettingsCubit(SettingsState.init(), app);
     await settings.setUseDash(false);
     // Use combined streams for audio as well, without any network requests.
-    await settings.setUseProxy(true);
     player = TestPlayerCubit(PlayerState.init(null), settings);
     nativeVideoSpeed = 1;
     nativeVideoPitch = 1;

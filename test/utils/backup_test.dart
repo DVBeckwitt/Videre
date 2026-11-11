@@ -11,6 +11,7 @@ import 'package:clipious/playlists/models/saved_playlist.dart';
 import 'package:clipious/playlists/services/playlist_library_service.dart';
 import 'package:clipious/playlists/services/playlist_progress.dart';
 import 'package:clipious/player/models/playback_session.dart';
+import 'package:clipious/player/models/video_display_mode.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
@@ -789,6 +790,22 @@ void main() {
     expect(
         UserBackup.validSetting(
             SettingsValue(lastVideoQualitySettingName, '99999')),
+        isFalse);
+  });
+
+  test('new and legacy video display preferences survive backup restore',
+      () async {
+    await source.saveSetting(SettingsValue(fillFullScreen, 'true'));
+    await source.saveSetting(SettingsValue(
+        videoDisplayModeSettingName, VideoDisplayMode.ratio3x2.name));
+    await target.restoreBackup(
+        UserBackup.parse((await source.exportBackup()).encode()));
+    expect(target.getSettings(fillFullScreen)?.value, 'true');
+    expect(target.getSettings(videoDisplayModeSettingName)?.value,
+        VideoDisplayMode.ratio3x2.name);
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(videoDisplayModeSettingName, 'unknown')),
         isFalse);
   });
 

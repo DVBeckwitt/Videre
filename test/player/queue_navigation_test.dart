@@ -43,7 +43,8 @@ class _PendingMetadataService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) {
     started.complete();
     return response.future;
   }

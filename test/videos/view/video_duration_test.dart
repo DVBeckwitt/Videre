@@ -13,6 +13,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:clipious/videos/views/components/video_duration_badge.dart';
 import 'package:clipious/videos/views/components/video_in_list.dart';
+import 'package:clipious/videos/views/components/video_metrics.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter/material.dart';
@@ -81,6 +82,57 @@ void main() {
     expect(thumbnailBounds.contains(labelBounds.topLeft), isTrue);
     expect(thumbnailBounds.contains(labelBounds.bottomRight), isTrue);
   }
+
+  testWidgets('video statistics wrap without splitting icon and count',
+      (tester) async {
+    for (final scale in [1.0, 2.0]) {
+      await show(
+        tester,
+        const VideoMetrics(
+          video: Video(
+            videoId: 'metrics',
+            lengthSeconds: 1344,
+            viewCount: 1720000,
+            likeCount: 1150,
+            publishedText: '12 years ago',
+          ),
+          dislikes: 338,
+        ),
+        width: 312,
+        textScale: scale,
+      );
+      expect(find.text('22:24'), findsOneWidget);
+      expect(find.text('338'), findsOneWidget);
+      expect(find.text('12 years ago'), findsOneWidget);
+      final bounds = tester.getRect(find.byType(VideoMetrics));
+      for (final icon in [
+        Icons.timer,
+        Icons.visibility,
+        Icons.thumb_up,
+        Icons.thumb_down
+      ]) {
+        final rect = tester.getRect(find.byIcon(icon));
+        expect(bounds.contains(rect.topLeft), isTrue);
+        expect(bounds.contains(rect.bottomRight), isTrue);
+      }
+    }
+  });
+
+  testWidgets('past premiere timestamp does not crash video statistics',
+      (tester) async {
+    await show(
+      tester,
+      const VideoMetrics(
+        video: Video(
+          videoId: 'past-premiere',
+          isUpcoming: true,
+          premiereTimestamp: 1,
+          viewCount: 123,
+        ),
+      ),
+    );
+    expect(find.text('123'), findsOneWidget);
+  });
 
   testWidgets(
       'compact playlist and history rows show a duration in the thumbnail',

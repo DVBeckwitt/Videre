@@ -3,7 +3,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../utils/views/components/external_link.dart';
 
 import '../../l10n/generated/app_localizations.dart';
 import '../feedback_controller.dart';
@@ -470,22 +470,8 @@ class _FeedbackFormScreenState extends State<FeedbackFormScreen>
               title: Text('#${receipt.issueNumber} · ${receipt.title}'),
               subtitle: Text(MaterialLocalizations.of(context)
                   .formatMediumDate(receipt.createdAt.toLocal())),
-              trailing: const Icon(Icons.open_in_new),
-              onTap: () async {
-                try {
-                  final opened = await launchUrl(receipt.issueUrl,
-                      mode: LaunchMode.externalApplication);
-                  if (!opened && mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(locals.feedbackOpenFailed)));
-                  }
-                } catch (_) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(locals.feedbackOpenFailed)));
-                  }
-                }
-              },
+              trailing: const Icon(Icons.link),
+              onTap: () => openExternalLink(context, receipt.issueUrl),
             ),
         ],
       );

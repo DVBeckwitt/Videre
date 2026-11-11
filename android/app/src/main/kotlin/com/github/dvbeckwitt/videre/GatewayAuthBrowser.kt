@@ -18,12 +18,10 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.webkit.ProxyConfig
-import androidx.webkit.ProxyController
 import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import com.github.dvbeckwitt.videre.proxy.GatewayContext
+import com.github.dvbeckwitt.videre.proxy.BrowserPrivacySettings
 import com.github.dvbeckwitt.videre.proxy.GatewaySessions
 import com.github.dvbeckwitt.videre.proxy.NerdVpnPkce
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
@@ -44,16 +42,12 @@ import org.json.JSONObject
 
 /** A dedicated, isolated gateway login; it never exports the browser cookie jar. */
 class GatewayAuthBrowser(private val activity: Activity) {
-    private data class Policy(val enabled: Boolean, val host: String, val port: Int) {
-        fun proxyUrl(): String = "socks5://${if (host.contains(':')) "[$host]" else host}:$port"
-    }
+    private data class Policy(val enabled: Boolean, val host: String, val port: Int)
     private class Request(val result: MethodChannel.Result, val context: GatewayContext,
-        val revision: Long, val policy: Policy, val loginUrl: String,
+        val policy: Policy, val loginUrl: String,
         val nonce: String, val pkce: NerdVpnPkce?, val title: String, val help: String, val cancel: String) {
+        var revision: Long? = null
         var finishing = false
-        var applying = false
-        var overridden = false
-        var clearing = false
         var token: String? = null
         var error: String? = null
         var errorDetails: Map<String, Any>? = null
@@ -73,14 +67,16 @@ class GatewayAuthBrowser(private val activity: Activity) {
         if (key == "configuration") handler.post { finish(error = "GATEWAY_PROXY_CHANGED") }
     }
     private val timeout = Runnable { finish(error = "GATEWAY_LOGIN_TIMEOUT") }
+    private val proxyInstallTimeout = Runnable { finish(error = "GATEWAY_PROXY_UNAVAILABLE") }
 
     fun handle(call: MethodCall, result: MethodChannel.Result) {
         if (call.method == "close") {
             val request = current
             val target = call.argument<String>("context")
             val revision = call.argument<Number>("revision")?.toLong()
+            val activeRevision = request?.revision
             val matching = (target == null || runCatching { GatewayContext.parse(target) == request?.context }.getOrDefault(false)) &&
-                (revision == null || revision == request?.revision)
+                (revision == null || activeRevision == null || revision == activeRevision)
             if (request == null || !matching) result.success(null)
             else { request.closeResults.add(result); finish() }
             return
@@ -96,28 +92,25 @@ class GatewayAuthBrowser(private val activity: Activity) {
             server.query != null || server.fragment != null || policy == null) {
             result.error("GATEWAY_INVALID_ARGUMENT", null, null); return
         }
-        if (!server.isHttps && !policy.enabled) {
+        val requiresProxy = !server.isHttps || server.host.trimEnd('.').endsWith(".onion", ignoreCase = true)
+        if (requiresProxy && !policy.enabled) {
             result.error("GATEWAY_ONION_PROXY_REQUIRED", null, null); return
         }
         if (!GatewaySessions.supported()) {
             result.error("GATEWAY_UNSUPPORTED", null, null); return
         }
-        if (policy.enabled && !WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+        if (!WebViewBrowserLease.supported()) {
             result.error("GATEWAY_PROXY_UNSUPPORTED", null, null); return
         }
         if (!WebViewBrowserLease.acquire(this)) {
             result.error("GATEWAY_BROWSER_BUSY", null, null); return
-        }
-        val revision = try { GatewaySessions.beginSignIn(context) } catch (_: Exception) {
-            WebViewBrowserLease.release(this)
-            result.error("GATEWAY_UNAVAILABLE", null, null); return
         }
         val nonce = UUID.randomUUID().toString()
         val pkce = NerdVpnPkce.forServer(server, nonce)
         val login = pkce?.authorizationUrl(server) ?: server.newBuilder().encodedPath(server.encodedPath.trimEnd('/') + "/authorize_token")
             .addQueryParameter("scopes", ":feed,:subscriptions*,:playlists*,:history*")
             .addQueryParameter("callback_url", "videre-gateway://callback/$nonce").build().toString()
-        val request = Request(result, context, revision, policy, login, nonce, pkce,
+        val request = Request(result, context, policy, login, nonce, pkce,
             call.argument<String>("title") ?: "Sign in to protected server",
             call.argument<String>("help") ?: "Sign in to your gateway, then authorize Invidious.",
             call.argument<String>("cancel") ?: "Cancel")
@@ -125,25 +118,30 @@ class GatewayAuthBrowser(private val activity: Activity) {
         preferences.registerOnSharedPreferenceChangeListener(proxyChanged)
         handler.postDelayed(timeout, 10 * 60 * 1000L)
         if (readPolicy() != policy) { finish(error = "GATEWAY_PROXY_CHANGED"); return }
-        if (!policy.enabled) { show(request); return }
         try {
-            request.applying = true
-            request.overridden = true
-            val config = ProxyConfig.Builder().addProxyRule(policy.proxyUrl()).removeImplicitRules().build()
-            ProxyController.getInstance().setProxyOverride(config, executor) {
-                if (current !== request) return@setProxyOverride
-                request.applying = false
-                if (request.finishing) clearProxy(request)
-                else if (readPolicy() != policy) finish(error = "GATEWAY_PROXY_CHANGED")
-                else show(request)
+            handler.postDelayed(proxyInstallTimeout, 10_000L)
+            WebViewBrowserLease.install(this, executor) {
+                if (current !== request || request.finishing) return@install
+                handler.removeCallbacks(proxyInstallTimeout)
+                if (readPolicy() != policy) {
+                    finish(error = "GATEWAY_PROXY_CHANGED")
+                    return@install
+                }
+                // Creating the isolated profile can initialize browser state.
+                // Wait until the process-wide (still denied) route is installed.
+                val revision = try { GatewaySessions.beginSignIn(context) } catch (_: Exception) {
+                    finish(error = "GATEWAY_UNAVAILABLE")
+                    return@install
+                }
+                request.revision = revision
+                show(request, revision)
             }
         } catch (_: Exception) {
-            request.applying = false
             finish(error = "GATEWAY_PROXY_UNAVAILABLE")
         }
     }
 
-    private fun show(request: Request) {
+    private fun show(request: Request, revision: Long) {
         if (current !== request || request.finishing) return
         if (closed || activity.isFinishing || activity.isDestroyed || readPolicy() != request.policy) {
             finish(error = "GATEWAY_BROWSER_UNAVAILABLE"); return
@@ -172,9 +170,12 @@ class GatewayAuthBrowser(private val activity: Activity) {
             content.addView(hint)
             val web = WebView(activity)
             browser = web
-            WebViewCompat.setProfile(web, GatewaySessions.signInProfileName(request.context, request.revision))
+            BrowserPrivacySettings.apply(web)
+            val profileName = GatewaySessions.signInProfileName(request.context, revision)
+            ProfileStore.getInstance().getOrCreateProfile(profileName).serviceWorkerController
+                .serviceWorkerWebSettings.blockNetworkLoads = true
+            WebViewCompat.setProfile(web, profileName)
             web.settings.apply {
-                javaScriptEnabled = true
                 domStorageEnabled = true
                 allowFileAccess = false
                 allowContentAccess = false
@@ -193,7 +194,8 @@ class GatewayAuthBrowser(private val activity: Activity) {
                 override fun shouldOverrideUrlLoading(view: WebView, target: String): Boolean =
                     navigate(request, view, Uri.parse(target))
                 override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                    finish(error = "GATEWAY_BROWSER_UNAVAILABLE"); return true
+                    if (browser === view && current === request) finish(error = "GATEWAY_BROWSER_UNAVAILABLE")
+                    return true
                 }
             }
             content.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -203,6 +205,9 @@ class GatewayAuthBrowser(private val activity: Activity) {
             surface.setOnCancelListener { finish() }
             surface.show()
             surface.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            WebViewBrowserLease.allow(this, request.policy.host.takeIf { request.policy.enabled },
+                request.policy.port.takeIf { request.policy.enabled })
+            web.settings.blockNetworkLoads = false
             web.loadUrl(request.loginUrl)
         } catch (_: Exception) { finish(error = "GATEWAY_BROWSER_UNAVAILABLE") }
     }
@@ -222,7 +227,8 @@ class GatewayAuthBrowser(private val activity: Activity) {
             if (uri.host == "callback" && uri.path == "/${request.nonce}" &&
                 previous != null && request.context.allows(previous) &&
                 !token.isNullOrBlank() && token.length <= 65536) {
-                if (GatewaySessions.completeSignIn(request.context, request.revision)) finish(token = token)
+                val revision = request.revision ?: return true
+                if (GatewaySessions.completeSignIn(request.context, revision)) finish(token = token)
                 else finish(error = "GATEWAY_LOGIN_CANCELLED")
             }
             return true
@@ -248,10 +254,11 @@ class GatewayAuthBrowser(private val activity: Activity) {
 
     private fun exchangeCode(request: Request, web: WebView, code: String) {
         val pkce = request.pkce ?: return
+        val revision = request.revision ?: return
         try {
             // Keep the old session intact until the new code is exchanged. The
             // pending profile supplies cookies only to this exact origin.
-            val profileName = GatewaySessions.signInProfileName(request.context, request.revision)
+            val profileName = GatewaySessions.signInProfileName(request.context, revision)
             val manager = ProfileStore.getInstance().getOrCreateProfile(profileName).cookieManager
             val url = request.context.origin.newBuilder().encodedPath("/api/v1/token").build()
             val cookie = manager.getCookie(url.toString())
@@ -307,10 +314,10 @@ class GatewayAuthBrowser(private val activity: Activity) {
                         if (readPolicy() != request.policy) { finish(error = "GATEWAY_PROXY_CHANGED"); return@post }
                         if (exchanged == null) { finish(error = failure, details = failureDetails); return@post }
                         try {
-                            val pendingName = GatewaySessions.signInProfileName(request.context, request.revision)
+                            val pendingName = GatewaySessions.signInProfileName(request.context, revision)
                             val pendingCookies = ProfileStore.getInstance().getOrCreateProfile(pendingName).cookieManager
                             returnedCookies.forEach { value -> pendingCookies.setCookie(url.toString(), value) }
-                            if (GatewaySessions.completeSignIn(request.context, request.revision)) finish(token = exchanged)
+                            if (GatewaySessions.completeSignIn(request.context, revision)) finish(token = exchanged)
                             else finish(error = "GATEWAY_LOGIN_CANCELLED")
                         } catch (_: Exception) { finish(error = "GATEWAY_TOKEN_EXCHANGE_FAILED") }
                     }
@@ -325,11 +332,13 @@ class GatewayAuthBrowser(private val activity: Activity) {
         val request = current ?: return
         if (request.finishing) return
         request.finishing = true
+        WebViewBrowserLease.deny(this)
         request.token = token
         request.error = error
         request.errorDetails = details
         request.exchange?.cancel()
         handler.removeCallbacks(timeout)
+        handler.removeCallbacks(proxyInstallTimeout)
         preferences.unregisterOnSharedPreferenceChangeListener(proxyChanged)
         approval?.setOnCancelListener(null)
         approval?.dismiss()
@@ -344,25 +353,10 @@ class GatewayAuthBrowser(private val activity: Activity) {
             runCatching { it.destroy() }
         }
         browser = null
-        if (token == null) runCatching { GatewaySessions.cancelSignIn(request.context, request.revision) }
-        clearProxy(request)
-    }
-
-    private fun clearProxy(request: Request) {
-        if (current !== request || !request.finishing || request.applying || request.clearing) return
-        if (!request.overridden) { complete(request); return }
-        request.clearing = true
-        try {
-            ProxyController.getInstance().clearProxyOverride(executor) {
-                request.overridden = false
-                request.clearing = false
-                complete(request)
-            }
-        } catch (_: Exception) {
-            WebViewBrowserLease.block()
-            request.error = "GATEWAY_PROXY_UNAVAILABLE"
-            complete(request)
+        if (token == null) request.revision?.let { revision ->
+            runCatching { GatewaySessions.cancelSignIn(request.context, revision) }
         }
+        complete(request)
     }
 
     private fun complete(request: Request) {

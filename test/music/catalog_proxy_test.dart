@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/http_overrides.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/invidious_music_catalog_service.dart';
+import 'support/legacy_music_catalog.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _CatalogNetworkBinding extends AutomatedTestWidgetsFlutterBinding {
@@ -22,9 +25,17 @@ void main() {
   _CatalogNetworkBinding();
   final proxy = NetworkProxy.instance;
   final previousOverrides = HttpOverrides.current;
+  const sessions = MethodChannel('videre/gateway_sessions');
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late Service previousService;
 
   setUp(() async {
+    messenger.setMockMethodCallHandler(
+        sessions,
+        (call) async => call.method == 'resolve'
+            ? {'enabled': false, 'needsSignIn': false}
+            : false);
     previousService = service;
     db = await SembastSqfDb.createInMemory();
     // Trust only the local fixture for this test, through the existing setting.
@@ -41,11 +52,12 @@ void main() {
     await proxy.initialize(saved: '{}', configureNative: false);
     HttpOverrides.global = previousOverrides;
     await db.close();
+    messenger.setMockMethodCallHandler(sessions, null);
   });
 
   for (final proxyVideos in [false, true]) {
     test(
-        'Music uses SOCKS with Proxy videos=$proxyVideos and refreshes identity',
+        'Invidious Music uses SOCKS and denies Google with saved proxy=$proxyVideos',
         () async {
       await db.saveSetting(
           SettingsValue(useProxySettingName, proxyVideos.toString()));
@@ -56,30 +68,35 @@ void main() {
       await proxy
           .apply(SocksProxyConfig(enabled: true, port: first.server.port));
 
-      // No injected client or replacement origin: these are the production
-      // catalog requests to https://music.youtube.com over a local SOCKS tunnel.
-      final catalog = MusicCatalogService();
-      expect(await catalog.searchSongs('Get Lucky'), hasLength(2));
-      expect(await catalog.getNewReleases(), hasLength(3));
-      expect(first.destinations, List.filled(3, ('music.youtube.com', 443)));
-      expect(first.paths, ['/', '/youtubei/v1/search', '/youtubei/v1/browse']);
+      const instance = Server(url: 'https://music-instance.example');
+      await db.upsertServer(instance);
+      final catalog = InvidiousMusicCatalogService(api: service);
+      expect((await catalog.searchSongs('Get Lucky')).single.title,
+          'first-route-visitor');
+      expect(await catalog.getTrendingSongs(), hasLength(1));
       expect(
-          first.visitors, [null, 'first-route-visitor', 'first-route-visitor']);
+          first.destinations, List.filled(2, ('music-instance.example', 443)));
+      expect(first.paths, ['/api/v1/search', '/api/v1/trending']);
+
+      // The retired direct client exists only as a test fixture. Even an
+      // explicit attempt through the app transport cannot contact Google.
+      final retired = LegacyMusicCatalogFixture(httpClient: service.httpClient);
+      await expectLater(retired.searchSongs('Get Lucky'),
+          throwsA(isA<MusicCatalogException>()));
+      expect(first.destinations, hasLength(2));
 
       await proxy
           .apply(SocksProxyConfig(enabled: true, port: second.server.port));
-      expect(await catalog.searchSongs('Get Lucky'), hasLength(2));
-      // A new Tor route must not reuse the previous route's visitor identity.
-      expect(second.paths, ['/', '/youtubei/v1/search']);
-      expect(second.visitors, [null, 'second-route-visitor']);
-      expect(second.destinations, List.filled(2, ('music.youtube.com', 443)));
-      expect(first.paths, hasLength(3));
+      expect((await catalog.searchSongs('Another song')).single.title,
+          'second-route-visitor');
+      expect(second.paths, ['/api/v1/search']);
+      expect(second.destinations, [('music-instance.example', 443)]);
+      expect(first.paths, hasLength(2));
 
       await second.close();
-      await expectLater(catalog.searchSongs('Get Lucky'),
-          throwsA(isA<MusicCatalogException>()));
-      expect(first.paths, hasLength(3));
-      expect(second.paths, hasLength(2));
+      await expectLater(catalog.searchSongs('Uncached song'), throwsException);
+      expect(first.paths, hasLength(2));
+      expect(second.paths, hasLength(1));
     });
   }
 }
@@ -90,7 +107,6 @@ class _CatalogSocks {
   final String visitor;
   final destinations = <(String, int)>[];
   final paths = <String>[];
-  final visitors = <String?>[];
   final _sockets = <Socket>[];
   bool _closed = false;
 
@@ -118,7 +134,7 @@ class _CatalogSocks {
       expect(await input.read(3), [5, 1, 0]);
       socket.add([5, 0]);
       await socket.flush();
-      // SOCKS must receive the hostname, never a locally resolved Google IP.
+      // SOCKS receives the Invidious hostname without local DNS resolution.
       expect(await input.read(4), [5, 1, 0, 3]);
       final host = ascii.decode(await input.read((await input.read(1)).single));
       final port = await input.read(2);
@@ -144,23 +160,22 @@ class _CatalogSocks {
         }
       }
       await input.read(int.parse(headers['content-length'] ?? '0'));
-      expect(headers['host'], 'music.youtube.com');
+      expect(headers['host'], 'music-instance.example');
       expect(headers.containsKey('authorization'), isFalse);
       expect(headers.containsKey('cookie'), isFalse);
       paths.add(path);
-      visitors.add(headers['x-goog-visitor-id']);
-      final String response;
-      if (path == '/') {
-        response = jsonEncode({
-          'INNERTUBE_CLIENT_VERSION': '1.20261108.01.00',
-          'VISITOR_DATA': visitor,
-        });
-      } else {
-        final fixture =
-            path.endsWith('/search') ? 'songs' : 'discovery/new_releases';
-        response =
-            await File('test/music/fixtures/$fixture.json').readAsString();
-      }
+      expect(headers.containsKey('x-goog-visitor-id'), isFalse);
+      expect(['/api/v1/search', '/api/v1/trending'], contains(path));
+      final response = jsonEncode([
+        {
+          'type': 'video',
+          'videoId': '4D7u5KF7SP8',
+          'title': visitor,
+          'author': 'Fixture artist',
+          'lengthSeconds': 370,
+          'videoThumbnails': [],
+        },
+      ]);
       final bytes = utf8.encode(response);
       socket.add(ascii.encode('HTTP/1.1 200 OK\r\n'
           'Content-Type: application/json\r\n'

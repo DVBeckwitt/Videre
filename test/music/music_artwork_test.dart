@@ -6,6 +6,8 @@ import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
+import 'package:clipious/utils/views/components/selected_server.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:file/file.dart';
@@ -20,6 +22,7 @@ class _ArtworkCache extends Fake implements cache.BaseCacheManager {
 
   final File file;
   final requests = <({String url, Map<String, String>? headers})>[];
+  final failUrls = <String>{};
 
   @override
   Stream<cache.FileResponse> getFileStream(String url,
@@ -27,6 +30,10 @@ class _ArtworkCache extends Fake implements cache.BaseCacheManager {
       Map<String, String>? headers,
       bool withProgress = false}) async* {
     requests.add((url: url, headers: headers));
+    if (failUrls.contains(url)) {
+      throw cache.HttpExceptionWithStatus(302, 'Unavailable private artwork',
+          uri: Uri.parse(url));
+    }
     yield cache.FileInfo(file, cache.FileSource.Cache, DateTime.utc(2100), url);
   }
 }
@@ -136,6 +143,139 @@ void main() {
     expect(find.byIcon(Icons.error_outline), findsNothing);
   }
 
+  Widget avatar(List<ImageObject>? images, {String name = 'DVBeckwitt'}) =>
+      MediaQuery(
+        data: const MediaQueryData(devicePixelRatio: 1),
+        child: ChannelAvatar(name: name, images: images, size: 56),
+      );
+
+  List<ImageObject> avatarImages() => [
+        ImageObject(null, 'https://yt3.ggpht.com/channel=s88', 88, 88),
+        ImageObject(null, 'https://yt3.ggpht.com/channel=s176', 176, 176),
+        ImageObject(null, 'https://yt3.ggpht.com/channel=s900', 900, 900),
+      ];
+
+  Future<void> selectServer(WidgetTester tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(server);
+      await db.useServer(server);
+    });
+  }
+
+  void expectAvatarInitial() {
+    expect(find.text('D'), findsOneWidget);
+    expect(find.byIcon(Icons.error_outline), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  }
+
+  testWidgets('channel avatar paints its private image instead of the initial',
+      (tester) async {
+    await selectServer(tester);
+    try {
+      await show(tester, avatar(avatarImages()));
+      expect(imageCache.requests, hasLength(1));
+      expect(imageCache.requests.single.url,
+          'https://instance.example/ggpht/channel=s88');
+      expect(imageCache.requests.single.headers,
+          containsPair('X-Test', 'music-artwork'));
+      expect(find.text('D'), findsNothing);
+      await expectArtworkPixels(tester);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('channel avatar tries another private size after a failed image',
+      (tester) async {
+    await selectServer(tester);
+    imageCache.failUrls.add('https://instance.example/ggpht/channel=s88');
+    try {
+      await show(tester, avatar(avatarImages()));
+      expect(imageCache.requests.map((request) => request.url), [
+        'https://instance.example/ggpht/channel=s88',
+        'https://instance.example/ggpht/channel=s900',
+      ]);
+      expect(imageCache.requests.map((request) => request.headers),
+          everyElement(containsPair('X-Test', 'music-artwork')));
+      expect(find.text('D'), findsNothing);
+      await expectArtworkPixels(tester);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('exhausted channel avatars retain their initial without a loop',
+      (tester) async {
+    await selectServer(tester);
+    imageCache.failUrls.addAll([
+      'https://instance.example/ggpht/channel=s88',
+      'https://instance.example/ggpht/channel=s176',
+      'https://instance.example/ggpht/channel=s900',
+    ]);
+    try {
+      await show(tester, avatar(avatarImages()));
+      expectAvatarInitial();
+      expect(imageCache.requests.map((request) => request.url), [
+        'https://instance.example/ggpht/channel=s88',
+        'https://instance.example/ggpht/channel=s900',
+        'https://instance.example/ggpht/channel=s176',
+      ]);
+      await show(tester, avatar(avatarImages()));
+      expectAvatarInitial();
+      expect(imageCache.requests, hasLength(3));
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  for (final source in ['missing', 'blank', 'unsupported']) {
+    testWidgets('$source channel artwork uses an initial without a request',
+        (tester) async {
+      await selectServer(tester);
+      try {
+        await show(
+            tester,
+            avatar(switch (source) {
+              'missing' => null,
+              'blank' => [ImageObject(null, '  ', 0, 0)],
+              _ => [
+                  ImageObject(
+                      null, 'https://s.ytimg.com/yts/img/channel.png', 512, 512)
+                ]
+            }));
+        expectAvatarInitial();
+        expect(imageCache.requests, isEmpty);
+        if (source != 'unsupported') {
+          expect(find.byType(SelectedServerBuilder), findsNothing);
+        }
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    });
+  }
+
+  testWidgets(
+      'remounting a failed channel avatar can recover its private image',
+      (tester) async {
+    await selectServer(tester);
+    const url = 'https://instance.example/ggpht/channel=s88';
+    imageCache.failUrls.add(url);
+    try {
+      await show(tester, avatar([avatarImages().first]));
+      expectAvatarInitial();
+      expect(imageCache.requests, hasLength(1));
+      await tester.pumpWidget(const SizedBox.shrink());
+      imageCache.failUrls.clear();
+
+      await show(tester, avatar([avatarImages().first]));
+      expect(imageCache.requests.map((request) => request.url), [url, url]);
+      expect(find.text('D'), findsNothing);
+      await expectArtworkPixels(tester);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
   for (final (name, build) in <(String, Widget Function())>[
     (
       'shelf',
@@ -145,11 +285,11 @@ void main() {
       'grid',
       () => MusicCatalogGrid(itemCount: 1, itemBuilder: (_, __) => card())
     ),
-    ('fixed artwork', () => thumbnail(sourceUrl)),
+    ('fixed artwork', () => thumbnail(sourceUrl, useInvidiousProxy: true)),
   ]) {
     for (final selectedServer in [false, true]) {
       testWidgets(
-          '$name paints original Music artwork with selectedServer=$selectedServer',
+          '$name routes Music artwork with selectedServer=$selectedServer',
           (tester) async {
         if (selectedServer) {
           await tester.runAsync(() async {
@@ -159,10 +299,16 @@ void main() {
         }
         try {
           await show(tester, build());
-          expect(imageCache.requests, hasLength(1));
-          expect(imageCache.requests.single.url, sourceUrl);
-          expect(imageCache.requests.single.headers, isNull);
-          await expectArtworkPixels(tester);
+          if (selectedServer) {
+            expect(imageCache.requests, hasLength(1));
+            expect(imageCache.requests.single.url,
+                'https://instance.example/ggpht/album=w512-h512');
+            expect(imageCache.requests.single.headers,
+                containsPair('X-Test', 'music-artwork'));
+            await expectArtworkPixels(tester);
+          } else {
+            expect(imageCache.requests, isEmpty);
+          }
         } finally {
           await tester.pumpWidget(const SizedBox.shrink());
         }
@@ -206,8 +352,10 @@ void main() {
             musicThumbnails: [ImageObject(null, sourceUrl, 512, 512)],
           ));
       expect(imageCache.requests, hasLength(1));
-      expect(imageCache.requests.single.url, sourceUrl);
-      expect(imageCache.requests.single.headers, isNull);
+      expect(imageCache.requests.single.url,
+          'https://instance.example/ggpht/album=w512-h512');
+      expect(imageCache.requests.single.headers,
+          containsPair('X-Test', 'music-artwork'));
       await expectArtworkPixels(tester);
 
       await show(
@@ -224,6 +372,71 @@ void main() {
       expect(imageCache.requests.last.headers,
           containsPair('X-Test', 'music-artwork'));
       await expectArtworkPixels(tester);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('unsupported Google artwork skips to a proxied image candidate',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(server);
+      await db.useServer(server);
+    });
+    try {
+      await show(
+          tester,
+          MusicCatalogShelf(
+            itemCount: 1,
+            itemBuilder: (_, __) => MusicCatalogCard(
+              title: 'Saved song',
+              subtitle: 'Artist',
+              thumbnails: [
+                ImageObject(
+                    null,
+                    'https://i.ytimg.com/an_webp/song/mqdefault_6s.webp',
+                    512,
+                    512),
+                ImageObject(null, sourceUrl, 512, 512),
+              ],
+              onOpen: () {},
+            ),
+          ));
+      expect(imageCache.requests, hasLength(1));
+      expect(imageCache.requests.single.url,
+          'https://instance.example/ggpht/album=w512-h512');
+      await expectArtworkPixels(tester);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('unsupported Google artwork fails without a direct cache request',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(server);
+      await db.useServer(server);
+    });
+    try {
+      await show(
+          tester,
+          thumbnail('https://s.ytimg.com/yts/img/cover.png',
+              useInvidiousProxy: true));
+      expect(imageCache.requests, isEmpty);
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets('independent provider opt-out cannot fetch Google artwork',
+      (tester) async {
+    try {
+      await show(tester, thumbnail(sourceUrl));
+      expect(imageCache.requests, isEmpty);
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
     }

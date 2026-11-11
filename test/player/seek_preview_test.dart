@@ -226,6 +226,45 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('unsupported preferred storyboard keeps a usable private preview',
+      (tester) async {
+    final unsupported = Storyboard.fromJson({
+      ...board.toJson(),
+      'width': 32,
+      'height': 18,
+      'templateUrl': r'https://i.ytimg.com/unsupported/sheet-$M.png',
+    });
+    await tester.pumpWidget(host(SeekPreview(
+        video: video.copyWith(storyboards: [board, unsupported]),
+        position: const Duration(seconds: 10),
+        duration: const Duration(seconds: 40))));
+    await settleImage(tester);
+    expect(cacheManager.requests, hasLength(1));
+    expect(cacheManager.requests.single.url,
+        'https://instance.example/sb/i/id/L2/M0.png');
+    expect(find.byType(ClipRRect), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('unsupported-only storyboard retains time without a request',
+      (tester) async {
+    final unsupported = Storyboard.fromJson({
+      ...board.toJson(),
+      'templateUrl': r'https://i.ytimg.com/unsupported/sheet-$M.png',
+    });
+    await tester.pumpWidget(host(SeekPreview(
+        video: video.copyWith(storyboards: [unsupported]),
+        position: const Duration(seconds: 10),
+        duration: const Duration(seconds: 40))));
+    await settleImage(tester);
+    expect(cacheManager.requests, isEmpty);
+    expect(find.text('00:10'), findsOneWidget);
+    expect(find.byType(ClipRRect), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
       'phone shows a preview while dragging and commits the seek only on release',
       (tester) async {

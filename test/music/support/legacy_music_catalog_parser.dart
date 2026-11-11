@@ -1,4 +1,4 @@
-part of 'music_catalog_service.dart';
+part of 'legacy_music_catalog.dart';
 
 Map<String, dynamic> _map(Object? value) =>
     value is Map<String, dynamic> ? value : const {};
@@ -57,7 +57,7 @@ List<MusicArtist> _artistLinks(Object? node) {
     final name = _string(run['text']).trim();
     final pageType =
         _maps(run, 'browseEndpointContextMusicConfig').firstOrNull?['pageType'];
-    if (MusicCatalogService._artistId.hasMatch(id) &&
+    if (LegacyMusicCatalogFixture._artistId.hasMatch(id) &&
         name.isNotEmpty &&
         (pageType == null || pageType == 'MUSIC_PAGE_TYPE_ARTIST')) {
       artists.putIfAbsent(id, () => MusicArtist(id: id, name: name));
@@ -121,9 +121,12 @@ MusicTrack? _track(Map<String, dynamic> item,
   final id = playlistVideoId.isNotEmpty
       ? playlistVideoId
       : _string(_maps(columns.first, 'watchEndpoint').firstOrNull?['videoId']);
-  if (!MusicCatalogService._videoId.hasMatch(id) || title.isEmpty) return null;
+  if (!LegacyMusicCatalogFixture._videoId.hasMatch(id) || title.isEmpty) {
+    return null;
+  }
   final album = _runs(columns)
-      .where((run) => MusicCatalogService._albumId.hasMatch(_browseId(run)))
+      .where(
+          (run) => LegacyMusicCatalogFixture._albumId.hasMatch(_browseId(run)))
       .firstOrNull;
   final trackArtists = _artists(columns);
   final trackArtistLinks = _artistLinks(columns);
@@ -147,7 +150,7 @@ MusicTrack? _track(Map<String, dynamic> item,
 MusicAlbum? _album(Map<String, dynamic> item) {
   final id = _browseId(item['navigationEndpoint']);
   final columns = item['flexColumns'];
-  if (!MusicCatalogService._albumId.hasMatch(id) ||
+  if (!LegacyMusicCatalogFixture._albumId.hasMatch(id) ||
       columns is! List ||
       columns.isEmpty) {
     return null;
@@ -165,7 +168,9 @@ MusicAlbum? _album(Map<String, dynamic> item) {
 MusicAlbum? _release(Map<String, dynamic> item, MusicArtist artist) {
   final id = _browseId(item['navigationEndpoint']);
   final title = _text(item['title']);
-  if (!MusicCatalogService._albumId.hasMatch(id) || title.isEmpty) return null;
+  if (!LegacyMusicCatalogFixture._albumId.hasMatch(id) || title.isEmpty) {
+    return null;
+  }
   final artists = _artists(item['subtitle']);
   final artistLinks = _artistLinks(item['subtitle']);
   return MusicAlbum(
@@ -180,7 +185,7 @@ MusicAlbum? _release(Map<String, dynamic> item, MusicArtist artist) {
 MusicArtist? _artist(Map<String, dynamic> item) {
   final id = _browseId(item['navigationEndpoint']);
   final columns = item['flexColumns'];
-  if (!MusicCatalogService._artistId.hasMatch(id) ||
+  if (!LegacyMusicCatalogFixture._artistId.hasMatch(id) ||
       columns is! List ||
       columns.isEmpty) {
     return null;
@@ -195,7 +200,7 @@ MusicPlaylist? _playlist(Map<String, dynamic> item) {
   final browseId = _browseId(item['navigationEndpoint']);
   final id = browseId.startsWith('VL') ? browseId.substring(2) : browseId;
   final columns = item['flexColumns'];
-  if (!MusicCatalogService._playlistId.hasMatch(id) ||
+  if (!LegacyMusicCatalogFixture._playlistId.hasMatch(id) ||
       columns is! List ||
       columns.isEmpty) {
     return null;

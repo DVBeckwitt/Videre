@@ -7,13 +7,16 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/network/socks_proxy.dart';
+import 'package:clipious/player/media_source.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -67,6 +70,12 @@ class _HeldAudioPlayer implements AudioPlayer {
   AudioSource? requestedSource;
 
   @override
+  bool get playing => false;
+
+  @override
+  Future<void> pause() async {}
+
+  @override
   Future<Duration?> setAudioSource(AudioSource audioSource,
       {bool preload = true, int? initialIndex, Duration? initialPosition}) {
     requestedSource = audioSource;
@@ -111,7 +120,8 @@ class _QueuedMetadataService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) {
     _requested.putIfAbsent(videoId, Completer<void>.new).complete();
     return result(videoId).future;
   }
@@ -178,6 +188,156 @@ void main() {
     await database.close();
     if (!identical(service, originalService)) service.httpClient.close();
     service = originalService;
+  });
+
+  group('official NerdVPN media aliases', () {
+    const public = 'https://invidious.nerdvpn.de';
+    const onion = 'http://$nerdVpnOnionHost';
+    const query = 'host=rr1.googlevideo.com&sig=a%2fb%2Bc&x=one&x=two';
+    for (final (source, target) in [
+      (public, onion),
+      (public, 'https://$nerdVpnOnionHost'),
+      (onion, public),
+    ]) {
+      test('$source follows selected $target', () {
+        final account = Server(
+            url: target, customHeaders: const {'X-Instance-Access': 'fixture'});
+        final original = '$source/videoplayback?$query';
+        final routed = proxyMediaUrl(original, account);
+        expect(routed, '$target/videoplayback?$query');
+        expect(validatedMediaUrl(routed, account), isNotNull);
+        expect(mediaHeaders(account, original), isNull);
+        expect(mediaHeaders(account, routed)?['X-Instance-Access'], 'fixture');
+        expect(Uri.parse(routed).queryParametersAll['host'],
+            ['rr1.googlevideo.com']);
+      });
+    }
+    test('manifest aliases retain signed fields while setting local playback',
+        () {
+      const account = Server(url: onion);
+      for (final path in [
+        '/api/manifest/dash/id/video',
+        '/api/manifest/hls_playlist/path',
+        '/api/manifest/hls_variant/path',
+      ]) {
+        expect(proxyMediaUrl('$public$path?$query', account, adaptive: true),
+            '$onion$path?$query&local=true');
+      }
+    });
+    test('untrusted aliases and nonmedia paths are never admitted', () {
+      const account = Server(url: onion);
+      for (final url in [
+        'https://invidious.nerdvpn.de.example/videoplayback',
+        'https://user@invidious.nerdvpn.de/videoplayback',
+        'https://invidious.nerdvpn.de:8443/videoplayback',
+        'http://invidious.nerdvpn.de/videoplayback',
+        '$public/preferences',
+        '$public/api/v1/videos/video',
+        '$public/videoplayback-other',
+        '$public/api/manifest/other',
+        '$public/videoplayback/%2e%2e/preferences',
+      ]) {
+        final routed = proxyMediaUrl(url, account);
+        expect(routed, url);
+        expect(validatedMediaUrl(routed, account), isNull);
+        expect(mediaHeaders(account, routed), isNull);
+      }
+    });
+    test('NerdVPN media cannot rebase onto an unrelated selected instance', () {
+      const account = Server(url: 'https://other.example');
+      const url = '$public/videoplayback?$query';
+      expect(proxyMediaUrl(url, account), url);
+      expect(validatedMediaUrl(url, account), isNull);
+    });
+  });
+
+  group('Googlevideo media proxy URLs', () {
+    const sourceHost = 'rr1---sn-test.googlevideo.com';
+    const signedQuery = 'expire=123&sig=a%2fb%2Bc%3D&n=space%20value'
+        '&duplicate=first&duplicate=second&empty=&flag';
+    const source = 'https://$sourceHost/videoplayback?$signedQuery#position';
+
+    test('source admission never accepts direct YouTube endpoints', () {
+      const server = Server(url: 'https://instance.example');
+      for (final url in [
+        source,
+        'https://www.youtube.com/api/manifest/hls_playlist/id/video',
+        'https://manifest.googlevideo.com/api/manifest/dash/id/video',
+      ]) {
+        expect(validatedMediaUrl(url, server), isNull);
+        expect(
+            validatedMediaUrl(
+                proxyMediaUrl(url, server, adaptive: true), server),
+            isNull,
+            reason: 'local=true must not authorize a Google-hosted manifest');
+      }
+      expect(validatedMediaUrl(proxyMediaUrl(source, server), server),
+          'https://instance.example/videoplayback?$signedQuery&host=$sourceHost#position');
+    });
+
+    for (final (instance, path) in [
+      ('https://invidious.nerdvpn.de', '/videoplayback'),
+      ('http://instance.onion', '/videoplayback'),
+      ('https://instance.example/invidious/', '/invidious/videoplayback'),
+    ]) {
+      test('$instance preserves the signed query and adds its source host', () {
+        final server = Server(
+            url: instance,
+            customHeaders: const {'X-Instance-Access': 'fixture'});
+        final proxied = proxyMediaUrl(source, server);
+        final origin = Uri.parse(instance).origin;
+        expect(proxied, '$origin$path?$signedQuery&host=$sourceHost#position');
+        expect(Uri.parse(proxied).queryParametersAll['host'], [sourceHost]);
+        expect(mediaHeaders(server, source), isNull);
+        expect(mediaHeaders(server, proxied)?['X-Instance-Access'], 'fixture');
+      });
+    }
+
+    test('an absent query receives the required source host', () {
+      const server = Server(url: 'https://instance.example');
+      expect(proxyMediaUrl('https://$sourceHost/videoplayback', server),
+          'https://instance.example/videoplayback?host=$sourceHost');
+    });
+
+    test('existing host fields cannot override or duplicate the source host',
+        () {
+      const server = Server(url: 'https://instance.example');
+      const query = 'sig=a%2fb&host=wrong.example&duplicate=one'
+          '&%68ost=another.example&duplicate=two&host';
+      final proxied =
+          proxyMediaUrl('https://$sourceHost/videoplayback?$query', server);
+      expect(
+          proxied,
+          'https://instance.example/videoplayback?sig=a%2fb&duplicate=one'
+          '&duplicate=two&host=$sourceHost');
+      expect(Uri.parse(proxied).queryParametersAll['host'], [sourceHost]);
+    });
+
+    test('saved direct preference cannot bypass the media proxy', () async {
+      const server = Server(url: 'https://instance.example');
+      await db.saveSetting(SettingsValue('use-proxy', 'false'));
+      expect(proxyMediaUrl(source, server),
+          'https://instance.example/videoplayback?$signedQuery&host=$sourceHost#position');
+    });
+
+    test('instance URLs retain their advertised host and complete query', () {
+      const server = Server(url: 'https://instance.example');
+      const local = 'https://instance.example/videoplayback?host=advertised'
+          '&sig=a%2fb&duplicate=one&duplicate=two';
+      expect(proxyMediaUrl(local, server), local);
+    });
+
+    test('non-Googlevideo URLs and lookalike hosts are not rewritten', () {
+      const server = Server(url: 'https://instance.example');
+      for (final origin in [
+        'https://other.example',
+        'https://googlevideo.com.example',
+        'https://notgooglevideo.com',
+      ]) {
+        final url = '$origin/videoplayback?$signedQuery';
+        expect(proxyMediaUrl(url, server), url);
+      }
+    });
   });
 
   test('proxy stop prevents late queued metadata from recreating a source',
@@ -345,7 +505,6 @@ void main() {
 
   test('proxy stop waits for audio disposal and prevents pending autoplay',
       () async {
-    await settings.setUseProxy(true);
     final audioPlayer = TestPlayerCubit(
         PlayerState.init(null).copyWith(isAudio: true), settings);
     final native = _HeldAudioPlayer();

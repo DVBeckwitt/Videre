@@ -4,6 +4,7 @@ import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
+import 'package:clipious/player/views/components/video_display_mode_picker.dart';
 import 'package:clipious/player/views/tv/components/sleep_timer.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -94,97 +95,113 @@ class TvPlayerSettings extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: TvButton(
-                      autofocus: true,
-                      unfocusedColor: playerState.selected == Tabs.video
-                          ? colors.secondaryContainer
-                          : Colors.transparent,
-                      onFocusChanged: cubit.videoButtonFocusChange,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 8.0, horizontal: 16),
-                        child: Text(
-                          locals.quality,
-                          style: settingStyle,
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: TvButton(
+                        autofocus: true,
+                        unfocusedColor: playerState.selected == Tabs.video
+                            ? colors.secondaryContainer
+                            : Colors.transparent,
+                        onFocusChanged: cubit.videoButtonFocusChange,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 8.0, horizontal: 16),
+                          child: Text(
+                            locals.quality,
+                            style: settingStyle,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  Visibility(
-                    visible: settings.state.useDash,
-                    child: Padding(
+                    Visibility(
+                      visible: settings.state.useDash,
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: TvButton(
+                          onFocusChanged: cubit.audioButtonFocusChange,
+                          unfocusedColor: playerState.selected == Tabs.audio
+                              ? colors.secondaryContainer
+                              : Colors.transparent,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 8.0, horizontal: 16),
+                            child: Text(locals.audio, style: settingStyle),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
                       padding: const EdgeInsets.all(8.0),
                       child: TvButton(
-                        onFocusChanged: cubit.audioButtonFocusChange,
-                        unfocusedColor: playerState.selected == Tabs.audio
+                        onFocusChanged: cubit.captionsButtonFocusChange,
+                        unfocusedColor: playerState.selected == Tabs.captions
                             ? colors.secondaryContainer
                             : Colors.transparent,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                               vertical: 8.0, horizontal: 16),
-                          child: Text(locals.audio, style: settingStyle),
+                          child: Text(locals.subtitles, style: settingStyle),
                         ),
                       ),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: TvButton(
-                      onFocusChanged: cubit.captionsButtonFocusChange,
-                      unfocusedColor: playerState.selected == Tabs.captions
-                          ? colors.secondaryContainer
-                          : Colors.transparent,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 8.0, horizontal: 16),
-                        child: Text(locals.subtitles, style: settingStyle),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: TvButton(
+                        onFocusChanged: cubit.playbackSpeedButtonFocusChange,
+                        unfocusedColor:
+                            playerState.selected == Tabs.playbackSpeed
+                                ? colors.secondaryContainer
+                                : Colors.transparent,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 8.0, horizontal: 16),
+                          child:
+                              Text(locals.playbackSpeed, style: settingStyle),
+                        ),
                       ),
                     ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: TvButton(
-                      onFocusChanged: cubit.playbackSpeedButtonFocusChange,
-                      unfocusedColor: playerState.selected == Tabs.playbackSpeed
-                          ? colors.secondaryContainer
-                          : Colors.transparent,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 8.0, horizontal: 16),
-                        child: Text(locals.playbackSpeed, style: settingStyle),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: TvButton(
+                        onFocusChanged: cubit.sleepTimerButtonFocusChange,
+                        unfocusedColor: playerState.selected == Tabs.sleepTimer
+                            ? colors.secondaryContainer
+                            : Colors.transparent,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 8.0, horizontal: 16),
+                          child: Text(locals.sleepTimer, style: settingStyle),
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+              Wrap(
+                alignment: WrapAlignment.center,
+                children: [
+                  TextButton.icon(
+                    key: const ValueKey('player-video-display-open'),
+                    onPressed: () => showVideoDisplayModePicker(context),
+                    icon: const Icon(Icons.aspect_ratio),
+                    label: Text(locals.videoDisplay),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: TvButton(
-                      onFocusChanged: cubit.sleepTimerButtonFocusChange,
-                      unfocusedColor: playerState.selected == Tabs.sleepTimer
-                          ? colors.secondaryContainer
-                          : Colors.transparent,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 8.0, horizontal: 16),
-                        child: Text(locals.sleepTimer, style: settingStyle),
-                      ),
+                  if (context.select((PlayerCubit player) =>
+                      canChoosePlayerBackend(player.state)))
+                    TextButton.icon(
+                      key: const ValueKey('player-backend-open'),
+                      onPressed: () => showPlayerBackendPicker(context,
+                          player: context.read<PlayerCubit>()),
+                      icon: const Icon(Icons.dns_outlined),
+                      label: Text(locals.backendChoose),
                     ),
-                  ),
                 ],
               ),
-              if (context.select(
-                  (PlayerCubit player) => canChoosePlayerBackend(player.state)))
-                TextButton.icon(
-                  key: const ValueKey('player-backend-open'),
-                  onPressed: () => showPlayerBackendPicker(context,
-                      player: context.read<PlayerCubit>()),
-                  icon: const Icon(Icons.dns_outlined),
-                  label: Text(locals.backendChoose),
-                ),
               if (playerState.selected == Tabs.playbackSpeed)
                 Flexible(
                   child: Center(

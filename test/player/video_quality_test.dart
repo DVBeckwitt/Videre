@@ -4,16 +4,23 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/network/nerdvpn_origin.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,11 +39,13 @@ class _VideoPlayer extends VideoPlayerCubit {
   void onInit() {}
 }
 
-Video _video(String id, {List<int> heights = const [1080, 480, 360]}) =>
+Video _video(String id,
+        {List<int> heights = const [1080, 480, 360],
+        String serverUrl = 'https://instance.example'}) =>
     Video(videoId: id, lengthSeconds: 60, formatStreams: [
       for (final height in heights)
         FormatStream(
-            'https://instance.example/$id-$height.mp4',
+            '$serverUrl/$id-$height.mp4',
             '$height',
             'video/mp4',
             'medium',
@@ -65,6 +74,7 @@ void main() {
   late TestSettingsCubit settings;
   late TestPlayerCubit player;
   late List<String> sources;
+  late List<int?> initialDashHeights;
   late List<int> trackHeights;
   late Set<String> failedSources;
   late Service previousService;
@@ -85,6 +95,7 @@ void main() {
     await settings.setUseDash(false);
     player = TestPlayerCubit(PlayerState.init(null), settings);
     sources = [];
+    initialDashHeights = [];
     trackHeights = [];
     failedSources = {};
     messenger.setMockMessageHandler(
@@ -99,8 +110,10 @@ void main() {
         trackHeights.add(call.arguments['height'] as int);
       }
       if (call.method == 'setDataSource') {
-        final uri = call.arguments['dataSource']['uri'] as String;
+        final source = call.arguments['dataSource'] as Map;
+        final uri = source['uri'] as String;
         sources.add(uri);
+        initialDashHeights.add(source['initialDashHeight'] as int?);
         if (failedSources.contains(uri)) {
           throw PlatformException(code: 'VideoError');
         }
@@ -151,6 +164,55 @@ void main() {
     expect(preferredVideoQualityIndex([1080, 480], 1080), 0);
     expect(preferredVideoQualityIndex([0, null], 720), isNull);
     expect(preferredVideoQualityIndex([360, 1080], 0), isNull);
+  });
+
+  test('selecting captions lazily uses the playing backend snapshot', () async {
+    final requests = <http.Request>[];
+    service.httpClient.close();
+    service = Service(httpClient: MockClient((request) async {
+      requests.add(request);
+      return http.Response(
+        '{"transcript":{"body":[{"type":"regular","startMs":0,'
+        '"endMs":20000,"line":"Selected backend captions"}]}}',
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    }));
+    final selector = BackendSelector('COMPANION_ID', [
+      const BackendOption('2', 'Preferred'),
+      const BackendOption('7', 'Playing'),
+    ]);
+    final preferred = selector.withSelection(
+        const Server(url: 'https://instance.example'), '2');
+    await db.upsertServer(preferred);
+    await db.useServer(preferred);
+    final playback = BackendPlayback.manual(preferred, '7');
+    final video = create(_video('captioned').copyWith(
+      captions: [
+        Caption('English', 'en',
+            'https://music.youtube.com/untrusted-caption-location'),
+      ],
+      backendPlayback: playback,
+    ));
+    try {
+      await video.playVideo(false);
+      await _flush();
+      expect(requests, isEmpty);
+      expect(video.getSubtitles(), contains('English'));
+      video.selectSubtitle(video.getSubtitles().indexOf('English'));
+      await _flush();
+      expect(requests, hasLength(1));
+      expect(requests.single.url.origin, preferred.url);
+      expect(requests.single.url.path, '/api/v1/transcripts/captioned');
+      expect(requests.single.headers['Cookie'], 'COMPANION_ID=7');
+      expect(video.videoController!.subtitlesLines.single.texts,
+          ['Selected backend captions']);
+      expect(video.state.subtitleFailed, isFalse);
+      expect(
+          selector.selectedValue(await db.getCurrentlySelectedServer()), '2');
+    } finally {
+      await video.close();
+    }
   });
 
   test('offline document URIs reach the native player without file conversion',
@@ -292,6 +354,39 @@ void main() {
     }
   });
 
+  for (final legacyPreference in [null, 'false']) {
+    test(
+        'official manifests are skipped with legacy use-proxy=$legacyPreference',
+        () async {
+      if (legacyPreference != null) {
+        await db.saveSetting(SettingsValue('use-proxy', legacyPreference));
+      }
+      await settings.setUseDash(true);
+      final requests = <Uri>[];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request.url);
+        return http.Response('<MPD/>', 200);
+      }));
+      final video = create(_video('private', heights: [360]).copyWith(
+        hlsUrl:
+            'https://manifest.youtube.com/api/manifest/hls_playlist/id/private',
+        dashUrl:
+            'https://manifest.googlevideo.com/api/manifest/dash/id/private',
+      ));
+      try {
+        await video.playVideo(false);
+        await _flush();
+        expect(sources, ['https://instance.example/private-360.mp4']);
+        expect(requests, isEmpty,
+            reason: 'Official manifests must be rejected before probing them');
+        expect(video.selectedVideoTrack(), 0);
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
   test('adaptive startup applies saved cap before manifest tracks arrive',
       () async {
     await settings.setLastVideoQuality(720);
@@ -300,7 +395,7 @@ void main() {
     try {
       await video.playVideo(false);
       await _flush();
-      expect(sources.first, endsWith('first.m3u8'));
+      expect(sources.first, 'https://instance.example/first.m3u8?local=true');
       expect(trackHeights.last, 720);
       // Track discovery can finish after native initialization. The selected
       // row should reflect the closest available resolution to the saved cap.
@@ -316,7 +411,7 @@ void main() {
       video.switchVideo(_video('second').copyWith(
           hlsUrl: 'https://instance.example/second.m3u8', liveNow: true));
       await _flush();
-      expect(sources.last, endsWith('second.m3u8'));
+      expect(sources.last, 'https://instance.example/second.m3u8?local=true');
       expect(trackHeights.last, 0);
       expect(settings.state.lastVideoQuality, 720);
     } finally {
@@ -326,6 +421,8 @@ void main() {
 
   test('DASH startup and progressive fallback both honor remembered quality',
       () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     await settings.setUseDash(true);
     await settings.setLastVideoQuality(480);
     final video = create(_video('first')
@@ -333,16 +430,193 @@ void main() {
     try {
       await video.playVideo(false);
       await _flush();
-      expect(sources.first, endsWith('first.dash'));
-      expect(trackHeights.last, 480);
-      failedSources.add('https://instance.example/second.dash');
+      expect(sources.first, 'https://instance.example/first.dash?local=true');
+      expect(initialDashHeights, [480]);
+      expect(trackHeights, isEmpty,
+          reason: 'The cap must accompany native preparation');
+      failedSources.add('https://instance.example/second.dash?local=true');
       video.switchVideo(_video('second')
           .copyWith(dashUrl: 'https://instance.example/second.dash'));
       await _flush();
       expect(sources.last, endsWith('second-480.mp4'));
+      expect(initialDashHeights, [480, 480, null]);
       expect(settings.state.lastVideoQuality, 480);
     } finally {
       await video.close();
     }
+  });
+
+  test('DASH prepares with Auto on a reused player when quality is disabled',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    await settings.setUseDash(true);
+    await settings.setLastVideoQuality(480);
+    final video = create(_video('first')
+        .copyWith(dashUrl: 'https://instance.example/first.dash'));
+    addTearDown(video.close);
+
+    await video.playVideo(false);
+    final controller = video.videoController;
+    expect(controller?.betterPlayerAsmsTrack?.height, 480);
+    await settings.setRememberVideoQuality(false);
+    video.switchVideo(_video('second')
+        .copyWith(dashUrl: 'https://instance.example/second.dash'));
+    await _flush();
+
+    expect(video.videoController, same(controller));
+    expect(initialDashHeights, [480, 0]);
+    expect(controller?.betterPlayerAsmsTrack?.height, 0);
+    expect(trackHeights, isEmpty);
+    expect(settings.state.lastVideoQuality, 480);
+  });
+
+  group('NerdVPN automatic startup', () {
+    const nerdVpn = 'https://invidious.nerdvpn.de';
+    const dashPath = '/api/manifest/dash/id/startup';
+    const dashQuery = '$dashPath?local=true';
+    late List<Uri> manifestRequests;
+
+    setUp(() async {
+      final platform = debugDefaultTargetPlatformOverride;
+      final tv = app_main.isTv;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      app_main.isTv = false;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = platform;
+        app_main.isTv = tv;
+      });
+      await db.deleteSetting(useDashSettingName);
+      settings.emit(SettingsState.init());
+
+      manifestRequests = [];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        manifestRequests.add(request.url);
+        return http.Response('<MPD type="static"/>', 200, request: request);
+      }));
+    });
+
+    Future<_VideoPlayer> createStartupVideo({
+      String serverUrl = nerdVpn,
+      bool liveNow = false,
+    }) async {
+      final server = Server(url: serverUrl);
+      await db.upsertServer(server);
+      await db.useServer(server);
+      return create(_video('startup', heights: [480, 360], serverUrl: serverUrl)
+          .copyWith(dashUrl: '$serverUrl$dashPath', liveNow: liveNow));
+    }
+
+    test('starts progressive without probing DASH and can enable DASH',
+        () async {
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn/startup-360.mp4']);
+      expect(manifestRequests, isEmpty);
+      expect(video.isUsingDash(), isFalse);
+      expect(video.getVideoTracks()[video.selectedVideoTrack()], '360p');
+      expect(db.getSettings(useDashSettingName), isNull);
+
+      video.toggleDash();
+      await _flush();
+      expect(sources.last, '$nerdVpn$dashQuery');
+      expect(manifestRequests, [Uri.parse('$nerdVpn$dashQuery')]);
+      expect(video.isUsingDash(), isTrue);
+      expect(db.getSettings(useDashSettingName)?.value, 'true');
+    });
+
+    test('a failed progressive startup tries DASH before another quality',
+        () async {
+      failedSources.add('$nerdVpn/startup-360.mp4');
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn/startup-360.mp4', '$nerdVpn$dashQuery']);
+      expect(manifestRequests, [Uri.parse('$nerdVpn$dashQuery')]);
+      expect(video.isUsingDash(), isTrue);
+      expect(db.getSettings(useDashSettingName), isNull);
+    });
+
+    test('a remembered matching height starts at that progressive quality',
+        () async {
+      await settings.setLastVideoQuality(480);
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn/startup-480.mp4']);
+      expect(manifestRequests, isEmpty);
+      expect(video.getVideoTracks()[video.selectedVideoTrack()], '480p');
+      expect(settings.state.lastVideoQuality, 480);
+    });
+
+    for (final height in [0, 720]) {
+      test('retains DASH for remembered quality $height without a match',
+          () async {
+        await settings.setLastVideoQuality(height);
+        final video = await createStartupVideo();
+        addTearDown(video.close);
+
+        await video.playVideo(false);
+        await _flush();
+        expect(sources, ['$nerdVpn$dashQuery']);
+        expect(video.isUsingDash(), isTrue);
+        expect(settings.state.lastVideoQuality, height);
+      });
+    }
+
+    test('retains explicitly enabled DASH', () async {
+      await settings.setUseDash(true);
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn$dashQuery']);
+      expect(video.isUsingDash(), isTrue);
+    });
+
+    for (final serverUrl in [
+      'https://invidious.dvbeckwitt.duckdns.org',
+      'http://$nerdVpnOnionHost',
+    ]) {
+      test('keeps DASH priority on $serverUrl', () async {
+        final video = await createStartupVideo(serverUrl: serverUrl);
+        addTearDown(video.close);
+
+        await video.playVideo(false);
+        await _flush();
+        expect(sources, ['$serverUrl$dashQuery']);
+        expect(video.isUsingDash(), isTrue);
+      });
+    }
+
+    test('keeps DASH priority for live NerdVPN streams', () async {
+      final video = await createStartupVideo(liveNow: true);
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn$dashQuery']);
+      expect(video.isUsingDash(), isTrue);
+    });
+
+    test('keeps DASH priority on TV without an in-player toggle', () async {
+      app_main.isTv = true;
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn$dashQuery']);
+      expect(video.isUsingDash(), isTrue);
+    });
   });
 }

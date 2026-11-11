@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/services/playlist_library_service.dart';
+import 'package:clipious/playlists/services/playlist_progress.dart';
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/person_profile.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -13,10 +16,13 @@ import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/no_server_selected.dart';
 import 'package:clipious/utils/backup.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/service.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast_io.dart';
+import 'package:sembast/sembast_memory.dart' show newDatabaseFactoryMemory;
 
 void main() {
   const videoId = 'abcdefghijk';
@@ -49,10 +55,14 @@ void main() {
         'sidCookie': 'SID=second-account',
         'inUse': false,
       });
-      await client.saveProgress(Progress(0.45, videoId));
-      await client.upsertHistoryVideo(
-          HistoryVideoCache(videoId, 'Existing video', 'Author', ''));
-      await client.saveSetting(SettingsValue('local-playlists', '[]'));
+      await client.progressStore
+          .record(videoId)
+          .put(raw, Progress(0.45, videoId).toJson());
+      await client.historyVideoCacheStore.record(videoId).put(raw,
+          HistoryVideoCache(videoId, 'Existing video', 'Author', '').toJson());
+      await client.settingsStore
+          .record('local-playlists')
+          .put(raw, SettingsValue('local-playlists', '[]').toJson());
 
       expect(await client.getProfiles(), [PersonProfile.defaultProfile]);
       expect(await client.getProfiles(), [PersonProfile.defaultProfile]);
@@ -298,6 +308,298 @@ void main() {
     await expectLater(
         database.forProfile('default').useProfile(person.id), throwsStateError);
     expect(database.profileId, 'default');
+  });
+
+  test('profile deletion rejects the active, missing and last profiles',
+      () async {
+    await expectLater(database.deleteProfile('default'), throwsStateError);
+    await expectLater(database.deleteProfile('missing'), throwsStateError);
+    final second = await database.createProfile('Second');
+    await expectLater(database.deleteProfile('default'), throwsStateError);
+    await database.useProfile(second.id);
+    await expectLater(database.deleteProfile(second.id), throwsStateError);
+    await database.deleteProfile('default');
+    expect((await database.getProfiles()).map((profile) => profile.id),
+        [second.id]);
+    await expectLater(database.deleteProfile(second.id), throwsStateError);
+    await expectLater(database.useProfile('default'), throwsStateError);
+    expect(database.profileId, second.id);
+  });
+
+  for (final deleteDefault in [false, true]) {
+    test('deletion removes only its complete library (default=$deleteDefault)',
+        () async {
+      final second = await database.createProfile('Second');
+      final deleted = deleteDefault ? 'default' : second.id;
+      final retained = deleteDefault ? second.id : 'default';
+      const stores = [
+        'downloadedVideo',
+        'searchHistory',
+        'serviers',
+        'videoFilters',
+        'historyVideoCache',
+        'progress',
+        'offline_subscriptions',
+        'settings',
+      ];
+      String storeName(String id, String name) =>
+          id == 'default' ? name : 'profile:$id:$name';
+      for (final id in ['default', second.id]) {
+        for (final name in stores) {
+          await stringMapStoreFactory
+              .store(storeName(id, name))
+              .record('private')
+              .put(database.db, {'owner': id});
+        }
+        await intMapStoreFactory
+            .store(storeName(id, 'homeLayout'))
+            .record(1)
+            .put(database.db, {'owner': id});
+        for (final name in [
+          'watchState',
+          'watchMembership',
+          'watchOutbox',
+          'watchSync',
+        ]) {
+          await stringMapStoreFactory
+              .store('$name:$id')
+              .record('private')
+              .put(database.db, {'owner': id});
+        }
+      }
+      for (final key in [
+        networkSocksProxySettingName,
+        skipSslVerificationSettingName,
+        'download-folder',
+        forceTvUiSettingName,
+      ]) {
+        await database.saveSetting(SettingsValue(key, 'device value'));
+      }
+      for (final name in ['appLogs', 'dearrow']) {
+        await stringMapStoreFactory
+            .store(name)
+            .record('shared')
+            .put(database.db, {'value': 'shared'});
+      }
+      await database.useProfile(retained);
+      await database.deleteProfile(deleted);
+      for (final name in stores) {
+        expect(
+            await stringMapStoreFactory
+                .store(storeName(deleted, name))
+                .record('private')
+                .get(database.db),
+            isNull);
+        expect(
+            await stringMapStoreFactory
+                .store(storeName(retained, name))
+                .record('private')
+                .get(database.db),
+            {'owner': retained});
+      }
+      expect(
+          await intMapStoreFactory
+              .store(storeName(deleted, 'homeLayout'))
+              .count(database.db),
+          0);
+      expect(
+          await intMapStoreFactory
+              .store(storeName(retained, 'homeLayout'))
+              .count(database.db),
+          1);
+      for (final name in [
+        'watchState',
+        'watchMembership',
+        'watchOutbox',
+        'watchSync',
+      ]) {
+        expect(
+            await stringMapStoreFactory
+                .store('$name:$deleted')
+                .count(database.db),
+            0);
+        expect(
+            await stringMapStoreFactory
+                .store('$name:$retained')
+                .count(database.db),
+            1);
+      }
+      for (final key in [
+        networkSocksProxySettingName,
+        skipSslVerificationSettingName,
+        'download-folder',
+        forceTvUiSettingName,
+      ]) {
+        expect(database.getSettings(key)?.value, 'device value');
+      }
+      for (final name in ['appLogs', 'dearrow']) {
+        expect(await stringMapStoreFactory.store(name).count(database.db), 1);
+      }
+    });
+  }
+
+  test('deleted default stays deleted across initialization and a reopen',
+      () async {
+    final factory = newDatabaseFactoryMemory();
+    var client = SembastSqfDb(await factory.openDatabase('deleted-default'));
+    try {
+      await client.getProfiles();
+      final second = await client.createProfile('Second');
+      await client.useProfile(second.id);
+      await client.deleteProfile('default');
+      expect(() => client.forProfile('default'), throwsStateError);
+      await client.close();
+      client = SembastSqfDb(await factory.openDatabase('deleted-default'));
+      expect((await client.getProfiles()).map((profile) => profile.id),
+          [second.id]);
+      expect(client.profileId, second.id);
+      await client.renameProfile(second.id, 'Renamed');
+      final third = await client.createProfile('Third');
+      expect((await client.getProfiles()).map((profile) => profile.id),
+          unorderedEquals([second.id, third.id]));
+      // Repair a stale persisted selection using an existing person.
+      await stringMapStoreFactory
+          .store('personProfileState')
+          .record('active')
+          .put(client.db, {'id': 'default'});
+      await client.getProfiles();
+      expect([second.id, third.id], contains(client.profileId));
+      expect(() => client.forProfile('default'), throwsStateError);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('deleted captured views cannot read, write or recreate their person',
+      () async {
+    final second = await database.createProfile('Second');
+    final owner = database.forProfile('default');
+    final watch = WatchRepository(owner);
+    await watch.beginPlayback(videoId); // Initialize its cached store handles.
+    await database.useProfile(second.id);
+    await database.deleteProfile('default');
+    expect(() => owner.db, throwsStateError);
+    expect(() => owner.profileId, throwsStateError);
+    expect(() => owner.settingsStore, throwsStateError);
+    expect(() => owner.getSettings('download-folder'), throwsStateError);
+    expect(() => owner.getVideoProgress(videoId), throwsStateError);
+    expect(() => watch.status(videoId), throwsStateError);
+    await expectLater(owner.getProfiles(), throwsStateError);
+    await expectLater(owner.useProfile('default'), throwsStateError);
+    await expectLater(owner.saveSetting(SettingsValue('local-playlists', '[]')),
+        throwsStateError);
+    await expectLater(
+        owner.saveProgress(Progress(1, videoId)), throwsStateError);
+    expect((await database.getProfiles()).map((profile) => profile.id),
+        [second.id]);
+    await owner.close();
+    expect(database.profileId, second.id);
+  });
+
+  test('writes queued behind deletion cannot recreate private stores',
+      () async {
+    final person = await database.createProfile('Remove');
+    final owner = database.forProfile(person.id);
+    final watch = WatchRepository(owner);
+    final library = PlaylistLibraryService.forProfile(owner, person.id);
+    final checkpoints = PlaylistProgressService.forProfile(owner, person.id);
+    await watch.beginPlayback(videoId);
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    final blocking = database.db.transaction((txn) async {
+      entered.complete();
+      await release.future;
+    });
+    await entered.future;
+    final deletion = database.deleteProfile(person.id);
+    final failures = [
+      expectLater(owner.saveSetting(SettingsValue('local-playlists', '[]')),
+          throwsStateError),
+      expectLater(owner.saveProgress(Progress(1, videoId)), throwsStateError),
+      expectLater(
+          owner.upsertHistoryVideo(
+              HistoryVideoCache(videoId, 'Late history', 'Author', '')),
+          throwsStateError),
+      expectLater(watch.beginPlayback(videoId), throwsStateError),
+      expectLater(watch.mergeRemote('account', {videoId}, complete: true),
+          throwsStateError),
+      expectLater(watch.setSyncStatus('account', 'synced'), throwsStateError),
+      expectLater(
+          library.remove(PlaylistReference(
+              kind: PlaylistSourceKind.public,
+              playlistId: 'PLremoved',
+              profileId: person.id)),
+          throwsStateError),
+      expectLater(checkpoints.clear(), throwsStateError),
+    ];
+    release.complete();
+    await blocking;
+    await deletion;
+    await Future.wait(failures);
+    for (final name in ['settings', 'progress', 'historyVideoCache']) {
+      expect(
+          await stringMapStoreFactory
+              .store('profile:${person.id}:$name')
+              .count(database.db),
+          0);
+    }
+    for (final name in [
+      'watchState',
+      'watchMembership',
+      'watchOutbox',
+      'watchSync'
+    ]) {
+      expect(
+          await stringMapStoreFactory
+              .store('$name:${person.id}')
+              .count(database.db),
+          0);
+    }
+    expect((await database.getProfiles()).single.id, 'default');
+  });
+
+  test('a history reply after profile deletion cancels without reviving data',
+      () async {
+    final person = await database.createProfile('Remove');
+    final owner = database.forProfile(person.id);
+    final account = Server(
+        url: endpoint,
+        id: 'account',
+        profileId: person.id,
+        authToken: 'test-token');
+    await owner.upsertServer(account);
+    final entered = Completer<void>();
+    final response = Completer<List<String>>();
+    final worker = WatchHistorySync(
+        repository: WatchRepository(owner),
+        readPage: (_, __, ___) {
+          entered.complete();
+          return response.future;
+        },
+        changeHistory: (_, __, ___) async => fail('Unexpected history write'),
+        accountIsCurrent: (_) async => (await owner.getServers()).isNotEmpty);
+    final running = worker.run(account);
+    await entered.future;
+    await database.saveProgress(Progress(0.35, videoId));
+    await database.deleteProfile(person.id);
+    response.complete([videoId]);
+    await running;
+    await worker.run(account, force: true);
+    // A late unawaited request must also stop before constructing a new worker.
+    await Service().syncAccountHistory(account, database: owner);
+    expect(database.getVideoProgress(videoId), 0.35);
+    for (final name in [
+      'watchState',
+      'watchMembership',
+      'watchOutbox',
+      'watchSync'
+    ]) {
+      expect(
+          await stringMapStoreFactory
+              .store('$name:${person.id}')
+              .count(database.db),
+          0);
+    }
   });
 
   test(

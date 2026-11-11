@@ -209,7 +209,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   bool _isDisposed = false;
   double? _temporarySpeed;
   int _playPauseGeneration = 0;
-  late Completer<void> _initializingCompleter;
+  int _sourceGeneration = 0;
+  int _seekRevision = 0;
+  Completer<void>? _initializingCompleter;
+  String? _initializingSourceKey;
   StreamSubscription<dynamic>? _eventSubscription;
 
   bool get _created => _creatingCompleter.isCompleted;
@@ -234,6 +237,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       if (_isDisposed) {
         return;
       }
+      final initializing = _initializingCompleter;
+      if (event.eventType == VideoEventType.initialized &&
+          (initializing == null ||
+              initializing.isCompleted ||
+              (event.key != null && event.key != _initializingSourceKey))) {
+        return;
+      }
       videoEventStreamController.add(event);
 
       switch (event.eventType) {
@@ -243,8 +253,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           value = value.copyWith(
               duration: event.duration,
               size: event.size,
+              position: event.position,
               isLiveStream: event.isLiveStream);
-          _initializingCompleter.complete(null);
+          if (!initializing!.isCompleted) initializing.complete();
           _applyPlayPause();
           break;
         case VideoEventType.completed:
@@ -299,8 +310,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         );
       }
       _timer?.cancel();
-      if (!_initializingCompleter.isCompleted) {
-        _initializingCompleter.completeError(object);
+      final initializing = _initializingCompleter;
+      if (initializing != null && !initializing.isCompleted) {
+        initializing.completeError(object);
       }
     }
 
@@ -348,11 +360,17 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   /// null.
   /// **Android only**: The [formatHint] option allows the caller to override
   /// the video format detection code.
+  /// Set [retryDashTrack] when retrying the same managed DASH load to retain
+  /// its current native track constraints.
   /// ClearKey DRM only supported on Android.
   Future<void> setNetworkDataSource(
     String dataSource, {
     VideoFormat? formatHint,
     String? inlineDashManifest,
+    Duration? initialPosition,
+    int? initialDashHeight,
+    bool retryDashTrack = false,
+    bool fastDashStartupFallback = false,
     Map<String, String?>? headers,
     bool useCache = false,
     int? maxCacheSize,
@@ -377,6 +395,15 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         uri: dataSource,
         formatHint: formatHint,
         inlineDashManifest: inlineDashManifest,
+        initialPosition: initialPosition,
+        initialDashHeight: initialDashHeight,
+        retryDashTrackFromLoadId: retryDashTrack && initialDashHeight != null
+            ? _sourceGeneration
+            : null,
+        fastDashStartupFallback: fastDashStartupFallback,
+        loadId: initialPosition == null && initialDashHeight == null
+            ? null
+            : _sourceGeneration + 1,
         headers: headers,
         useCache: useCache,
         maxCacheSize: maxCacheSize,
@@ -431,6 +458,16 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       return;
     }
 
+    final sourceGeneration = ++_sourceGeneration;
+    final previousInitialization = _initializingCompleter;
+    if (previousInitialization != null && !previousInitialization.isCompleted) {
+      previousInitialization.complete();
+    }
+    _initializingCompleter = null;
+    _initializingSourceKey = dataSourceDescription.key;
+    _timer?.cancel();
+    _seekPosition = null;
+
     value = VideoPlayerValue(
       duration: null,
       isLooping: value.isLooping,
@@ -439,12 +476,22 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     );
 
     if (!_creatingCompleter.isCompleted) await _creatingCompleter.future;
+    if (_isDisposed || sourceGeneration != _sourceGeneration) return;
 
-    _initializingCompleter = Completer<void>();
-
-    await VideoPlayerPlatform.instance
-        .setDataSource(_textureId, dataSourceDescription);
-    return _initializingCompleter.future;
+    final initializing = Completer<void>();
+    _initializingCompleter = initializing;
+    try {
+      await Future.wait([
+        VideoPlayerPlatform.instance
+            .setDataSource(_textureId, dataSourceDescription),
+        initializing.future,
+      ], eagerError: true);
+    } finally {
+      if (identical(_initializingCompleter, initializing)) {
+        _initializingCompleter = null;
+        _initializingSourceKey = null;
+      }
+    }
   }
 
   @override
@@ -452,6 +499,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     await _creatingCompleter.future;
     if (!_isDisposed) {
       _isDisposed = true;
+      final initializing = _initializingCompleter;
+      if (initializing != null && !initializing.isCompleted) {
+        initializing.complete();
+      }
       value = VideoPlayerValue.uninitialized();
       _timer?.cancel();
       await _eventSubscription?.cancel();
@@ -511,10 +562,15 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           if (_isDisposed) {
             return;
           }
+          final sourceGeneration = _sourceGeneration;
+          final seekRevision = _seekRevision;
           final Duration? newPosition = await position;
           final DateTime? newAbsolutePosition = await absolutePosition;
-          // ignore: invariant_booleans
-          if (_isDisposed) {
+          // A sample started before a source change or seek belongs to the
+          // previous position and must not update or release the new target.
+          if (_isDisposed ||
+              sourceGeneration != _sourceGeneration ||
+              seekRevision != _seekRevision) {
             return;
           }
           _updatePosition(newPosition, absolutePosition: newAbsolutePosition);
@@ -575,6 +631,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     if (_isDisposed) {
       return;
     }
+    final sourceGeneration = _sourceGeneration;
+    final seekRevision = ++_seekRevision;
     _timer?.cancel();
     final int positionInMs = value.position.inMilliseconds;
     final int durationInMs = value.duration?.inMilliseconds ?? 0;
@@ -592,7 +650,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     _seekPosition = positionToSeek;
 
     await _videoPlayerPlatform.seekTo(_textureId, positionToSeek);
-    if (_isDisposed) return;
+    // A source change or newer seek owns the current position and play intent.
+    // The previous native request may finish after either has been replaced.
+    if (_isDisposed ||
+        sourceGeneration != _sourceGeneration ||
+        seekRevision != _seekRevision) {
+      return;
+    }
     _updatePosition(position);
 
     // A pause or play requested while the native seek was pending wins over
@@ -662,6 +726,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   /// [height] specifies height of the selected track
   /// [bitrate] specifies bitrate of the selected track
   Future<void> setTrackParameters(int? width, int? height, int? bitrate) async {
+    final sourceGeneration = _sourceGeneration;
+    if (!_creatingCompleter.isCompleted) await _creatingCompleter.future;
+    if (_isDisposed || sourceGeneration != _sourceGeneration) return;
     await _videoPlayerPlatform.setTrackParameters(
         _textureId, width, height, bitrate);
   }

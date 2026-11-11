@@ -54,6 +54,17 @@ class GatewayTransportTest {
         }
     }
 
+    @Test fun `protected browser cannot select or approve an official YouTube origin`() {
+        val origin = "https://music.youtube.com"
+        assertThrows(IllegalArgumentException::class.java) {
+            GatewayContext.parse("v1.$key.${origin.encodeUtf8().base64Url()}")
+        }
+        for (proxyEnabled in listOf(false, true)) {
+            assertFalse(context.canNavigateDuringSignIn("$origin/youtubei/v1/search".toHttpUrl(), proxyEnabled))
+            assertTrue(context.canNavigateDuringSignIn("https://identity.example/sign-in".toHttpUrl(), proxyEnabled))
+        }
+    }
+
     @Test fun `onion token bootstrap keeps account scope and strips internal marker`() {
         val origin = "http://$onionHost"
         val onionMarker = "v1.$key.${origin.encodeUtf8().base64Url()}"

@@ -42,13 +42,6 @@ class VideoPlayerSettingsScreen extends StatelessWidget {
                 description: Text(locals.useDashDescription),
               ),
               SettingsTile.switchTile(
-                leading: const Icon(Icons.vpn_lock),
-                initialValue: state.useProxy,
-                onToggle: cubit.toggleProxy,
-                title: Text(locals.useProxy),
-                description: Text(locals.useProxyDescription),
-              ),
-              SettingsTile.switchTile(
                 leading: const Icon(Icons.play_arrow),
                 initialValue: state.autoplayVideoOnLoad,
                 onToggle: cubit.toggleAutoplayOnLoad,
@@ -96,13 +89,6 @@ class VideoPlayerSettingsScreen extends StatelessWidget {
                 onToggle: cubit.toggleForceLandscapeFullScreen,
                 title: Text(locals.lockFullScreenToLandscape),
                 description: Text(locals.lockFullScreenToLandscapeDescription),
-              ),
-              SettingsTile.switchTile(
-                leading: const Icon(Icons.open_in_full),
-                initialValue: state.fillFullscreen,
-                onToggle: cubit.toggleFillFullscreen,
-                title: Text(locals.fillFullscreen),
-                description: Text(locals.fillFullscreenDescription),
               ),
               SettingsTile.switchTile(
                 leading: const Icon(Icons.tune),

@@ -65,7 +65,7 @@ class GatewayAuth {
       {String title = 'Sign in to protected server',
       String cancel = 'Cancel',
       String help =
-          'Sign in to your gateway, then authorize this Invidious account.'}) async {
+          'Sign in to your gateway, then authorize this Invidious account. Page scripts are disabled for privacy; sign-in pages that require JavaScript are unsupported.'}) async {
     final context = _context(server);
     final intent = _beginIntent(context.key);
     final proxy = NetworkProxy.instance;
@@ -102,8 +102,13 @@ class GatewayAuth {
       return isCurrent() ? token : null;
     } on PlatformException catch (error) {
       if (!isCurrent()) return null;
-      if (error.code == 'GATEWAY_UNSUPPORTED') {
+      if (error.code == 'GATEWAY_UNSUPPORTED' ||
+          error.code == 'GATEWAY_PROXY_UNSUPPORTED') {
         throw const GatewayUnsupported();
+      }
+      if (error.code == 'GATEWAY_PROXY_UNAVAILABLE') {
+        throw const GatewaySignInFailed(
+            'Could not start protected browser routing. Try again.');
       }
       if (error.code == 'GATEWAY_ONION_PROXY_REQUIRED') {
         throw const GatewaySignInFailed(
@@ -148,17 +153,24 @@ class GatewayAuth {
     if (context == null) return;
     final intent = _beginIntent(context.key);
     Future<void> revoke() async {
-      final current = await status(server);
-      if (_intents[context.key] != intent || !current.enabled) return;
+      var current = await status(server);
+      if (_intents[context.key] != intent) return;
       try {
         try {
+          // Proxy installation precedes native session creation. Such a
+          // request can gain its revision after this status snapshot, even
+          // when this account already has an older completed session.
           await _browser.invokeMethod<void>('close', {
             'context': context.encoded,
-            'revision': current.revision,
           });
         } on MissingPluginException {
           // A worker may revoke a session without an Activity/login browser.
         }
+        if (!current.supported && !current.enabled) return;
+        // A login could also have completed between status and close. A new
+        // Dart sign-in waits for this revocation before opening its browser.
+        current = await status(server);
+        if (!current.enabled) return;
         await _sessions.invokeMethod<void>('signOut', {
           'context': context.encoded,
           'revision': current.revision,
@@ -199,5 +211,5 @@ class GatewayUnsupported implements Exception {
   const GatewayUnsupported();
   @override
   String toString() =>
-      'This Android WebView does not support isolated sign-in profiles. Update Android System WebView to use protected servers.';
+      'This WebView lacks the required sign-in protections. Update Android System WebView to use protected servers.';
 }

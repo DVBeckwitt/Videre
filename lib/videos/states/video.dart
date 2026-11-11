@@ -10,6 +10,7 @@ import '../../globals.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../player/models/backend_playback.dart';
 import '../../player/states/player.dart';
+import '../../service.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../settings/states/settings.dart';
 import '../models/video.dart';
@@ -53,19 +54,35 @@ class VideoCubit extends Cubit<VideoState> {
   Future<void> onReady() async {
     if (isClosed) return;
     final generation = ++_loadGeneration;
-    emit(state.copyWith(loadingVideo: true, error: '', requestedBackend: null));
+    emit(state.copyWith(
+        loadingVideo: true,
+        retryingVideo: false,
+        error: '',
+        requestedBackend: null));
     try {
       Video video =
           await service.getVideo(state.videoId, onBackendRequest: (request) {
         if (!isClosed && generation == _loadGeneration) {
-          emit(state.copyWith(requestedBackend: request));
+          emit(state.copyWith(requestedBackend: request, retryingVideo: false));
         }
-      });
+      },
+              loadObserver: VideoLoadObserver(
+                  isCurrent: () => !isClosed && generation == _loadGeneration,
+                  onRetry: () {
+                    if (!isClosed &&
+                        generation == _loadGeneration &&
+                        state.loadingVideo) {
+                      emit(state.copyWith(retryingVideo: true));
+                    }
+                  }));
       if (isClosed || generation != _loadGeneration) return;
       final isLoggedIn = await service.isLoggedIn();
       if (isClosed || generation != _loadGeneration) return;
       emit(state.copyWith(
-          loadingVideo: false, video: video, isLoggedIn: isLoggedIn));
+          loadingVideo: false,
+          retryingVideo: false,
+          video: video,
+          isLoggedIn: isLoggedIn));
 
       getDownloadStatus();
       if (settings.state.useReturnYoutubeDislike) {
@@ -82,7 +99,8 @@ class VideoCubit extends Cubit<VideoState> {
         error = coulnotLoadVideos;
       }
       if (!isClosed && generation == _loadGeneration) {
-        emit(state.copyWith(error: error, loadingVideo: false));
+        emit(state.copyWith(
+            error: error, loadingVideo: false, retryingVideo: false));
       }
     }
   }
@@ -167,6 +185,7 @@ sealed class VideoState with _$VideoState {
       BackendPlayback? requestedBackend,
       int? dislikes,
       @Default(true) loadingVideo,
+      @Default(false) bool retryingVideo,
       required String videoId,
       required bool isLoggedIn,
       @Default(false) bool downloading,

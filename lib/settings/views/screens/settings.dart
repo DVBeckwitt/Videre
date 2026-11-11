@@ -123,12 +123,10 @@ class SettingsScreen extends StatelessWidget {
                     description: Text(
                       List.of([
                         locals.useDash,
-                        locals.useProxy,
                         locals.autoplayVideoOnLoad,
                         locals.subtitles,
                         "SponsorBlock",
                         locals.lockFullScreenToLandscape,
-                        locals.fillFullscreen
                       ]).join(", "),
                       maxLines: 3,
                       overflow: TextOverflow.ellipsis,

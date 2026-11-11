@@ -33,7 +33,8 @@ class _AdmissionService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest}) {
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) {
     ids.add(videoId);
     observer = onBackendRequest;
     if (!requested.isCompleted) requested.complete();

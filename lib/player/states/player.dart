@@ -30,6 +30,7 @@ import '../../playlists/services/playlist_load_session.dart';
 import '../../playlists/services/playlist_progress.dart';
 import '../../main.dart';
 import '../../media_handler.dart';
+import '../../service.dart' show VideoLoadObserver;
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/db/server.dart';
 import '../../utils/interfaces/db.dart';
@@ -47,6 +48,7 @@ import '../models/playback_queue.dart';
 import '../models/playback_pitch.dart';
 import '../models/backend_playback.dart';
 import '../models/backend_recovery.dart';
+import '../models/playback_recovery.dart';
 
 export '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 
@@ -61,6 +63,17 @@ const maxInt = -1 >>> 1;
 var log = Logger('MiniPlayerController');
 
 enum PlayerRepeat { noRepeat, repeatAll, repeatOne }
+
+class _PlaybackRefreshRequest {
+  final Video video;
+  final int generation;
+  final observers = <bool Function()>{};
+  late final Future<Video?> result;
+
+  _PlaybackRefreshRequest(this.video, this.generation);
+
+  bool get active => observers.any((observer) => observer());
+}
 
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static PlayerCubit? _sessionOwner;
@@ -108,18 +121,43 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   bool? _requestedPlaying;
+  bool _playbackInterrupted = false;
+  AudioInterruptionType? _audioInterruptionType;
+  bool _videoFocusActivationRequired = false;
+  final Future<bool> Function()? _activateVideoFocus;
+  int _audioFocusRevision = 0;
+  bool _resumePlaybackAfterInterruption = false;
+  bool _resumeReplacedAudioAfterInterruption = false;
+  int _transportIntentRevision = 0;
+  int? _interruptionIntentRevision;
+  int? _interruptionVideoGeneration;
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSubscription;
   int _progressGeneration = 0;
   int _videoSwitchGeneration = 0;
   int _sponsorRequestGeneration = 0;
   String? _requestedBackendVideoId;
   bool _backendSwitchPending = false;
   bool _manualSelectionPending = false;
+  Future<void>? _currentVideoRetry;
+  int? _currentVideoRetryGeneration;
+  PlaybackRecoveryBudget _playbackRecoveryBudget = PlaybackRecoveryBudget();
+  _PlaybackRefreshRequest? _playbackRefresh;
+  Video? _recoveringVideo;
+  Duration? _recoveryProgressPosition;
+  final Future<void> Function(Duration) _waitForPlaybackRecovery;
   Timer? _backendSuccessTimer;
   final _timers = <String, Timer>{};
   Duration? _backendProgressPosition;
 
   /// The current user's play/pause intent also applies to a replacement source.
   bool get requestedPlaying => _requestedPlaying ?? state.isPlaying;
+  bool get playbackInterrupted =>
+      _playbackInterrupted &&
+      (!state.isAudio || _audioInterruptionType != AudioInterruptionType.duck);
+  bool get shouldStartPlayback =>
+      _requestedPlaying != false &&
+      !playbackInterrupted &&
+      (state.isAudio || !_videoFocusActivationRequired);
 
   void attachMediaHandler(MediaHandler handler) {
     _mediaSessionHandler = handler;
@@ -145,8 +183,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       PlaylistReference? playlistReference,
       PlaylistLoadSession? playlistLoader,
       int startIndex = 0,
-      bool? playlistAudio})
+      bool? playlistAudio,
+      Future<void> Function(Duration)? playbackRecoveryDelay,
+      Future<bool> Function()? videoFocusActivation})
       : _resumeOnReady = resume,
+        _activateVideoFocus = videoFocusActivation,
+        _waitForPlaybackRecovery =
+            playbackRecoveryDelay ?? Future<void>.delayed,
         _initialPlaylistReference = playlistReference,
         _initialPlaylistLoader = playlistLoader,
         _initialPlaylistIndex = startIndex,
@@ -549,6 +592,176 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     emit(state.copyWith(currentlyPlaying: video));
   }
 
+  bool _samePlaybackSource(Video first, Video second) =>
+      first.videoId == second.videoId &&
+      playbackQueueId(first) == playbackQueueId(second) &&
+      (first.playbackSourceId != null
+          ? identical(first.playbackSourceId, second.playbackSourceId)
+          : identical(first, second));
+
+  bool _currentPlaybackSource(Video video) =>
+      !isClosed &&
+      !_isDisposing &&
+      !_switchingProfile &&
+      !_backendSwitchPending &&
+      !state.isClosing &&
+      !state.isHidden &&
+      state.offlineCurrentlyPlaying == null &&
+      state.currentlyPlaying != null &&
+      _samePlaybackSource(video, state.currentlyPlaying!);
+
+  void _clearPlaybackRecovery({bool resetBudget = false}) {
+    if (resetBudget) _playbackRecoveryBudget = PlaybackRecoveryBudget();
+    _recoveringVideo = null;
+    _recoveryProgressPosition = null;
+    if (!isClosed && state.recoveringPlayback) {
+      emit(state.copyWith(recoveringPlayback: false));
+    }
+  }
+
+  /// Refreshes only the admitted source for the current queue occurrence.
+  /// Null means the shared automatic budget is exhausted; refusals throw.
+  Future<Video?> refreshCurrentPlayback(Video video,
+      {required bool Function() isCurrent}) async {
+    if (!_currentPlaybackSource(video) || !isCurrent()) {
+      throw StateError('The playback source changed.');
+    }
+    var pending = _playbackRefresh;
+    if (pending != null && pending.generation == _videoSwitchGeneration) {
+      if (!_samePlaybackSource(pending.video, video)) {
+        throw StateError('Another playback recovery is in progress.');
+      }
+    } else {
+      pending = _PlaybackRefreshRequest(video, _videoSwitchGeneration);
+      _playbackRefresh = pending;
+    }
+    final request = pending;
+    final first = request.observers.isEmpty;
+    request.observers.add(isCurrent);
+    if (first) {
+      request.result = _refreshCurrentPlayback(request).whenComplete(() {
+        if (identical(_playbackRefresh, request)) _playbackRefresh = null;
+      });
+    }
+    try {
+      final refreshed = await request.result;
+      if (!isCurrent() || request.generation != _videoSwitchGeneration) {
+        throw StateError('The playback source changed.');
+      }
+      return refreshed;
+    } finally {
+      request.observers.remove(isCurrent);
+    }
+  }
+
+  Future<Video?> _refreshCurrentPlayback(
+      _PlaybackRefreshRequest request) async {
+    final video = request.video;
+    final route = video.playbackConnection ?? video.backendPlayback;
+    final database = db;
+    final profile = database.profileId;
+    bool active() =>
+        request.generation == _videoSwitchGeneration &&
+        request.active &&
+        identical(db, database) &&
+        database.profileId == profile &&
+        !NetworkProxy.instance.isChanging &&
+        _currentPlaybackSource(video);
+    Future<void> check() async {
+      if (route == null ||
+          !active() ||
+          !route.matches(await database.getCurrentlySelectedServer()) ||
+          !active()) {
+        throw StateError('The playback connection changed.');
+      }
+    }
+
+    try {
+      await check();
+      while (true) {
+        final delay = _playbackRecoveryBudget.reserve();
+        if (delay == null) {
+          _clearPlaybackRecovery();
+          return null;
+        }
+        _clearBackendProgress();
+        _recoveringVideo = null;
+        _recoveryProgressPosition = null;
+        emit(state.copyWith(recoveringPlayback: true, backendRecovery: null));
+        try {
+          await _waitForPlaybackRecovery(delay);
+          await check();
+          final loaded =
+              await service.refreshPlaybackVideo(video, isCurrent: active);
+          await check();
+          if (loaded.videoId != video.videoId ||
+              loaded.playbackSourceId == null ||
+              loaded.playbackConnection == null) {
+            throw StateError('The refreshed playback source was not admitted.');
+          }
+          final current = state.currentlyPlaying!;
+          final refreshed = loaded.preservingMusicMetadataFrom(current);
+          _recoveringVideo = refreshed;
+          emit(state.copyWith(currentlyPlaying: refreshed));
+          return refreshed;
+        } catch (error) {
+          await check();
+          if (!isPlaybackRefreshRetryable(error) ||
+              !_playbackRecoveryBudget.hasRemaining) {
+            rethrow;
+          }
+        }
+      }
+    } catch (_) {
+      if (request.generation == _videoSwitchGeneration) {
+        _clearPlaybackRecovery();
+      }
+      rethrow;
+    }
+  }
+
+  bool _isPlaybackRecoverySource(Video video) {
+    final recovering = _recoveringVideo;
+    if (!state.recoveringPlayback ||
+        recovering == null ||
+        !_samePlaybackSource(recovering, video) ||
+        !_currentPlaybackSource(video) ||
+        NetworkProxy.instance.isChanging) {
+      return false;
+    }
+    final route = video.playbackConnection ?? video.backendPlayback;
+    final saved = route == null
+        ? null
+        : db
+            .forProfile(route.preferredServer.profileId)
+            .getAccount(route.preferredServer.accountId);
+    return route != null &&
+        route.preferredServer.profileId == db.profileId &&
+        saved?.inUse == true &&
+        route.matches(saved!);
+  }
+
+  void reportPlaybackRecoveryReady(Video video, {required bool playing}) {
+    if (!playing && _isPlaybackRecoverySource(video)) _clearPlaybackRecovery();
+  }
+
+  void reportPlaybackRecoveryProgress(Video video, Duration position,
+      {required bool playing}) {
+    if (!_isPlaybackRecoverySource(video)) return;
+    if (!playing) {
+      _recoveryProgressPosition = null;
+      return;
+    }
+    final previous = _recoveryProgressPosition;
+    if (previous == null || position < previous) {
+      _recoveryProgressPosition = position;
+      return;
+    }
+    if (position - previous >= const Duration(milliseconds: 250)) {
+      _clearPlaybackRecovery();
+    }
+  }
+
   /// Called only after a native source has initialized. A paused source is ready,
   /// but it has not proved that playback resumed.
   void reportBackendPlaybackReady(String videoId, BackendPlayback? request,
@@ -600,8 +813,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || _isDisposing || _switchingProfile || state.isClosing)
       return;
     // The previous decoder can still emit while replacement metadata loads.
-    if (_backendSwitchPending && event.type != MediaEventType.backendRetry) {
+    if (_backendSwitchPending &&
+        event.type != MediaEventType.backendRetry &&
+        event.type != MediaEventType.metadataRetry) {
       return;
+    }
+    if (event.state == MediaState.error ||
+        event.state == MediaState.completed) {
+      _clearPlaybackRecovery();
     }
     if (event.state == MediaState.error && state.backendRecovery != null) {
       _clearBackendProgress();
@@ -612,11 +831,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (event.type == MediaEventType.seek ||
         event.type == MediaEventType.pause) {
       _backendProgressPosition = null;
+      _recoveryProgressPosition = null;
     }
     handleMediaEvent(event);
     mapMediaEventToMediaHandler(event);
 
     emit(state.copyWith(mediaEvent: event));
+  }
+
+  void _clearMetadataRetry() {
+    if (state.mediaEvent.type == MediaEventType.metadataRetry) {
+      // Metadata may be ready while the native source is still initializing.
+      emit(state.copyWith(
+          mediaEvent: const MediaEvent(state: MediaState.loading)));
+    }
   }
 
   @override
@@ -670,10 +898,23 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void mapMediaEventToMediaHandler(MediaEvent event) {
     if (!isTv && event.type != MediaEventType.progress) {
       log.fine("Event state: ${event.state}, ${event.type}");
+      // A buffered-position update does not mean the decoder finished buffering.
+      final processingState = event.type == MediaEventType.bufferChanged
+          ? mediaHandler.playbackState.value.processingState
+          : const {
+                MediaState.idle: AudioProcessingState.idle,
+                MediaState.loading: AudioProcessingState.loading,
+                MediaState.buffering: AudioProcessingState.buffering,
+                MediaState.completed: AudioProcessingState.completed,
+              }[event.state] ??
+              AudioProcessingState.ready;
+      final playing = state.isPlaying &&
+          processingState != AudioProcessingState.idle &&
+          processingState != AudioProcessingState.completed;
       var playbackState = PlaybackState(
         controls: [
           state.hasQueue ? MediaControl.skipToPrevious : MediaControl.rewind,
-          if (state.isPlaying) MediaControl.pause else MediaControl.play,
+          if (playing) MediaControl.pause else MediaControl.play,
           MediaControl.stop,
           state.hasQueue ? MediaControl.skipToNext : MediaControl.fastForward,
         ],
@@ -685,19 +926,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           MediaAction.setRepeatMode
         },
         androidCompactActionIndices: const [0, 1, 3],
-        processingState: const {
-              MediaState.idle: AudioProcessingState.idle,
-              MediaState.loading: AudioProcessingState.loading,
-              MediaState.buffering: AudioProcessingState.buffering,
-              MediaState.ready: AudioProcessingState.ready,
-              MediaState.completed: AudioProcessingState.completed,
-              MediaState.playing: AudioProcessingState.ready,
-            }[event.state] ??
-            AudioProcessingState.ready,
-        playing: event.state == MediaState.idle ||
-                event.state == MediaState.completed
-            ? false
-            : state.isPlaying,
+        // Android uses a spinner for BUFFERING even when playing is false.
+        // Publish PAUSED through ready/false so the lock screen offers Play.
+        processingState:
+            !playing && processingState == AudioProcessingState.buffering
+                ? AudioProcessingState.ready
+                : processingState,
+        playing: playing,
         updatePosition: state.position,
         bufferedPosition: state.bufferedPosition,
         speed: state.speed,
@@ -730,11 +965,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final session = await AudioSession.instance;
     if (_isDisposing || isClosed) return;
     audioSession = session;
-    audioSession.configure(const AudioSessionConfiguration(
+    await audioSession.configure(const AudioSessionConfiguration(
       avAudioSessionCategory: AVAudioSessionCategory.playback,
       avAudioSessionCategoryOptions:
           AVAudioSessionCategoryOptions.allowBluetooth,
+      androidAudioAttributes: AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.music,
+        usage: AndroidAudioUsage.media,
+      ),
     ));
+    if (_isDisposing || isClosed) return;
+    _interruptionSubscription =
+        audioSession.interruptionEventStream.listen(handleAudioInterruption);
     WidgetsBinding.instance.addObserver(this);
     if (!isTv) {
       _becomingNoisySubscription =
@@ -889,6 +1131,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _videoSwitchGeneration++;
     _requestedBackendVideoId = null;
     await _becomingNoisySubscription?.cancel();
+    await _interruptionSubscription?.cancel();
     await _updateAutoPip(state, disable: true);
     _pip?.onPipEntered = null;
     _pip?.onPipExited = null;
@@ -925,6 +1168,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void hide() {
     if (isClosed || state.isClosing) return;
+    _clearPlaybackRecovery(resetBudget: true);
+    _clearMetadataRetry();
     // Background playback must stop before the closing animation can run.
     pause();
     _pitchVideoId = null;
@@ -974,6 +1219,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// Clear immediately: an animation callback must never clear the next queue.
   Future<void> prepareForProfileSwitch() async {
     if (isClosed) return;
+    _clearPlaybackRecovery(resetBudget: true);
+    _clearMetadataRetry();
     pause();
     final saved = _saveSession(state);
     _bindPlaylist(null, []);
@@ -1372,7 +1619,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<void> _switchToVideo(IdedVideo video,
       {Duration? startAt,
       bool? playing,
-      BackendPlayback? backendRequest}) async {
+      BackendPlayback? backendRequest,
+      bool retainOnFailure = false}) async {
     if (isClosed || _switchingProfile) return;
     _waitingForPlaylist = false;
     _sessionTransitionPending = true;
@@ -1384,7 +1632,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     _requestedPlaying = playing;
     final generation = ++_videoSwitchGeneration;
+    _clearPlaybackRecovery(resetBudget: true);
     bool active() => !isClosed && generation == _videoSwitchGeneration;
+    _clearMetadataRetry();
     _progressGeneration++;
     _requestedBackendVideoId = video is Video ? video.videoId : null;
     _backendSwitchPending = true;
@@ -1394,13 +1644,30 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     videoDragCancelled();
     emit(state.copyWith(
         isClosing: false, requestedBackend: null, backendRecovery: null));
-    if (backendRequest != null) {
+    if (backendRequest != null && !retainOnFailure) {
       _recordBackendRequest(video.videoId, backendRequest);
     }
     try {
       // we move the existing video to the stack of played video
-      await audioSession.setActive(true);
+      final focusRevision = _audioFocusRevision;
+      final focusGranted =
+          await (_videoFocusActivationRequired && !state.isAudio
+              ? (_activateVideoFocus?.call() ?? audioSession.setActive(true))
+              : audioSession.setActive(true));
       if (!active()) return;
+      if (focusGranted && focusRevision == _audioFocusRevision) {
+        _videoFocusActivationRequired = false;
+      }
+      if (retainOnFailure && backendRequest != null) {
+        final selected = await db.getCurrentlySelectedServer();
+        if (!active()) return;
+        if (backendRequest.matches(selected)) {
+          _recordBackendRequest(video.videoId, backendRequest);
+        } else {
+          // A changed account or routing policy owns a new connection snapshot.
+          backendRequest = null;
+        }
+      }
       bool isOffline = video is DownloadedVideo;
       // we want to switch to audio mode as soon as we can to prevent problems when switching from audio to video or the other way
       if (isOffline) {
@@ -1436,16 +1703,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         var reuseLoaded = video is Video &&
             video.formatStreams != null &&
             video.adaptiveFormats != null;
-        if (reuseLoaded && video.backendPlayback != null) {
+        final cachedConnection = video is Video
+            ? video.playbackConnection ?? video.backendPlayback
+            : null;
+        if (reuseLoaded && cachedConnection != null) {
           final currentServer = await db.getCurrentlySelectedServer();
           if (!active()) return;
-          reuseLoaded = video.backendPlayback!.matches(currentServer);
+          reuseLoaded = cachedConnection.matches(currentServer);
         }
         if (reuseLoaded && video is Video && backendRequest == null) {
           v = video;
         } else {
+          var metadataPending = true;
           void onBackendRequest(BackendPlayback request) {
-            if (!active()) return;
+            if (!active() || !metadataPending) return;
             _recordBackendRequest(video.videoId, request);
             if (request.retryIndex > 0 || request.manualSelection) {
               setEvent(MediaEvent(
@@ -1455,19 +1726,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             }
           }
 
-          v = backendRequest == null
-              ? await service.getVideo(video.videoId,
-                  onBackendRequest: onBackendRequest)
-              : await service.getVideoForBackend(video.videoId, backendRequest,
-                  onBackendRequest: onBackendRequest, isCurrent: active);
+          try {
+            v = backendRequest == null
+                ? await service.getVideo(video.videoId,
+                    onBackendRequest: onBackendRequest,
+                    loadObserver: VideoLoadObserver(
+                      isCurrent: () => active() && metadataPending,
+                      onRetry: () {
+                        if (!active() || !metadataPending) return;
+                        setEvent(const MediaEvent(
+                            state: MediaState.loading,
+                            type: MediaEventType.metadataRetry));
+                      },
+                    ))
+                : await service.getVideoForBackend(
+                    video.videoId, backendRequest,
+                    onBackendRequest: onBackendRequest, isCurrent: active);
+          } finally {
+            metadataPending = false;
+          }
           if (!active()) return;
+          _clearMetadataRetry();
         }
         if (video is Video) v = v.preservingMusicMetadataFrom(video);
         currentlyPlaying = v;
+        if (retainOnFailure) startAt = state.position;
         mediaCommand = MediaCommand(MediaCommandType.switchVideo,
             value: SwitchVideoValue(video: v, startAt: startAt));
       } else {
         offlineCurrentlyPlaying = video;
+        if (retainOnFailure) startAt = state.position;
         mediaCommand =
             MediaCommand(MediaCommandType.switchToOfflineVideo, value: video);
       }
@@ -1476,7 +1764,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           offlineCurrentlyPlaying?.lengthSeconds ??
           0;
       await _bindWatchSession(video.videoId,
-          intentional: backendRequest == null);
+          intentional: backendRequest == null && !retainOnFailure);
       if (!active() || _switchingProfile) return;
       final progress = _profileDatabase.getVideoProgress(video.videoId);
       final resumeAt = startAt ??
@@ -1537,12 +1825,24 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
     } catch (err) {
       if (!active()) return;
+      _clearMetadataRetry();
       _backendSwitchPending = false;
-      if (video is Video &&
-          (state.backendRecovery != null || video.musicMetadata != null)) {
+      if (retainOnFailure ||
+          (video is Video &&
+              (state.backendRecovery != null || video.musicMetadata != null))) {
         pause();
         videoDragCancelled();
-        emit(state.copyWith(currentlyPlaying: video));
+        if (retainOnFailure) _sessionTransitionPending = false;
+        // Retry belongs to this selection, even when metadata never arrived.
+        // Do not carry the previous video's position into a newly chosen song.
+        emit(state.copyWith(
+            currentlyPlaying: video is Video ? video : null,
+            offlineCurrentlyPlaying: video is DownloadedVideo ? video : null,
+            isPlaying: false,
+            position:
+                retainOnFailure ? state.position : startAt ?? state.position,
+            startAt:
+                retainOnFailure ? state.position : startAt ?? state.startAt));
         setEvent(const MediaEvent(state: MediaState.error));
         return;
       }
@@ -1706,23 +2006,195 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     await _switchToVideo(video, startAt: startAt);
   }
 
+  /// An explicit Retry keeps the current queue occurrence and position even if
+  /// fresh metadata fails. Repeated taps share the current attempt.
+  /// Per-video manual backend choices persist; automatic recovery starts a new
+  /// bounded attempt from the saved preference.
+  Future<void> retryCurrentVideo() {
+    final pending = _currentVideoRetry;
+    if (pending != null &&
+        _currentVideoRetryGeneration == _videoSwitchGeneration) {
+      return pending;
+    }
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        state.isClosing ||
+        state.isHidden ||
+        _backendSwitchPending ||
+        _manualSelectionPending) {
+      return Future.value();
+    }
+    final video = state.currentlyPlaying;
+    final offline = state.offlineCurrentlyPlaying;
+    final IdedVideo? retry =
+        video?.copyWith(formatStreams: null, adaptiveFormats: null) ?? offline;
+    if (retry == null) return Future.value();
+    final previousRoute = video?.backendPlayback;
+    final selector = previousRoute?.server.backendSelector;
+    final manualRoute =
+        previousRoute?.manualSelection == true && selector != null
+            ? BackendPlayback.manual(previousRoute!.preferredServer,
+                selector.selectedValue(previousRoute.server))
+            : null;
+    final operation = _switchToVideo(retry,
+        startAt: state.position,
+        playing: true,
+        backendRequest: manualRoute,
+        retainOnFailure: true);
+    late final Future<void> result;
+    result = operation.whenComplete(() {
+      if (identical(_currentVideoRetry, result)) {
+        _currentVideoRetry = null;
+        _currentVideoRetryGeneration = null;
+      }
+    });
+    _currentVideoRetry = result;
+    _currentVideoRetryGeneration = _videoSwitchGeneration;
+    return result;
+  }
+
   void togglePlaying() {
     state.isPlaying ? pause() : play();
   }
 
+  void handleAudioInterruption(AudioInterruptionEvent event) {
+    if (isClosed || _isDisposing) return;
+    if (event.begin) {
+      if (_playbackInterrupted && _audioInterruptionType == event.type) return;
+      _audioFocusRevision++;
+      // Permanent loss abandons focus and has no promised end event. Cancel
+      // automatic playback, while allowing a later explicit Play to ask again.
+      final permanent = event.type == AudioInterruptionType.unknown;
+      final continuing = !permanent &&
+          _playbackInterrupted &&
+          _interruptionIntentRevision == _transportIntentRevision &&
+          _interruptionVideoGeneration == _videoSwitchGeneration;
+      final resume = continuing
+          ? _resumePlaybackAfterInterruption
+          : requestedPlaying ||
+              (_backendSwitchPending && _requestedPlaying != false);
+      _playbackInterrupted = !permanent;
+      _audioInterruptionType = event.type;
+      if (permanent) {
+        _requestedPlaying = false;
+        _transportIntentRevision++;
+        _videoFocusActivationRequired = true;
+      }
+      _recoveryProgressPosition = null;
+      // A second temporary focus type belongs to the same interruption. Native
+      // Pause reports must not replace the original user intent or forget that
+      // a replacement audio decoder mounted while playback was blocked.
+      _resumeReplacedAudioAfterInterruption =
+          continuing && _resumeReplacedAudioAfterInterruption;
+      _interruptionIntentRevision = _transportIntentRevision;
+      _interruptionVideoGeneration = _videoSwitchGeneration;
+      _resumePlaybackAfterInterruption = !_switchingProfile &&
+          !permanent &&
+          (state.hasVideo || _backendSwitchPending) &&
+          resume &&
+          !state.isClosing &&
+          !state.isHidden;
+      // just_audio owns ordinary audio focus. Video needs a pause command but
+      // the interruption must not overwrite the user's remembered intent.
+      if (!_switchingProfile &&
+          !state.isAudio &&
+          state.hasVideo &&
+          !state.isClosing) {
+        emit(
+            state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
+      }
+      return;
+    }
+    if (!_playbackInterrupted) return;
+    _playbackInterrupted = false;
+    _audioInterruptionType = null;
+    final resumePlayback = _resumePlaybackAfterInterruption &&
+        !_switchingProfile &&
+        event.type != AudioInterruptionType.unknown &&
+        _interruptionIntentRevision == _transportIntentRevision &&
+        _interruptionVideoGeneration == _videoSwitchGeneration &&
+        _requestedPlaying != false &&
+        (!state.isAudio || _resumeReplacedAudioAfterInterruption) &&
+        !state.isClosing &&
+        !state.isHidden;
+    _resumePlaybackAfterInterruption = false;
+    _resumeReplacedAudioAfterInterruption = false;
+    if (resumePlayback) {
+      // Ordinary audio resumes through just_audio. A decoder mounted during
+      // the interruption never received its beginning, so it needs this command.
+      if (_videoFocusActivationRequired && !state.isAudio) {
+        unawaited(_playVideoAfterFocusLoss(
+            _videoSwitchGeneration, _transportIntentRevision));
+      } else {
+        emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.play)));
+      }
+    }
+  }
+
   void play() {
     if (_switchingProfile || isClosed || _isDisposing) return;
+    _transportIntentRevision++;
     _requestedPlaying = true;
+    if (!state.isAudio &&
+        _videoFocusActivationRequired &&
+        !playbackInterrupted) {
+      unawaited(_playVideoAfterFocusLoss(
+          _videoSwitchGeneration, _transportIntentRevision));
+      return;
+    }
+    if (_playbackInterrupted) {
+      _resumePlaybackAfterInterruption = true;
+      _interruptionIntentRevision = _transportIntentRevision;
+      _interruptionVideoGeneration = _videoSwitchGeneration;
+    }
     final recovery = state.backendRecovery;
     emit(state.copyWith(
         backendRecovery:
             recovery != null && recovery.phase == BackendRecoveryPhase.ready
                 ? recovery.withPhase(BackendRecoveryPhase.trying)
                 : recovery,
-        mediaCommand: MediaCommand(MediaCommandType.play)));
+        mediaCommand: MediaCommand(_playbackInterrupted && !state.isAudio
+            ? MediaCommandType.pause
+            : MediaCommandType.play)));
+  }
+
+  Future<void> _playVideoAfterFocusLoss(
+      int generation, int intentRevision) async {
+    final focusRevision = _audioFocusRevision;
+    bool granted;
+    try {
+      granted =
+          await (_activateVideoFocus?.call() ?? audioSession.setActive(true));
+    } catch (_) {
+      granted = false;
+    }
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        generation != _videoSwitchGeneration ||
+        intentRevision != _transportIntentRevision ||
+        focusRevision != _audioFocusRevision ||
+        _requestedPlaying != true ||
+        state.isAudio ||
+        state.isHidden ||
+        state.isClosing ||
+        playbackInterrupted) {
+      return;
+    }
+    if (!granted) {
+      _requestedPlaying = false;
+      emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
+      return;
+    }
+    _videoFocusActivationRequired = false;
+    _audioInterruptionType = null;
+    _resumePlaybackAfterInterruption = false;
+    emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.play)));
   }
 
   void pause() {
+    _transportIntentRevision++;
     _waitingForPlaylist = false;
     _requestedPlaying = false;
     emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
@@ -1922,6 +2394,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void seek(Duration duration) {
+    _recoveryProgressPosition = null;
     if (duration.inSeconds < 0) {
       duration = Duration.zero;
     }
@@ -1983,16 +2456,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       String? artworkUrl;
       Map<String, String>? artworkHeaders;
       if (thumbnail != null && thumbnail.isNotEmpty) {
-        if (musicThumbnails.isNotEmpty) {
-          artworkUrl = thumbnail;
-        } else {
-          final playing = state.currentlyPlaying;
-          final server = (playing?.videoId == e.videoId
-                  ? playing?.backendPlayback?.server
-                  : null) ??
-              e.backendPlayback?.server ??
-              await db.getCurrentlySelectedServer();
-          artworkUrl = invidiousImageUrl(thumbnail, server);
+        final playing = state.currentlyPlaying;
+        final server = (playing?.videoId == e.videoId
+                ? playing?.backendPlayback?.server
+                : null) ??
+            e.backendPlayback?.server ??
+            await db.getCurrentlySelectedServer();
+        artworkUrl = invidiousImageUrl(thumbnail, server);
+        if (artworkUrl != null) {
           artworkHeaders = server.headersForUrl(artworkUrl);
         }
       }
@@ -2118,10 +2589,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (state.currentlyPlaying != null &&
         !state.isClosing &&
         state.isAudio != value) {
+      final resumeVideo = !value &&
+          _videoFocusActivationRequired &&
+          state.isPlaying &&
+          requestedPlaying;
+      if (_playbackInterrupted &&
+          _interruptionVideoGeneration == _videoSwitchGeneration) {
+        _resumeReplacedAudioAfterInterruption =
+            value && _audioInterruptionType == AudioInterruptionType.pause;
+      }
       _progressGeneration++;
       // The replacement decoder reads its starting position when it mounts.
       videoDragCancelled();
       emit(state.copyWith(isAudio: value, startAt: state.position));
+      if (resumeVideo) play();
       if (_playlistReference != null) {
         unawaited(saveProgress(state.position.inSeconds));
       }
@@ -2213,6 +2694,7 @@ sealed class PlayerState with _$PlayerState {
       Video? currentlyPlaying,
       BackendPlayback? requestedBackend,
       BackendRecovery? backendRecovery,
+      @Default(false) bool recoveringPlayback,
       DownloadedVideo? offlineCurrentlyPlaying,
       @Default([]) List<Video> videos,
       @Default([]) List<DownloadedVideo> offlineVideos,

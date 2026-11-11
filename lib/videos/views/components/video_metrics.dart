@@ -20,92 +20,61 @@ class VideoMetrics extends StatelessWidget {
       this.showDuration = true,
       this.iconSize = 20});
 
-  Widget get separator => Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      child: Text(
-        '•',
-        style: style,
-      ));
+  Widget metric(IconData icon, String label) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: iconSize),
+          const SizedBox(width: 4),
+          Flexible(child: Text(label, style: style)),
+        ],
+      );
 
   @override
   Widget build(BuildContext context) {
     AppLocalizations locals = AppLocalizations.of(context)!;
 
+    final now = DateTime.now();
+    final premiere = video?.premiereTimestamp;
+    final startsAt = premiere == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(premiere * 1000);
     List<Widget> metrics = [];
-    if ((video?.isUpcoming ?? false) && video?.premiereTimestamp != null) {
-      final range = DateTimeRange(
-          end: DateTime.fromMillisecondsSinceEpoch(
-              video!.premiereTimestamp! * 1000),
-          start: DateTime.now());
-
+    if ((video?.isUpcoming ?? false) &&
+        startsAt != null &&
+        startsAt.isAfter(now)) {
       metrics = [
-        Text(locals.premieresIn(prettyDuration(range.duration, maxUnits: 1))),
-        const SizedBox.shrink()
+        Text(
+          locals.premieresIn(
+              prettyDuration(startsAt.difference(now), maxUnits: 1)),
+          style: style,
+        ),
       ];
     } else {
       var length = video?.lengthSeconds ?? 0;
       if (showDuration && length > 0) {
-        metrics.addAll([
-          Icon(Icons.timer, size: iconSize),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(
-              prettyDurationCustom(Duration(seconds: length)),
-              style: style,
-            ),
-          ),
-          separator
-        ]);
+        metrics.add(metric(
+            Icons.timer, prettyDurationCustom(Duration(seconds: length))));
       }
 
       var views = video?.viewCount ?? 0;
       if (views > 0) {
-        metrics.addAll([
-          Icon(Icons.visibility, size: iconSize),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(
-              compactCurrency.format(views),
-              style: style,
-            ),
-          ),
-          separator
-        ]);
+        metrics.add(metric(Icons.visibility, compactCurrency.format(views)));
       }
 
       var likes = video?.likeCount ?? 0;
       if (likes > 0) {
-        metrics.addAll([
-          Icon(Icons.thumb_up, size: iconSize),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(
-              compactCurrency.format(likes),
-              style: style,
-            ),
-          ),
-          separator
-        ]);
+        metrics.add(metric(Icons.thumb_up, compactCurrency.format(likes)));
       }
 
       if (dislikes != null && dislikes! >= 0) {
-        metrics.addAll([
-          Icon(Icons.thumb_down, size: iconSize),
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Text(
-              compactCurrency.format(dislikes).replaceAll(".00", ""),
-              style: style,
-            ),
-          ),
-          separator
-        ]);
+        metrics.add(metric(Icons.thumb_down,
+            compactCurrency.format(dislikes).replaceAll(".00", "")));
       }
 
       var date = video?.publishedText ?? '';
       if ((date.isNotEmpty && !date.startsWith('0')) ||
           video?.liveNow == true) {
-        metrics.addAll([
+        metrics.add(
           (video?.liveNow ?? false)
               ? Visibility(
                   visible: video!.liveNow ?? false,
@@ -118,6 +87,7 @@ class VideoMetrics extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8.0, vertical: 2),
                       child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         mainAxisAlignment: MainAxisAlignment.end,
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
@@ -125,13 +95,14 @@ class VideoMetrics extends StatelessWidget {
                             Icons.podcasts,
                             size: iconSize,
                           ),
-                          Padding(
+                          Flexible(
+                              child: Padding(
                             padding: const EdgeInsets.only(left: 8.0),
                             child: Text(
                               locals.streamIsLive,
                               style: style,
                             ),
-                          ),
+                          )),
                         ],
                       ),
                     ),
@@ -141,18 +112,17 @@ class VideoMetrics extends StatelessWidget {
                   date,
                   style: style,
                 ),
-          separator
-        ]);
-      }
-
-      // removing last separator
-      if (metrics.isNotEmpty) {
-        metrics.removeAt(metrics.length - 1);
+        );
       }
     }
 
     return metrics.isNotEmpty
-        ? Row(children: metrics)
+        ? Wrap(
+            spacing: 16,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: metrics,
+          )
         : const SizedBox.shrink();
   }
 }

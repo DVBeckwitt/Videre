@@ -72,6 +72,50 @@ void main() {
         BetterPlayerEventType.changedSubtitles);
   });
 
+  test('custom content is lazy and each failed selection can be retried',
+      () async {
+    var calls = 0;
+    final selected = BetterPlayerSubtitlesSource(
+      type: BetterPlayerSubtitlesSourceType.memory,
+      contentLoader: () async {
+        calls++;
+        if (calls == 1) throw const HttpException('Unavailable');
+        return _validCaptions;
+      },
+    );
+    expect(calls, 0);
+    await controller.setupSubtitleSource(selected);
+    expect(calls, 1);
+    expect(controller.betterPlayerSubtitlesSource, isNull);
+    expect(events.single.betterPlayerEventType,
+        BetterPlayerEventType.subtitleLoadFailed);
+
+    events.clear();
+    await controller.setupSubtitleSource(selected);
+    expect(calls, 2);
+    expect(controller.betterPlayerSubtitlesSource, same(selected));
+    expect(controller.subtitlesLines.single.texts, ['Working captions']);
+    expect(events.single.betterPlayerEventType,
+        BetterPlayerEventType.changedSubtitles);
+  });
+
+  test('a late custom loader cannot replace a newer selection', () async {
+    final pending = Completer<String>();
+    final older = controller.setupSubtitleSource(BetterPlayerSubtitlesSource(
+      type: BetterPlayerSubtitlesSourceType.memory,
+      contentLoader: () => pending.future,
+    ));
+    final newer = BetterPlayerSubtitlesSource(
+      type: BetterPlayerSubtitlesSourceType.none,
+    );
+    await controller.setupSubtitleSource(newer);
+    pending.complete(_validCaptions);
+    await older;
+    expect(controller.betterPlayerSubtitlesSource, same(newer));
+    expect(controller.subtitlesLines, isEmpty);
+    expect(events, hasLength(1));
+  });
+
   test('loads a single SRT cue without a trailing blank line', () async {
     final selected = BetterPlayerSubtitlesSource(
       type: BetterPlayerSubtitlesSourceType.memory,

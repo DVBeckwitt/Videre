@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:easy_debounce/easy_throttle.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:flutter/foundation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -14,12 +15,24 @@ import 'package:logging/logging.dart';
 import '../../settings/states/settings.dart';
 import '../../videos/models/adaptive_format.dart';
 import '../media_source.dart';
+import '../models/media_command.dart';
 import '../models/media_event.dart';
+import '../models/backend_playback.dart';
+import '../models/audio_stall_detector.dart';
 import '../models/playback_pitch.dart';
 
 part 'audio_player.freezed.dart';
 
 Logger log = Logger('AudioPlayerController');
+const _maxAudioSources = 10;
+
+class _AudioPlaybackStall implements Exception {
+  const _AudioPlaybackStall();
+}
+
+bool _retryableAudioFailure(Object error) =>
+    error is _AudioPlaybackStall ||
+    (error is PlayerException && error.backendRetryable);
 
 class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   AudioPlayer? audioPlayer;
@@ -32,9 +45,23 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   int _playbackPitchSemitones = 0;
   int? _loadingGeneration;
   int? _backendMetadataGeneration;
+  Duration? _pendingSeek;
   bool _playbackOffline = false;
   bool _wantsToPlay = true;
   bool _terminalErrorSent = false;
+  int? _manualRetryGeneration;
+  bool _sourceAdmitted = false;
+  int _sourceLoadRevision = 0;
+  int _stallRevision = 0;
+  final _stallDetector = AudioStallDetector();
+  Timer? _stallTimer;
+  bool _focusInterrupted = false;
+  bool _resumeAfterFocus = false;
+  bool _deferredFocusResume = false;
+  int? _focusGeneration;
+  AudioPlayer? _nativeProgressOwner;
+  Future<({int revision, NativePlaybackProgress? sample})>?
+      _nativeProgressRequest;
   Future<void>? _disposal;
   final _playerSubscriptions = <StreamSubscription<dynamic>>[];
 
@@ -66,7 +93,16 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     _playbackGeneration++;
     _loadingGeneration = null;
     _backendMetadataGeneration = null;
+    _pendingSeek = null;
     _wantsToPlay = false;
+    _sourceAdmitted = false;
+    _resumeAfterFocus = false;
+    _deferredFocusResume = false;
+    _focusInterrupted = false;
+    _sourceLoadRevision++;
+    _stopStallWatch(forgetProgress: true);
+    _nativeProgressOwner = null;
+    _nativeProgressRequest = null;
     final current = audioPlayer;
     audioPlayer = null;
     EasyThrottle.cancel('audio-progress');
@@ -89,8 +125,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   void initPlayer() {
     if (audioPlayer == null) {
       final current = audioPlayer = AudioPlayer();
+      unawaited(_listenForAudioInterruptions(current));
       bool active() =>
-          !isClosed && _ownsParentPlayback && identical(audioPlayer, current);
+          !isClosed &&
+          !_terminalErrorSent &&
+          _ownsParentPlayback &&
+          identical(audioPlayer, current);
       _playerSubscriptions.addAll([
         current.playerStateStream.listen((value) {
           if (active()) onStateStreamChange(value);
@@ -138,12 +178,184 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         value: semitones));
   }
 
+  Future<void> _listenForAudioInterruptions(AudioPlayer current) async {
+    final session = await AudioSession.instance;
+    if (isClosed || !identical(audioPlayer, current)) return;
+    _playerSubscriptions
+        .add(session.interruptionEventStream.listen(handleAudioInterruption));
+  }
+
+  @visibleForTesting
+  void handleAudioInterruption(AudioInterruptionEvent event) {
+    if (isClosed || !_ownsParentPlayback) return;
+    final endingDuck = !event.begin && event.type == AudioInterruptionType.duck;
+    if (event.type == AudioInterruptionType.duck &&
+        (!endingDuck || !_focusInterrupted)) {
+      return;
+    }
+    _stopStallWatch();
+    if (event.begin) {
+      // Permanent loss abandons Android's focus request and may never produce
+      // an end event. Cancel automatic resume, but allow a later explicit Play
+      // to reach just_audio, which requests audio focus before playing.
+      _focusInterrupted = event.type == AudioInterruptionType.pause;
+      _focusGeneration = _playbackGeneration;
+      _resumeAfterFocus =
+          event.type == AudioInterruptionType.pause && _wantsToPlay;
+      if (event.type == AudioInterruptionType.unknown) {
+        _wantsToPlay = false;
+        _deferredFocusResume = false;
+      }
+      return;
+    }
+    _focusInterrupted = false;
+    final resume = (event.type == AudioInterruptionType.pause || endingDuck) &&
+        _resumeAfterFocus &&
+        (_deferredFocusResume || endingDuck) &&
+        _focusGeneration == _playbackGeneration;
+    _resumeAfterFocus = false;
+    _deferredFocusResume = false;
+    final generation = _playbackGeneration;
+    // just_audio owns ordinary pause/resume, but a later duck cancels its
+    // remembered pause. Release that blocking pause on gain, as well as any
+    // source recovery explicitly deferred while focus was unavailable.
+    if (resume) {
+      scheduleMicrotask(() {
+        if (!isClosed &&
+            generation == _playbackGeneration &&
+            _ownsParentPlayback &&
+            !_terminalErrorSent &&
+            _loadingGeneration == null &&
+            _wantsToPlay &&
+            !_focusInterrupted &&
+            !player.playbackInterrupted) {
+          play();
+        }
+      });
+    }
+  }
+
   bool get _awaitingBackendMetadata =>
       _backendMetadataGeneration == _playbackGeneration;
 
+  void _stopStallWatch({bool forgetProgress = false}) {
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    _stallRevision++;
+    _stallDetector.reset(forgetProgress: forgetProgress);
+  }
+
+  bool _canWatchProgress(AudioPlayer current) =>
+      !isClosed &&
+      !_terminalErrorSent &&
+      _ownsParentPlayback &&
+      player.state.isAudio &&
+      !_playbackOffline &&
+      _sourceAdmitted &&
+      state.video != null &&
+      _loadingGeneration == null &&
+      !_awaitingBackendMetadata &&
+      _wantsToPlay &&
+      !_focusInterrupted &&
+      !player.playbackInterrupted &&
+      player.shouldStartPlayback &&
+      identical(audioPlayer, current) &&
+      current.playing;
+
+  void _startStallWatch() {
+    final current = audioPlayer;
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        current == null ||
+        !_canWatchProgress(current)) {
+      return;
+    }
+    _stallTimer ??= Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(checkForStalledPlayback());
+    });
+  }
+
+  Future<({int revision, NativePlaybackProgress? sample})> _nativeProgress(
+      AudioPlayer current) {
+    final pending = _nativeProgressRequest;
+    if (pending != null && identical(_nativeProgressOwner, current)) {
+      return pending;
+    }
+    final revision = _sourceLoadRevision;
+    late final Future<({int revision, NativePlaybackProgress? sample})> request;
+    request =
+        Future<NativePlaybackProgress?>.sync(current.getNativePlaybackProgress)
+            .catchError((Object _) => null)
+            .then((sample) => (revision: revision, sample: sample))
+            .whenComplete(() {
+      if (identical(_nativeProgressRequest, request)) {
+        _nativeProgressRequest = null;
+        _nativeProgressOwner = null;
+        _startStallWatch();
+      }
+    });
+    _nativeProgressOwner = current;
+    return _nativeProgressRequest = request;
+  }
+
+  /// Fresh native snapshots establish progress; the animated Dart position
+  /// stream extrapolates time and cannot establish a silent decoder stall.
+  @visibleForTesting
+  Future<void> checkForStalledPlayback() async {
+    final current = audioPlayer;
+    if (current == null || !_canWatchProgress(current)) {
+      _stopStallWatch();
+      return;
+    }
+    // Timer ticks share one platform request. A delayed sample is not failure.
+    if (_nativeProgressRequest != null) return;
+    final generation = _playbackGeneration;
+    final revision = _stallRevision;
+    final video = state.video!;
+    final result = await _nativeProgress(current).timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => (revision: _sourceLoadRevision, sample: null));
+    if (generation != _playbackGeneration ||
+        revision != _stallRevision ||
+        result.revision != _sourceLoadRevision ||
+        !identical(state.video, video) ||
+        !_canWatchProgress(current)) {
+      return;
+    }
+    final sample = result.sample;
+    if (sample == null) {
+      _stopStallWatch();
+      return;
+    }
+    final playing = sample.playWhenReady &&
+        sample.isPlaying &&
+        sample.processingState == ProcessingState.ready &&
+        sample.suppressionReason == 0 &&
+        !sample.seekPending &&
+        !sample.hasError;
+    player.reportPlaybackRecoveryProgress(video, sample.position,
+        playing: playing);
+    player.reportBackendPlaybackProgress(
+        video.videoId, video.backendPlayback, sample.position,
+        playing: playing);
+    if (_stallDetector.observe(sample, eligible: true)) {
+      _beginPlaybackRecovery(current, const _AudioPlaybackStall(),
+          resumeAt: sample.position);
+    }
+  }
+
   void onStateStreamChange(PlayerState state) {
-    if (!_ownsParentPlayback || _awaitingBackendMetadata) return;
+    if (_terminalErrorSent ||
+        !_ownsParentPlayback ||
+        _awaitingBackendMetadata) {
+      return;
+    }
     log.fine('Player state event $state');
+    if (!state.playing) {
+      _stopStallWatch();
+    } else {
+      _startStallWatch();
+    }
     switch (state.processingState) {
       case ProcessingState.idle:
         // looks like this is causing issues with the player control notification
@@ -153,11 +365,19 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         player.setEvent(const MediaEvent(state: MediaState.loading));
         break;
       case ProcessingState.buffering:
-        player.setEvent(const MediaEvent(state: MediaState.buffering));
+        // Audio focus can interrupt or resume playback before buffering ends.
+        final changed = _loadingGeneration == null &&
+            state.playing != player.state.isPlaying;
+        player.setEvent(MediaEvent(
+            state: MediaState.buffering,
+            type: changed
+                ? (state.playing ? MediaEventType.play : MediaEventType.pause)
+                : null));
         break;
       case ProcessingState.ready:
         final video = this.state.video;
-        if (video != null) {
+        if (video != null && _loadingGeneration == null) {
+          player.reportPlaybackRecoveryReady(video, playing: state.playing);
           player.reportBackendPlaybackReady(
               video.videoId, video.backendPlayback,
               playing: state.playing);
@@ -173,6 +393,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         }
         break;
       case ProcessingState.completed:
+        _sourceAdmitted = false;
+        _stopStallWatch();
         player.setEvent(const MediaEvent(state: MediaState.completed));
         break;
     }
@@ -180,6 +402,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
 
   void onDurationChanged(Duration? duration) {
     if (isClosed ||
+        _terminalErrorSent ||
         !_ownsParentPlayback ||
         audioPlayer == null ||
         _awaitingBackendMetadata) {
@@ -193,22 +416,16 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   void onPositionChanged(Duration position) {
-    if (!_ownsParentPlayback ||
+    if (_terminalErrorSent ||
+        !_ownsParentPlayback ||
         _awaitingBackendMetadata ||
-        _loadingGeneration != null) return;
-    final current = audioPlayer;
-    final video = state.video;
-    if (current != null &&
-        video != null &&
-        _loadingGeneration != _playbackGeneration &&
-        !_terminalErrorSent) {
-      player.reportBackendPlaybackProgress(
-          video.videoId, video.backendPlayback, position,
-          playing: current.playing &&
-              current.processingState == ProcessingState.ready);
+        _loadingGeneration != null) {
+      return;
     }
+    final current = audioPlayer;
     EasyThrottle.throttle('audio-progress', const Duration(seconds: 1), () {
       if (isClosed ||
+          _terminalErrorSent ||
           !_ownsParentPlayback ||
           current == null ||
           !identical(audioPlayer, current) ||
@@ -235,29 +452,61 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       // source loop owns those failures, so a native event cannot retry twice.
       return;
     }
-    final generation = _playbackGeneration;
     if (_playbackOffline ||
-        error is! PlayerException ||
-        !error.backendRetryable ||
-        state.video?.backendPlayback == null) {
+        !_sourceAdmitted ||
+        !_retryableAudioFailure(error) ||
+        state.video == null) {
       _failPlayback(error);
       return;
     }
+    _beginPlaybackRecovery(current, error);
+  }
+
+  void _beginPlaybackRecovery(AudioPlayer current, Object error,
+      {Duration? resumeAt}) {
+    if (_loadingGeneration != null || _terminalErrorSent || isClosed) return;
+    final generation = _playbackGeneration;
+    final parentGeneration = player.backendPlaybackGeneration;
+    final sourceRevision = _sourceLoadRevision;
     _loadingGeneration = generation;
-    final resumeAt = current.position;
+    _stopStallWatch();
     emit(state.copyWith(loading: true));
-    unawaited(_loadAudioSource(current, generation,
-            offline: false, startAt: resumeAt, firstError: error)
-        .then((loaded) {
+    unawaited(() async {
+      // Error callbacks may arrive while the Dart animation still extrapolates
+      // progress. Prefer the native playhead; never use a seek target as proof.
+      final initialPosition = resumeAt ?? current.position;
+      final sample = resumeAt == null
+          ? await _nativeProgress(current).timeout(const Duration(seconds: 3),
+              onTimeout: () => (revision: sourceRevision, sample: null))
+          : null;
+      if (isClosed ||
+          generation != _playbackGeneration ||
+          parentGeneration != player.backendPlaybackGeneration ||
+          !identical(audioPlayer, current)) {
+        return;
+      }
+      final measured = sample?.revision == sourceRevision &&
+              sample?.sample?.seekPending == false
+          ? sample?.sample?.position
+          : null;
+      final loaded = await _loadAudioSource(current, generation,
+          offline: false,
+          startAt: resumeAt ?? measured ?? initialPosition,
+          firstError: error,
+          allowStreamRefresh: true);
       if (loaded && !isClosed && generation == _playbackGeneration) {
         super.playVideo(false);
       }
-    }));
+    }());
   }
 
   void _failPlayback(Object error) {
     if (isClosed || _terminalErrorSent) return;
     _terminalErrorSent = true;
+    _stopStallWatch();
+    // A failed source is not playing. Publish pause before the error so the
+    // controls and notification stop without hiding the actionable failure.
+    pause();
     // Native and metadata exceptions may contain signed URLs or request data.
     log.warning('Audio playback failed (${error.runtimeType})');
     player.setEvent(const MediaEvent(state: MediaState.error));
@@ -267,7 +516,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   Future<bool> _loadAudioSource(AudioPlayer current, int generation,
       {required bool offline,
       required Duration? startAt,
-      Object? firstError}) async {
+      Object? firstError,
+      bool allowStreamRefresh = false}) async {
     var video = state.video;
     final offlineVideo = state.offlineVideo;
     final parentGeneration = player.backendPlaybackGeneration;
@@ -284,25 +534,38 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     try {
       while (active()) {
         if (failure != null) {
-          if (offline ||
-              failure is! PlayerException ||
-              !failure.backendRetryable ||
-              video?.backendPlayback == null) {
+          if (offline || !_retryableAudioFailure(failure) || video == null) {
             throw failure;
           }
           _backendMetadataGeneration = generation;
           Video? next;
+          var sameRoute = false;
           try {
-            next = await service.retryVideoBackend(video!, isCurrent: active,
-                onRetry: (request) {
-              if (active() &&
-                  player.setRequestedBackend(video!.videoId, request)) {
-                player.setEvent(MediaEvent(
-                    state: MediaState.loading,
-                    type: MediaEventType.backendRetry,
-                    value: request.label));
+            if (allowStreamRefresh) {
+              try {
+                next = await player.refreshCurrentPlayback(video,
+                    isCurrent: active);
+                sameRoute = next != null;
+              } catch (error) {
+                if (!active()) return false;
+                if (!isBackendRetryable(error)) rethrow;
+                // Only a classified transient refresh failure can proceed to
+                // the existing, separately bounded alternate-backend policy.
               }
-            });
+            }
+            if (!active()) return false;
+            if (next == null && video.backendPlayback != null) {
+              next = await service.retryVideoBackend(video, isCurrent: active,
+                  onRetry: (request) {
+                if (active() &&
+                    player.setRequestedBackend(video!.videoId, request)) {
+                  player.setEvent(MediaEvent(
+                      state: MediaState.loading,
+                      type: MediaEventType.backendRetry,
+                      value: request.label));
+                }
+              });
+            }
           } finally {
             if (_backendMetadataGeneration == generation) {
               _backendMetadataGeneration = null;
@@ -312,7 +575,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           if (next == null) throw failure;
           next = next.preservingMusicMetadataFrom(video);
           video = next;
-          player.reportBackendVideoLoaded(next);
+          if (!sameRoute) player.reportBackendVideoLoaded(next);
           emit(state.copyWith(
               video: next,
               audioLength: Duration(seconds: next.lengthSeconds ?? 0),
@@ -321,23 +584,23 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           failure = null;
         }
         try {
-          AudioSource? source;
+          final sources = <AudioSource>[];
           if (offline) {
             final path = await offlineVideo!.effectivePath;
             if (!active()) return false;
-            source = Uri.tryParse(path)?.scheme == 'content'
+            sources.add(Uri.tryParse(path)?.scheme == 'content'
                 ? AudioSource.uri(Uri.parse(path))
-                : AudioSource.file(path);
+                : AudioSource.file(path));
           } else {
             final selectedServer = await db.getCurrentlySelectedServer();
             if (!active()) return false;
-            final playback = video?.backendPlayback;
+            final playback =
+                video?.backendPlayback ?? video?.playbackConnection;
             if (playback != null && !playback.matches(selectedServer)) {
               throw StateError('Playback context changed');
             }
             final server = playback?.server ?? selectedServer;
-            player.setRequestedBackend(video!.videoId, playback);
-            final proxy = service.useProxy();
+            player.setRequestedBackend(video!.videoId, video.backendPlayback);
             final combined = (video.formatStreams ?? [])
                 .where((stream) => !stream.isLegacyHd720)
                 .toList()
@@ -348,35 +611,48 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
                 .sortByReversed(
                     (format) => int.tryParse(format.bitrate ?? '') ?? 0)
                 .map((format) => format.url);
-            // Keep the combined proxy source preference, but audio-only
-            // responses must use the same instance route as video playback.
-            final candidates =
-                proxy ? [...combined, ...adaptive] : [...adaptive, ...combined];
+            // Audio playback should not depend on a combined video stream.
+            // Keep combined formats as a fallback for missing usable audio.
+            final candidates = [...adaptive, ...combined];
+            final seen = <String>{};
             for (final candidate in candidates) {
               final parsed = parseMediaUrl(candidate);
               if (parsed == null) continue;
-              final url = validatedMediaUrl(
-                  proxyMediaUrl(parsed, server, proxy), server);
-              if (url == null) continue;
-              source = AudioSource.uri(Uri.parse(url),
-                  headers: mediaHeaders(server, url));
-              break;
+              final url =
+                  validatedMediaUrl(proxyMediaUrl(parsed, server), server);
+              if (url == null || !seen.add(url)) continue;
+              sources.add(AudioSource.uri(Uri.parse(url),
+                  headers: mediaHeaders(server, url)));
+              if (sources.length >= _maxAudioSources) break;
             }
           }
-          if (source == null) {
+          if (sources.isEmpty) {
             throw StateError('No supported audio source');
           }
-          await current.setAudioSource(source, initialPosition: startAt);
+          for (var index = 0; index < sources.length; index++) {
+            try {
+              // just_audio can carry its native Play intent into a new source.
+              // Restore intent only after setup and the latest parent/focus
+              // checks, including a Pause whose child command is still queued.
+              if (current.playing) await current.pause();
+              if (!active()) return false;
+              _sourceLoadRevision++;
+              await current.setAudioSource(sources[index],
+                  initialPosition: _pendingSeek ?? startAt);
+              break;
+            } catch (error) {
+              if (!active()) return false;
+              // An unavailable audio track need not make the whole backend
+              // unusable. Try its remaining admitted formats first. Access
+              // refusals and non-retryable failures retain their terminal path.
+              if (index == sources.length - 1 ||
+                  error is! PlayerException ||
+                  !error.backendRetryable) {
+                rethrow;
+              }
+            }
+          }
           if (!active()) return false;
-          // Source initialization may briefly report zero before its initial
-          // seek. Publish the admitted position before any play/rate event:
-          // MediaSession extrapolates progress from those events.
-          final position = current.position;
-          emit(state.copyWith(audioPosition: position));
-          player.setEvent(MediaEvent<Duration>(
-              state: MediaState.ready,
-              type: MediaEventType.progress,
-              value: position));
           // A speed or pause selection made during recovery wins over the
           // values that were active when the request began.
           await current.setSpeed(_playbackSpeed);
@@ -386,19 +662,51 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
                 .setPitch(pitchFactorForSemitones(_playbackPitchSemitones));
           }
           if (!active()) return false;
+          // Seeking the old source while metadata or native setup is pending
+          // would be overwritten by the replacement's initial position. Apply
+          // the latest request after all asynchronous setup has finished.
+          while (_pendingSeek != null) {
+            final position = _pendingSeek!;
+            _pendingSeek = null;
+            startAt = position;
+            if (current.position != position) await current.seek(position);
+            if (!active()) return false;
+          }
+          // Publish the admitted position before any play/rate event:
+          // MediaSession extrapolates progress from those events.
+          final position = current.position;
+          emit(state.copyWith(audioPosition: position));
+          player.setEvent(MediaEvent<Duration>(
+              state: MediaState.ready,
+              type: MediaEventType.progress,
+              value: position));
           super.setSpeed(_playbackSpeed);
           _reportPitch(_playbackPitchSemitones);
           _loadingGeneration = null;
-          if (_wantsToPlay) {
+          _sourceAdmitted = true;
+          final interrupted = _focusInterrupted || player.playbackInterrupted;
+          if (_wantsToPlay && player.shouldStartPlayback && !interrupted) {
             play();
+          } else if (interrupted) {
+            // Preserve temporary-focus intent while preventing source setup
+            // from starting audio before the interruption has ended.
+            _deferredFocusResume = _wantsToPlay;
+            if (current.playing) await current.pause();
+            if (!active()) return false;
+            player.setEvent(const MediaEvent(
+                state: MediaState.playing, type: MediaEventType.pause));
           } else {
             pause();
           }
           emit(state.copyWith(loading: false, error: null));
           if (video != null && active()) {
+            player.reportPlaybackRecoveryReady(video,
+                playing:
+                    _wantsToPlay && player.shouldStartPlayback && !interrupted);
             player.reportBackendPlaybackReady(
                 video.videoId, video.backendPlayback,
-                playing: _wantsToPlay);
+                playing:
+                    _wantsToPlay && player.shouldStartPlayback && !interrupted);
           }
           return true;
         } catch (error) {
@@ -422,11 +730,13 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     _parentPlaybackGeneration = player.backendPlaybackGeneration;
     _loadingGeneration = generation;
     _backendMetadataGeneration = null;
+    _pendingSeek = null;
+    _sourceAdmitted = false;
+    _resumeAfterFocus = false;
+    _deferredFocusResume = false;
+    _stopStallWatch(forgetProgress: true);
     _playbackOffline = offline;
-    _wantsToPlay =
-        !offline && state.video?.backendPlayback?.manualSelection == true
-            ? player.requestedPlaying
-            : true;
+    _wantsToPlay = player.shouldStartPlayback;
     _terminalErrorSent = false;
     final videoId =
         offline ? state.offlineVideo!.videoId : state.video!.videoId;
@@ -507,27 +817,108 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   @override
+  void handleCommand(MediaCommand command) {
+    if (_terminalErrorSent && command.type == MediaCommandType.pause) {
+      // Parent Retry can publish its error before this queued command arrives.
+      // Pause natively without replacing the failure's visible state.
+      _wantsToPlay = false;
+      _stopStallWatch();
+      audioPlayer?.pause();
+      return;
+    }
+    if (command.type == MediaCommandType.play &&
+        (_terminalErrorSent || _loadingGeneration == _playbackGeneration)) {
+      // The base handler announces Play immediately after dispatch. A failed
+      // decoder must reload first, and publish Play only after source admission.
+      play();
+      return;
+    }
+    super.handleCommand(command);
+  }
+
+  @override
   void play() {
+    if (_terminalErrorSent) {
+      if (state.offlineVideo == null) {
+        unawaited(_retryAfterFailure());
+      } else {
+        unawaited(playVideo(state.offlineVideo != null,
+            startAt: player.state.position));
+      }
+      return;
+    }
     _wantsToPlay = true;
-    if (_loadingGeneration != _playbackGeneration) audioPlayer?.play();
+    if (_focusInterrupted || player.playbackInterrupted) {
+      // A newer explicit Play supersedes a Pause made during a temporary
+      // interruption, without playing before focus returns.
+      _focusGeneration = _playbackGeneration;
+      _resumeAfterFocus = true;
+      _deferredFocusResume = true;
+      return;
+    }
+    if (_loadingGeneration == _playbackGeneration ||
+        !player.shouldStartPlayback) {
+      return;
+    }
+    audioPlayer?.play();
+    _startStallWatch();
     player.setEvent(
         const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
   }
 
+  Future<void> _retryAfterFailure() async {
+    final generation = _playbackGeneration;
+    if (isClosed ||
+        !player.state.isAudio ||
+        !_ownsParentPlayback ||
+        _manualRetryGeneration == generation) {
+      return;
+    }
+    _manualRetryGeneration = generation;
+    final queueId = player.state.currentQueueId;
+    try {
+      final retry = player.retryCurrentVideo();
+      final parentGeneration = player.backendPlaybackGeneration;
+      await retry;
+      if (!isClosed &&
+          generation == _playbackGeneration &&
+          parentGeneration == player.backendPlaybackGeneration &&
+          queueId == player.state.currentQueueId &&
+          player.state.mediaEvent.state == MediaState.error) {
+        // Failed fresh metadata retains this decoder's actionable error. A
+        // later explicit Play may retry the same retained queue occurrence.
+        _parentPlaybackGeneration = parentGeneration;
+      }
+    } catch (_) {
+      // Keep the existing error without exposing request or credential data.
+    } finally {
+      if (_manualRetryGeneration == generation) _manualRetryGeneration = null;
+    }
+  }
+
   @override
   void seek(Duration position) {
-    audioPlayer?.seek(position);
+    _stopStallWatch(forgetProgress: true);
+    if (_loadingGeneration == _playbackGeneration) {
+      _pendingSeek = position;
+    } else {
+      audioPlayer?.seek(position);
+    }
     player.setEvent(
         const MediaEvent(state: MediaState.playing, type: MediaEventType.seek));
     player.setEvent(MediaEvent(
         state: MediaState.playing,
         type: MediaEventType.progress,
         value: position));
+    _startStallWatch();
   }
 
   @override
   void pause() {
     _wantsToPlay = false;
+    _resumeAfterFocus = false;
+    _deferredFocusResume = false;
+    _stopStallWatch();
     audioPlayer?.pause();
     player.setEvent(const MediaEvent(
         state: MediaState.playing, type: MediaEventType.pause));
@@ -640,10 +1031,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   }
 
   void onBufferChanged(Duration event) {
-    if (_awaitingBackendMetadata) return;
+    if (_terminalErrorSent || _awaitingBackendMetadata) return;
     final current = audioPlayer;
     EasyThrottle.throttle('audio-buffering', const Duration(seconds: 1), () {
       if (isClosed ||
+          _terminalErrorSent ||
           !_ownsParentPlayback ||
           current == null ||
           !identical(audioPlayer, current) ||

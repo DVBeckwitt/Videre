@@ -6,6 +6,7 @@ import '../offline_subscriptions/models/offline_subscription.dart';
 import '../playlists/models/playlist.dart';
 import '../playlists/models/playlist_reference.dart';
 import '../playlists/models/saved_playlist.dart';
+import '../player/models/video_display_mode.dart';
 import '../settings/models/db/settings.dart';
 import '../settings/models/db/video_filter.dart';
 import '../videos/models/db/history_video_cache.dart';
@@ -359,6 +360,8 @@ class UserBackup {
       'home-content-mode' => const ['videos', 'music'].contains(value),
       'home-experience' =>
         const ['videosAndMusic', 'videosOnly', 'musicOnly'].contains(value),
+      videoDisplayModeSettingName =>
+        VideoDisplayMode.fromStorage(value) != null,
       phoneNavigationSettingName => PhoneNavigation.decode(value) != null,
       browsingCountry => RegExp(r'^[A-Z]{2}$').hasMatch(value),
       localeSettingName =>

@@ -1,13 +1,14 @@
 # Music in Videre
 
-Music uses public YouTube Music catalog data and Videre's existing Invidious
-playback, queues, local library, and download engine. It does not sign in to a
+Music uses the selected Invidious instance for browsing, artwork, and playback
+metadata, together with Videre's queues, local library, and download engine.
+Opening Music does not contact `music.youtube.com`. It does not sign in to a
 Google account or synchronize a Google library.
 
 Use the **Videos / Music** switch at the top of the home screen on phones,
-tablets, and TVs. Music has its own **Home**, **Explore**, and **Library**
-destinations. Use the search button in Music to find a specific song, album,
-artist, or public playlist.
+tablets, and TVs. Music has its own **Home**, **Search**, and **Library**
+destinations. Search finds songs, channels, and public playlists through the
+selected Invidious instance.
 
 Choose **Settings → Browsing → Home experience** to show **Videos and Music**
 (the default), **Videos only**, or **Music only**. The same choice is available
@@ -15,29 +16,34 @@ in the home and navigation customizers. A single-mode choice opens that home
 directly and hides the switch. The preference and last selected mode belong to
 the active Videre profile.
 
-## Home and Explore
+## Home and Search
 
-**Home** shows public new albums and singles, global chart playlists, and mood
-and genre shortcuts. **Explore** provides the full new-release grid, charts
-with a country selector, and the public moods and genres. Selecting a mood or
-genre opens its curated playlists.
+**Home** shows the full **Trending music** feed returned by the server's standard
+`/api/v1/trending?type=Music` endpoint, with shortcuts to **Search** and **Library**.
+The existing browsing-country setting applies. Search and Library remain
+available when the instance's trending feed is empty or fails; there is no
+fallback to Google.
 
-Discovery uses anonymous public catalog feeds. New releases come from the
-catalog's release grid. Chart playlists retain their supplied titles, such as
-daily or weekly video charts, and availability varies by country. Artist cards
-are shown as **Artists in the charts**, without assigning numerical ranks. The
-country selector lists the regions supported by the catalog.
-
-Personalized **For you** groups are excluded. Videre does not provide Google
-account recommendations, synchronized likes, or a synchronized YouTube Music
-library. Your local Library is separate from these public feeds.
+Music provides Invidious search, channels, public playlists, and local playlists.
+YouTube Music's album, new-release, chart, and mood catalogs have no browsing
+pages or API routes in the app. Personalized Google recommendations and
+synchronized likes are not part of Music.
 
 ## Browse and listen
 
-Search songs, albums, artists, or public playlists. Artist pages show popular
-songs, albums, and singles/EPs. Album and playlist pages retain the catalog's
-track order. Selecting a song starts from the beginning; **Resume listening**
+Search **Songs**, **Channels**, or **Playlists** through Invidious. Songs use
+the server's video search; Channels use channel search and show that channel's
+popular uploads. These are standard YouTube results supplied by Invidious, not
+a verified YouTube Music artist or album catalog. Public playlists retain the
+server's track order. Selecting a song starts from the beginning; **Resume listening**
 continues the saved Music session at its saved position.
+
+Public playlists, including `OLAK5uy_` IDs, use Invidious's standard playlist
+endpoint. Saved mixes with `RD` IDs use its standard mixes endpoint.
+A dynamic mix plays the batch returned by that endpoint;
+it does not claim to load an endless radio stream. Public playlist pagination
+merges overlapping pages by source position while retaining repeated recordings
+at different positions.
 
 Selecting a track in a public or local playlist keeps the full playlist in the
 queue, including earlier tracks and repeated occurrences. **Resume playlist**
@@ -54,18 +60,22 @@ or expanded. TV uses focusable audio controls with the same playback engine.
 
 ## Local library and downloads
 
-**Library** has filters for **Playlists**, **Songs**, **Albums**, **Artists**,
-and, on phones and tablets, **Downloads**. Use **Save song**, **Save album**,
-**Save artist**, or **Save playlist** to bookmark catalog items in the active
-Videre profile. Saved albums, artists, and public playlists reopen their catalog
-pages; bookmarks do not download audio. You can remove a bookmark from Library
-or its catalog page.
+**Library** has filters for **Playlists**, **Songs**, **Channels**, and, on phones
+and tablets, **Downloads**. Use **Save song**, **Save channel**, or **Save playlist**
+to bookmark items in the active Videre profile. Bookmarks do not download audio.
+You can remove a bookmark from Library or its detail page.
+
+Album bookmarks from earlier versions remain stored and included in backups for
+import/export compatibility, but are hidden from the active library. Their
+YouTube Music album browse IDs are not opened. Existing local playlists,
+downloads, saved playback, and album labels attached to songs are preserved.
 
 Use **Save to playlist** on a song or collection to choose or create a playlist
 on this device. Collections are added in order; existing songs are not duplicated.
 Library's Playlists filter includes these local Music playlists and bookmarked
 public playlists. Local playlist pages show their Music tracks and provide
-**Play all** and collection actions.
+**Play all**, **Resume playlist**, and collection actions. Use **Remove from
+playlist** in a song's Music actions to remove it from that local playlist.
 These operations belong to the active Videre profile. Switching profiles closes
 an open save dialog and stops any remaining collection operation.
 
@@ -102,62 +112,56 @@ again to acquire segment data, including any category enabled after downloading.
 
 ## Network boundary
 
-Public discovery feeds, catalog searches, and artist, album, or playlist lookups
-contact `music.youtube.com` through Videre's configured network transport, including
-SOCKS5/Orbot. These requests do not send Invidious credentials or Google login
-cookies. Playback URLs are resolved by the selected Invidious backend and follow
-the media-proxy setting. Music catalog artwork loads from its original public
-image URLs through the same configured network transport, without Invidious
-credentials or Google login cookies. Album, artist, playlist, player, download,
-and notification covers therefore do not depend on the Invidious image proxy.
-Fallback video thumbnails still use the selected instance's image routing,
-including saved songs without a catalog cover. New Music history entries retain
-their catalog artwork and song metadata.
+Music searches, trending, channel details, public playlists, and song metadata
+use the selected server's standard Invidious API through the existing request
+and authentication layer. NerdVPN API-key access and protected-server gateway
+sessions follow the same rules as Videos. Missing access or a failed request
+does not switch to YouTube Music. Responses and playlist pagination are rejected
+after a profile, account, backend, server, or proxy change.
 
-The two proxy controls are independent and can be combined:
+Google-hosted Music artwork, including saved catalog covers from earlier
+versions, uses the Invidious image proxy. Player, library, video cards, downloads,
+and notification artwork follow the same routing, without a direct Google
+fallback. Existing optional third-party services such as SponsorBlock and
+DeArrow retain their own settings and network routes.
 
-| Network proxy (SOCKS5/Orbot) | Proxy videos | Catalog and artwork | Audio streams |
-|---|---|---|---|
-| Off | Off | Public catalog/image hosts | Media host supplied by Invidious |
-| Off | On | Public catalog/image hosts | Through Invidious |
-| On | Off | Through SOCKS | Media host through SOCKS |
-| On | On | Through SOCKS | Invidious through SOCKS |
+Video, audio, and downloads always use the selected Invidious media proxy.
+The direct-playback switch has been removed. Previous `use-proxy=false` settings
+and imported backups cannot restore direct Google playback. App transport rejects
+official YouTube destinations, including redirects and adaptive stream children,
+before opening their connections. If an instance cannot proxy a stream, playback
+fails instead of connecting directly to Google. Unsupported Google image paths
+show a placeholder or another proxied image, without a direct fallback.
 
-**Proxy videos** is an Invidious media setting, not a general Internet proxy.
-Invidious's [standard API](https://docs.invidious.io/api/) does not provide the YouTube Music discovery/catalog
-endpoints. Enable **Settings → Network proxy** to route those requests through
-SOCKS or Tor as well. An enabled but unavailable SOCKS endpoint fails rather
-than trying a direct connection. Changing the network proxy discards the cached
-catalog visitor data; unfinished responses from the previous route cannot seed
-requests on the new route. Multi-page collections and discovery lookups also
-discard continuations from the previous route. Retry a Music section after
-changing the route.
+Invidious fetches content from YouTube on its server; this keeps those connections
+off the device, rather than removing YouTube from the server's upstream sources.
+See the [Invidious API](https://docs.invidious.io/api/) for the standard browsing
+and video metadata endpoints used by Music.
 
-If the anonymous startup request redirects to YouTube's HTTPS consent page,
-Videre retries the original Music URL once with `SOCS=CAE=`, the
-[reject-optional-cookies value documented by NewPipe](https://github.com/TeamNewPipe/NewPipeExtractor/blob/39b9482ea2be0e9ab95a31987c2f3347396e84ec/extractor/src/main/java/org/schabi/newpipe/extractor/services/youtube/YoutubeParsingHelper.java).
-It does not follow the redirect, import response cookies, or retain this marker
-for API requests or artwork. The retry shares the original route and deadline.
-
-The catalog can be unavailable in a Tor exit's country. Music identifies the
-observed regional startup page and suggests another circuit or region; it does
-not switch to a direct connection. Proxied catalog requests allow up to 60
-seconds per request (20 seconds without SOCKS), while transport connection
-deadlines still apply. Invidious availability is separate from catalog access.
-An earlier live Tor check returned the regional startup page after this consent
-retry; it established accurate regional error handling, not catalog availability
-from that exit.
-
-YouTube Music catalog endpoints are unofficial. Their response formats are
-isolated in `MusicCatalogService` and its parsers, with offline fixtures and an
-opt-in live smoke test. Artist release shelves follow the catalog's full-list
-links and continuations, rather than treating preview cards as the entire list.
-Discovery validates country/category inputs and bounds continuation requests;
-unavailable or malformed responses produce a retryable error instead of a
-substitute feed.
-See the [upstream browsing reference](https://ytmusicapi.readthedocs.io/en/stable/reference/browsing.html).
+The optional **Settings → Network proxy** routes the Invidious connection and
+other enabled services through SOCKS or Tor. It does not enable direct YouTube
+playback. An unavailable SOCKS endpoint fails without trying a direct connection.
 
 ## Verification
+
+The canonical `tools/validate.dart` checks include the offline `test/music`
+suite alongside player, download, profile, and video regressions. The Invidious
+adapter tests exercise both NerdVPN and `invidious.dvbeckwitt.duckdns.org` origins with
+mocked transport, standard API paths and authentication routing, complete
+playlist pagination, and rejection of stale results. UI tests cover Home and
+search, local library actions, hidden legacy album bookmarks, and artwork proxying.
+Mocked endpoints do not establish live server availability or Android playback.
+
+Android acceptance should cover Music search and trending on both configured
+servers, authenticated artwork, playlist queues, screen-off playback, local
+saving, offline playback, session restoration, and TV D-pad access. A Windows
+APK build or widget test does not establish physical-device or Linux CI coverage.
+
+### Historical direct-catalog checks
+
+These observations describe the earlier direct YouTube Music implementation,
+which the application's default Invidious adapter no longer calls. They are not
+evidence for current Invidious music behavior.
 
 A bounded rerun late on November 9, 2026 (November 10 UTC) used separate US and
 DE exit constraints. Tor's check API confirmed both routes; Tor's local GeoIP
@@ -169,27 +173,23 @@ repeated there. These negative checks preserve the earlier successful Tor
 observations; they do not establish current catalog availability or fresh Music
 playback on either tested route.
 
-The canonical `tools/validate.dart` checks include the offline `test/music`
-suite alongside the existing player, download, profile, and video regressions.
-The live catalog and anonymous discovery checks are deliberately separate:
+The earlier direct-catalog implementation and parser fixtures are now isolated
+under `test/music/support/` for offline historical regression evidence. They are
+not included in the app. There is no direct-catalog fallback or opt-in mode.
+
+The opt-in live check now exercises only an explicitly supplied Invidious server:
 
 ```powershell
-./submodules/flutter/bin/flutter.bat test --dart-define=VIDERE_LIVE_MUSIC_TEST=true test/music/catalog_live_test.dart
+./submodules/flutter/bin/flutter.bat test --dart-define=VIDERE_LIVE_MUSIC_TEST=true --dart-define=VIDERE_LIVE_MUSIC_INSTANCE=https://your-invidious-instance test/music/catalog_live_test.dart
 ```
 
-To repeat both media-proxy modes through a running SOCKS listener, add
-`--dart-define=VIDERE_LIVE_MUSIC_SOCKS_PORT=9050`. The optional
-`VIDERE_LIVE_MUSIC_SOCKS_HOST` define defaults to `127.0.0.1`.
-`--dart-define=VIDERE_LIVE_MUSIC_VERIFY_TOR=true` also requires Tor's check API
-to confirm the route, without printing its IP address. The live checks stay
-disabled unless `VIDERE_LIVE_MUSIC_TEST=true` is explicitly supplied.
+The instance must allow the test client's API access. Credentials are not accepted
+in command-line defines. To exercise a running SOCKS listener, add
+`--dart-define=VIDERE_LIVE_MUSIC_SOCKS_PORT=9050`; the optional
+`VIDERE_LIVE_MUSIC_SOCKS_HOST` defaults to `127.0.0.1`.
+`--dart-define=VIDERE_LIVE_MUSIC_VERIFY_TOR=true` additionally checks Tor's API
+without printing an IP address. Live checks remain disabled without the explicit
+opt-in, and reject official YouTube addresses or off-origin redirects.
 
-Android acceptance should cover the Videos/Music switch, Home experience choices,
-Home/Explore/Library navigation, country and mood selection, public catalog
-browsing, both media-proxy modes, screen-off playback, queue changes,
-interruption handling, local saving, offline playback, session restoration,
-and TV D-pad access. A Windows APK build or widget test does not establish
-physical-device or Linux CI coverage.
-
-Gapless playback and Google-account synchronization are outside this anonymous
-Music implementation.
+Gapless playback and Google-account synchronization are outside this Music
+implementation.

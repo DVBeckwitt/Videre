@@ -11,6 +11,7 @@ const playerShuffle = 'player-shuffle';
 const playerAutoplayOnLoad = 'player-autoplay-on-load';
 const playerAutoplayQueue = 'player-autoplay-queue';
 const playRecommendedNextSettingName = 'play-recommended-next';
+// Retained so backups from versions with a direct playback setting import.
 const useProxySettingName = 'use-proxy';
 const networkSocksProxySettingName = 'network-socks-proxy';
 const useReturnYoutubeDislikeSettingName = 'use-return-youtube-dislike';
@@ -33,6 +34,7 @@ const lockOrientationFullScreen = 'lock-orientation-fullscreen';
 const skipStepSettingName = 'skip-step';
 const skipExponentialSettingName = 'skip-exponentially';
 const fillFullScreen = 'fill-fullscreen';
+const videoDisplayModeSettingName = 'video-display-mode';
 const appLayoutSettingName = 'app-layout';
 const tvAppLayoutSettingName = 'tv-app-layout';
 const phoneNavigationSettingName = 'phone-navigation';

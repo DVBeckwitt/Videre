@@ -19,6 +19,7 @@ import 'package:clipious/videos/views/components/inner_view_tablet.dart';
 import 'package:clipious/videos/views/components/video_share_button.dart';
 
 import '../../../player/states/player.dart';
+import '../../../player/views/components/video_retry_notice.dart';
 import '../../../utils.dart';
 import '../components/backend_status.dart';
 
@@ -285,11 +286,18 @@ class VideoScreen extends StatelessWidget {
                                                 ),
                                               )
                                             : videoState.loadingVideo
-                                                ? const DeviceWidget(
-                                                    portraitTabletAsPhone: true,
-                                                    phone: VideoPlaceHolder(),
-                                                    tablet:
-                                                        TabletVideoPlaceHolder())
+                                                ? showVideoMetadataRetry(
+                                                        videoState)
+                                                    ? const Center(
+                                                        child:
+                                                            VideoRetryNotice())
+                                                    : const DeviceWidget(
+                                                        portraitTabletAsPhone:
+                                                            true,
+                                                        phone:
+                                                            VideoPlaceHolder(),
+                                                        tablet:
+                                                            TabletVideoPlaceHolder())
                                                 : DeviceWidget(
                                                     portraitTabletAsPhone: true,
                                                     phone: VideoInnerView(

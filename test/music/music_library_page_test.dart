@@ -225,16 +225,21 @@ void main() {
     });
   }
 
-  testWidgets(
-      'song and album buttons persist and toggle their own bookmark kinds',
+  testWidgets('song and channel buttons preserve hidden legacy album bookmarks',
       (tester) async {
     const album = MusicLibraryEntry(
         kind: MusicLibraryKind.album, id: 'MPREalbum', title: 'Album');
+    const channel = MusicLibraryEntry(
+        kind: MusicLibraryKind.artist, id: 'UCchannel', title: 'Channel');
+    await tester.runAsync(() => library.save(album));
     await show(tester,
         body: Column(children: [
           const MusicLibraryActions(videos: [song], compact: false),
+          const MusicBookmarkButton(entry: channel),
           const MusicBookmarkButton(entry: album),
         ]));
+    expect(find.text('Save album'), findsNothing);
+    expect(find.text('Remove saved album'), findsNothing);
     await tester.runAsync(() async {
       await tester.tap(find.text('Save song'));
       await waitFor(
@@ -243,13 +248,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Remove saved song'), findsOneWidget);
     await tester.runAsync(() async {
-      await tester.tap(find.text('Save album'));
-      await waitFor(() => library.contains(MusicLibraryKind.album, album.id));
+      await tester.tap(find.text('Save channel'));
+      await waitFor(
+          () => library.contains(MusicLibraryKind.artist, channel.id));
     });
     await tester.pumpAndSettle();
-    expect(find.text('Remove saved album'), findsOneWidget);
-    expect(library.entries.map((entry) => entry.kind),
-        [MusicLibraryKind.album, MusicLibraryKind.song]);
+    expect(find.text('Remove saved channel'), findsOneWidget);
+    expect(library.entries.map((entry) => entry.kind), [
+      MusicLibraryKind.artist,
+      MusicLibraryKind.song,
+      MusicLibraryKind.album
+    ]);
+    expect(library.entries.last.toJson(), album.toJson());
   });
 
   testWidgets('empty Music playlist creation is visible immediately',
@@ -269,7 +279,7 @@ void main() {
   });
 
   testWidgets(
-      'saved collections and artists can be removed without catalog access',
+      'supported bookmarks can be removed while legacy albums stay stored',
       (tester) async {
     const album = MusicLibraryEntry(
         kind: MusicLibraryKind.album, id: 'MPREalbum', title: 'Saved album');
@@ -285,10 +295,12 @@ void main() {
       }
     });
     await show(tester);
+    expect(find.text('Albums'), findsNothing);
+    expect(find.text('Artists'), findsNothing);
+    expect(find.text('Saved album'), findsNothing);
     for (final item in [
       (tab: 'Playlists', label: 'Remove saved playlist', entry: playlist),
-      (tab: 'Albums', label: 'Remove saved album', entry: album),
-      (tab: 'Artists', label: 'Remove saved artist', entry: artist),
+      (tab: 'Channels', label: 'Remove saved channel', entry: artist),
     ]) {
       await tester.tap(find.text(item.tab));
       await tester.pumpAndSettle();
@@ -300,7 +312,64 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(item.entry.title), findsNothing);
     }
+    expect(library.entries.single.toJson(), album.toJson());
   });
+
+  for (final tv in [false, true]) {
+    testWidgets(
+        'Music removes the selected song from a mixed local playlist (TV: $tv)',
+        (tester) async {
+      app_globals.isTv = tv;
+      const otherSong = Video(
+          videoId: 'secondsong2',
+          musicMetadata:
+              MusicMetadata(title: 'Second song', artist: 'Other channel'));
+      const nonMusic = Video(videoId: 'videoonly01', title: 'Video only');
+      await tester.runAsync(() async {
+        await MusicLibrarySession(app)
+            .createPlaylist('Mixed music list', [nonMusic, song, otherSong]);
+        await library.save(MusicLibraryEntry.song(song));
+      });
+      final playlistId = service
+          .getLocalPlaylists()
+          .singleWhere((playlist) => playlist.title == 'Mixed music list')
+          .playlistId;
+      await show(tester);
+      expect(find.text('Albums'), findsNothing);
+      expect(find.text('Channels'), findsOneWidget);
+      await tester.tap(find.text('Mixed music list'));
+      await tester.pumpAndSettle();
+      expect(find.text('Video only'), findsNothing);
+      await tester.tap(find.byTooltip('Music actions').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Remove saved song'), findsOneWidget);
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Remove from playlist'));
+        await tester.pumpAndSettle();
+        await waitFor(() =>
+            service
+                .getLocalPlaylists()
+                .singleWhere(
+                  (playlist) => playlist.playlistId == playlistId,
+                )
+                .videos
+                .length ==
+            2);
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Saved song'), findsNothing);
+      expect(find.text('Second song'), findsOneWidget);
+      final remaining = service.getLocalPlaylists().singleWhere(
+            (playlist) => playlist.playlistId == playlistId,
+          );
+      expect(remaining.videos.map((video) => video.videoId),
+          [nonMusic.videoId, otherSong.videoId]);
+      expect(remaining.videos.last.musicMetadata?.toJson(),
+          otherSong.musicMetadata?.toJson());
+      expect(library.contains(MusicLibraryKind.song, song.videoId), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets(
       'downloads show only current-profile music audio and play completed files',
@@ -357,6 +426,7 @@ void main() {
     await show(tester);
     expect(find.text('Downloads'), findsNothing);
     expect(find.text('Library'), findsOneWidget);
-    expect(find.text('Artists'), findsOneWidget);
+    expect(find.text('Channels'), findsOneWidget);
+    expect(find.text('Albums'), findsNothing);
   });
 }

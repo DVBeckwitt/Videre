@@ -13,8 +13,15 @@ import 'package:river_player/src/video_player/video_player.dart';
 
 class BetterPlayerWithControls extends StatefulWidget {
   final BetterPlayerController? controller;
+  final BoxFit? fit;
+  final double? videoAspectRatio;
 
-  const BetterPlayerWithControls({Key? key, this.controller}) : super(key: key);
+  const BetterPlayerWithControls({
+    Key? key,
+    this.controller,
+    this.fit,
+    this.videoAspectRatio,
+  }) : super(key: key);
 
   @override
   _BetterPlayerWithControlsState createState() =>
@@ -131,13 +138,16 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
         fit: StackFit.passthrough,
         children: <Widget>[
           if (placeholderOnTop) _buildPlaceholder(betterPlayerController),
-          Transform.rotate(
-            angle: rotation * pi / 180,
-            child: _BetterPlayerVideoFitWidget(
-              betterPlayerController,
-              betterPlayerController.getFit(),
+          if (!configuration.showPlaceholderUntilPlay ||
+              betterPlayerController.hasCurrentDataSourceStarted)
+            Transform.rotate(
+              angle: rotation * pi / 180,
+              child: _BetterPlayerVideoFitWidget(
+                betterPlayerController.videoPlayerController,
+                widget.fit ?? betterPlayerController.getFit(),
+                aspectRatio: widget.videoAspectRatio,
+              ),
             ),
-          ),
           betterPlayerController.betterPlayerConfiguration.overlay ??
               Container(),
           BetterPlayerSubtitlesDrawer(
@@ -206,16 +216,17 @@ class _BetterPlayerWithControlsState extends State<BetterPlayerWithControls> {
   }
 }
 
-///Widget used to set the proper box fit of the video. Default fit is 'fill'.
+/// Fits just the video texture, leaving controls and subtitles in the viewport.
 class _BetterPlayerVideoFitWidget extends StatefulWidget {
   const _BetterPlayerVideoFitWidget(
-    this.betterPlayerController,
+    this.controller,
     this.boxFit, {
-    Key? key,
-  }) : super(key: key);
+    this.aspectRatio,
+  });
 
-  final BetterPlayerController betterPlayerController;
+  final VideoPlayerController? controller;
   final BoxFit boxFit;
+  final double? aspectRatio;
 
   @override
   _BetterPlayerVideoFitWidgetState createState() =>
@@ -224,109 +235,67 @@ class _BetterPlayerVideoFitWidget extends StatefulWidget {
 
 class _BetterPlayerVideoFitWidgetState
     extends State<_BetterPlayerVideoFitWidget> {
-  VideoPlayerController? get controller =>
-      widget.betterPlayerController.videoPlayerController;
-
-  bool _initialized = false;
-
-  VoidCallback? _initializedListener;
-
-  bool _started = false;
-
-  StreamSubscription? _controllerEventSubscription;
+  Size? _size;
 
   @override
   void initState() {
     super.initState();
-    if (!widget.betterPlayerController.betterPlayerConfiguration
-        .showPlaceholderUntilPlay) {
-      _started = true;
-    } else {
-      _started = widget.betterPlayerController.hasCurrentDataSourceStarted;
-    }
-
-    _initialize();
+    _size = _initializedSize;
+    widget.controller?.addListener(_onVideoChanged);
   }
 
   @override
   void didUpdateWidget(_BetterPlayerVideoFitWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.betterPlayerController.videoPlayerController != controller) {
-      if (_initializedListener != null) {
-        oldWidget.betterPlayerController.videoPlayerController!
-            .removeListener(_initializedListener!);
-      }
-      _initialized = false;
-      _initialize();
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?.removeListener(_onVideoChanged);
+      _size = _initializedSize;
+      widget.controller?.addListener(_onVideoChanged);
     }
   }
 
-  void _initialize() {
-    if (controller?.value.initialized == false) {
-      _initializedListener = () {
-        if (!mounted) {
-          return;
-        }
-
-        if (_initialized != controller!.value.initialized) {
-          _initialized = controller!.value.initialized;
-          setState(() {});
-        }
-      };
-      controller!.addListener(_initializedListener!);
-    } else {
-      _initialized = true;
+  Size? get _initializedSize {
+    final value = widget.controller?.value;
+    final size = value?.size;
+    if (value?.initialized != true ||
+        size == null ||
+        size.isEmpty ||
+        !size.isFinite) {
+      return null;
     }
+    return size;
+  }
 
-    _controllerEventSubscription =
-        widget.betterPlayerController.controllerEventStream.listen((event) {
-      if (event == BetterPlayerControllerEvent.play) {
-        if (!_started) {
-          setState(() {
-            _started =
-                widget.betterPlayerController.hasCurrentDataSourceStarted;
-          });
-        }
-      }
-      if (event == BetterPlayerControllerEvent.setupDataSource) {
-        setState(() {
-          _started = false;
-        });
-      }
-    });
+  void _onVideoChanged() {
+    final size = _initializedSize;
+    if (mounted && size != _size) {
+      setState(() => _size = size);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_initialized && _started) {
-      return Center(
-        child: ClipRect(
-          child: Container(
-            width: double.infinity,
-            height: double.infinity,
-            child: FittedBox(
-              fit: widget.boxFit,
-              child: SizedBox(
-                width: controller!.value.size?.width ?? 0,
-                height: controller!.value.size?.height ?? 0,
-                child: VideoPlayer(controller),
-              ),
-            ),
+    final size = _size;
+    if (size == null) return const SizedBox();
+    final ratio = widget.aspectRatio;
+    final width = ratio == null ? size.width : size.height * ratio;
+    return ClipRect(
+      child: SizedBox.expand(
+        child: FittedBox(
+          fit: widget.boxFit,
+          child: SizedBox(
+            width: width.isFinite && width > 0 ? width : size.width,
+            height: size.height,
+            child: VideoPlayer(widget.controller),
           ),
         ),
-      );
-    } else {
-      return const SizedBox();
-    }
+      ),
+    );
   }
 
   @override
   void dispose() {
-    if (_initializedListener != null) {
-      widget.betterPlayerController.videoPlayerController!
-          .removeListener(_initializedListener!);
-    }
-    _controllerEventSubscription?.cancel();
+    widget.controller?.removeListener(_onVideoChanged);
     super.dispose();
   }
 }

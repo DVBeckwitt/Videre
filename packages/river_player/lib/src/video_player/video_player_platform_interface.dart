@@ -218,6 +218,11 @@ class DataSource {
     this.uri,
     this.formatHint,
     this.inlineDashManifest,
+    this.initialPosition,
+    this.initialDashHeight,
+    this.retryDashTrackFromLoadId,
+    this.fastDashStartupFallback = false,
+    this.loadId,
     this.asset,
     this.package,
     this.headers,
@@ -260,6 +265,21 @@ class DataSource {
 
   /// Optional Android static DASH manifest body. Excluded from diagnostics.
   final String? inlineDashManifest;
+
+  /// Optional start position applied before preparing an Android network VOD.
+  final Duration? initialPosition;
+
+  /// Android DASH height cap applied before preparation. Zero selects Auto.
+  final int? initialDashHeight;
+
+  /// Previous Android DASH load whose active video constraints may be reused.
+  final int? retryDashTrackFromLoadId;
+
+  /// Shorten eligible Android DASH startup retries when a fallback is available.
+  final bool fastDashStartupFallback;
+
+  /// Identifies an individual load when the platform reports its start position.
+  final int? loadId;
 
   /// **Android only**. String representation of a formatHint.
   String? get rawFormalHint {
@@ -320,6 +340,7 @@ class DataSource {
 
   /// Key to compare DataSource
   String get key {
+    if (loadId != null) return 'load:$loadId';
     String? result = "";
 
     if (uri != null && uri!.isNotEmpty) {
@@ -421,7 +442,7 @@ class VideoEvent {
   /// Only used if [eventType] is [VideoEventType.bufferingUpdate].
   final List<DurationRange>? buffered;
 
-  ///Seek position
+  /// Seek target or the actual position reported when the source is initialized.
   final Duration? position;
 
   ///Is livestream

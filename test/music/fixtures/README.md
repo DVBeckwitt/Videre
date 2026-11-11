@@ -1,3 +1,7 @@
+These historical responses are retained for offline regression tests in
+`test/music/support/legacy_music_catalog.dart`. The application's Music catalog
+uses Invidious and includes no direct YouTube Music client.
+
 These reduced fixtures were captured from unauthenticated public YouTube Music
 search/browse responses on 2026-11-08, using the repository's Dart 3.9.2 SDK.
 

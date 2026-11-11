@@ -19,6 +19,11 @@ import 'package:http/testing.dart';
 
 const _videoJson =
     '{"videoId":"test-video","title":"Test","adaptiveFormats":[],"formatStreams":[],"captions":[]}';
+const _startingBackend =
+    'This backend is still starting and not yet available. '
+    'Please wait for a short time or use another backend.';
+const _blockedBackend = 'This backend is blocked by Youtube. Please wait '
+    'until it has refreshed itself or switch to another backend.';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -117,6 +122,90 @@ void main() {
     });
   }
 
+  for (final message in [_startingBackend, _blockedBackend]) {
+    test(
+        'explicit backend-unavailable HTTP 500 tries a healthy alternative: $message',
+        () async {
+      final routes = <String?>[];
+      respond((request) async {
+        routes.add(requestCookieValue(request.headers, 'ROUTE'));
+        return routes.length == 1
+            ? http.Response(jsonEncode({'error': message}), 500,
+                request: request, headers: {'content-type': 'application/json'})
+            : ok();
+      });
+      final video = await api.getVideo('test-video');
+      expect(routes, ['0', '1']);
+      expect(video.backendPlayback!.retryIndex, 1);
+      expect((await db.getCurrentlySelectedServer()).customHeaders,
+          instance.customHeaders);
+    });
+
+    test(
+        'explicit backend-unavailable HTTP 500 shares the two-alternative budget: $message',
+        () async {
+      final routes = <String?>[];
+      respond((request) async {
+        routes.add(requestCookieValue(request.headers, 'ROUTE'));
+        return http.Response(jsonEncode({'error': message}), 500,
+            request: request, headers: {'content-type': 'application/json'});
+      });
+      await expectLater(
+          api.getVideo('test-video'), throwsA(isA<InvidiousServiceError>()));
+      expect(routes, ['0', '1', '2']);
+    });
+
+    test(
+        'explicit backend-unavailable HTTP 500 obeys automatic fallback opt-out: $message',
+        () async {
+      await db.upsertServer(configured(enabled: false).copyWith(inUse: true));
+      var calls = 0;
+      respond((request) async {
+        calls++;
+        return http.Response(jsonEncode({'error': message}), 500,
+            request: request, headers: {'content-type': 'application/json'});
+      });
+      await expectLater(
+          api.getVideo('test-video'), throwsA(isA<InvidiousServiceError>()));
+      expect(calls, 1);
+    });
+  }
+
+  test('only structured, exact backend-unavailable HTTP 500 is eligible', () {
+    final normalized = _blockedBackend
+        .replaceAll('Youtube', 'YouTube')
+        .replaceAll(' Please wait ', '\n  Please wait\n');
+    expect(
+        isBackendRetryable(InvidiousServiceError('Display text',
+            statusCode: 500, errorCode: normalized)),
+        isTrue);
+    for (final error in [
+      InvidiousServiceError(_startingBackend, statusCode: 500),
+      InvidiousServiceError('Unrelated',
+          statusCode: 500, errorCode: 'unavailable'),
+      InvidiousServiceError('Similar wording',
+          statusCode: 500, errorCode: '$_startingBackend Please retry.'),
+      InvidiousServiceError('HTML',
+          statusCode: 500, errorCode: _startingBackend, responseWasHtml: true),
+      for (final status in [401, 403, 404, 429])
+        InvidiousServiceError('Refused',
+            statusCode: status, errorCode: _startingBackend),
+      InvidiousServiceError('Cooldown',
+          statusCode: 500,
+          errorCode: _startingBackend,
+          retryAfter: const Duration(seconds: 1)),
+      InvidiousServiceError('Invalid cooldown',
+          statusCode: 500,
+          errorCode: _startingBackend,
+          retryAfterIsInvalid: true),
+      InvidiousServiceError('Gateway',
+          statusCode: 500, errorCode: 'unavailable', isGatewayResponse: true),
+    ]) {
+      expect(isBackendRetryable(error), isFalse,
+          reason: '${error.message}/${error.statusCode}');
+    }
+  });
+
   test(
       'explicit fallback opt-out prevents retries and preserves the preference',
       () async {
@@ -207,6 +296,63 @@ void main() {
     expect(recovered.backendPlayback!.retryIndex, 1);
   });
 
+  for (final entryPoint in [
+    'normal',
+    'interactive',
+    'explicit server',
+    'manual backend',
+    'backend recovery',
+    'same-route refresh',
+  ]) {
+    test('$entryPoint rejects metadata for another video without retrying',
+        () async {
+      final routes = <String?>[];
+      var wrongVideo = false;
+      respond((request) async {
+        routes.add(requestCookieValue(request.headers, 'ROUTE'));
+        return wrongVideo
+            ? http.Response(
+                _videoJson.replaceFirst('test-video', 'other-video'), 200,
+                headers: {'content-type': 'application/json'})
+            : ok();
+      });
+      final initial = await api.getVideo('test-video');
+      routes.clear();
+      wrongVideo = true;
+      final Future<Object?> result;
+      switch (entryPoint) {
+        case 'normal':
+          result = api.getVideo('test-video');
+        case 'interactive':
+          result = api.getVideo('test-video',
+              loadObserver: VideoLoadObserver(
+                  isCurrent: () => true,
+                  onRetry: () => fail('Wrong video is not transient')));
+        case 'explicit server':
+          result = api.getVideo('test-video', serverOverride: instance);
+        case 'manual backend':
+          result = api.getVideoForBackend(
+              'test-video', BackendPlayback.manual(instance, '1'));
+        case 'backend recovery':
+          result = api.retryVideoBackend(initial, isCurrent: () => true);
+        case 'same-route refresh':
+          result = api.refreshPlaybackVideo(initial, isCurrent: () => true);
+        default:
+          throw StateError('Unknown fixture entry point');
+      }
+      await expectLater(result, throwsA(isA<FormatException>()));
+      expect(routes, [
+        if (entryPoint == 'manual backend' || entryPoint == 'backend recovery')
+          '1'
+        else
+          '0',
+      ]);
+      expect((await db.getCurrentlySelectedServer()).customHeaders,
+          instance.customHeaders);
+      expect(initial.videoId, 'test-video');
+    });
+  }
+
   test('a server change during failed metadata stops retries', () async {
     var calls = 0;
     respond((_) async {
@@ -281,7 +427,12 @@ void main() {
   test(
       'transport classification excludes TLS, malformed data and unknown errors',
       () {
-    expect(isBackendRetryable(const SocketException('unreachable')), isTrue);
+    expect(
+        isBackendRetryable(const SocketException('unreachable',
+            osError: OSError('Host unreachable', 10065))),
+        isTrue);
+    expect(
+        isBackendRetryable(const SocketException('Policy refused')), isFalse);
     expect(isBackendRetryable(TimeoutException('timeout')), isTrue);
     expect(
         isBackendRetryable(const HandshakeException('certificate')), isFalse);
@@ -293,10 +444,27 @@ void main() {
     test(
         'DASH classifier preserves ordinary fallback and identifies HTTP $status',
         () async {
-      respond((_) async => failed(status));
+      var requests = 0;
+      respond((_) async {
+        requests++;
+        return failed(status);
+      });
       final resolver = DashManifestResolver(client);
       const manifest =
           'https://instance.example/api/manifest/dash/id/test-video';
+      if ([403, 429].contains(status)) {
+        final refusal = throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'original status', status));
+        await expectLater(
+            resolver.resolve(manifest, 'test-video', instance), refusal);
+        expect(requests, 1);
+        await expectLater(
+            resolver.resolve(manifest, 'test-video', instance,
+                throwRetryable: true),
+            refusal);
+        expect(requests, 2);
+        return;
+      }
       expect(await resolver.resolve(manifest, 'test-video', instance), isNull);
       if ([502, 503, 504].contains(status)) {
         await expectLater(

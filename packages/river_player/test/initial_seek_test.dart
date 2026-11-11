@@ -1,21 +1,34 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:river_player/river_player.dart';
 
 class _DelayedSeekPlatform extends VideoPlayerPlatform {
   final streams = <int, StreamController<VideoEvent>>{};
   final commands = <String>[];
+  final sources = <({int textureId, DataSource source})>[];
+  final trackChanges = <({int? textureId, int? height, int sourceCount})>[];
+  Completer<void>? creationReleased;
   Completer<void> seekStarted = Completer<void>();
   Completer<void> seekReleased = Completer<void>();
   bool playing = false;
+  bool holdInitialization = false;
+  Duration? reportedInitialPosition;
   int nextId = 0;
+  Duration duration = const Duration(minutes: 3);
 
   void reset() {
     commands.clear();
+    sources.clear();
+    trackChanges.clear();
+    creationReleased = null;
     seekStarted = Completer<void>();
     seekReleased = Completer<void>();
     playing = false;
+    holdInitialization = false;
+    reportedInitialPosition = null;
+    duration = const Duration(minutes: 3);
   }
 
   @override
@@ -24,6 +37,7 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   Future<int?> create({
     BetterPlayerBufferingConfiguration? bufferingConfiguration,
   }) async {
+    if (creationReleased != null) await creationReleased!.future;
     final id = ++nextId;
     streams[id] = StreamController<VideoEvent>.broadcast();
     return id;
@@ -34,10 +48,16 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
       streams[textureId]!.stream;
   @override
   Future<void> setDataSource(int? textureId, DataSource source) async {
-    streams[textureId]!.add(VideoEvent(
-      key: source.key,
+    sources.add((textureId: textureId!, source: source));
+    if (!holdInitialization) initialize(sources.last);
+  }
+
+  void initialize(({int textureId, DataSource source}) load) {
+    streams[load.textureId]!.add(VideoEvent(
+      key: load.source.key,
       eventType: VideoEventType.initialized,
-      duration: const Duration(minutes: 3),
+      duration: duration,
+      position: reportedInitialPosition ?? load.source.initialPosition,
     ));
   }
 
@@ -50,7 +70,11 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   Future<void> setVolume(int? textureId, double volume) async {}
   @override
   Future<void> setTrackParameters(
-      int? textureId, int? width, int? height, int? bitrate) async {}
+      int? textureId, int? width, int? height, int? bitrate) async {
+    trackChanges.add(
+        (textureId: textureId, height: height, sourceCount: sources.length));
+  }
+
   @override
   Future<void> play(int? textureId) async {
     commands.add('play');
@@ -83,6 +107,161 @@ void main() {
   final platform = _DelayedSeekPlatform();
   VideoPlayerPlatform.instance = platform;
   setUp(platform.reset);
+
+  group('explicit initial position', () {
+    setUp(() {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      // A regression to the post-prepare seek should fail an assertion
+      // rather than block the test waiting on the seek fake.
+      platform.seekReleased.complete();
+    });
+
+    BetterPlayerController controllerWithResume() => BetterPlayerController(
+          const BetterPlayerConfiguration(
+            startAt: Duration(seconds: 40),
+            autoPlay: false,
+            handleLifecycle: false,
+            allowedScreenSleep: true,
+          ),
+        );
+
+    BetterPlayerDataSource video() => BetterPlayerDataSource(
+          BetterPlayerDataSourceType.network,
+          'https://example.com/video.mp4',
+          videoFormat: BetterPlayerVideoFormat.other,
+        );
+
+    test('prepares at the requested position and keeps native position',
+        () async {
+      final controller = controllerWithResume();
+      final source = video();
+      const requested = Duration(seconds: 21);
+      const reported = Duration(milliseconds: 20500);
+      try {
+        platform.reportedInitialPosition = reported;
+        await controller.setupDataSource(source, initialPosition: requested);
+        expect(platform.sources.single.source.initialPosition, requested);
+        expect(controller.videoPlayerController!.value.position, reported);
+        expect(platform.commands, isNot(contains(startsWith('seek:'))));
+
+        platform.reportedInitialPosition = null;
+        await controller.setupDataSource(source,
+            initialPosition: Duration.zero);
+        expect(platform.sources.last.source.initialPosition, Duration.zero);
+        expect(controller.videoPlayerController!.value.position, Duration.zero);
+        expect(platform.commands, isNot(contains(startsWith('seek:'))));
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test('same URL ignores initialization from a replaced load', () async {
+      final controller = controllerWithResume();
+      final source = video();
+      platform.holdInitialization = true;
+      try {
+        final first = controller.setupDataSource(source,
+            initialPosition: const Duration(seconds: 20));
+        await Future<void>.delayed(Duration.zero);
+        expect(platform.sources, hasLength(1));
+        final second = controller.setupDataSource(source,
+            initialPosition: const Duration(seconds: 5));
+        await Future<void>.delayed(Duration.zero);
+        expect(platform.sources, hasLength(2));
+        await first.timeout(const Duration(seconds: 1));
+
+        platform.initialize(platform.sources.first);
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.videoPlayerController!.value.initialized, isFalse);
+
+        platform.initialize(platform.sources.last);
+        await second;
+        expect(controller.videoPlayerController!.value.position,
+            const Duration(seconds: 5));
+        expect(platform.commands, isNot(contains(startsWith('seek:'))));
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test(
+        'a DASH track picked during native creation survives readiness and retry',
+        () async {
+      final controller = controllerWithResume();
+      final releaseCreation = platform.creationReleased = Completer<void>();
+      platform.holdInitialization = true;
+      final source = BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/video.mpd',
+        videoFormat: BetterPlayerVideoFormat.dash,
+        inlineDashManifest: '''<MPD><Period><AdaptationSet mimeType="video/mp4">
+          <Representation id="1" width="640" height="360"
+            bandwidth="500000" codecs="avc1.42001E" />
+          </AdaptationSet></Period></MPD>''',
+      );
+      try {
+        final setup = controller.setupDataSource(source,
+            initialPosition: Duration.zero, initialDashHeight: 360);
+        expect(controller.betterPlayerAsmsTrack?.height, 360);
+        final picked = BetterPlayerAsmsTrack(
+            'manual', 854, 480, 1000000, null, null, 'video/mp4');
+        controller.setTrack(picked);
+        expect(platform.trackChanges, isEmpty);
+        releaseCreation.complete();
+        await Future<void>.delayed(Duration.zero);
+
+        final load = platform.sources.single;
+        expect(load.source.initialDashHeight, 360);
+        expect(platform.trackChanges, [
+          (textureId: load.textureId, height: 480, sourceCount: 1),
+        ]);
+        platform.initialize(load);
+        await setup;
+        expect(controller.betterPlayerAsmsTrack, same(picked));
+        expect(platform.trackChanges, hasLength(1),
+            reason: 'Readiness must not send a late Auto reset');
+
+        platform.holdInitialization = false;
+        await controller.retryDataSource();
+        final retry = platform.sources.last.source;
+        expect(retry.initialDashHeight, 480);
+        expect(retry.retryDashTrackFromLoadId, load.source.loadId);
+        expect(retry.key, isNot(load.source.key));
+        expect(controller.betterPlayerAsmsTrack, same(picked));
+        expect(platform.trackChanges, hasLength(1));
+
+        await controller.setupDataSource(source,
+            initialPosition: Duration.zero, initialDashHeight: 0);
+        expect(platform.sources.last.source.initialDashHeight, 0);
+        expect(platform.sources.last.source.retryDashTrackFromLoadId, isNull);
+        expect(controller.betterPlayerAsmsTrack?.height, 0);
+      } finally {
+        if (!releaseCreation.isCompleted) releaseCreation.complete();
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test('uses the existing seek path on a platform without native support',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      final controller = controllerWithResume();
+      try {
+        await controller.setupDataSource(video(),
+            initialPosition: const Duration(seconds: 21));
+        expect(platform.sources.single.source.initialPosition, isNull);
+        expect(platform.commands, contains('seek:21'));
+        expect(controller.videoPlayerController!.value.position,
+            const Duration(seconds: 21));
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+  });
 
   test('changing videos discards a pending subtitle selection', () async {
     final controller = BetterPlayerController(const BetterPlayerConfiguration(
@@ -210,6 +389,48 @@ void main() {
     platform.seekReleased.complete();
     await seek;
     expect(platform.commands.last, 'seek-completed');
+  });
+
+  test('a replaced source ignores completion of its old pending seek',
+      () async {
+    final controller = BetterPlayerController(const BetterPlayerConfiguration(
+      autoPlay: false,
+      handleLifecycle: false,
+      allowedScreenSleep: true,
+    ));
+    final events = <BetterPlayerEventType>[];
+    controller
+        .addEventsListener((event) => events.add(event.betterPlayerEventType));
+    await controller.setupDataSource(BetterPlayerDataSource(
+      BetterPlayerDataSourceType.network,
+      'https://example.com/long.mp4',
+      videoFormat: BetterPlayerVideoFormat.other,
+    ));
+    final seek = controller.seekTo(const Duration(seconds: 40));
+    try {
+      await platform.seekStarted.future;
+      platform.duration = const Duration(seconds: 30);
+      await controller.setupDataSource(BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/short.mp4',
+        videoFormat: BetterPlayerVideoFormat.other,
+      ));
+      events.clear();
+      platform.commands.clear();
+      platform.seekReleased.complete();
+      await seek;
+
+      expect(events, isNot(contains(BetterPlayerEventType.finished)),
+          reason: 'An old seek must not advance the new video queue entry.');
+      expect(controller.videoPlayerController!.value.position, Duration.zero);
+      expect(events, isNot(contains(BetterPlayerEventType.seekTo)));
+      expect(platform.commands, ['seek-completed']);
+    } finally {
+      if (!platform.seekReleased.isCompleted) platform.seekReleased.complete();
+      await seek;
+      controller.dispose();
+      await Future<void>.delayed(Duration.zero);
+    }
   });
 
   for (final pauseDuringSeek in [false, true]) {

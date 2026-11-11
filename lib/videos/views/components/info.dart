@@ -3,7 +3,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/views/components/text_linkified.dart';
-import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/video_metrics.dart';
 import 'package:flutter/material.dart';
@@ -11,7 +11,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../../subscription_management/view/components/subscribe_button.dart';
-import '../../../utils/models/image_object.dart';
 import 'video_dislike_metrics.dart';
 
 class VideoInfo extends StatelessWidget {
@@ -81,13 +80,10 @@ class VideoInfo extends StatelessWidget {
                   onTap: () => openChannel(context),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4.0),
-                    child: Thumbnail(
-                      thumbnails: ImageObject.getThumbnailUrlsByPreferredOrder(
-                          video.authorThumbnails),
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(20)),
+                    child: ChannelAvatar(
+                      name: video.author ?? '',
+                      images: video.authorThumbnails,
+                      size: 40,
                     ),
                   ),
                 ),

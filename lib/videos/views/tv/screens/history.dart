@@ -109,11 +109,7 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                           )
                         : GridView.builder(
                             controller: list.scrollController,
-                            gridDelegate:
-                                const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 3,
-                              childAspectRatio: 16 / 13,
-                            ),
+                            gridDelegate: TvVideoGridDelegate(context),
                             itemCount: state.items.length,
                             findChildIndexCallback: (key) {
                               final index = state.items
@@ -162,8 +158,10 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                                   // Playback moves local history to the front.
                                   // Move the viewport before the refreshed grid
                                   // lays out, keeping its focused child alive.
-                                  list.scrollController.jumpTo(
-                                      ((newIndex ~/ 3) * rowHeight).clamp(
+                                  list.scrollController.jumpTo(((newIndex ~/
+                                              TvVideoGridDelegate.columns) *
+                                          rowHeight)
+                                      .clamp(
                                           0,
                                           list.scrollController.position
                                               .maxScrollExtent));

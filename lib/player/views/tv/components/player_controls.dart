@@ -10,7 +10,7 @@ import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/backend_request_indicator.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/player/views/tv/components/player_settings.dart';
-import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -20,7 +20,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../../../utils.dart';
-import '../../../../utils/models/image_object.dart';
 import '../../../../utils/models/paginated_list.dart';
 import '../../../states/player.dart';
 
@@ -60,6 +59,10 @@ class TvPlayerControls extends StatelessWidget {
               (PlayerCubit cubit) => canChoosePlayerBackend(cubit.state));
           final requestedBackend = context
               .select((PlayerCubit cubit) => cubit.state.requestedBackend);
+          final backendIndicatorOpacity =
+              playerState.showSettings || playerState.showQueue
+                  ? 0.0
+                  : playerState.controlsOpacity;
 
           return BlocListener<PlayerCubit, PlayerState>(
             listenWhen: (previous, current) =>
@@ -126,16 +129,12 @@ class TvPlayerControls extends StatelessWidget {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          Thumbnail(
-                                            thumbnails: ImageObject
-                                                .getThumbnailUrlsByPreferredOrder(
-                                                    currentlyPlaying
-                                                        ?.authorThumbnails),
-                                            width: 40,
-                                            height: 40,
-                                            decoration: BoxDecoration(
-                                                borderRadius:
-                                                    BorderRadius.circular(20)),
+                                          ChannelAvatar(
+                                            name:
+                                                currentlyPlaying?.author ?? '',
+                                            images: currentlyPlaying
+                                                ?.authorThumbnails,
+                                            size: 40,
                                           ),
                                           Padding(
                                             padding: const EdgeInsets.only(
@@ -476,13 +475,9 @@ class TvPlayerControls extends StatelessWidget {
                                   ),
                                   TextButton.icon(
                                     autofocus: true,
-                                    onPressed: currentlyPlaying == null
+                                    onPressed: !player.state.hasVideo
                                         ? null
-                                        : () => player.switchToVideo(
-                                            Video(
-                                                videoId:
-                                                    currentlyPlaying.videoId),
-                                            startAt: position),
+                                        : player.retryCurrentVideo,
                                     icon: const Icon(Icons.refresh),
                                     label: Text(locals.retry),
                                   ),
@@ -516,10 +511,17 @@ class TvPlayerControls extends StatelessWidget {
                       left: 0,
                       right: 0,
                       bottom: playerState.displayControls ? 144 : 48,
-                      child: TvOverscan(
-                        child: BackendRequestIndicator(
-                          playback: requestedBackend,
-                          overlay: true,
+                      child: ExcludeSemantics(
+                        excluding: backendIndicatorOpacity == 0,
+                        child: AnimatedOpacity(
+                          opacity: backendIndicatorOpacity,
+                          duration: AppMotion.fadeDuration(context),
+                          child: TvOverscan(
+                            child: BackendRequestIndicator(
+                              playback: requestedBackend,
+                              overlay: true,
+                            ),
+                          ),
                         ),
                       ),
                     ),

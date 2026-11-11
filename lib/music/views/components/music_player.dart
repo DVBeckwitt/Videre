@@ -95,11 +95,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
             if (state.mediaEvent.state == MediaState.error) ...[
               Text(locals.musicPlaybackError, textAlign: TextAlign.center),
               TextButton.icon(
-                onPressed: video != null
-                    ? () => player.switchToVideo(video, startAt: state.position)
-                    : offline != null
-                        ? () => player.switchToOfflineVideo(offline)
-                        : null,
+                onPressed: state.hasVideo ? player.retryCurrentVideo : null,
                 icon: const Icon(Icons.refresh),
                 label: Text(locals.retry),
               ),
@@ -357,9 +353,6 @@ class _MusicArtwork extends StatelessWidget {
         : video?.videoThumbnails ?? [];
     return images.isEmpty
         ? placeholder
-        : Thumbnail(
-            images: images,
-            useInvidiousProxy: music.thumbnails.isEmpty,
-            decoration: const BoxDecoration());
+        : Thumbnail(images: images, decoration: const BoxDecoration());
   }
 }

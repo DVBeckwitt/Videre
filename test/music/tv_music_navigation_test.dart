@@ -6,8 +6,9 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/views/components/content_mode_selector.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
-import 'package:clipious/music/models/music_album.dart';
-import 'package:clipious/music/models/music_discovery.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/music/views/screens/music.dart';
@@ -110,21 +111,38 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 }
 
 class _Catalog extends MusicCatalogService {
-  int releaseCalls = 0;
+  int trendingCalls = 0;
+  int searchCalls = 0;
 
   @override
-  Future<List<MusicAlbum>> getNewReleases() async {
-    releaseCalls++;
+  Future<List<MusicTrack>> getTrendingSongs() async {
+    trendingCalls++;
     return List.generate(
-        18, (index) => MusicAlbum(id: 'MPRE$index', title: 'Album $index'));
+        18,
+        (index) =>
+            MusicTrack(videoId: 'song000000$index', title: 'Song $index'));
   }
 
   @override
-  Future<MusicCharts> getCharts({String country = 'ZZ'}) async =>
-      MusicCharts(country: country);
+  Future<List<MusicTrack>> searchSongs(String query) async {
+    searchCalls++;
+    return List.generate(
+        18,
+        (index) => MusicTrack(
+                videoId: 'song000000$index',
+                title: '$query song $index',
+                artists: const [
+                  'Music channel'
+                ],
+                artistLinks: const [
+                  MusicArtist(id: 'UCmusic', name: 'Music channel')
+                ]));
+  }
 
   @override
-  Future<List<MusicMoodCategory>> getMoodCategories() async => [];
+  Future<MusicArtistPage> getArtist(String id) async => const MusicArtistPage(
+      artist: MusicArtist(id: 'UCmusic', name: 'Music channel'),
+      description: 'Channel detail');
 }
 
 void main() {
@@ -211,10 +229,14 @@ void main() {
       of: find.byKey(ValueKey('tv-music-page-$index')),
       matching: find.byIcon(icon));
 
+  Finder musicSearchIcon() => find.descendant(
+      of: find.byKey(const ValueKey('tv-music-search')),
+      matching: find.byIcon(Icons.search));
+
   testWidgets('TV mode selector and Music sidebar respond to remote keys',
       (tester) async {
     await mount(tester);
-    expect(catalog.releaseCalls, 0,
+    expect(catalog.trendingCalls, 0,
         reason: 'Video browsing must not load hidden Music pages');
     expect(
         Focus.of(tester.element(find.byIcon(Icons.search))).hasFocus, isTrue);
@@ -231,7 +253,7 @@ void main() {
     expect(find.byType(MusicHomePage), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
-    expect(Focus.of(tester.element(find.byIcon(Icons.search))).hasFocus, isTrue,
+    expect(Focus.of(tester.element(musicSearchIcon())).hasFocus, isTrue,
         reason: 'Music search stays reachable from the top bar');
     expect(tester.getRect(modeLabel('Videos')).top, greaterThanOrEqualTo(0));
     expect(tester.getRect(modeLabel('Music')).right, lessThanOrEqualTo(960));
@@ -241,13 +263,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(
-        Focus.of(tester.element(musicMenuIcon(Icons.explore_outlined, 1)))
-            .hasFocus,
+    expect(Focus.of(tester.element(musicMenuIcon(Icons.search, 1))).hasFocus,
         isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
-    expect(find.byType(MusicExplorePage), findsOneWidget);
+    expect(find.byType(MusicScreen), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
@@ -269,33 +289,42 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Music page and scroll survive switching modes with no refetch',
+  testWidgets('Music query and scroll survive switching modes with no refetch',
       (tester) async {
     settings.setVideoLayout([HomeDataSource.history, HomeDataSource.search]);
     await mount(tester);
     await select(tester, modeLabel('Music'));
-    await select(tester, musicMenuIcon(Icons.explore_outlined, 1));
-    final exploreState = tester.state(find.byType(MusicExplorePage));
+    await select(tester, musicMenuIcon(Icons.search, 1));
+    await tester.enterText(find.byKey(const ValueKey('music-search')), 'kept');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    final searchState = tester.state(find.byType(MusicScreen));
     final scroll = find.descendant(
-        of: find.byType(MusicExplorePage), matching: find.byType(Scrollable));
-    final position = tester.state<ScrollableState>(scroll.first).position;
+        of: find.byType(MusicScreen), matching: find.byType(Scrollable));
+    final position = tester.state<ScrollableState>(scroll.last).position;
     position.jumpTo(300);
     await tester.pumpAndSettle();
     expect(position.pixels, greaterThan(0));
     final offset = position.pixels;
-    final calls = catalog.releaseCalls;
+    final calls = catalog.searchCalls;
 
     await select(tester, modeLabel('Videos'));
-    expect(find.byType(MusicExplorePage), findsNothing);
+    expect(find.byType(MusicScreen), findsNothing);
     expect(find.byIcon(Icons.history), findsOneWidget);
     expect(find.byIcon(Icons.subscriptions), findsNothing,
         reason: 'The customized video menu must remain unchanged');
-    final hiddenAlbum = find.text('Album 0', skipOffstage: false).last;
-    expect(Focus.of(tester.element(hiddenAlbum)).canRequestFocus, isFalse);
+    final hiddenSong = find.text('kept song 4', skipOffstage: false).last;
+    expect(Focus.of(tester.element(hiddenSong)).canRequestFocus, isFalse);
     await select(tester, modeLabel('Music'));
-    expect(tester.state(find.byType(MusicExplorePage)), same(exploreState));
+    expect(tester.state(find.byType(MusicScreen)), same(searchState));
     expect(position.pixels, offset);
-    expect(catalog.releaseCalls, calls);
+    expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('music-search')))
+            .controller!
+            .text,
+        'kept');
+    expect(catalog.searchCalls, calls);
     expect(tester.takeException(), isNull);
   });
 
@@ -303,46 +332,64 @@ void main() {
       (tester) async {
     await mount(tester);
     await select(tester, modeLabel('Music'));
-    await select(tester, musicMenuIcon(Icons.explore_outlined, 1));
-    final before = tester.state(find.byType(MusicExplorePage));
+    await select(tester, musicMenuIcon(Icons.search, 1));
+    await tester.enterText(
+        find.byKey(const ValueKey('music-search')), 'private');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    final before = tester.state(find.byType(MusicScreen));
     final oldScroll = find.descendant(
-        of: find.byType(MusicExplorePage), matching: find.byType(Scrollable));
-    tester.state<ScrollableState>(oldScroll.first).position.jumpTo(300);
+        of: find.byType(MusicScreen), matching: find.byType(Scrollable));
+    tester.state<ScrollableState>(oldScroll.last).position.jumpTo(300);
     await tester.pumpAndSettle();
     appCubit.setSession(appCubit.state
         .copyWith(profileId: 'another-person', sessionRevision: 1));
     await tester.pumpAndSettle();
     expect(before.mounted, isFalse);
-    expect(find.byType(MusicExplorePage, skipOffstage: false), findsNothing);
+    expect(find.byType(MusicScreen, skipOffstage: false), findsNothing);
     expect(find.byType(MusicHomePage), findsOneWidget);
     expect(
         Focus.of(tester.element(musicMenuIcon(Icons.home_outlined, 0)))
             .hasFocus,
         isTrue);
-    await select(tester, musicMenuIcon(Icons.explore_outlined, 1));
-    final newScroll = find.descendant(
-        of: find.byType(MusicExplorePage), matching: find.byType(Scrollable));
-    expect(tester.state<ScrollableState>(newScroll.first).position.pixels, 0);
+    await select(tester, musicMenuIcon(Icons.search, 1));
+    expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('music-search')))
+            .controller!
+            .text,
+        isEmpty);
+    expect(find.text('private song 0'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('TV Music search opens remotely and Back restores its page',
+  testWidgets('TV Music search opens remotely and Back restores its results',
       (tester) async {
     await settings.setHomeContentMode(HomeContentMode.music);
     final router = AppRouter(hasServer: true);
     addTearDown(router.dispose);
     await mount(tester, router: router);
-    await select(tester, musicMenuIcon(Icons.explore_outlined, 1));
-    final before = tester.state(find.byType(MusicExplorePage));
-    await select(tester, find.byIcon(Icons.search));
+    await select(tester, musicSearchIcon());
     expect(find.byType(MusicScreen), findsOneWidget);
     expect(find.byKey(const ValueKey('music-search')), findsOneWidget);
+    final before = tester.state(find.byType(MusicScreen));
+    await tester.enterText(
+        find.byKey(const ValueKey('music-search')), 'remote');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    await select(tester, find.text('Music channel').first);
+    expect(find.text('Channel detail'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.byType(MusicScreen), findsNothing);
-    expect(tester.state(find.byType(MusicExplorePage)), same(before));
+    expect(find.text('Channel detail'), findsNothing);
+    expect(find.text('remote song 0'), findsOneWidget);
+    expect(tester.state(find.byType(MusicScreen)), same(before));
     expect(
-        Focus.of(tester.element(find.byIcon(Icons.search))).hasFocus, isTrue);
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('music-search')))
+            .controller!
+            .text,
+        'remote');
     expect(tester.takeException(), isNull);
   });
 
@@ -386,7 +433,7 @@ void main() {
         expect(find.byIcon(Icons.history), findsNothing);
       } else {
         expect(find.byIcon(Icons.history), findsOneWidget);
-        expect(catalog.releaseCalls, 0);
+        expect(catalog.trendingCalls, 0);
         expect(find.byType(MusicHomePage, skipOffstage: false), findsNothing);
       }
 

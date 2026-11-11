@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'gateway_session_bridge.dart';
 import 'nerdvpn_access.dart';
+import 'youtube_privacy.dart';
 
 /// Bounded JSON/API transport for background engines. Android owns its routing
 /// policy, so a stale worker cannot reset or bypass the foreground proxy.
@@ -24,6 +25,10 @@ class NativeProxyHttpClient extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final url = request.url;
     _checkOpen(url);
+    if (isOfficialYoutubeUrl(url)) {
+      throw http.ClientException(
+          'Direct YouTube connections are disabled.', url);
+    }
     if ((url.scheme != 'http' && url.scheme != 'https') ||
         !url.hasAuthority ||
         url.host.isEmpty) {

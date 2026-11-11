@@ -21,6 +21,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video_in_list.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:clipious/videos/views/components/history_video.dart';
+import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:clipious/videos/views/tv/components/video_item.dart';
 import 'package:clipious/videos/views/tv/screens/history.dart';
 import 'package:file/local.dart';
@@ -64,6 +65,7 @@ class _HistoryService extends Service {
   @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
+      VideoLoadObserver? loadObserver,
       void Function(BackendPlayback request)? onBackendRequest}) async {
     metadataRequests.add(videoId);
     if (failingVideos.contains(videoId)) throw StateError('Video unavailable');
@@ -165,9 +167,9 @@ void main() {
   });
 
   Future<void> seed(String id,
-      {double progress = 0, DateTime? watchedAt}) async {
+      {double progress = 0, DateTime? watchedAt, String? title}) async {
     final cached = HistoryVideoCache(
-        id, 'Video $id', 'A channel', 'https://instance.example/image',
+        id, title ?? 'Video $id', 'A channel', 'https://instance.example/image',
         lengthSeconds: 100);
     if (watchedAt != null) cached.created = watchedAt;
     await db.upsertHistoryVideo(cached);
@@ -177,8 +179,9 @@ void main() {
   }
 
   Future<void> mount(WidgetTester tester,
-      {Future<void> Function(BuildContext, Video)? onOpenVideo}) async {
-    tester.view.physicalSize = const Size(1280, 720);
+      {Future<void> Function(BuildContext, Video)? onOpenVideo,
+      Size viewport = const Size(1280, 720)}) async {
+    tester.view.physicalSize = viewport;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -328,6 +331,74 @@ void main() {
     await settle(tester);
 
     expect(opened, ['offline']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('narrow TV history fits a two-line title and channel name',
+      (tester) async {
+    const title = 'A long video title that wraps across two lines on TV';
+    await tester.runAsync(() => seed('long-title', title: title));
+    final opened = <String>[];
+    await mount(tester,
+        viewport: const Size(720, 360),
+        onOpenVideo: (_, video) async => opened.add(video.videoId));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await settle(tester);
+    expect(Focus.of(cardContext(tester, 'long-title')).hasFocus, isTrue);
+    expect(tester.getRect(find.text('A channel')).bottom,
+        lessThanOrEqualTo(tester.getRect(card('long-title')).bottom));
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await settle(tester);
+    expect(opened, ['long-title']);
+    expect(tester.takeException(), isNull);
+  });
+
+  Widget tightCard(Video video) => MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Center(
+            // Simulate a 1.5-pixel line-metric shortfall with test fonts.
+            child: SizedBox(
+              width: 208,
+              height: 183,
+              child: TvVideoItem(video: video, autoFocus: true),
+            ),
+          ),
+        ),
+      );
+
+  testWidgets('TV card fits mixed-script metadata when line metrics run tall',
+      (tester) async {
+    await tester.pumpWidget(tightCard(const Video(
+      videoId: '9bZkp7q19f0',
+      title: 'PSY - GANGNAM STYLE(강남스타일) M/V',
+      author: 'officialpsy',
+      lengthSeconds: 253,
+    )));
+    await settle(tester);
+
+    final bounds = tester.getRect(find.byType(TvVideoItem));
+    expect(tester.getRect(find.text('officialpsy')).bottom,
+        lessThanOrEqualTo(bounds.bottom));
+    expect(tester.getSize(find.byType(VideoThumbnailView)).aspectRatio,
+        closeTo(16 / 9, 0.0001));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('TV card shows duration for an expired premiere', (tester) async {
+    await tester.pumpWidget(tightCard(const Video(
+      videoId: 'expired-premiere',
+      title: 'An earlier premiere',
+      author: 'Channel',
+      lengthSeconds: 253,
+      isUpcoming: true,
+      premiereTimestamp: 1,
+    )));
+    await settle(tester);
+
+    expect(find.text('04:13'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:clipious/globals.dart' as globals;
 import 'package:flutter/services.dart';
@@ -9,11 +10,33 @@ import 'package:clipious/notifications/models/db/channel_notifications.dart';
 import 'package:clipious/notifications/models/db/playlist_notifications.dart';
 import 'package:clipious/notifications/models/db/subscription_notifications.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/no_server_selected.dart';
 import 'package:clipious/utils/file_db.dart';
+import 'package:clipious/utils/file_db_lock.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+
+Future<void> _contendForRetiredFile(List<Object> arguments) async {
+  final output = arguments[0] as SendPort;
+  final folder = arguments[1] as String;
+  output.send('started');
+  try {
+    await withFileDbLock(File(p.join(folder, 'profile.lock')), () async {
+      output.send('entered');
+      if (await File(p.join(folder, 'profile_deleted.marker')).exists()) {
+        output.send('retired');
+        return;
+      }
+      await File(p.join(folder, 'notification_cursors.json'))
+          .writeAsString('unexpected stale write');
+    });
+    output.send('finished');
+  } catch (error) {
+    output.send('failed: $error');
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -71,6 +94,10 @@ void main() {
     expect(n != null, true);
     expect(n!.lastSeenVideoId, "abc");
     expect(n.timestamp, 123);
+  });
+
+  test('background metadata never enables legacy direct playback', () {
+    expect(FileDB().getSettings(useProxySettingName)?.value, 'true');
   });
 
   test('test playlist notifications file db', () async {
@@ -681,6 +708,168 @@ void main() {
 
   test('clearDb ignores missing files', () async {
     await FileDB().clearDb();
+  });
+
+  test('profile deletion refuses the active mirror and captured views',
+      () async {
+    final storage = FileDB();
+    await storage.setLocale('fr');
+    await expectLater(storage.deleteProfile('default'), throwsStateError);
+    await expectLater(
+        storage.forProfile('second').deleteProfile('second'), throwsStateError);
+    expect(await storage.getLocale(), 'fr');
+    expect(
+        await File(p.join(
+                documentsDirectory.path, 'fileDb', 'profile_deleted.marker'))
+            .exists(),
+        isFalse);
+  });
+
+  test('default deletion clears only owned files and preserves the survivor',
+      () async {
+    final storage = FileDB();
+    const first =
+        Server(url: 'https://inv.example', authToken: 'fixture-token');
+    const survivor = Server(
+        url: 'https://other.example', profileId: 'second', id: 'survivor');
+    await storage.useServer(first);
+    await storage.upsertChannelNotification(
+        ChannelNotification('channel', 'Channel', 'old', 1));
+    await storage.upsertPlaylistNotification(
+        PlaylistNotification('playlist', 1, 1, 'Playlist'));
+    await storage
+        .setLastSubscriptionNotification(SubscriptionNotification('old', 1));
+    final captured = storage.forAccount(first);
+    final folder = Directory(p.join(documentsDirectory.path, 'fileDb'));
+    await File(p.join(folder.path, 'subscription_notifications.json'))
+        .writeAsString('{}');
+    await File(p.join(folder.path, 'unrelated.json')).writeAsString('keep');
+    final media = File(p.join(documentsDirectory.path, 'download.fixture'));
+    await media.writeAsString('keep downloaded media');
+    await storage.useProfile('second');
+    await storage.useServer(survivor);
+    await storage.setLocale('de');
+    final generic = File(p.join(folder.path, 'generic_settings.json'));
+    final before = await generic.readAsString();
+
+    await storage.deleteProfile('default');
+
+    for (final name in [
+      'channel_notifications.json',
+      'playlist_notifications.json',
+      'subscription_notifications.json',
+      'profile_settings.json',
+      'notification_cursors.json',
+    ]) {
+      expect(await File(p.join(folder.path, name)).exists(), isFalse,
+          reason: name);
+    }
+    expect(await generic.readAsString(), before);
+    expect(await File(p.join(folder.path, 'unrelated.json')).readAsString(),
+        'keep');
+    expect(await media.readAsString(), 'keep downloaded media');
+    expect(await storage.getCurrentlySelectedServer(), survivor);
+    expect(await storage.getLocale(), 'de');
+    expect(await File(p.join(folder.path, 'profile_deleted.marker')).exists(),
+        isTrue);
+    await expectLater(captured.getGenericSettings(), throwsStateError);
+    await expectLater(captured.getCurrentlySelectedServer(), throwsStateError);
+    await expectLater(
+        captured.setLastSubscriptionNotification(
+            SubscriptionNotification('late', 2)),
+        throwsStateError);
+    await expectLater(captured.useServer(first), throwsStateError);
+    await expectLater(storage.useProfile('default'), throwsStateError);
+    expect((await FileDB().getGenericSettings()).profileId, 'second');
+  });
+
+  test('scoped deletion is durable and cannot affect the default mirror',
+      () async {
+    final storage = FileDB();
+    await storage.setLocale('en');
+    await storage.useProfile('retired');
+    await storage.setLocale('fr');
+    final captured = storage.forProfile('retired');
+    await storage.useProfile('default');
+
+    await storage.deleteProfile('retired');
+    await FileDB().deleteProfile('retired');
+
+    expect(await storage.getLocale(), 'en');
+    await expectLater(captured.setLocale('de'), throwsStateError);
+    await expectLater(
+        FileDB().forProfile('retired').getGenericSettings(), throwsStateError);
+    await expectLater(FileDB().useProfile('retired'), throwsStateError);
+    expect((await storage.getGenericSettings()).profileId, 'default');
+  });
+
+  test('partial deletion leaves revocation intact and cleanup can be retried',
+      () async {
+    final storage = FileDB();
+    const account = Server(url: 'https://inv.example', authToken: 'fixture');
+    await storage.useServer(account);
+    final captured = storage.forAccount(account);
+    await storage.useProfile('second');
+    final invalid = Directory(p.join(
+        documentsDirectory.path, 'fileDb', 'channel_notifications.json'));
+    await invalid.create();
+
+    await expectLater(
+        storage.deleteProfile('default'), throwsA(isA<FileSystemException>()));
+    await expectLater(captured.getCurrentlySelectedServer(), throwsStateError);
+    await expectLater(captured.setLocale('fr'), throwsStateError);
+    await invalid.delete();
+    await storage.deleteProfile('default');
+    await expectLater(storage.useProfile('default'), throwsStateError);
+    expect((await storage.getGenericSettings()).profileId, 'second');
+  });
+
+  test('FileDB OS lock releases after an action throws', () async {
+    final lock = File(p.join(documentsDirectory.path, 'fixture.lock'));
+    await expectLater(
+        withFileDbLock<void>(lock, () async => throw StateError('fixture')),
+        throwsStateError);
+    var entered = false;
+    await withFileDbLock(lock, () async => entered = true);
+    expect(entered, isTrue);
+  });
+
+  test('FileDB OS lock serializes another isolate before retirement commit',
+      () async {
+    final folder =
+        await Directory(p.join(documentsDirectory.path, 'locking')).create();
+    final port = ReceivePort();
+    final started = Completer<void>();
+    final finished = Completer<void>();
+    final messages = <String>[];
+    final subscription = port.listen((message) {
+      messages.add(message as String);
+      if (message == 'started') started.complete();
+      if (message == 'finished' || message.startsWith('failed:')) {
+        finished.complete();
+      }
+    });
+    Isolate? worker;
+    try {
+      await withFileDbLock(File(p.join(folder.path, 'profile.lock')), () async {
+        worker = await Isolate.spawn(
+            _contendForRetiredFile, <Object>[port.sendPort, folder.path]);
+        await started.future.timeout(const Duration(seconds: 5));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(messages, ['started']);
+        await File(p.join(folder.path, 'profile_deleted.marker'))
+            .writeAsString('', flush: true);
+      });
+      await finished.future.timeout(const Duration(seconds: 5));
+      expect(messages, ['started', 'entered', 'retired', 'finished']);
+      expect(
+          await File(p.join(folder.path, 'notification_cursors.json')).exists(),
+          isFalse);
+    } finally {
+      worker?.kill(priority: Isolate.immediate);
+      await subscription.cancel();
+      port.close();
+    }
   });
 
   test('storage clients report unavailable app storage', () async {

@@ -31,7 +31,6 @@ class VideoThumbnailView extends StatelessWidget {
           Thumbnail(
             thumbnails: thumbnails,
             images: hasMusicArtwork ? musicThumbnails : images,
-            useInvidiousProxy: !hasMusicArtwork,
             decoration: decoration ??
                 BoxDecoration(
                   color: colors.secondaryContainer,

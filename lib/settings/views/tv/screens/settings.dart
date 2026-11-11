@@ -343,13 +343,6 @@ class TVSettingsScreen extends StatelessWidget {
                   onSelected: (context) => cubit.toggleDash(!state.useDash),
                   trailing: Switch(onChanged: (value) {}, value: state.useDash),
                 ),
-                SettingsTile(
-                  title: locals.useProxy,
-                  description: locals.useProxyDescription,
-                  onSelected: (context) => cubit.toggleProxy(!state.useProxy),
-                  trailing:
-                      Switch(onChanged: (value) {}, value: state.useProxy),
-                ),
                 AdjustmentSettingTile(
                   title: locals.skipStep,
                   value: state.skipStep.floor(),

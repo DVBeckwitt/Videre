@@ -17,6 +17,11 @@ class BetterPlayerSubtitlesSource {
   ///Content of subtitles, used when type is memory
   final String? content;
 
+  ///Loads subtitle text only when this track is selected. Each retry invokes
+  ///the loader again. The caller owns transport, authentication and deadlines.
+  ///When supplied, this takes precedence over [content] and [urls].
+  final Future<String> Function()? contentLoader;
+
   ///Subtitles selected by default, without user interaction
   final bool? selectedByDefault;
 
@@ -41,6 +46,7 @@ class BetterPlayerSubtitlesSource {
     this.name = "Default subtitles",
     this.urls,
     this.content,
+    this.contentLoader,
     this.selectedByDefault,
     this.headers,
     this.asmsIsSegmented,
@@ -54,6 +60,7 @@ class BetterPlayerSubtitlesSource {
     String name = "Default subtitles",
     String? url,
     String? content,
+    Future<String> Function()? contentLoader,
     bool? selectedByDefault,
     Map<String, String>? headers,
   }) =>
@@ -63,6 +70,7 @@ class BetterPlayerSubtitlesSource {
           name: name,
           urls: [url],
           content: content,
+          contentLoader: contentLoader,
           selectedByDefault: selectedByDefault,
           headers: headers,
         )

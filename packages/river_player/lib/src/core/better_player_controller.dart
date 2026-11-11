@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:collection/collection.dart' show IterableExtension;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:river_player/river_player.dart';
@@ -11,7 +13,6 @@ import 'package:river_player/src/dash/better_player_dash_utils.dart';
 import 'package:river_player/src/subtitles/better_player_subtitle.dart';
 import 'package:river_player/src/subtitles/better_player_subtitles_factory.dart';
 import 'package:river_player/src/video_player/video_player.dart';
-import 'package:river_player/src/video_player/video_player_platform_interface.dart';
 
 ///Class used to control overall Better Player behavior. Main class to change
 ///state of Better Player.
@@ -82,6 +83,9 @@ class BetterPlayerController {
       _betterPlayerSubtitlesSourceList;
   BetterPlayerSubtitlesSource? _betterPlayerSubtitlesSource;
   int _subtitleLoadGeneration = 0;
+  int _sourceGeneration = 0;
+  int _seekRevision = 0;
+  int? _initialDashHeight;
 
   ///Currently used subtitles source.
   BetterPlayerSubtitlesSource? get betterPlayerSubtitlesSource =>
@@ -234,8 +238,22 @@ class BetterPlayerController {
     return betterPLayerControllerProvider.controller;
   }
 
-  ///Setup new data source in Better Player.
-  Future setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+  ///Sets up a new data source. An explicit [initialPosition], including zero,
+  ///overrides the configured start position for this load. On Android, network
+  ///VOD sources can prepare directly at that position.
+  ///Set [initialDashHeight] to apply a height cap before Android prepares DASH.
+  ///Zero selects Auto and clears the preceding source's video constraints.
+  ///Enable [fastDashStartupFallback] when the caller has a compatible fallback
+  ///source ready for a failed Android DASH startup.
+  Future<void> setupDataSource(BetterPlayerDataSource betterPlayerDataSource,
+      {Duration? initialPosition,
+      int? initialDashHeight,
+      bool fastDashStartupFallback = false}) async {
+    final sourceGeneration = ++_sourceGeneration;
+    final dashHeight = _isAndroidNetworkVod(betterPlayerDataSource) &&
+            betterPlayerDataSource.videoFormat == BetterPlayerVideoFormat.dash
+        ? initialDashHeight
+        : null;
     ++_subtitleLoadGeneration;
     _betterPlayerSubtitlesSource = null;
     subtitlesLines.clear();
@@ -249,6 +267,7 @@ class BetterPlayerController {
     _hasCurrentDataSourceStarted = false;
     _hasCurrentDataSourceInitialized = false;
     _betterPlayerDataSource = betterPlayerDataSource;
+    _initialDashHeight = dashHeight;
     _betterPlayerSubtitlesSourceList.clear();
 
     ///Build videoPlayerController if null
@@ -261,6 +280,12 @@ class BetterPlayerController {
 
     ///Clear asms tracks
     betterPlayerAsmsTracks.clear();
+    if (dashHeight != null) {
+      _betterPlayerAsmsTrack = dashHeight == 0
+          ? BetterPlayerAsmsTrack.defaultTrack()
+          : BetterPlayerAsmsTrack(
+              null, 0x7fffffff, dashHeight, 0x7fffffff, null, null, null);
+    }
     _betterPlayerAsmsAudioTracks = null;
     _betterPlayerAsmsAudioTrack = null;
 
@@ -291,8 +316,17 @@ class BetterPlayerController {
     }
 
     ///Process data source
-    await _setupDataSource(betterPlayerDataSource);
-    setTrack(BetterPlayerAsmsTrack.defaultTrack());
+    await _setupDataSource(betterPlayerDataSource,
+        initialPosition: initialPosition,
+        initialDashHeight: dashHeight,
+        fastDashStartupFallback: fastDashStartupFallback);
+    // Android already selected the starting track. A default sent here would
+    // discard the cap and any track chosen while the source was preparing.
+    if (dashHeight == null &&
+        !_disposed &&
+        sourceGeneration == _sourceGeneration) {
+      setTrack(BetterPlayerAsmsTrack.defaultTrack());
+    }
   }
 
   ///Configure subtitles based on subtitles source.
@@ -321,6 +355,7 @@ class BetterPlayerController {
   ///This method configures tracks, subtitles and audio tracks from given
   ///master playlist.
   Future _setupAsmsDataSource(BetterPlayerDataSource source) async {
+    final sourceGeneration = _sourceGeneration;
     final manifest = source.inlineDashManifest;
     final data = manifest ??
         await BetterPlayerAsmsUtils.getDataFromUrl(source.url, _getHeaders());
@@ -328,7 +363,9 @@ class BetterPlayerController {
       final response = manifest != null
           ? await BetterPlayerDashUtils.parse(data, source.url)
           : await BetterPlayerAsmsUtils.parse(data, source.url);
-      if (_disposed || !identical(_betterPlayerDataSource, source)) return;
+      if (_disposed ||
+          sourceGeneration != _sourceGeneration ||
+          !identical(_betterPlayerDataSource, source)) return;
 
       /// Load tracks
       if (_betterPlayerDataSource?.useAsmsTracks == true) {
@@ -358,7 +395,8 @@ class BetterPlayerController {
       if (betterPlayerDataSource?.useAsmsAudioTracks == true &&
           _isDataSourceAsms(betterPlayerDataSource!)) {
         _betterPlayerAsmsAudioTracks = response.audios ?? [];
-        if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true) {
+        if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true &&
+            _betterPlayerAsmsAudioTrack == null) {
           setAudioTrack(_betterPlayerAsmsAudioTracks!.first);
         }
       }
@@ -478,8 +516,21 @@ class BetterPlayerController {
     }
   }
 
+  bool _isAndroidNetworkVod(BetterPlayerDataSource source) =>
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.android &&
+      source.type == BetterPlayerDataSourceType.network &&
+      source.liveStream != true;
+
   ///Internal method which invokes videoPlayerController source setup.
-  Future _setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+  Future<void> _setupDataSource(BetterPlayerDataSource betterPlayerDataSource,
+      {Duration? initialPosition,
+      int? initialDashHeight,
+      bool retryDashTrack = false,
+      bool fastDashStartupFallback = false}) async {
+    final sourceGeneration = _sourceGeneration;
+    final androidNetworkVod = _isAndroidNetworkVod(betterPlayerDataSource);
+    final nativeInitialPosition = androidNetworkVod ? initialPosition : null;
     switch (betterPlayerDataSource.type) {
       case BetterPlayerDataSourceType.network:
         await videoPlayerController?.setNetworkDataSource(
@@ -504,6 +555,10 @@ class BetterPlayerController {
           overriddenDuration: _betterPlayerDataSource!.overriddenDuration,
           formatHint: _getVideoFormat(_betterPlayerDataSource!.videoFormat),
           inlineDashManifest: betterPlayerDataSource.inlineDashManifest,
+          initialPosition: nativeInitialPosition,
+          initialDashHeight: androidNetworkVod ? initialDashHeight : null,
+          retryDashTrack: retryDashTrack,
+          fastDashStartupFallback: androidNetworkVod && fastDashStartupFallback,
           licenseUrl: _betterPlayerDataSource?.drmConfiguration?.licenseUrl,
           certificateUrl:
               _betterPlayerDataSource?.drmConfiguration?.certificateUrl,
@@ -564,7 +619,11 @@ class BetterPlayerController {
         }
         break;
     }
-    await _initializeVideo();
+    if (_disposed || sourceGeneration != _sourceGeneration) return;
+    await _initializeVideo(
+        startAt: nativeInitialPosition == null
+            ? initialPosition ?? betterPlayerConfiguration.startAt
+            : null);
   }
 
   ///Create file from provided list of bytes. File will be created in temporary
@@ -580,7 +639,8 @@ class BetterPlayerController {
 
   ///Initializes video based on configuration. Invoke actions which need to be
   ///run on player start.
-  Future _initializeVideo() async {
+  Future<void> _initializeVideo({Duration? startAt}) async {
+    final sourceGeneration = _sourceGeneration;
     setLooping(betterPlayerConfiguration.looping);
     _videoEventStreamSubscription?.cancel();
     _videoEventStreamSubscription = null;
@@ -610,8 +670,9 @@ class BetterPlayerController {
       }
     }
 
-    final startAt = betterPlayerConfiguration.startAt;
-    if (startAt != null) {
+    if (startAt != null &&
+        !_disposed &&
+        sourceGeneration == _sourceGeneration) {
       // Finish the resume seek before the caller can play. Its captured paused
       // state must not arrive later and override that explicit play command.
       await seekTo(startAt);
@@ -692,7 +753,16 @@ class BetterPlayerController {
       throw StateError("The video has not been initialized yet.");
     }
 
-    await videoPlayerController!.seekTo(moment);
+    final sourceGeneration = _sourceGeneration;
+    final seekRevision = ++_seekRevision;
+    final controller = videoPlayerController!;
+    await controller.seekTo(moment);
+    if (_disposed ||
+        sourceGeneration != _sourceGeneration ||
+        seekRevision != _seekRevision ||
+        !identical(controller, videoPlayerController)) {
+      return;
+    }
 
     _postEvent(BetterPlayerEvent(BetterPlayerEventType.seekTo,
         parameters: <String, dynamic>{_durationParameter: moment}));
@@ -835,6 +905,7 @@ class BetterPlayerController {
     if (currentVideoPlayerValue.initialized &&
         !_hasCurrentDataSourceInitialized) {
       _hasCurrentDataSourceInitialized = true;
+      _applyAudioTrack();
       debugPrint(
           "BetterPlayerController: Video initialized ${currentVideoPlayerValue.isLiveStream}");
       _postEvent(
@@ -1245,17 +1316,27 @@ class BetterPlayerController {
 
   ///Retry data source if playback failed.
   Future retryDataSource() async {
-    await _setupDataSource(_betterPlayerDataSource!);
+    final sourceGeneration = _sourceGeneration;
+    final dashHeight = _initialDashHeight;
+    await _setupDataSource(_betterPlayerDataSource!,
+        initialDashHeight: dashHeight == null
+            ? null
+            : _betterPlayerAsmsTrack?.height ?? dashHeight,
+        retryDashTrack: dashHeight != null);
+    if (_disposed || sourceGeneration != _sourceGeneration) return;
     if (_videoPlayerValueOnError != null) {
       final position = _videoPlayerValueOnError!.position;
       await seekTo(position);
+      if (_disposed || sourceGeneration != _sourceGeneration) return;
       await play();
-      _videoPlayerValueOnError = null;
+      if (sourceGeneration == _sourceGeneration)
+        _videoPlayerValueOnError = null;
     }
   }
 
   ///Set [audioTrack] in player. Works only for HLS or DASH streams.
   void setAudioTrack(BetterPlayerAsmsAudioTrack audioTrack) {
+    if (_disposed) return;
     if (videoPlayerController == null) {
       throw StateError("The data source has not been initialized");
     }
@@ -1266,7 +1347,15 @@ class BetterPlayerController {
     }
 
     _betterPlayerAsmsAudioTrack = audioTrack;
-    videoPlayerController!.setAudioTrack(audioTrack.label, audioTrack.id);
+    _applyAudioTrack();
+  }
+
+  void _applyAudioTrack() {
+    final track = _betterPlayerAsmsAudioTrack;
+    // Inline discovery can finish before native creation or source setup. Keep
+    // the current choice and apply it when this source's tracks are available.
+    if (_disposed || !_hasCurrentDataSourceInitialized || track == null) return;
+    videoPlayerController?.setAudioTrack(track.label, track.id);
   }
 
   ///Enable or disable audio mixing with other sound within device.

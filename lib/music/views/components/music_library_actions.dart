@@ -70,6 +70,18 @@ class MusicLibrarySession {
     await saveToPlaylist(id, videos);
   }
 
+  Future<void> removeFromPlaylist(String playlistId, String videoId) async {
+    _requireCurrent();
+    if (!playlistId.startsWith('local:')) {
+      throw ArgumentError('Choose a local playlist');
+    }
+    // The existing local mutation captures its owner before yielding and uses
+    // the video identity, never the index in Music's filtered playlist view.
+    await _service.deleteUserPlaylistVideo(playlistId, videoId);
+    _requireCurrent();
+    library.notifyChanged();
+  }
+
   Future<void> setBookmark(MusicLibraryEntry entry,
       {required bool saved}) async {
     _requireCurrent();
@@ -105,14 +117,24 @@ class MusicLibrarySession {
   }
 }
 
-enum _LibraryAction { saveBookmark, removeBookmark, save, download }
+enum _LibraryAction {
+  saveBookmark,
+  removeBookmark,
+  save,
+  removeFromPlaylist,
+  download
+}
 
 class MusicLibraryActions extends StatefulWidget {
   final List<Video> videos;
   final bool compact;
+  final String? localPlaylistId;
 
   const MusicLibraryActions(
-      {super.key, required this.videos, this.compact = true});
+      {super.key,
+      required this.videos,
+      this.compact = true,
+      this.localPlaylistId});
 
   static Future<void> save(BuildContext context, List<Video> videos) async {
     if (videos.isEmpty) return;
@@ -180,6 +202,7 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
   bool _busy = false;
   MusicLibrarySession? _menuSession;
   List<Video>? _menuVideos;
+  String? _menuPlaylistId;
   ModalRoute<dynamic>? _menuRoute;
   StreamSubscription<AppState>? _sessionChanges;
 
@@ -193,6 +216,7 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
         final route = _menuRoute;
         _menuSession = null;
         _menuVideos = null;
+        _menuPlaylistId = null;
         _menuRoute = null;
         if (route != null && route.isActive) {
           route.navigator?.removeRoute(route);
@@ -216,8 +240,11 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
   Future<void> _act(_LibraryAction action) async {
     final menuSession = _menuSession;
     final videos = _menuVideos ?? List<Video>.unmodifiable(widget.videos);
+    final playlistId =
+        menuSession == null ? widget.localPlaylistId : _menuPlaylistId;
     _menuSession = null;
     _menuVideos = null;
+    _menuPlaylistId = null;
     _menuRoute = null;
     final session =
         menuSession ?? MusicLibrarySession(context.read<AppCubit>());
@@ -234,6 +261,10 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
         }
       } else if (action == _LibraryAction.save) {
         await MusicLibraryActions.save(context, videos);
+      } else if (action == _LibraryAction.removeFromPlaylist) {
+        if (playlistId != null && videos.length == 1) {
+          await session.removeFromPlaylist(playlistId, videos.single.videoId);
+        }
       } else {
         await MusicLibraryActions.download(context, videos);
       }
@@ -265,6 +296,8 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
     final bookmarkLabel = saved ? locals.musicRemoveSong : locals.musicSaveSong;
     final bookmarkAction =
         saved ? _LibraryAction.removeBookmark : _LibraryAction.saveBookmark;
+    final removable = widget.localPlaylistId?.startsWith('local:') == true &&
+        widget.videos.length == 1;
     if (widget.compact) {
       return PopupMenuButton<_LibraryAction>(
         tooltip: locals.musicLibraryActions,
@@ -272,10 +305,12 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
         onOpened: () {
           _menuSession = MusicLibrarySession(context.read<AppCubit>());
           _menuVideos = List<Video>.unmodifiable(widget.videos);
+          _menuPlaylistId = widget.localPlaylistId;
         },
         onCanceled: () {
           _menuSession = null;
           _menuVideos = null;
+          _menuPlaylistId = null;
           _menuRoute = null;
         },
         onSelected: _act,
@@ -293,6 +328,10 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
                 _menuRoute = ModalRoute.of(context);
                 return Text(locals.musicSaveToPlaylist);
               })),
+          if (removable)
+            PopupMenuItem(
+                value: _LibraryAction.removeFromPlaylist,
+                child: Text(locals.removeFromPlayList)),
           if (!isTv)
             PopupMenuItem(
                 value: _LibraryAction.download,
@@ -310,6 +349,12 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
           onPressed: enabled ? () => _act(_LibraryAction.save) : null,
           icon: const Icon(Icons.playlist_add),
           label: Text(locals.musicSaveToPlaylist)),
+      if (removable)
+        OutlinedButton.icon(
+            onPressed:
+                enabled ? () => _act(_LibraryAction.removeFromPlaylist) : null,
+            icon: const Icon(Icons.playlist_remove),
+            label: Text(locals.removeFromPlayList)),
       if (!isTv)
         OutlinedButton.icon(
             onPressed: enabled ? () => _act(_LibraryAction.download) : null,
@@ -362,37 +407,43 @@ class _MusicBookmarkButtonState extends State<MusicBookmarkButton> {
   }
 
   @override
-  Widget build(BuildContext context) => BlocBuilder<AppCubit, AppState>(
-        builder: (context, state) {
-          final library = MusicLibraryService.forProfile(db, db.profileId);
-          return ListenableBuilder(
-            listenable: library.changes,
-            builder: (context, _) {
-              final saved =
-                  library.contains(widget.entry.kind, widget.entry.id);
-              final locals = AppLocalizations.of(context)!;
-              final label = switch (widget.entry.kind) {
-                MusicLibraryKind.song =>
-                  saved ? locals.musicRemoveSong : locals.musicSaveSong,
-                MusicLibraryKind.album =>
-                  saved ? locals.musicRemoveAlbum : locals.musicSaveAlbum,
-                MusicLibraryKind.artist =>
-                  saved ? locals.musicRemoveArtist : locals.musicSaveArtist,
-                MusicLibraryKind.playlist =>
-                  saved ? locals.musicRemovePlaylist : locals.musicSavePlaylist,
-              };
-              return OutlinedButton.icon(
-                  onPressed: _busy ||
-                          state.globalLoading ||
-                          state.sessionRecoveryRequired
-                      ? null
-                      : () => _setSaved(!saved),
-                  icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
-                  label: Text(label));
-            },
-          );
-        },
-      );
+  Widget build(BuildContext context) {
+    // Legacy album bookmarks remain in storage and backups, but the Invidious
+    // Music surface cannot browse or create YouTube Music catalog albums.
+    if (widget.entry.kind == MusicLibraryKind.album) {
+      return const SizedBox.shrink();
+    }
+    return BlocBuilder<AppCubit, AppState>(
+      builder: (context, state) {
+        final library = MusicLibraryService.forProfile(db, db.profileId);
+        return ListenableBuilder(
+          listenable: library.changes,
+          builder: (context, _) {
+            final saved = library.contains(widget.entry.kind, widget.entry.id);
+            final locals = AppLocalizations.of(context)!;
+            final label = switch (widget.entry.kind) {
+              MusicLibraryKind.song =>
+                saved ? locals.musicRemoveSong : locals.musicSaveSong,
+              MusicLibraryKind.album =>
+                saved ? locals.musicRemoveAlbum : locals.musicSaveAlbum,
+              MusicLibraryKind.artist =>
+                saved ? locals.musicRemoveArtist : locals.musicSaveArtist,
+              MusicLibraryKind.playlist =>
+                saved ? locals.musicRemovePlaylist : locals.musicSavePlaylist,
+            };
+            return OutlinedButton.icon(
+                onPressed: _busy ||
+                        state.globalLoading ||
+                        state.sessionRecoveryRequired
+                    ? null
+                    : () => _setSaved(!saved),
+                icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
+                label: Text(label));
+          },
+        );
+      },
+    );
+  }
 }
 
 class _SaveMusicDialogState extends State<_SaveMusicDialog> {

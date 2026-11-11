@@ -75,7 +75,6 @@ Future<void> _waitForRoute(String name, {StackRouter? router}) async {
 
 void _expectMusicArgs(MusicRouteArgs args, String kind, String id) {
   expect(args.videoId, kind == 'song' ? id : isNull);
-  expect(args.albumId, kind == 'album' ? id : isNull);
   expect(args.playlistId, kind == 'playlist' ? id : isNull);
   expect(args.artistId, kind == 'artist' ? id : isNull);
 }
@@ -185,11 +184,6 @@ void main() {
       'song',
       'https://music.youtube.com/watch?v=dQw4w9WgXcQ&list=RDAMVMdQw4w9WgXcQ',
       'dQw4w9WgXcQ'
-    ),
-    (
-      'album',
-      'https://music.youtube.com/browse/MPREb_K8qWMWVqXGi',
-      'MPREb_K8qWMWVqXGi'
     ),
     (
       'playlist',
@@ -309,6 +303,7 @@ void main() {
       'https://music.youtube.com/channel/UC_kRDKYrUlrbtrSiyu5Tflg/extra',
       'https://music.youtube.com/channel/UC_kRDKYrUlrbtrSiyu5Tflg%2Fprivate',
       'https://music.youtube.com/channel/MPREb_K8qWMWVqXGi',
+      'https://music.youtube.com/browse/MPREb_K8qWMWVqXGi',
       'https://music.youtube.com.example.com/channel/UC_kRDKYrUlrbtrSiyu5Tflg',
       'https://music.youtube.com/browse/MPREalbum%2Fprivate',
       'https://music.youtube.com/playlist?list=',
@@ -336,7 +331,8 @@ void main() {
 
     app.setGlobalLoading(false);
     app.requireSessionRecovery();
-    await app.openAppLink('https://music.youtube.com/browse/MPREalbum', true);
+    await app.openAppLink(
+        'https://music.youtube.com/watch?v=dQw4w9WgXcQ', true);
     expect(appRouter.stack.map((page) => page.name), [TvHomeRoute.name]);
   });
 
@@ -354,12 +350,14 @@ void main() {
     ));
     final context = tester.element(find.byType(TextLinkified));
 
-    linkified.openLink(context,
-        UrlElement('https://music.youtube.com/browse/MPREb_K8qWMWVqXGi'));
+    linkified.openLink(
+        context,
+        UrlElement(
+            'https://music.youtube.com/playlist?list=PLsupported_music'));
     await tester.pump();
     expect(router.pushed?.routeName, MusicRoute.name);
     _expectMusicArgs(
-        router.pushed!.args as MusicRouteArgs, 'album', 'MPREb_K8qWMWVqXGi');
+        router.pushed!.args as MusicRouteArgs, 'playlist', 'PLsupported_music');
 
     linkified.openLink(context, TimestampElement('1:23'));
     expect(player.sought, const Duration(minutes: 1, seconds: 23));

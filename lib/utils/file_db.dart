@@ -25,6 +25,7 @@ import '../notifications/models/db/playlist_notifications.dart';
 import '../notifications/models/db/subscription_notifications.dart';
 import '../settings/models/db/server.dart';
 import '../settings/models/errors/no_server_selected.dart';
+import 'file_db_lock.dart';
 import 'interfaces/db.dart';
 
 part 'file_db.g.dart';
@@ -42,13 +43,21 @@ const _subNotifsFile = 'subscription_notifications.json',
     _notificationCursors = 'notification_cursors.json',
     _fileDbFolder = 'fileDb';
 const _fileNotFoundErrorCode = 2;
+const _profileFiles = [
+  _channelNotifFile,
+  _playlistNotifsFile,
+  _subNotifsFile,
+  _profileSettings,
+  _notificationCursors,
+];
+const _profileDeleted = 'profile_deleted.marker';
 
 final _log = Logger('FileDb');
 
 class FileDB extends IDbClient {
-  // Share queues across foreground clients. Background readers see complete
-  // files through atomic replacement; this is not a cross-isolate write lock.
+  // Keep foreground ordering in addition to the OS locks shared by engines.
   static final _pendingUpdates = <String, Future<void>>{};
+  static final _heldLocks = Object();
 
   final String? _fixedProfileId;
   final Server? _fixedAccount;
@@ -81,11 +90,86 @@ class FileDB extends IDbClient {
       : '${base64Url.encode(utf8.encode(id)).replaceAll('=', '')}.$name';
 
   Future<String> _selectedProfileId() async {
-    if (_fixedProfileId != null) return _fixedProfileId;
+    if (_fixedProfileId != null) {
+      await _ensureProfileAvailable(_fixedProfileId);
+      return _fixedProfileId;
+    }
     final settings =
         await _readGenericSettings(await _openAppFile(_genericSettings));
+    await _ensureProfileAvailable(settings.profileId);
     _lastProfileId = settings.profileId;
     return settings.profileId;
+  }
+
+  Future<void> _ensureProfileAvailable(String id) async {
+    final marker = await _openAppFile(_profilePath(_profileDeleted, id));
+    if (await FileSystemEntity.type(marker.path, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      throw StateError('This profile has been deleted');
+    }
+  }
+
+  Future<T> _withStorageLock<T>(File file, Future<T> Function() action) async {
+    final held = Zone.current[_heldLocks] as Set<String>? ?? const <String>{};
+    final key = file.absolute.path;
+    if (held.contains(key)) return action();
+    return withFileDbLock(
+        file,
+        () => runZoned(action, zoneValues: {
+              _heldLocks: {...held, key}
+            }));
+  }
+
+  Future<T> _withProfileLock<T>(String id, Future<T> Function() action,
+      {bool allowDeleted = false}) async {
+    final lock = await _openAppFile(_profilePath('profile.lock', id));
+    return _withStorageLock(lock, () async {
+      if (!allowDeleted) await _ensureProfileAvailable(id);
+      return action();
+    });
+  }
+
+  String? _fileProfile(File file) {
+    final name = p.basename(file.path);
+    for (final owned in _profileFiles) {
+      if (name == owned) return 'default';
+      if (name.endsWith('.$owned')) {
+        final encoded = name.substring(0, name.length - owned.length - 1);
+        return utf8.decode(base64Url.decode(base64Url.normalize(encoded)));
+      }
+    }
+    return null;
+  }
+
+  /// Retire an inactive mirror before removing its exact owned files. The
+  /// marker is permanent, including after a partial cleanup failure, so an
+  /// already running background isolate cannot recreate this person's data.
+  @override
+  Future<void> deleteProfile(String id) async {
+    if (_fixedProfileId != null) {
+      throw StateError('Only the root file database can delete profiles');
+    }
+    if (id.isEmpty || id.length > 128) {
+      throw ArgumentError.value(id, 'id', 'Invalid profile ID');
+    }
+    // Selection always acquires the generic lock before any profile lock.
+    await _updateFile(_genericSettings, (file) async {
+      if ((await _readGenericSettings(file)).profileId == id) {
+        throw StateError('Switch profiles before deleting the active profile');
+      }
+      await _withProfileLock(id, () async {
+        final marker = await _openAppFile(_profilePath(_profileDeleted, id));
+        await marker.writeAsString('', flush: true);
+        for (final name in _profileFiles) {
+          final owned = await _openAppFile(_profilePath(name, id));
+          try {
+            await owned.delete();
+          } on FileSystemException catch (error) {
+            if (error.osError?.errorCode != _fileNotFoundErrorCode) rethrow;
+          }
+        }
+      }, allowDeleted: true);
+    });
   }
 
   Future<void> _updateProfileFile(
@@ -103,7 +187,7 @@ class FileDB extends IDbClient {
       if (_fixedProfileId != id) {
         throw StateError('A fixed profile view cannot switch profiles');
       }
-      return Future.value();
+      return _ensureProfileAvailable(id);
     }
     return _updateFile(_genericSettings, (file) async {
       final current = await _readGenericSettings(file);
@@ -171,9 +255,11 @@ class FileDB extends IDbClient {
     _lastProfileId = active.profileId;
     if (_fixedProfileId != null && _fixedProfileId != active.profileId) {
       final settings = await _readProfileSettings(_fixedProfileId);
+      await _ensureProfileAvailable(_fixedProfileId);
       if (_fixedAccount != null) settings.server = _fixedAccount;
       return settings;
     }
+    await _ensureProfileAvailable(active.profileId);
     if (active.server?.profileId != active.profileId) active.server = null;
     if (_fixedAccount != null) active.server = _fixedAccount;
     return active;
@@ -395,7 +481,16 @@ class FileDB extends IDbClient {
 
   Future<void> _updateFile(String path, Future<void> Function(File) update) {
     final previous = _pendingUpdates[path] ?? Future<void>.value();
-    final result = previous.then((_) async => update(await _openAppFile(path)));
+    final result = previous.then((_) async {
+      final file = await _openAppFile(path);
+      if (path == _genericSettings) {
+        return _withStorageLock(
+            await _openAppFile('generic_settings.lock'), () => update(file));
+      }
+      final id = _fileProfile(file);
+      if (id == null) throw StateError('FileDB write has no profile owner');
+      return _withProfileLock(id, () => update(file));
+    });
     // A failed update still reaches its caller without blocking later changes.
     _pendingUpdates[path] = result.then<void>((_) {}, onError: (Object _) {});
     return result;
@@ -416,40 +511,42 @@ class FileDB extends IDbClient {
 
   Future<void> _writeMapToFile(File f, Map<String, dynamic> map,
       {FutureOr<bool> Function()? stillCurrent}) async {
-    var string = jsonEncode(map);
-    _log.fine("Writing json to ${f.path}");
-    final temporary = File('${f.path}.${const Uuid().v4()}.tmp');
-    try {
-      await temporary.writeAsString(string, flush: true);
-      if (stillCurrent != null) {
-        final current = stillCurrent();
-        if (!(current is Future<bool> ? await current : current)) return;
+    final id = _fileProfile(f) ?? map['profileId'] as String?;
+    if (id == null) throw StateError('FileDB write has no profile owner');
+    await _withProfileLock(id, () async {
+      var string = jsonEncode(map);
+      _log.fine("Writing json to ${f.path}");
+      final temporary = File('${f.path}.${const Uuid().v4()}.tmp');
+      try {
+        await temporary.writeAsString(string, flush: true);
+        if (stillCurrent != null) {
+          final current = stillCurrent();
+          if (!(current is Future<bool> ? await current : current)) return;
+        }
+        await temporary.rename(f.path);
+      } finally {
+        if (await temporary.exists()) await temporary.delete();
       }
-      await temporary.rename(f.path);
-    } finally {
-      if (await temporary.exists()) await temporary.delete();
-    }
+    });
   }
 
   Future<Map<String, dynamic>> _readFileAsMap(File f) async {
+    final id = _fileProfile(f);
+    if (id != null) await _ensureProfileAvailable(id);
+    Map<String, dynamic> content;
     try {
       final contents = await f.readAsString();
-
-      return jsonDecode(contents);
+      content = jsonDecode(contents);
     } catch (e) {
-      return {};
+      content = {};
     }
+    if (id != null) await _ensureProfileAvailable(id);
+    return content;
   }
 
   Future<void> clearDb() async {
     final id = await _selectedProfileId();
-    for (final path in const [
-      _channelNotifFile,
-      _playlistNotifsFile,
-      _subNotifsFile,
-      _profileSettings,
-      _notificationCursors,
-    ]) {
+    for (final path in _profileFiles) {
       await _updateFile(_profilePath(path, id), (file) async {
         try {
           await file.delete();
@@ -691,7 +788,7 @@ class FileDB extends IDbClient {
   SettingsValue? getSettings(String name) {
     _log.fine("trying to get setting $name");
     return switch (name) {
-      (useProxySettingName) => SettingsValue(useProxySettingName, "false"),
+      (useProxySettingName) => SettingsValue(useProxySettingName, "true"),
       (_) => throw UnimplementedError()
     };
   }

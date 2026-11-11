@@ -94,6 +94,16 @@ void main() {
     expect(item.duration, const Duration(seconds: 42));
   });
 
+  test('unsupported Google notification artwork never reaches the image cache',
+      () async {
+    final controller =
+        createPlayer(video('https://s.ytimg.com/yts/img/cover.png'));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.artUri, isNull);
+    expect(item.artHeaders, isNull);
+    expect(item.title, 'Artwork video');
+  });
+
   test('queued artwork preserves the metadata server snapshot', () async {
     const metadataServer = Server(
         url: 'https://metadata.example',
@@ -147,7 +157,7 @@ void main() {
     expect(item.artHeaders, isNull);
   });
 
-  test('music notification uses the original cover without instance access',
+  test('saved music notification routes its Google cover through the instance',
       () async {
     const cover = 'https://lh3.googleusercontent.com/cover';
     final music = MusicMetadata(
@@ -163,11 +173,9 @@ void main() {
     expect(item.title, 'Song');
     expect(item.artist, 'Singer');
     expect(item.album, 'Album');
-    expect(item.artUri, Uri.parse(cover));
-    expect(item.artHeaders, isNull);
-
-    await db.deleteServerById(selectedServer);
-    expect((await controller.getMediaItem(0))!.artUri, item.artUri);
+    expect(item.artUri, Uri.parse('https://selected.example/ggpht/cover'));
+    expect(
+        item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
   });
 
   test('music notification without a cover keeps the instance video thumbnail',

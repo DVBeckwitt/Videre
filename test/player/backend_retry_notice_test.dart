@@ -10,10 +10,12 @@ import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
+import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/views/components/backend_retry_notice.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/backend_request_indicator.dart';
+import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/tv/components/player_controls.dart';
@@ -25,6 +27,8 @@ import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/motion_binding.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -51,7 +55,16 @@ class _BackendPlayerCubit extends TestPlayerCubit {
 
   void clearRecovery() => emit(state.copyWith(backendRecovery: null));
 
+  void setReconnecting(bool active, MediaEvent event) =>
+      emit(state.copyWith(recoveringPlayback: active, mediaEvent: event));
+
+  void setColdMetadataEvent(MediaEvent event) =>
+      emit(state.copyWith(currentlyPlaying: null, mediaEvent: event));
+
   void setTimer(bool active) => emit(state.copyWith(hasTimer: active));
+
+  void setCompact({bool mini = false, bool pip = false}) =>
+      emit(state.copyWith(isMini: mini, isPip: pip));
 }
 
 Future<void> pumpRecoveryFrame(WidgetTester tester) async {
@@ -128,6 +141,112 @@ void main() {
       .widgetList<FadeTransition>(
           find.ancestor(of: child, matching: find.byType(FadeTransition)))
       .fold(1.0, (value, fade) => value * fade.opacity.value);
+
+  double paintedOpacity(WidgetTester tester, Finder child) {
+    var opacity = 1.0;
+    RenderObject? node = tester.renderObject(child);
+    while (node != null) {
+      if (node is RenderOpacity) opacity *= node.opacity;
+      if (node is RenderAnimatedOpacity) opacity *= node.opacity.value;
+      node = node.parent;
+    }
+    return opacity;
+  }
+
+  testWidgets(
+      'metadata retry on cold start is nonblocking and yields to recovery',
+      (tester) async {
+    await tester.runAsync(() async {
+      player.setColdMetadataEvent(const MediaEvent(
+          state: MediaState.loading, type: MediaEventType.metadataRetry));
+    });
+    var taps = 0;
+    const buttonKey = ValueKey('underlying-control');
+    await tester.pumpWidget(host(
+        Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+              child: TextButton(
+                key: buttonKey,
+                onPressed: () => taps++,
+                child: const Text('Control'),
+              ),
+            ),
+            const Positioned.fill(child: PlayerRetryIndicator()),
+          ],
+        ),
+        motion: MotionPreference.off));
+    try {
+      final notice = find.text('Retrying video details…');
+      expect(notice, findsOneWidget);
+      await tester.tap(find.byKey(buttonKey));
+      expect(taps, 1);
+
+      await tester.runAsync(() async {
+        player.showRecovery(
+            BackendPlayback(backendServer), BackendRecoveryPhase.trying,
+            manual: true);
+      });
+      await pumpRecoveryFrame(tester);
+      expect(notice, findsNothing);
+
+      await tester.runAsync(() async {
+        player.clearRecovery();
+        player.setColdMetadataEvent(const MediaEvent(
+            state: MediaState.error, type: MediaEventType.metadataRetry));
+      });
+      await pumpRecoveryFrame(tester);
+      expect(notice, findsNothing);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  testWidgets(
+      'playback recovery stays visible through incidental decoder events',
+      (tester) async {
+    final focus = FocusNode();
+    var taps = 0;
+    await tester.pumpWidget(host(
+        Stack(
+          fit: StackFit.expand,
+          children: [
+            Center(
+                child: TextButton(
+              focusNode: focus,
+              onPressed: () => taps++,
+              child: const Text('Pause'),
+            )),
+            const Positioned.fill(child: PlayerRetryIndicator()),
+          ],
+        ),
+        motion: MotionPreference.off));
+    focus.requestFocus();
+    await tester.pump();
+    for (final state in [
+      MediaState.loading,
+      MediaState.buffering,
+      MediaState.ready
+    ]) {
+      player.setReconnecting(true, MediaEvent(state: state));
+      await pumpRecoveryFrame(tester);
+      expect(find.text('Reconnecting playback…'), findsOneWidget);
+      expect(find.text('Retrying video details…'), findsNothing);
+      expect(focus.hasFocus, isTrue);
+    }
+    await tester.tap(find.text('Pause'));
+    expect(taps, 1);
+    player.setCompact(pip: true);
+    await pumpRecoveryFrame(tester);
+    expect(find.text('Reconnecting playback…'), findsNothing);
+    player.setCompact();
+    player.setReconnecting(false, const MediaEvent(state: MediaState.error));
+    await pumpRecoveryFrame(tester);
+    expect(find.text('Reconnecting playback…'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    focus.dispose();
+  });
 
   for (final motion in MotionPreference.values) {
     testWidgets('${motion.name}: sponsor notice remains readable before expiry',
@@ -312,38 +431,97 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets(
-        '$mode requested backend persists after recovery and controls fade',
+    for (final motion in MotionPreference.values) {
+      testWidgets(
+          '$mode ${motion.name}: backend label follows controls after recovery',
+          (tester) async {
+        final semantics = tester.ensureSemantics();
+        try {
+          if (mode == 'audio') player.setAudio(true);
+          final initial =
+              BackendPlayback(selector.withSelection(backendServer, 'west'));
+          player.requestBackend(initial);
+          await tester.pumpWidget(host(
+              mode == 'TV' ? const TvPlayerControls() : const PlayerControls(),
+              motion: motion));
+          Future<void> revealControls() async {
+            if (mode == 'TV') {
+              // A remote key reveals the timeline even before full controls open.
+              await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+            } else {
+              await tester.tapAt(const Offset(400, 200));
+              // The player distinguishes a single tap from double-tap seek.
+              await tester.pump(const Duration(milliseconds: 300));
+            }
+            await pumpRecoveryFrame(tester);
+            await tester.pump(const Duration(milliseconds: 300));
+          }
+
+          if (mode == 'TV') await revealControls();
+          await tester.pump(const Duration(milliseconds: 300));
+          var label = find.text('Requested backend: West · 1');
+          expect(paintedOpacity(tester, label), 1);
+          expect(find.semantics.byLabel(RegExp('Requested backend: West · 1')),
+              findsOneWidget);
+          await tester.pump(const Duration(seconds: 5));
+          await tester.pump(const Duration(milliseconds: 300));
+          expect(paintedOpacity(tester, label), 0);
+          expect(find.semantics.byLabel(RegExp('Requested backend: West · 1')),
+              findsNothing);
+
+          await revealControls();
+          expect(paintedOpacity(tester, label), 1);
+          expect(find.semantics.byLabel(RegExp('Requested backend: West · 1')),
+              findsOneWidget);
+          if (mode == 'TV') {
+            final context =
+                tester.element(find.byType(BackendRequestIndicator));
+            expect(context.read<TvPlayerControlsCubit>().state.displayControls,
+                isFalse);
+          }
+
+          final retry = initial.next()!;
+          player.showRecovery(retry, BackendRecoveryPhase.trying);
+          await pumpRecoveryFrame(tester);
+          expect(find.text('Trying East · 2…'), findsOneWidget);
+          await tester.pump(const Duration(seconds: 5));
+          await tester.pump(const Duration(milliseconds: 300));
+          label = find.text('Requested backend: East · 2');
+          expect(paintedOpacity(tester, label), 0);
+          expect(paintedOpacity(tester, find.text('Trying East · 2…')), 1);
+          player.showRecovery(retry, BackendRecoveryPhase.succeeded);
+          await pumpRecoveryFrame(tester);
+          expect(paintedOpacity(tester, find.text('Playback resumed')), 1);
+          player.clearRecovery();
+          await tester.pump(const Duration(seconds: 5));
+          expect(find.byType(BackendRecoveryNotice), findsNothing);
+          expect(paintedOpacity(tester, label), 0);
+          await revealControls();
+          expect(paintedOpacity(tester, label), 1);
+          expect(find.text('Requested backend: West · 1'), findsNothing);
+
+          player.requestBackend(null);
+          await pumpRecoveryFrame(tester);
+          expect(find.byType(BackendRequestIndicator), findsNothing);
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump(const Duration(seconds: 5));
+          expect(tester.takeException(), isNull);
+        } finally {
+          semantics.dispose();
+        }
+      });
+    }
+  }
+
+  for (final compact in ['mini', 'PiP']) {
+    testWidgets('$compact video has no backend label over its picture',
         (tester) async {
-      if (mode == 'audio') player.setAudio(true);
-      final initial =
-          BackendPlayback(selector.withSelection(backendServer, 'west'));
-      player.requestBackend(initial);
-      await tester.pumpWidget(host(
-          mode == 'TV' ? const TvPlayerControls() : const PlayerControls()));
-      await tester.pump(const Duration(seconds: 5));
-      expect(find.text('Requested backend: West · 1'), findsOneWidget);
-      expect(
-          find.ancestor(
-              of: find.byType(BackendRequestIndicator),
-              matching: find.byType(AnimatedOpacity)),
-          findsNothing);
-
-      final retry = initial.next()!;
-      player.showRecovery(retry, BackendRecoveryPhase.trying);
+      player.requestBackend(
+          BackendPlayback(selector.withSelection(backendServer, 'west')));
+      await tester.pumpWidget(host(const PlayerControls()));
+      player.setCompact(mini: compact == 'mini', pip: compact == 'PiP');
       await pumpRecoveryFrame(tester);
-      expect(find.text('Trying East · 2…'), findsOneWidget);
-      expect(find.text('Requested backend: East · 2'), findsOneWidget);
-      player.showRecovery(retry, BackendRecoveryPhase.succeeded);
-      await pumpRecoveryFrame(tester);
-      player.clearRecovery();
-      await tester.pump(const Duration(seconds: 5));
-      expect(find.byType(BackendRecoveryNotice), findsNothing);
-      expect(find.text('Requested backend: East · 2'), findsOneWidget);
-      expect(find.text('Requested backend: West · 1'), findsNothing);
-
-      player.requestBackend(null);
-      await pumpRecoveryFrame(tester);
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.byType(BackendRequestIndicator), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 5));
@@ -413,7 +591,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('persistent overlay leaves underlying player controls clickable',
+  testWidgets('backend overlay leaves underlying player controls clickable',
       (tester) async {
     var taps = 0;
     await tester.pumpWidget(host(Stack(children: [

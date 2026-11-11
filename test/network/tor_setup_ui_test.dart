@@ -20,28 +20,17 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late TextEditingController controller;
   final calls = <MethodCall>[];
-  var available = true;
-  var appAvailable = true;
   String? clipboardText;
-  Completer<bool>? launch;
   Completer<void>? clipboard;
-  Completer<bool>? appLaunch;
 
   setUp(() {
     controller = TextEditingController();
     calls.clear();
-    available = true;
-    appAvailable = true;
     clipboardText = null;
-    launch = null;
     clipboard = null;
-    appLaunch = null;
     messenger.setMockMethodCallHandler(_channel, (call) async {
       calls.add(call);
-      if (call.method == 'openApp') {
-        return appLaunch == null ? appAvailable : await appLaunch!.future;
-      }
-      return launch == null ? available : await launch!.future;
+      return true;
     });
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
       if (call.method == 'Clipboard.setData') {
@@ -115,24 +104,22 @@ void main() {
   });
 
   testWidgets(
-      'external handoff preserves typed key and prevents duplicate open',
+      'address dialog preserves typed key and prevents duplicate opening',
       (tester) async {
     controller.text = _key;
-    launch = Completer<bool>();
     await showSetup(tester);
-    await tester.tap(find.text('Open Tor Browser'));
-    await tester.pump();
+    await tester.tap(find.text('Tor preferences address'));
+    await tester.pumpAndSettle();
     expect(
         tester
             .widget<OutlinedButton>(
                 find.byWidgetPredicate((widget) => widget is OutlinedButton))
             .onPressed,
         isNull);
-    expect(calls, hasLength(1));
-    expect(calls.single.method, 'openNerdVpnPreferences');
-    expect(calls.single.arguments, {'serverUrl': _onionOrigin});
+    expect(calls, isEmpty);
     expect(controller.text, _key);
-    launch!.complete(true);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
     expect(controller.text, _key);
@@ -147,34 +134,31 @@ void main() {
 
   for (final television in [false, true]) {
     testWidgets(
-        '${television ? 'TV' : 'phone'} missing Tor Browser explains separate install and preserves onion',
+        '${television ? 'TV' : 'phone'} onion guidance preserves address and copies only on request',
         (tester) async {
-      available = false;
-      appAvailable = false;
       await showSetup(tester, television: television);
-      await tester.tap(find.text('Open Tor Browser'));
+      await tester.tap(find.text('Tor preferences address'));
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsOneWidget);
-      expect(find.textContaining('Tor Browser cannot open this link directly'),
-          findsOneWidget);
+      expect(
+          find.textContaining('Copy this address and open it'), findsOneWidget);
       expect(find.textContaining('Videre does not include Tor Browser.'),
           findsOneWidget);
       expect(find.text('$_onionOrigin/preferences#api-access'), findsOneWidget);
       expect(find.textContaining('https://invidious.nerdvpn.de'), findsNothing);
-      expect(calls, hasLength(1));
+      expect(calls, isEmpty);
       expect(clipboardText, isNull);
-      await tester.tap(find.text('Copy address and open Tor Browser'));
+      await tester.tap(find.text('Copy to clipboard'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Install Tor Browser separately'),
-          findsOneWidget);
+      expect(find.text('Address copied.'), findsOneWidget);
       expect(clipboardText, '$_onionOrigin/preferences#api-access');
-      expect(calls.last.method, 'openApp');
+      expect(calls, isEmpty);
       expect(find.text('$_onionOrigin/preferences#api-access'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
     testWidgets(
-        '${television ? 'TV' : 'phone'} setup disables edits and handoff during validation',
+        '${television ? 'TV' : 'phone'} setup disables edits and address dialog during validation',
         (tester) async {
       await showSetup(tester, television: television, loading: true);
       expect(
@@ -194,29 +178,25 @@ void main() {
     });
   }
 
-  testWidgets(
-      'Tor Browser without link support gets an explicit public-address handoff',
+  testWidgets('copying the preferences address does not copy the API key',
       (tester) async {
-    available = false;
     controller.text = _key;
     await showSetup(tester);
-    await tester.tap(find.text('Open Tor Browser'));
+    await tester.tap(find.text('Tor preferences address'));
     await tester.pumpAndSettle();
     expect(clipboardText, isNull);
-    expect(calls, hasLength(1));
-    await tester.tap(find.text('Copy address and open Tor Browser'));
+    expect(calls, isEmpty);
+    await tester.tap(find.text('Copy to clipboard'));
     await tester.pumpAndSettle();
     expect(clipboardText, '$_onionOrigin/preferences#api-access');
     expect(clipboardText, isNot(contains(_key)));
-    expect(calls.map((call) => call.method),
-        ['openNerdVpnPreferences', 'openApp']);
-    expect(calls.last.arguments, isNull);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(calls, isEmpty);
+    expect(find.byType(AlertDialog), findsOneWidget);
     expect(controller.text, _key);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('TV remote select opens the separate browser and masks the key',
+  testWidgets('TV remote select shows a copyable address and masks the key',
       (tester) async {
     controller.text = _key;
     await showSetup(tester, television: true);
@@ -224,76 +204,76 @@ void main() {
     expect(field.obscureText, isTrue);
     expect(field.autocorrect, isFalse);
     expect(find.text(_key), findsNothing);
-    Focus.of(tester.element(find.text('Open Tor Browser'))).requestFocus();
+    Focus.of(tester.element(find.text('Tor preferences address')))
+        .requestFocus();
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
-    expect(calls, hasLength(1));
-    expect(calls.single.arguments, {'serverUrl': _onionOrigin});
+    expect(calls, isEmpty);
+    expect(find.text('$_onionOrigin/preferences#api-access'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
   for (final barrier in [false, true]) {
-    testWidgets(
-        '${barrier ? 'barrier' : 'OK'} dismissal during clipboard wait cancels browser launch',
-        (tester) async {
-      available = false;
-      clipboard = Completer<void>();
-      await showSetup(tester, pushed: true);
-      final setupRoute =
-          ModalRoute.of(tester.element(find.byType(NerdVpnOnionSetup)))!;
-      await tester.tap(find.text('Open Tor Browser'));
-      await tester.pumpAndSettle();
-      final dialogContext = tester.element(find.byType(AlertDialog));
-      final dialogRoute = ModalRoute.of(dialogContext)!;
-      await tester.tap(find.text('Copy address and open Tor Browser'));
-      await tester.pump();
-      if (barrier) {
-        await tester.tapAt(const Offset(1, 1));
-      } else {
-        await tester.tap(find.text('OK'));
-      }
-      expect(dialogContext.mounted, isTrue);
-      expect(dialogRoute.isCurrent, isFalse);
-      clipboard!.complete();
-      await tester.pump();
-      expect(calls.map((call) => call.method), ['openNerdVpnPreferences']);
-      expect(setupRoute.isCurrent, isTrue);
-      await tester.pumpAndSettle();
-      expect(find.byType(NerdVpnOnionSetup), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets(
-        '${barrier ? 'barrier' : 'OK'} dismissal during app launch cannot pop the setup route',
-        (tester) async {
-      available = false;
-      appLaunch = Completer<bool>();
-      await showSetup(tester, pushed: true);
-      final setupRoute =
-          ModalRoute.of(tester.element(find.byType(NerdVpnOnionSetup)))!;
-      await tester.tap(find.text('Open Tor Browser'));
-      await tester.pumpAndSettle();
-      final dialogContext = tester.element(find.byType(AlertDialog));
-      final dialogRoute = ModalRoute.of(dialogContext)!;
-      await tester.tap(find.text('Copy address and open Tor Browser'));
-      await tester.pump();
-      expect(calls.last.method, 'openApp');
-      if (barrier) {
-        await tester.tapAt(const Offset(1, 1));
-      } else {
-        await tester.tap(find.text('OK'));
-      }
-      expect(dialogContext.mounted, isTrue);
-      expect(dialogRoute.isCurrent, isFalse);
-      appLaunch!.complete(true);
-      await tester.pump();
-      expect(setupRoute.isCurrent, isTrue);
-      await tester.pumpAndSettle();
-      expect(find.byType(NerdVpnOnionSetup), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
+    for (final succeeds in [false, true]) {
+      testWidgets(
+          '${barrier ? 'barrier' : 'OK'} dismissal during clipboard ${succeeds ? 'success' : 'failure'} does not update or pop setup',
+          (tester) async {
+        clipboard = Completer<void>();
+        await showSetup(tester, pushed: true);
+        final setupRoute =
+            ModalRoute.of(tester.element(find.byType(NerdVpnOnionSetup)))!;
+        await tester.tap(find.text('Tor preferences address'));
+        await tester.pumpAndSettle();
+        final dialogContext = tester.element(find.byType(AlertDialog));
+        final dialogRoute = ModalRoute.of(dialogContext)!;
+        await tester.tap(find.text('Copy to clipboard'));
+        await tester.pump();
+        if (barrier) {
+          await tester.tapAt(const Offset(1, 1));
+        } else {
+          await tester.tap(find.text('OK'));
+        }
+        expect(dialogContext.mounted, isTrue);
+        expect(dialogRoute.isCurrent, isFalse);
+        if (succeeds) {
+          clipboard!.complete();
+        } else {
+          clipboard!.completeError(PlatformException(code: 'unavailable'));
+        }
+        await tester.pump();
+        expect(calls, isEmpty);
+        expect(setupRoute.isCurrent, isTrue);
+        await tester.pumpAndSettle();
+        expect(find.byType(NerdVpnOnionSetup), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
   }
+
+  testWidgets(
+      'copy failure keeps the selectable address and allows another attempt',
+      (tester) async {
+    clipboard = Completer<void>();
+    await showSetup(tester);
+    await tester.tap(find.text('Tor preferences address'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy to clipboard'));
+    await tester.pump();
+    clipboard!.completeError(PlatformException(code: 'unavailable'));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('The address could not be copied. Select and copy it below.'),
+        findsOneWidget);
+    expect(find.text('$_onionOrigin/preferences#api-access'), findsOneWidget);
+    expect(calls, isEmpty);
+    clipboard = null;
+    await tester.tap(find.text('Copy to clipboard'));
+    await tester.pumpAndSettle();
+    expect(clipboardText, '$_onionOrigin/preferences#api-access');
+    expect(find.text('Address copied.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
       'TV secure keyboard disables suggestions and personalized learning',

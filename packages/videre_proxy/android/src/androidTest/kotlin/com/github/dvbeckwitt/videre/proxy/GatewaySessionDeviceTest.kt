@@ -1,5 +1,6 @@
 package com.github.dvbeckwitt.videre.proxy
 
+import android.content.Context
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.webkit.ProfileStore
@@ -89,6 +90,61 @@ class GatewaySessionDeviceTest {
         GatewaySessions.cancelSignIn(first, cancelled)
         GatewaySessions.signOut(first, cancelled)
         assertFalse("Logout may finish revocation after closing its own pending login", GatewaySessions.resolve(first, url).enabled)
+    }
+
+    @Test fun anotherEngineInitializationDoesNotCancelAnActiveReauthentication() {
+        if (!GatewaySessions.supported()) return
+        val saved = GatewaySessions.beginSignIn(first)
+        setCookie(first, saved, "authentik_proxy_fixture=previous; Path=/; Secure; HttpOnly")
+        assertTrue(GatewaySessions.completeSignIn(first, saved))
+        val pending = GatewaySessions.beginSignIn(first)
+
+        GatewaySessions.initialize(instrumentation.targetContext)
+
+        assertEquals(pending, GatewaySessions.status(first)["revision"])
+        assertTrue(GatewaySessions.resolve(first, url).needsSignIn)
+        setCookie(first, pending, "authentik_proxy_fixture=latest; Path=/; Secure; HttpOnly")
+        assertTrue(GatewaySessions.completeSignIn(first, pending))
+        assertTrue(GatewaySessions.resolve(first, url).cookies.orEmpty().contains("=latest"))
+    }
+
+    @Test fun readingSavedCookiesRestoresTheProfileWorkerNetworkBlock() {
+        if (!GatewaySessions.supported()) return
+        val revision = GatewaySessions.beginSignIn(first)
+        val profileName = GatewaySessions.signInProfileName(first, revision)
+        setCookie(first, revision, "authentik_proxy_fixture=retained; Path=/; Secure; HttpOnly")
+        assertTrue(GatewaySessions.completeSignIn(first, revision))
+        instrumentation.runOnMainSync {
+            // Model process-local settings resetting while the saved cookie profile survives.
+            ProfileStore.getInstance().getOrCreateProfile(profileName)
+                .serviceWorkerController.serviceWorkerWebSettings.blockNetworkLoads = false
+        }
+        assertTrue(GatewaySessions.resolve(first, url).cookies.orEmpty().contains("=retained"))
+        instrumentation.runOnMainSync {
+            assertTrue(ProfileStore.getInstance().getOrCreateProfile(profileName)
+                .serviceWorkerController.serviceWorkerWebSettings.blockNetworkLoads)
+        }
+    }
+
+    @Test fun missingPendingProfileCanBeRevokedWithoutRecreatingIt() {
+        if (!GatewaySessions.supported()) return
+        val profileName = "${first.profileName}_missing"
+        instrumentation.runOnMainSync {
+            assertFalse(ProfileStore.getInstance().allProfileNames.contains(profileName))
+        }
+        // Model a pending profile that Chromium did not persist before process death.
+        val preferences = instrumentation.targetContext
+            .getSharedPreferences("videre_gateway_sessions", Context.MODE_PRIVATE)
+        assertTrue(preferences.edit().putBoolean("pending_${first.key}", true)
+            .putString("pendingProfile_${first.key}", profileName).commit())
+        assertTrue(GatewaySessions.resolve(first, url).needsSignIn)
+
+        GatewaySessions.signOut(first)
+
+        assertFalse(GatewaySessions.resolve(first, url).enabled)
+        instrumentation.runOnMainSync {
+            assertFalse("Cleanup must not recreate a missing profile", ProfileStore.getInstance().allProfileNames.contains(profileName))
+        }
     }
 
     private fun setCookie(account: GatewayContext, revision: Long, value: String) {

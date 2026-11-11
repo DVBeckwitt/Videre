@@ -8,9 +8,27 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   final streams = <int, StreamController<VideoEvent>>{};
   final pendingPlays = <Completer<void>>[];
   int nextId = 0;
+  Completer<Duration>? heldPosition;
+  Completer<DateTime?>? heldAbsolutePosition;
+  Completer<void> positionStarted = Completer<void>();
+  Completer<void> absolutePositionStarted = Completer<void>();
+  Duration position = const Duration(seconds: 1);
+  Completer<void>? heldCreate;
+  bool holdInitialization = false;
+  final pendingSources = <int, DataSource>{};
+  final audioSelections = <(int?, String?, int?)>[];
 
   void reset() {
     pendingPlays.clear();
+    heldPosition = null;
+    heldAbsolutePosition = null;
+    positionStarted = Completer<void>();
+    absolutePositionStarted = Completer<void>();
+    position = const Duration(seconds: 1);
+    heldCreate = null;
+    holdInitialization = false;
+    pendingSources.clear();
+    audioSelections.clear();
   }
 
   @override
@@ -22,6 +40,7 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   }) async {
     final id = ++nextId;
     streams[id] = StreamController<VideoEvent>.broadcast();
+    await heldCreate?.future;
     return id;
   }
 
@@ -31,6 +50,14 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
 
   @override
   Future<void> setDataSource(int? textureId, DataSource source) async {
+    if (holdInitialization) {
+      pendingSources[textureId!] = source;
+      return;
+    }
+    initialize(textureId!, source);
+  }
+
+  void initialize(int textureId, DataSource source) {
     streams[textureId]!.add(VideoEvent(
       key: source.key,
       eventType: VideoEventType.initialized,
@@ -55,11 +82,29 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   @override
   Future<void> pause(int? textureId) async {}
   @override
-  Future<Duration> getPosition(int? textureId) async =>
-      const Duration(seconds: 1);
+  Future<void> seekTo(int? textureId, Duration? position) async {}
+  @override
+  Future<void> setTrackParameters(
+      int? textureId, int? width, int? height, int? bitrate) async {}
+  @override
+  Future<void> setAudioTrack(int? textureId, String? name, int? index) async {
+    audioSelections.add((textureId, name, index));
+  }
 
   @override
-  Future<DateTime?> getAbsolutePosition(int? textureId) async => null;
+  Future<Duration> getPosition(int? textureId) async {
+    if (!positionStarted.isCompleted) positionStarted.complete();
+    final held = heldPosition;
+    if (held != null) return held.future;
+    return position;
+  }
+
+  @override
+  Future<DateTime?> getAbsolutePosition(int? textureId) async {
+    if (!absolutePositionStarted.isCompleted)
+      absolutePositionStarted.complete();
+    return heldAbsolutePosition?.future;
+  }
 }
 
 Future<void> trackTimers(Future<void> Function(List<Timer>) body) async {
@@ -87,6 +132,99 @@ void main() {
   final platform = _DelayedPlayPlatform();
   VideoPlayerPlatform.instance = platform;
   setUp(platform.reset);
+
+  BetterPlayerController adaptivePlayer() =>
+      BetterPlayerController(const BetterPlayerConfiguration(
+        autoPlay: false,
+        handleLifecycle: false,
+        allowedScreenSleep: true,
+      ));
+
+  BetterPlayerDataSource dashSource(String name) => BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/$name.mpd',
+        videoFormat: BetterPlayerVideoFormat.dash,
+        inlineDashManifest: '<MPD type="static"><Period>'
+            '<AdaptationSet mimeType="audio/mp4" lang="en"/>'
+            '<AdaptationSet mimeType="audio/mp4" lang="es"/>'
+            '</Period></MPD>',
+      );
+
+  Future<void> flush() async {
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  for (final chooseBeforeReady in [false, true]) {
+    test('inline audio waits for native creation ($chooseBeforeReady)',
+        () async {
+      final created = platform.heldCreate = Completer<void>();
+      final controller = adaptivePlayer();
+      final setup = controller.setupDataSource(dashSource('first'));
+      try {
+        if (chooseBeforeReady) {
+          controller.setAudioTrack(
+              BetterPlayerAsmsAudioTrack(id: 1, label: 'es', language: 'es'));
+        }
+        await flush();
+        final beforeCreation = List.of(platform.audioSelections);
+        created.complete();
+        await setup;
+        await flush();
+        expect(beforeCreation, isEmpty,
+            reason: 'Native creation has not supplied a texture ID yet.');
+        expect(platform.audioSelections, [
+          (
+            platform.nextId,
+            chooseBeforeReady ? 'es' : 'en',
+            chooseBeforeReady ? 1 : 0
+          )
+        ]);
+      } finally {
+        if (!created.isCompleted) created.complete();
+        controller.dispose();
+        await flush();
+      }
+    });
+  }
+
+  test('replacement audio waits for its own initialization', () async {
+    final controller = adaptivePlayer();
+    try {
+      await controller.setupDataSource(dashSource('first'));
+      platform.audioSelections.clear();
+      platform.holdInitialization = true;
+      final setup = controller.setupDataSource(dashSource('replacement'));
+      await flush();
+      controller.setAudioTrack(controller.betterPlayerAsmsAudioTracks!.last);
+      final beforeInitialization = List.of(platform.audioSelections);
+      final pending = platform.pendingSources.entries.single;
+      platform.initialize(pending.key, pending.value);
+      await setup;
+      await flush();
+      expect(beforeInitialization, isEmpty);
+      expect(platform.audioSelections, [(pending.key, 'es', 1)]);
+    } finally {
+      controller.dispose();
+      await flush();
+    }
+  });
+
+  test('disposing discards a pending inline audio selection', () async {
+    final controller = adaptivePlayer();
+    platform.holdInitialization = true;
+    unawaited(controller.setupDataSource(dashSource('pending')));
+    await flush();
+    final pendingTrack = controller.betterPlayerAsmsAudioTracks!.last;
+    final beforeDisposal = List.of(platform.audioSelections);
+    controller.dispose();
+    await flush();
+    platform.audioSelections.clear();
+    controller.setAudioTrack(pendingTrack);
+    await flush();
+    expect(beforeDisposal, isEmpty);
+    expect(platform.audioSelections, isEmpty);
+  });
 
   Future<VideoPlayerController> player() async {
     final controller = VideoPlayerController();
@@ -141,6 +279,82 @@ void main() {
               await controller.pause();
               expect(timers.where((timer) => timer.isActive), isEmpty);
             } finally {
+              await controller.dispose();
+            }
+          }));
+
+  for (final heldStage in ['position', 'absolute position']) {
+    test(
+        'a pending $heldStage poll cannot update a replacement source',
+        () => trackTimers((timers) async {
+              final controller = await player();
+              final heldPosition = heldStage == 'position'
+                  ? platform.heldPosition = Completer<Duration>()
+                  : null;
+              final heldAbsolute = heldStage == 'absolute position'
+                  ? platform.heldAbsolutePosition = Completer<DateTime?>()
+                  : null;
+              platform.position = const Duration(seconds: 40);
+              try {
+                final play = controller.play();
+                platform.pendingPlays.last.complete();
+                await play;
+                await (heldPosition != null
+                    ? platform.positionStarted.future
+                    : platform.absolutePositionStarted.future);
+                await controller.setNetworkDataSource(
+                    'https://example.com/replacement.mp4');
+                heldPosition?.complete(const Duration(seconds: 40));
+                heldAbsolute?.complete(DateTime.utc(2026, 1, 1));
+                await Future<void>.delayed(Duration.zero);
+                await Future<void>.delayed(Duration.zero);
+
+                expect(controller.value.position, Duration.zero);
+                expect(controller.value.absolutePosition, isNull);
+                expect(controller.value.isPlaying, isFalse);
+                expect(timers.where((timer) => timer.isActive), isEmpty);
+              } finally {
+                if (heldPosition != null && !heldPosition.isCompleted) {
+                  heldPosition.complete(const Duration(seconds: 40));
+                }
+                if (heldAbsolute != null && !heldAbsolute.isCompleted) {
+                  heldAbsolute.complete(null);
+                }
+                await controller.dispose();
+              }
+            }));
+  }
+
+  test(
+      'a pending position poll cannot release a newer seek target',
+      () => trackTimers((timers) async {
+            final controller = await player();
+            final held = platform.heldPosition = Completer<Duration>();
+            try {
+              final play = controller.play();
+              platform.pendingPlays.last.complete();
+              await play;
+              await platform.positionStarted.future;
+              await controller.pause();
+              await controller.seekTo(const Duration(seconds: 18));
+              held.complete(const Duration(seconds: 40));
+              await Future<void>.delayed(Duration.zero);
+              await Future<void>.delayed(Duration.zero);
+
+              platform.heldPosition = null;
+              platform.position = const Duration(seconds: 12);
+              platform.positionStarted = Completer<void>();
+              final resume = controller.play();
+              platform.pendingPlays.last.complete();
+              await resume;
+              await platform.positionStarted.future;
+              await Future<void>.delayed(Duration.zero);
+              await controller.pause();
+              expect(controller.value.position, const Duration(seconds: 18),
+                  reason: 'A pre-seek poll must not release the seek target; '
+                      'the native decoder has not yet reached it.');
+            } finally {
+              if (!held.isCompleted) held.complete(const Duration(seconds: 40));
               await controller.dispose();
             }
           }));

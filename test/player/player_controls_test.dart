@@ -5,12 +5,16 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/media_command.dart';
+import 'package:clipious/player/models/video_display_mode.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
+import 'package:clipious/player/views/components/video_display_mode_picker.dart';
+import 'package:clipious/player/views/tv/components/player_settings.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -410,6 +414,103 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   }
+
+  testWidgets('video options apply a new display mode during playback',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('player-video-display-open')));
+    await tester.pumpAndSettle();
+
+    expect(
+        tester.widget<ListTile>(find.widgetWithText(ListTile, 'Fit')).selected,
+        isTrue);
+    await tester.tap(find.byKey(const ValueKey('video-display-mode-stretch')));
+    await tester.pumpAndSettle();
+
+    expect(settings.state.videoDisplayMode, VideoDisplayMode.stretch);
+    expect(player.state.isPlaying, isTrue);
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a stale display picker cannot change another profile',
+      (tester) async {
+    final originalOwner = db.forProfile(db.profileId);
+    final other = await tester.runAsync(() => db.createProfile('Other'));
+    final otherOwner = db.forProfile(other!.id);
+    await tester.runAsync(() => otherOwner.saveSetting(SettingsValue(
+        videoDisplayModeSettingName, VideoDisplayMode.crop.name)));
+    await tester.pumpWidget(hostControls(Builder(
+      builder: (context) => TextButton(
+        onPressed: () => showVideoDisplayModePicker(context),
+        child: const Text('Display options'),
+      ),
+    )));
+    await tester.tap(find.text('Display options'));
+    await tester.pumpAndSettle();
+
+    // A dialog result can outlive the profile that opened it. Do not apply
+    // that result to whichever profile owns the database when it completes.
+    await tester.runAsync(() => db.useProfile(other.id));
+    await tester.tap(find.byKey(const ValueKey('video-display-mode-stretch')));
+    await tester.pumpAndSettle();
+
+    expect(otherOwner.getSettings(videoDisplayModeSettingName)?.value,
+        VideoDisplayMode.crop.name);
+    expect(originalOwner.getSettings(videoDisplayModeSettingName), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('TV remote selects a ratio and returns to the settings button',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final videoPlayer = await createPlayingVideo(tester);
+    await tester.runAsync(
+        () => settings.setVideoDisplayMode(VideoDisplayMode.ratio4x3));
+    await tester.pumpWidget(hostControls(
+      BlocProvider<VideoPlayerCubit>.value(
+        value: videoPlayer,
+        child: const Shortcuts(
+          shortcuts: {
+            SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+          },
+          child: TvPlayerSettings(),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final opener = find.byKey(const ValueKey('player-video-display-open'));
+    final openerLabel =
+        find.descendant(of: opener, matching: find.text('Video display'));
+    Focus.of(tester.element(openerLabel)).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+
+    expect(Focus.of(tester.element(find.text('4:3'))).hasPrimaryFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(Focus.of(tester.element(find.text('3:2'))).hasPrimaryFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+
+    expect(settings.state.videoDisplayMode, VideoDisplayMode.ratio3x2);
+    expect(Focus.of(tester.element(openerLabel)).hasPrimaryFocus, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('TV settings stay open until Back, then controls auto-hide',
       (tester) async {

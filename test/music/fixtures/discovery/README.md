@@ -1,3 +1,7 @@
+Historical offline parser fixtures; the application no longer uses these direct
+catalog endpoints. The fixture implementation is isolated under
+`test/music/support/` and requires an explicitly injected test client.
+
 Reduced anonymous public YouTube Music browse responses captured 2026-11-08.
 Only parser-required metadata is retained. Configuration, visitor identifiers,
 cookies, tracking, playback and personal/account data were never saved. Country

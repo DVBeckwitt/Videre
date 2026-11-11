@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'nerdvpn_origin.dart';
+import 'youtube_privacy.dart';
 
 /// An application proxy, independent of Invidious's media proxy setting.
 class SocksProxyConfig {
@@ -18,13 +19,23 @@ class SocksProxyConfig {
   }) {
     if (host.isEmpty ||
         host.trim() != host ||
-        RegExp(r'[\s/@?#]').hasMatch(host) ||
+        RegExp(r'[\s/%@?#]').hasMatch(host) ||
         host.contains('://') ||
         (host.contains(':') && InternetAddress.tryParse(host) == null)) {
       throw const FormatException('Enter a proxy host without a URL or port.');
     }
+    // RawSocket and Android's URL parser do not apply the same IDNA mapping.
+    // Require an unambiguous spelling before either implementation resolves it.
+    if (host.codeUnits.any((unit) => unit > 0x7f)) {
+      throw const FormatException(
+          'Use an ASCII proxy hostname, a punycode hostname, or an IP address.');
+    }
     if (port < 1 || port > 65535) {
       throw const FormatException('Proxy port must be between 1 and 65535.');
+    }
+    if (isOfficialYoutubeHost(host)) {
+      throw const FormatException(
+          'Direct YouTube connections are disabled. Choose another proxy host.');
     }
   }
 
@@ -66,23 +77,60 @@ void configureSocksHttpClient(
   bool Function(X509Certificate certificate, String host, int port)?
       badCertificateCallback,
   Duration timeout = const Duration(seconds: 15),
+  Map<String, String>? environment,
 }) {
+  void checkDestination(Uri uri) {
+    if (isOfficialYoutubeUrl(uri)) {
+      throw const SocketException(
+          'Direct YouTube connections are disabled. Use the Invidious proxy.');
+    }
+  }
+
   if (!config.enabled) {
     client.findProxy = (uri) {
       // This runs before connection reuse, DNS, or a system HTTP proxy and is
       // repeated for redirects. Use this client's policy, including unsaved
       // proxy tests, rather than the global application configuration.
-      if (uri.scheme == 'http' && isNerdVpnOnionUrl(uri.toString())) {
+      checkDestination(uri);
+      if (uri.host
+          .toLowerCase()
+          .replaceFirst(RegExp(r'\.+$'), '')
+          .endsWith('.onion')) {
         throw const SocketException(
             'Enable SOCKS5/Orbot in Network proxy to use this onion server.');
       }
-      return HttpClient.findProxyFromEnvironment(uri);
+      final proxy =
+          HttpClient.findProxyFromEnvironment(uri, environment: environment);
+      // An environment HTTP proxy is itself a network destination. Match the
+      // pinned dart:io proxy parser's credential and host separation so a
+      // permitted instance cannot send its first connection to YouTube.
+      for (final directive in proxy.split(';')) {
+        var address = directive.trim();
+        if (!address.startsWith('PROXY ')) continue;
+        address = address.substring('PROXY '.length).trim();
+        address = address.substring(address.lastIndexOf('@') + 1).trim();
+        final colon = address.lastIndexOf(':');
+        if (colon <= 0) continue; // dart:io rejects malformed proxy syntax.
+        final host = address.substring(0, colon).trim();
+        if (host.contains('%') || host.codeUnits.any((unit) => unit > 0x7f)) {
+          throw const SocketException(
+              'Use an ASCII proxy hostname, a punycode hostname, or an IP address.');
+        }
+        if (isOfficialYoutubeHost(host)) {
+          throw const SocketException(
+              'Direct YouTube connections are disabled. Choose another proxy host.');
+        }
+      }
+      return proxy;
     };
     return;
   }
   // Environment HTTP_PROXY/NO_PROXY settings must not add a direct fallback or
   // an HTTP CONNECT exchange inside the SOCKS tunnel.
-  client.findProxy = (_) => 'DIRECT';
+  client.findProxy = (uri) {
+    checkDestination(uri);
+    return 'DIRECT';
+  };
   client.connectionFactory = (uri, _, __) async => _startConnection(
         uri,
         config,

@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:clipious/player/dash_manifest_resolver.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -16,6 +20,8 @@ const original = 'https://inv.example/companion/api/manifest/dash/id/$videoId'
 const recovered = 'https://inv.example/companion/api/manifest/dash/id/$videoId'
     '?local=true&unique_res=1&check=test%2Bsignature%3D';
 const mpd = '<?xml version="1.0"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011"/>';
+const staticMpd = '<?xml version="1.0"?>'
+    '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"/>';
 
 String watchPage(String src) => '''
 <!doctype html><html><body>
@@ -24,11 +30,361 @@ src="$src"></video></body></html>
 ''';
 
 void main() {
+  test('each eligible play receives its own static manifest on a warm route',
+      () async {
+    final bodies = <String>[];
+    var calls = 0;
+    final resolver = DashManifestResolver(MockClient((request) async {
+      calls++;
+      return http.Response('$staticMpd<!--$calls-->', 200, request: request);
+    }));
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(bodies, ['$staticMpd<!--1-->']);
+    expect(calls, 1);
+
+    bodies.clear();
+    final second = original.replaceAll(videoId, 'next-video');
+    expect(
+        await resolver.resolve(second, 'next-video', server,
+            onManifest: bodies.add),
+        second);
+    expect(calls, 2);
+    expect(bodies, ['$staticMpd<!--2-->']);
+  });
+
+  test('missing-check recovery supplies only the fresh signed manifest body',
+      () async {
+    final bodies = <String>[];
+    final requested = <Uri>[];
+    var successfulManifests = 0;
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      if (request.url.path == '/watch') {
+        final id = request.url.queryParameters['v']!;
+        return http.Response(watchPage(recovered.replaceAll(videoId, id)), 200,
+            request: request);
+      }
+      if (!request.url.queryParameters.containsKey('check')) {
+        return http.Response('No check ID.', 400, request: request);
+      }
+      successfulManifests++;
+      return http.Response('$staticMpd<!--$successfulManifests-->', 200,
+          request: request);
+    }));
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        recovered);
+    expect(requested, hasLength(3));
+    expect(requested.first.toString(), original);
+    expect(requested[1].path, '/watch');
+    expect(requested.last.toString(), recovered);
+    expect(bodies, ['$staticMpd<!--1-->']);
+
+    requested.clear();
+    final next = original.replaceAll(videoId, 'next-video');
+    final nextSigned = recovered.replaceAll(videoId, 'next-video');
+    expect(
+        await resolver.resolve(next, 'next-video', server,
+            onManifest: bodies.add),
+        nextSigned);
+    expect(requested.map((uri) => uri.path),
+        ['/watch', '/companion/api/manifest/dash/id/next-video']);
+    expect(requested.last.toString(), nextSigned);
+    expect(bodies, ['$staticMpd<!--1-->', '$staticMpd<!--2-->']);
+  });
+
+  test('manifest reuse never crosses credentials or route-cache expiry',
+      () async {
+    var now = DateTime(2026);
+    var calls = 0;
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      calls++;
+      return http.Response('$staticMpd<!--$calls-->', 200, request: request);
+    }), now: () => now);
+
+    await resolver.resolve(original, videoId, server, onManifest: bodies.add);
+    await resolver.resolve(
+        original,
+        videoId,
+        server
+            .copyWith(customHeaders: {'X-Instance-Auth': 'other-test-account'}),
+        onManifest: bodies.add);
+    expect(calls, 2);
+    expect(bodies, ['$staticMpd<!--1-->', '$staticMpd<!--2-->']);
+
+    now = now.add(const Duration(minutes: 3));
+    await resolver.resolve(original, videoId, server, onManifest: bodies.add);
+    expect(calls, 3);
+    expect(bodies.last, '$staticMpd<!--3-->');
+  });
+
+  test('a static same-origin redirect uses the final URI for relative media',
+      () async {
+    const redirected = 'https://inv.example/redirected/manifest.mpd';
+    const body = '<?xml version="1.0"?>'
+        '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static">'
+        '<BaseURL>segments/</BaseURL></MPD>';
+    final bodies = <String>[];
+    final requested = <Uri>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      expect(request.followRedirects, isFalse);
+      expect(request.headers['X-Instance-Auth'], 'test-only');
+      if (request.url.toString() == original) {
+        return http.Response('', 302,
+            headers: {'location': '/redirected/manifest.mpd'},
+            request: request);
+      }
+      expect(request.url.toString(), redirected);
+      return http.Response(body, 200, request: request);
+    }));
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final base = await resolver.resolve(original, videoId, server,
+          onManifest: bodies.add);
+      expect(base, redirected);
+      expect(Uri.parse(base!).resolve('segments/').toString(),
+          'https://inv.example/redirected/segments/');
+    }
+    expect(requested.map((uri) => uri.toString()),
+        [original, redirected, original, redirected]);
+    expect(bodies, [body, body]);
+  });
+
+  test('a redirected response attributed to the original URL is not reused',
+      () async {
+    final bodies = <String>[];
+    final requested = <Uri>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      if (requested.length == 1) {
+        return http.Response('', 302,
+            headers: {'location': '/redirected/manifest.mpd'},
+            request: request);
+      }
+      final responseRequest = requested.length == 2
+          ? http.Request('GET', Uri.parse(original))
+          : request;
+      return http.Response(staticMpd, 200, request: responseRequest);
+    }));
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(requested, hasLength(2));
+    expect(requested.last.path, '/redirected/manifest.mpd');
+    expect(bodies, isEmpty);
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(requested, hasLength(2));
+    expect(bodies, isEmpty);
+
+    final next = original.replaceAll(videoId, 'next-video');
+    expect(
+        await resolver.resolve(next, 'next-video', server,
+            onManifest: bodies.add),
+        next);
+    expect(requested.last.toString(), next);
+    expect(requested, hasLength(3));
+    expect(bodies, [staticMpd]);
+  });
+
+  test('same-origin manifest redirect refusal remains terminal', () async {
+    final bodies = <String>[];
+    var calls = 0;
+    final resolver = DashManifestResolver(MockClient((request) async {
+      calls++;
+      if (calls == 1) {
+        return http.Response('', 302,
+            headers: {'location': '/refused.mpd'}, request: request);
+      }
+      expect(request.url.path, '/refused.mpd');
+      return http.Response('Refused', 403, request: request);
+    }));
+    await expectLater(
+        resolver.resolve(original, videoId, server,
+            throwRetryable: true, onManifest: bodies.add),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'status', 403)));
+    expect(calls, 2);
+    expect(bodies, isEmpty);
+  });
+
+  test('a redirected signed manifest keeps its validated final base', () async {
+    const finalPath = '/redirected/signed.mpd?local=true';
+    final requested = <Uri>[];
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      return switch (requested.length) {
+        1 => http.Response('No check ID.', 400, request: request),
+        2 => http.Response(watchPage(recovered), 200, request: request),
+        3 => http.Response('', 302,
+            headers: {'location': finalPath}, request: request),
+        _ => http.Response(staticMpd, 200, request: request),
+      };
+    }));
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        'https://inv.example$finalPath');
+    expect(requested, hasLength(4));
+    expect(requested[2].toString(), recovered);
+    expect(requested.last.toString(), 'https://inv.example$finalPath');
+    expect(bodies, [staticMpd]);
+  });
+
+  test('unattributed or mismatched response bodies cannot be reused', () async {
+    for (final request in [
+      null,
+      http.Request(
+          'GET', Uri.parse(original.replaceAll(videoId, 'other-video'))),
+      http.Request(
+          'GET', Uri.parse(original.replaceAll('inv.example', 'elsewhere'))),
+    ]) {
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(MockClient(
+          (_) async => http.Response(staticMpd, 200, request: request)));
+      expect(
+          await resolver.resolve(original, videoId, server,
+              onManifest: bodies.add),
+          original);
+      expect(bodies, isEmpty);
+    }
+  });
+
+  for (final body in [
+    mpd,
+    staticMpd.replaceFirst('type="static"', 'type="dynamic"'),
+    '<html><body>Sign in to this instance</body></html>',
+    '<html><body><MPD type="static"/></body></html>',
+    '<!-- <MPD type="static"/> --><html><body><MPD type="static"/></body></html>',
+  ]) {
+    test('non-static or unrecognized response preserves native loading: $body',
+        () async {
+      final bodies = <String>[];
+      var calls = 0;
+      final resolver = DashManifestResolver(MockClient((request) async {
+        calls++;
+        return http.Response(body, 200, request: request);
+      }));
+      for (var attempt = 0; attempt < 2; attempt++) {
+        expect(
+            await resolver.resolve(original, videoId, server,
+                onManifest: bodies.add),
+            original);
+      }
+      expect(calls, 1);
+      expect(bodies, isEmpty);
+    });
+  }
+
+  test('inline size limit counts bytes and leaves oversized URLs usable',
+      () async {
+    final maximum = DashManifestResolver.maxInlineManifestBytes;
+    final boundary = staticMpd.padRight(maximum);
+    final oversized =
+        '$staticMpd<!--${List.filled(maximum ~/ 2, 'é').join()}-->';
+    expect(oversized.length, lessThan(maximum));
+    for (final (body, reusable) in [(boundary, true), (oversized, false)]) {
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async =>
+          http.Response(body, 200,
+              headers: {'content-type': 'application/dash+xml; charset=utf-8'},
+              request: request)));
+      expect(
+          await resolver.resolve(original, videoId, server,
+              onManifest: bodies.add),
+          original);
+      expect(bodies, reusable ? [body] : isEmpty);
+    }
+  });
+
+  test('UTF-8 manifest text is reused exactly without a response charset',
+      () async {
+    const body = '<?xml version="1.0" encoding="UTF-8"?>'
+        '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static">'
+        '<ProgramInformation><Title>Björk 日本語</Title></ProgramInformation>'
+        '</MPD>';
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async =>
+        http.Response.bytes(utf8.encode(body), 200,
+            headers: {'content-type': 'application/dash+xml'},
+            request: request)));
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(bodies, [body]);
+  });
+
+  test('invalid UTF-8 or unsupported XML encodings keep native loading',
+      () async {
+    final invalidUtf8 = [
+      ...utf8.encode(staticMpd),
+      ...utf8.encode('<!--'),
+      0xff,
+      ...utf8.encode('-->'),
+    ];
+    for (final bytes in [
+      invalidUtf8,
+      utf8.encode(staticMpd.replaceFirst(
+          '<?xml version="1.0"?>', '<?xml version="1.0" encoding="UTF-16"?>')),
+      utf8.encode(staticMpd.replaceFirst('<?xml version="1.0"?>',
+          '<?xml version="1.0" encoding="ISO-8859-1"?>')),
+    ]) {
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async =>
+          http.Response.bytes(bytes, 200, request: request)));
+      expect(
+          await resolver.resolve(original, videoId, server,
+              onManifest: bodies.add),
+          original);
+      expect(bodies, isEmpty);
+    }
+  });
+
+  test('a response completed after timeout cannot deliver a manifest body',
+      () async {
+    final pending = Completer<http.Response>();
+    final started = Completer<http.Request>();
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) {
+      started.complete(request);
+      return pending.future;
+    }), timeout: const Duration(milliseconds: 10));
+    final resolving =
+        resolver.resolve(original, videoId, server, onManifest: bodies.add);
+    final request = await started.future;
+    expect(await resolving, isNull);
+    pending.complete(http.Response(staticMpd, 200, request: request));
+    await Future<void>.delayed(Duration.zero);
+    expect(bodies, isEmpty);
+  });
+
   test('already signed API URLs add no startup request', () async {
+    final bodies = <String>[];
     final resolver = DashManifestResolver(MockClient((_) async {
       fail('Signed sources do not need missing-check recovery');
     }));
-    expect(await resolver.resolve(recovered, videoId, server), recovered);
+    expect(
+        await resolver.resolve(recovered, videoId, server,
+            onManifest: bodies.add),
+        recovered);
+    expect(bodies, isEmpty);
   });
 
   test('healthy routes skip repeated probes, expire, and respect credentials',
@@ -56,6 +412,183 @@ void main() {
     await resolver.resolve(second, 'next-video', server);
     expect(calls, 5);
   });
+
+  test('a warmed unsigned route can begin requiring signed manifests',
+      () async {
+    final urls = <String>[];
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      urls.add(request.url.toString());
+      return switch (urls.length) {
+        1 => http.Response(staticMpd, 200, request: request),
+        2 => http.Response('No check ID.', 400, request: request),
+        3 => http.Response(watchPage(recovered), 200, request: request),
+        _ => http.Response('$staticMpd<!--signed-->', 200, request: request),
+      };
+    }));
+
+    expect(await resolver.resolve(original, videoId, server), original);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        recovered);
+    expect(urls, hasLength(4));
+    expect(urls.take(2), [original, original]);
+    expect(Uri.parse(urls[2]).path, '/watch');
+    expect(urls.last, recovered);
+    expect(bodies, ['$staticMpd<!--signed-->']);
+  });
+
+  test('a warm optional manifest fetch failure keeps native URL loading',
+      () async {
+    var calls = 0;
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      calls++;
+      if (calls == 1) return http.Response(staticMpd, 200, request: request);
+      throw http.ClientException('Transient manifest failure');
+    }));
+    await resolver.resolve(original, videoId, server);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            throwRetryable: true, onManifest: bodies.add),
+        original);
+    expect(calls, 2);
+    expect(bodies, isEmpty);
+  });
+
+  test('a slow warm manifest uses native loading and drops a late redirect',
+      () async {
+    final pending = Completer<http.Response>();
+    final requested = <Uri>[];
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      if (requested.length == 1) {
+        return http.Response(staticMpd, 200, request: request);
+      }
+      return pending.future;
+    }), timeout: const Duration(milliseconds: 20));
+
+    await resolver.resolve(original, videoId, server);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    pending.complete(
+        http.Response('', 302, headers: {'location': '/late-manifest.mpd'}));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(requested, [Uri.parse(original), Uri.parse(original)]);
+    expect(bodies, isEmpty);
+  });
+
+  test('a warm refusal survives a stalled response body and cancellation',
+      () async {
+    final cancellation = Completer<void>();
+    var cancelled = false;
+    final body = StreamController<List<int>>(onCancel: () {
+      cancelled = true;
+      return cancellation.future;
+    });
+    var calls = 0;
+    final resolver =
+        DashManifestResolver(MockClient.streaming((request, _) async {
+      if (++calls == 1) {
+        return http.StreamedResponse(Stream.value(utf8.encode(staticMpd)), 200,
+            request: request);
+      }
+      return http.StreamedResponse(body.stream, 429,
+          request: request, headers: {'retry-after': '60'});
+    }), timeout: const Duration(milliseconds: 20));
+
+    try {
+      await resolver.resolve(original, videoId, server);
+      await expectLater(
+          resolver
+              .resolve(original, videoId, server, onManifest: (_) {})
+              .timeout(const Duration(seconds: 1)),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.statusCode, 'status', 429)
+              .having((error) => error.retryAfter, 'retry delay',
+                  const Duration(seconds: 60))));
+      expect(calls, 2);
+      expect(cancelled, isTrue);
+    } finally {
+      cancellation.complete();
+      await body.close();
+    }
+  });
+
+  for (final timeoutFirst in [false, true]) {
+    testWidgets('signature evidence wins over a warm timeout ($timeoutFirst)',
+        (tester) async {
+      const nextId = 'next-video';
+      final next = original.replaceAll(videoId, nextId);
+      final signedNext = recovered.replaceAll(videoId, nextId);
+      final pending = Completer<http.Response>();
+      final signature = Completer<http.Response>();
+      final requested = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        final url = request.url.toString();
+        requested.add(url);
+        if (url == original && requested.length == 2) return pending.future;
+        if (url == next) return signature.future;
+        if (request.url.path == '/watch') {
+          final signed = request.url.queryParameters['v'] == nextId
+              ? signedNext
+              : recovered;
+          return http.Response(watchPage(signed), 200);
+        }
+        return http.Response(staticMpd, 200, request: request);
+      }), timeout: const Duration(milliseconds: 20));
+
+      await resolver.resolve(original, videoId, server);
+      final slow =
+          resolver.resolve(original, videoId, server, onManifest: (_) {});
+      await tester.pump(const Duration(milliseconds: 10));
+      final signed = resolver.resolve(next, nextId, server, onManifest: (_) {});
+      if (timeoutFirst) await tester.pump(const Duration(milliseconds: 10));
+      signature.complete(http.Response('No check ID.', 400));
+      expect(await signed, signedNext);
+      if (!timeoutFirst) await tester.pump(const Duration(milliseconds: 10));
+      expect(await slow, original);
+      pending.complete(http.Response(staticMpd, 200));
+
+      expect(
+          await resolver.resolve(original, videoId, server, onManifest: (_) {}),
+          recovered);
+      expect(requested.where((url) => url == original), hasLength(2));
+    });
+  }
+
+  for (final (status, retryAfter) in [(401, null), (429, null), (503, '10')]) {
+    test('warm manifest refusal $status cannot reach native fallback',
+        () async {
+      var calls = 0;
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        calls++;
+        if (calls == 1) return http.Response(staticMpd, 200, request: request);
+        return http.Response('Refused', status,
+            request: request,
+            headers: {if (retryAfter != null) 'retry-after': retryAfter});
+      }));
+      await resolver.resolve(original, videoId, server);
+      await expectLater(
+          resolver.resolve(original, videoId, server,
+              throwRetryable: true, onManifest: bodies.add),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.statusCode, 'status', status)
+              .having(isBackendRetryable, 'backend retry', isFalse)));
+      expect(calls, 2);
+      expect(bodies, isEmpty);
+    });
+  }
 
   test('known affected routes get fresh signatures without repeating the 400',
       () async {
@@ -140,7 +673,6 @@ void main() {
 
   for (final failure in [
     (400, 'Invalid check ID.'),
-    (403, 'No check ID.'),
     (500, 'No check ID.'),
   ]) {
     test('does not scrape for unrelated error $failure', () async {
@@ -150,6 +682,78 @@ void main() {
         return http.Response(failure.$2, failure.$1);
       }));
       expect(await resolver.resolve(original, videoId, server), isNull);
+      expect(calls, 1);
+    });
+  }
+
+  for (final status in [401, 403, 429]) {
+    for (final failedStep in [1, 2, 3]) {
+      test('DASH HTTP $status stops fallback at request $failedStep', () async {
+        var calls = 0;
+        final bodies = <String>[];
+        final resolver = DashManifestResolver(MockClient((_) async {
+          calls++;
+          if (calls == failedStep) return http.Response('Refused', status);
+          return calls == 1
+              ? http.Response('No check ID.', 400)
+              : http.Response(watchPage(recovered), 200);
+        }));
+        await expectLater(
+            resolver.resolve(original, videoId, server,
+                throwRetryable: true, onManifest: bodies.add),
+            throwsA(isA<InvidiousServiceError>()
+                .having((error) => error.statusCode, 'status', status)));
+        expect(calls, failedStep);
+        expect(bodies, isEmpty);
+      });
+    }
+  }
+
+  for (final retryAfter in ['10', 'invalid', 'Tue, 10 Nov 2026 12:00:10 GMT']) {
+    test('DASH cooldown $retryAfter cannot become backend fallback', () async {
+      var calls = 0;
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(MockClient((_) async {
+        calls++;
+        return http.Response('Unavailable', 503,
+            headers: {'retry-after': retryAfter});
+      }), now: () => DateTime.utc(2026, 11, 10, 12));
+      await expectLater(
+          resolver.resolve(original, videoId, server,
+              throwRetryable: true, onManifest: bodies.add),
+          throwsA(isA<InvidiousServiceError>()
+              .having(isBackendRetryable, 'backend retry', isFalse)));
+      expect(calls, 1);
+      expect(bodies, isEmpty);
+    });
+  }
+
+  for (final retryAfter in ['0', 'Tue, 10 Nov 2026 11:59:00 GMT']) {
+    test('DASH elapsed cooldown $retryAfter allows bounded backend fallback',
+        () async {
+      final resolver = DashManifestResolver(MockClient((_) async {
+        return http.Response('Unavailable', 503,
+            headers: {'retry-after': retryAfter});
+      }), now: () => DateTime.utc(2026, 11, 10, 12));
+      await expectLater(
+          resolver.resolve(original, videoId, server, throwRetryable: true),
+          throwsA(isA<BackendPlaybackFailure>()));
+    });
+  }
+
+  for (final failure in [
+    const HandshakeException('Certificate refused'),
+    const SocketException('Privacy policy refused'),
+  ]) {
+    test('DASH preserves a terminal ${failure.runtimeType}', () async {
+      var calls = 0;
+      final resolver = DashManifestResolver(MockClient((_) async {
+        calls++;
+        throw failure;
+      }));
+      await expectLater(
+          resolver.resolve(original, videoId, server, throwRetryable: true),
+          throwsA(same(failure)));
       expect(calls, 1);
     });
   }
@@ -238,25 +842,29 @@ void main() {
     expect(calls, 2);
   });
 
-  test('external manifests keep native handling without instance headers',
-      () async {
+  test('external manifests are not admitted for native playback', () async {
     final resolver = DashManifestResolver(MockClient((_) async {
       fail('External manifest must not be probed');
     }));
     const direct = 'https://r1.googlevideo.com/manifest.mpd';
-    expect(await resolver.resolve(direct, videoId, server), direct);
+    expect(await resolver.resolve(direct, videoId, server), isNull);
   });
 
   test('redirects retain native handling without forwarding credentials',
       () async {
     var calls = 0;
+    final bodies = <String>[];
     final resolver = DashManifestResolver(MockClient((_) async {
       calls++;
       return http.Response('', 302,
           headers: {'location': 'https://elsewhere/'});
     }));
-    expect(await resolver.resolve(original, videoId, server), original);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
     expect(calls, 1);
+    expect(bodies, isEmpty);
   });
 
   test('network failure and timeout use fallback', () async {

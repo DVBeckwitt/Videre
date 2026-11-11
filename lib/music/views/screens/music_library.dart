@@ -14,12 +14,13 @@ import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-enum _LibraryFilter { playlists, songs, albums, artists, downloads }
+enum _LibraryFilter { playlists, songs, channels, downloads }
 
 /// The Music home's local Library body. The home owns its navigation and chrome.
 class MusicLibraryPage extends StatefulWidget {
@@ -52,14 +53,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
   Future<void> _openBookmark(MusicLibraryEntry entry) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
-    if (!session.isCurrent) return;
+    if (!session.isCurrent || entry.kind == MusicLibraryKind.album) return;
     if (entry.kind == MusicLibraryKind.song) {
       await _play([entry.toVideo()]);
       return;
     }
     await Navigator.of(context).push<void>(MaterialPageRoute(
         builder: (_) => MusicScreen(
-              albumId: entry.kind == MusicLibraryKind.album ? entry.id : null,
               artistId: entry.kind == MusicLibraryKind.artist ? entry.id : null,
               playlistId:
                   entry.kind == MusicLibraryKind.playlist ? entry.id : null,
@@ -68,14 +68,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   }
 
   Widget _artwork(List<ImageObject> images,
-          {IconData icon = Icons.music_note, bool useInvidiousProxy = false}) =>
+          {IconData icon = Icons.music_note}) =>
       SizedBox.square(
         dimension: 52,
         child: images.isEmpty
             ? Icon(icon)
             : Thumbnail(
                 images: images,
-                useInvidiousProxy: useInvidiousProxy,
                 decoration:
                     BoxDecoration(borderRadius: BorderRadius.circular(8))),
       );
@@ -110,8 +109,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     };
     return ListTile(
         key: ValueKey('music-saved-${entry.kind.name}-${entry.id}'),
-        leading: _artwork(entry.thumbnails,
-            useInvidiousProxy: entry.usesVideoThumbnails),
+        leading: entry.kind == MusicLibraryKind.artist
+            ? ChannelAvatar(
+                name: entry.title, images: entry.thumbnails, size: 52)
+            : _artwork(entry.thumbnails),
         title: Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis),
         subtitle: entry.subtitle.isEmpty
             ? null
@@ -133,8 +134,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       switch (filter) {
         _LibraryFilter.playlists => locals.musicPlaylists,
         _LibraryFilter.songs => locals.musicSongs,
-        _LibraryFilter.albums => locals.musicAlbums,
-        _LibraryFilter.artists => locals.musicArtists,
+        _LibraryFilter.channels => locals.channels,
         _LibraryFilter.downloads => locals.downloads,
       };
 
@@ -184,17 +184,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       leading: SizedBox.square(
                         dimension: 52,
                         child: Stack(fit: StackFit.expand, children: [
-                          _artwork(
-                              music.thumbnails.isNotEmpty
-                                  ? music.thumbnails
-                                  : song.videoThumbnails,
-                              useInvidiousProxy: music.thumbnails.isEmpty),
+                          _artwork(music.thumbnails.isNotEmpty
+                              ? music.thumbnails
+                              : song.videoThumbnails),
                           VideoWatchProgress(videoId: song.videoId),
                         ]),
                       ),
                       title: Text(music.title),
                       subtitle: Text(music.artist),
-                      trailing: MusicLibraryActions(videos: [song]),
+                      trailing: MusicLibraryActions(
+                          videos: [song], localPlaylistId: playlist.playlistId),
                       onTap: () => _play(songs,
                           reference: reference, startIndex: index));
                 }),
@@ -215,8 +214,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final kind = switch (_filter) {
       _LibraryFilter.playlists => MusicLibraryKind.playlist,
       _LibraryFilter.songs => MusicLibraryKind.song,
-      _LibraryFilter.albums => MusicLibraryKind.album,
-      _LibraryFilter.artists => MusicLibraryKind.artist,
+      _LibraryFilter.channels => MusicLibraryKind.artist,
       _LibraryFilter.downloads => MusicLibraryKind.song,
     };
     final entries =
@@ -231,7 +229,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           alignment: Alignment.centerLeft,
           child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextButton.icon(
+              child: FilledButton.icon(
                   onPressed: () => MusicLibraryActions.createPlaylist(context),
                   icon: const Icon(Icons.add),
                   label: Text(locals.createNewPlaylist)))),

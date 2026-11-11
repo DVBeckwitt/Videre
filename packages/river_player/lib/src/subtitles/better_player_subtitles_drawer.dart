@@ -32,7 +32,6 @@ class _BetterPlayerSubtitlesDrawerState
   late TextStyle _innerTextStyle;
   late TextStyle _outerTextStyle;
 
-  VideoPlayerValue? _latestValue;
   BetterPlayerSubtitlesConfiguration? _configuration;
   bool _playerVisible = false;
 
@@ -56,6 +55,7 @@ class _BetterPlayerSubtitlesDrawerState
 
     widget.betterPlayerController.videoPlayerController!
         .addListener(_updateState);
+    widget.betterPlayerController.addEventsListener(_onPlayerEvent);
 
     _outerTextStyle = TextStyle(
         fontSize: _configuration!.fontSize,
@@ -74,20 +74,37 @@ class _BetterPlayerSubtitlesDrawerState
   }
 
   @override
+  void didUpdateWidget(BetterPlayerSubtitlesDrawer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.betterPlayerController != widget.betterPlayerController) {
+      oldWidget.betterPlayerController.videoPlayerController
+          ?.removeListener(_updateState);
+      oldWidget.betterPlayerController.removeEventsListener(_onPlayerEvent);
+      widget.betterPlayerController.videoPlayerController
+          ?.addListener(_updateState);
+      widget.betterPlayerController.addEventsListener(_onPlayerEvent);
+    }
+  }
+
+  @override
   void dispose() {
     widget.betterPlayerController.videoPlayerController!
         .removeListener(_updateState);
+    widget.betterPlayerController.removeEventsListener(_onPlayerEvent);
     _visibilityStreamSubscription.cancel();
     super.dispose();
   }
 
   ///Called when player state has changed, i.e. new player position, etc.
   void _updateState() {
-    if (mounted) {
-      setState(() {
-        _latestValue =
-            widget.betterPlayerController.videoPlayerController!.value;
-      });
+    if (mounted) setState(() {});
+  }
+
+  void _onPlayerEvent(BetterPlayerEvent event) {
+    if (event.betterPlayerEventType == BetterPlayerEventType.changedSubtitles) {
+      // A remembered track can finish loading while playback is paused, with
+      // no native position event to redraw its first cue.
+      _updateState();
     }
   }
 
@@ -118,14 +135,17 @@ class _BetterPlayerSubtitlesDrawerState
   }
 
   BetterPlayerSubtitle? _getSubtitleAtCurrentPosition() {
-    if (_latestValue == null) {
+    final value = widget.betterPlayerController.videoPlayerController?.value;
+    if (value == null) {
       return null;
     }
 
-    final Duration position = _latestValue!.position;
+    final Duration position = value.position;
     for (final BetterPlayerSubtitle subtitle
         in widget.betterPlayerController.subtitlesLines) {
-      if (subtitle.start! <= position && subtitle.end! >= position) {
+      // Cue intervals exclude their end, so adjacent transcript lines switch
+      // exactly at their shared boundary (including when seeking while paused).
+      if (subtitle.start! <= position && subtitle.end! > position) {
         return subtitle;
       }
     }

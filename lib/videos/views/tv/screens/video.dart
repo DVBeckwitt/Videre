@@ -2,7 +2,7 @@ import 'package:clipious/utils/motion.dart';
 import 'dart:ui';
 
 import 'package:auto_route/auto_route.dart';
-import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -20,7 +20,7 @@ import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:clipious/videos/views/components/video_metrics.dart';
 
 import '../../../../player/states/player.dart';
-import '../../../../utils/models/image_object.dart';
+import '../../../../player/views/components/video_retry_notice.dart';
 import '../../../models/video.dart';
 import '../../../states/tv_video.dart';
 import '../../../states/video.dart';
@@ -111,11 +111,14 @@ class TvVideoScreen extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       VideoBackendStatus(state: videoState),
-                      const SizedBox(
-                          width: 50,
-                          height: 50,
-                          child: MotionLoadingIndicator(
-                              child: CircularProgressIndicator())),
+                      if (showVideoMetadataRetry(videoState))
+                        const VideoRetryNotice()
+                      else
+                        const SizedBox(
+                            width: 50,
+                            height: 50,
+                            child: MotionLoadingIndicator(
+                                child: CircularProgressIndicator())),
                     ],
                   )),
             secondChild: videoState.video == null
@@ -272,22 +275,15 @@ class TvVideoScreen extends StatelessWidget {
                                                         mainAxisSize:
                                                             MainAxisSize.min,
                                                         children: [
-                                                          Thumbnail(
+                                                          ChannelAvatar(
+                                                            name: videoState
+                                                                    .video
+                                                                    ?.author ??
+                                                                '',
                                                             images: videoState
                                                                 .video
                                                                 ?.authorThumbnails,
-                                                            thumbnails: ImageObject
-                                                                .getThumbnailUrlsByPreferredOrder(
-                                                                    videoState
-                                                                        .video
-                                                                        ?.authorThumbnails),
-                                                            width: 40,
-                                                            height: 40,
-                                                            decoration: BoxDecoration(
-                                                                borderRadius:
-                                                                    BorderRadius
-                                                                        .circular(
-                                                                            20)),
+                                                            size: 40,
                                                           ),
                                                           Padding(
                                                             padding:

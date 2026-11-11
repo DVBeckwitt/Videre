@@ -23,6 +23,9 @@ void main() {
       {'enabled': true, 'host': 'http://127.0.0.1'},
       {'enabled': true, 'host': '127.0.0.1:9050'},
       {'enabled': true, 'host': 'user@host'},
+      {'enabled': true, 'host': '%79outube.com'},
+      {'enabled': true, 'host': '\uff59outube.com'},
+      {'enabled': true, 'host': 'proxy\u3002example'},
       {'enabled': true, 'port': 0},
       {'enabled': true, 'port': 65536},
       {'enabled': true, 'port': '9050'},
@@ -31,6 +34,8 @@ void main() {
       expect(() => SocksProxyConfig.fromJson(json), throwsFormatException);
     }
     expect(SocksProxyConfig(enabled: true, host: '::1').host, '::1');
+    expect(SocksProxyConfig(enabled: true, host: 'xn--bcher-kva.example').host,
+        'xn--bcher-kva.example');
   });
 
   test('only literal loopback and localhost bypass the proxy', () {
@@ -47,7 +52,24 @@ void main() {
     }
   });
 
-  test('official HTTP onion fails before connecting when SOCKS is disabled',
+  test('an official YouTube host cannot be used as the SOCKS endpoint', () {
+    for (final host in [
+      'music.youtube.com',
+      'MUSIC.YOUTUBE.COM.',
+      'music.youtube\u3002com',
+      'www.googleapis.com',
+      'rr1.googlevideo.com',
+    ]) {
+      expect(() => SocksProxyConfig(enabled: true, host: host),
+          throwsFormatException,
+          reason: host);
+      expect(() => SocksProxyConfig.fromJson({'enabled': true, 'host': host}),
+          throwsFormatException,
+          reason: 'saved $host');
+    }
+  });
+
+  test('HTTP and HTTPS onions fail before connecting when SOCKS is disabled',
       () async {
     var connections = 0;
     final client = HttpClient()
@@ -58,22 +80,154 @@ void main() {
     addTearDown(() => client.close(force: true));
     configureSocksHttpClient(client, SocksProxyConfig());
 
-    await expectLater(
-        client.getUrl(Uri.parse('http://$nerdVpnOnionHost/api/v1/stats')),
-        throwsA(isA<SocketException>().having(
-            (error) => error.message, 'message', contains('Enable SOCKS5'))));
+    for (final url in [
+      'http://$nerdVpnOnionHost/api/v1/stats',
+      'https://$nerdVpnOnionHost/api/v1/stats',
+      'http://instance.onion:8080/api/v1/stats',
+      'https://INSTANCE.ONION./api/v1/stats',
+    ]) {
+      await expectLater(
+          client.getUrl(Uri.parse(url)),
+          throwsA(isA<SocketException>().having(
+              (error) => error.message, 'message', contains('Enable SOCKS5'))));
+    }
     expect(connections, 0);
   });
 
-  test('a local redirect cannot bypass the HTTP onion SOCKS requirement',
+  test('official YouTube requests fail before any connection attempt',
       () async {
+    var connections = 0;
+    final client = HttpClient()
+      ..connectionFactory = (_, __, ___) {
+        connections++;
+        throw const SocketException('Unexpected connection in test.');
+      };
+    addTearDown(() => client.close(force: true));
+    configureSocksHttpClient(client, SocksProxyConfig());
+    for (final url in [
+      'https://music.youtube.com/youtubei/v1/search',
+      'https://rr1.googlevideo.com/videoplayback',
+      'https://i.ytimg.com/vi/video/default.jpg',
+    ]) {
+      await expectLater(
+          client.getUrl(Uri.parse(url)),
+          throwsA(isA<SocketException>().having((e) => e.message,
+              'privacy failure', contains('Direct YouTube connections'))));
+    }
+    expect(connections, 0);
+  });
+
+  test('SOCKS is not an exception for direct YouTube destinations', () async {
+    final proxy = await _FakeSocks.start();
+    addTearDown(proxy.close);
+    final client = _client(proxy);
+    addTearDown(() => client.close(force: true));
+    await expectLater(
+        client
+            .postUrl(Uri.parse('https://music.youtube.com/youtubei/v1/search')),
+        throwsA(isA<SocketException>().having((e) => e.message,
+            'privacy failure', contains('Direct YouTube connections'))));
+    expect(proxy.connections, 0);
+  });
+
+  test('environment proxies cannot use an official YouTube endpoint', () async {
+    for (final proxy in [
+      'http://music.youtube.com:8080',
+      'user:private@music.youtube.com:8080',
+      'http://MUSIC.YOUTUBE.COM.:8080',
+      'www.googleapis.com:8080',
+      'proxy.example:8080; PROXY music.youtube.com:8080',
+    ]) {
+      var connections = 0;
+      final client = HttpClient()
+        ..connectionFactory = (_, __, ___) {
+          connections++;
+          throw const SocketException('Unexpected connection in test.');
+        };
+      addTearDown(() => client.close(force: true));
+      configureSocksHttpClient(client, SocksProxyConfig(),
+          environment: {'http_proxy': proxy});
+      await expectLater(
+          client.getUrl(Uri.parse('http://instance.example/api/v1/stats')),
+          throwsA(isA<SocketException>().having((e) => e.message,
+              'privacy failure', contains('Direct YouTube connections'))));
+      expect(connections, 0, reason: 'No connection to proxy is allowed');
+    }
+  });
+
+  test('a permitted environment proxy still receives the selected route',
+      () async {
+    final proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => proxy.close(force: true));
+    final received = Completer<Uri>();
+    proxy.listen((request) {
+      received.complete(request.uri);
+      request.response.write('proxied environment');
+      unawaited(request.response.close());
+    });
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    configureSocksHttpClient(client, SocksProxyConfig(),
+        environment: {'http_proxy': 'http://127.0.0.1:${proxy.port}'});
+    final target = Uri.parse('http://instance.example/api/v1/stats');
+    final request = await client.getUrl(target);
+    expect(
+        await utf8.decodeStream(await request.close()), 'proxied environment');
+    expect(await received.future, target);
+  });
+
+  test('ambiguous environment proxy spellings fail before DNS', () async {
+    for (final host in [
+      '%79outube.com',
+      '\uff59outube.com',
+      'proxy\u3002example'
+    ]) {
+      var connections = 0;
+      final client = HttpClient()
+        ..connectionFactory = (_, __, ___) {
+          connections++;
+          throw const SocketException('Unexpected connection in test.');
+        };
+      addTearDown(() => client.close(force: true));
+      configureSocksHttpClient(client, SocksProxyConfig(),
+          environment: {'http_proxy': '$host:8080'});
+      await expectLater(
+          client.getUrl(Uri.parse('http://instance.example/api/v1/stats')),
+          throwsA(isA<SocketException>().having((e) => e.message,
+              'invalid proxy host', contains('ASCII proxy hostname'))));
+      expect(connections, 0);
+    }
+  });
+
+  test('instance redirect cannot connect to official YouTube hosts', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     addTearDown(() => server.close(force: true));
     server.listen((request) {
       request.response
         ..statusCode = HttpStatus.found
         ..headers.set(HttpHeaders.locationHeader,
-            'http://$nerdVpnOnionHost/api/v1/stats');
+            'https://music.youtube.com/youtubei/v1/search');
+      unawaited(request.response.close());
+    });
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    configureSocksHttpClient(client, SocksProxyConfig());
+    final request = await client
+        .getUrl(Uri.parse('http://127.0.0.1:${server.port}/videoplayback'));
+    await expectLater(
+        request.close(),
+        throwsA(isA<SocketException>().having((e) => e.message,
+            'privacy failure', contains('Direct YouTube connections'))));
+  });
+
+  test('a local redirect cannot bypass the onion SOCKS requirement', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) {
+      request.response
+        ..statusCode = HttpStatus.found
+        ..headers.set(
+            HttpHeaders.locationHeader, 'https://instance.onion/api/v1/stats');
       unawaited(request.response.close());
     });
     final client = HttpClient();

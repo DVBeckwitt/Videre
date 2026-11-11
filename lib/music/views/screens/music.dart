@@ -4,7 +4,6 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
-import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
@@ -20,11 +19,14 @@ import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/playlist_loading_notice.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
@@ -33,17 +35,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-enum _MusicSearch { songs, albums, artists, playlists }
+enum _MusicSearch { songs, artists, playlists }
 
 @RoutePage()
 class MusicScreen extends StatefulWidget {
   final String? videoId;
-  final String? albumId;
   final String? playlistId;
   final String? artistId;
+  final bool embedded;
 
   const MusicScreen(
-      {super.key, this.videoId, this.albumId, this.playlistId, this.artistId});
+      {super.key,
+      this.videoId,
+      this.playlistId,
+      this.artistId,
+      this.embedded = false});
 
   static Widget tvAudio({Video? video, DownloadedVideo? offlineVideo}) =>
       _MusicTvAudio(video: video, offlineVideo: offlineVideo);
@@ -82,15 +88,14 @@ class _MusicScreenState extends State<MusicScreen> {
   final _search = TextEditingController();
   _MusicSearch _type = _MusicSearch.songs;
   List<MusicTrack> _songs = [];
-  List<MusicAlbum> _albums = [];
   List<MusicArtist> _artists = [];
   List<MusicPlaylist> _playlists = [];
   MusicCollection? _collection;
-  bool _collectionIsAlbum = true;
   MusicArtistPage? _artistPage;
   final _browseHistory =
-      <({MusicCollection? collection, MusicArtistPage? artist, bool album})>[];
+      <({MusicCollection? collection, MusicArtistPage? artist})>[];
   bool _loading = false;
+  bool _retryingSong = false;
   Object? _failure;
   bool _searched = false;
   bool _starting = false;
@@ -105,9 +110,7 @@ class _MusicScreenState extends State<MusicScreen> {
       _hasBrowsePage &&
       !_searched &&
       _browseHistory.isEmpty &&
-      (widget.albumId != null ||
-          widget.artistId != null ||
-          widget.playlistId != null);
+      (widget.artistId != null || widget.playlistId != null);
 
   @override
   void initState() {
@@ -121,9 +124,15 @@ class _MusicScreenState extends State<MusicScreen> {
   void didUpdateWidget(MusicScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoId != widget.videoId ||
-        oldWidget.albumId != widget.albumId ||
         oldWidget.playlistId != widget.playlistId ||
         oldWidget.artistId != widget.artistId) {
+      // Clearing every route argument has no replacement request to invalidate
+      // the old one. Revoke it before opening the new destination either way.
+      _generation++;
+      _loading = false;
+      _retryingSong = false;
+      _failure = null;
+      _retry = null;
       _openInitial();
     }
   }
@@ -152,11 +161,11 @@ class _MusicScreenState extends State<MusicScreen> {
     _generation++;
     setState(() {
       _loading = false;
+      _retryingSong = false;
       _failure = null;
       _searched = false;
       _starting = false;
       _songs = [];
-      _albums = [];
       _artists = [];
       _playlists = [];
       _collection = null;
@@ -167,10 +176,8 @@ class _MusicScreenState extends State<MusicScreen> {
   }
 
   Future<void> _openInitial() async {
-    if (widget.albumId != null) {
-      await _openCollection(widget.albumId!, album: true);
-    } else if (widget.playlistId != null) {
-      await _openCollection(widget.playlistId!, album: false);
+    if (widget.playlistId != null) {
+      await _openCollection(widget.playlistId!);
     } else if (widget.videoId != null) {
       await _openSong(widget.videoId!);
     } else if (widget.artistId != null) {
@@ -185,6 +192,7 @@ class _MusicScreenState extends State<MusicScreen> {
     final generation = ++_generation;
     setState(() {
       _loading = true;
+      _retryingSong = false;
       _failure = null;
       _retry = retry;
     });
@@ -195,7 +203,12 @@ class _MusicScreenState extends State<MusicScreen> {
         setState(() => _failure = error);
       }
     } finally {
-      if (_active(generation, session)) setState(() => _loading = false);
+      if (_active(generation, session)) {
+        setState(() {
+          _loading = false;
+          _retryingSong = false;
+        });
+      }
     }
   }
 
@@ -210,7 +223,6 @@ class _MusicScreenState extends State<MusicScreen> {
       _artistPage = null;
       _browseHistory.clear();
       _songs = [];
-      _albums = [];
       _artists = [];
       _playlists = [];
     });
@@ -218,9 +230,6 @@ class _MusicScreenState extends State<MusicScreen> {
       if (type == _MusicSearch.songs) {
         final songs = await musicCatalogService.searchSongs(query);
         if (_active(generation, session)) setState(() => _songs = songs);
-      } else if (type == _MusicSearch.albums) {
-        final albums = await musicCatalogService.searchAlbums(query);
-        if (_active(generation, session)) setState(() => _albums = albums);
       } else if (type == _MusicSearch.artists) {
         final artists = await musicCatalogService.searchArtists(query);
         if (_active(generation, session)) setState(() => _artists = artists);
@@ -233,20 +242,17 @@ class _MusicScreenState extends State<MusicScreen> {
     }, _submit);
   }
 
-  Future<void> _openCollection(String id, {required bool album}) async {
+  Future<void> _openCollection(String id) async {
     await _run((generation, session) async {
-      final collection = album
-          ? await musicCatalogService.getAlbum(id)
-          : await musicCatalogService.getPlaylist(id);
+      final collection = await musicCatalogService.getPlaylist(id);
       if (_active(generation, session)) {
         setState(() {
           _rememberBrowsePage();
           _collection = collection;
-          _collectionIsAlbum = album;
           _artistPage = null;
         });
       }
-    }, () => _openCollection(id, album: album));
+    }, () => _openCollection(id));
   }
 
   void _rememberBrowsePage() {
@@ -254,7 +260,6 @@ class _MusicScreenState extends State<MusicScreen> {
       _browseHistory.add((
         collection: _collection,
         artist: _artistPage,
-        album: _collectionIsAlbum
       ));
     }
   }
@@ -275,9 +280,17 @@ class _MusicScreenState extends State<MusicScreen> {
 
   Future<void> _openSong(String id) async {
     await _run((generation, session) async {
-      final song = await musicCatalogService.getSong(id);
+      final song = await musicCatalogService.getSong(id,
+          loadObserver: VideoLoadObserver(
+              isCurrent: () => _active(generation, session),
+              onRetry: () {
+                if (_active(generation, session)) {
+                  setState(() => _retryingSong = true);
+                }
+              }));
       if (!_active(generation, session)) return;
       setState(() {
+        _retryingSong = false;
         _songs = [song];
         _type = _MusicSearch.songs;
         _searched = true;
@@ -285,17 +298,23 @@ class _MusicScreenState extends State<MusicScreen> {
         _artistPage = null;
         _browseHistory.clear();
       });
-      await _play([song]);
+      await _play([song], loadedVideo: song.playbackVideo);
     }, () => _openSong(id));
   }
 
   Future<void> _play(List<MusicTrack> tracks,
       {PlaylistReference? reference,
       int startIndex = 0,
-      Duration startAt = Duration.zero}) async {
+      Duration startAt = Duration.zero,
+      Video? loadedVideo}) async {
     final session = context.read<AppCubit>().state;
     if (_starting || tracks.isEmpty || !_sameSession(session)) return;
     final videos = tracks.map((track) => track.toVideo()).toList();
+    if (loadedVideo != null &&
+        videos.length == 1 &&
+        loadedVideo.videoId == videos.single.videoId) {
+      videos[0] = loadedVideo.preservingMusicMetadataFrom(videos.single);
+    }
     setState(() => _starting = true);
     try {
       await MusicScreen.playTracks(context, videos,
@@ -318,12 +337,12 @@ class _MusicScreenState extends State<MusicScreen> {
         final previous = _browseHistory.removeLast();
         _collection = previous.collection;
         _artistPage = previous.artist;
-        _collectionIsAlbum = previous.album;
       } else {
         _collection = null;
         _artistPage = null;
       }
       _loading = false;
+      _retryingSong = false;
       _failure = null;
       _retry = null;
     });
@@ -397,7 +416,6 @@ class _MusicScreenState extends State<MusicScreen> {
           ? const Icon(Icons.music_note)
           : Thumbnail(
               images: images,
-              useInvidiousProxy: false,
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
             ));
 
@@ -425,13 +443,6 @@ class _MusicScreenState extends State<MusicScreen> {
     );
   }
 
-  Widget _albumTile(MusicAlbum album) => ListTile(
-      leading: _artwork(album.thumbnails),
-      title: Text(album.title),
-      subtitle: _artistByline(album.artists, album.artistLinks),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => _openCollection(album.id, album: true));
-
   Widget _song(MusicTrack track,
       {int? index, List<MusicTrack>? queue, PlaylistReference? reference}) {
     return ListTile(
@@ -449,15 +460,9 @@ class _MusicScreenState extends State<MusicScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _artistByline(track.artists, track.artistLinks),
-          if (index == null &&
-              track.albumId != null &&
-              track.albumTitle != null)
-            TextButton(
-                style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
-                onPressed: () => _openCollection(track.albumId!, album: true),
-                child: Text(track.albumTitle!,
-                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+          if (index == null && track.albumTitle != null)
+            Text(track.albumTitle!,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
         ],
       ),
       trailing: MusicLibraryActions(videos: [track.toVideo()]),
@@ -473,17 +478,18 @@ class _MusicScreenState extends State<MusicScreen> {
 
   Widget _results() {
     final locals = AppLocalizations.of(context)!;
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) {
+      return Center(
+          child: _retryingSong
+              ? const VideoRetryNotice()
+              : const CircularProgressIndicator());
+    }
     if (_failure != null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(
-                _failure is MusicCatalogRegionUnavailable
-                    ? locals.musicRegionUnavailable
-                    : locals.musicCatalogError,
-                textAlign: TextAlign.center),
+            Text(locals.musicCatalogError, textAlign: TextAlign.center),
             const SizedBox(height: 12),
             FilledButton.icon(
                 onPressed: _retry,
@@ -502,9 +508,9 @@ class _MusicScreenState extends State<MusicScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(locals.musicSearchStart, textAlign: TextAlign.center),
+            Text(locals.musicInvidiousSearchStart, textAlign: TextAlign.center),
             const SizedBox(height: 12),
-            Text(locals.musicCatalogConnection,
+            Text(locals.musicInvidiousConnection,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
           ]),
@@ -517,12 +523,6 @@ class _MusicScreenState extends State<MusicScreen> {
           itemCount: _songs.length,
           itemBuilder: (_, index) => _song(_songs[index]));
     }
-    if (_type == _MusicSearch.albums) {
-      if (_albums.isEmpty) return Center(child: Text(locals.musicNoResults));
-      return ListView.builder(
-          itemCount: _albums.length,
-          itemBuilder: (_, index) => _albumTile(_albums[index]));
-    }
     if (_type == _MusicSearch.artists) {
       if (_artists.isEmpty) return Center(child: Text(locals.musicNoResults));
       return ListView.builder(
@@ -530,7 +530,8 @@ class _MusicScreenState extends State<MusicScreen> {
           itemBuilder: (_, index) {
             final artist = _artists[index];
             return ListTile(
-                leading: _artwork(artist.thumbnails),
+                leading: ChannelAvatar(
+                    name: artist.name, images: artist.thumbnails, size: 56),
                 title: Text(artist.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _openArtist(artist.id));
@@ -546,18 +547,16 @@ class _MusicScreenState extends State<MusicScreen> {
               title: Text(playlist.title),
               subtitle: playlist.author == null ? null : Text(playlist.author!),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => _openCollection(playlist.id, album: false));
+              onTap: () => _openCollection(playlist.id));
         });
   }
 
   Widget _collectionResults(MusicCollection collection) {
     final locals = AppLocalizations.of(context)!;
-    final reference = _collectionIsAlbum
-        ? null
-        : PlaylistReference(
-            kind: PlaylistSourceKind.public,
-            playlistId: collection.id,
-            profileId: db.profileId);
+    final reference = PlaylistReference(
+        kind: PlaylistSourceKind.public,
+        playlistId: collection.id,
+        profileId: db.profileId);
     return ListView(children: [
       Padding(
         padding: const EdgeInsets.all(16),
@@ -574,20 +573,16 @@ class _MusicScreenState extends State<MusicScreen> {
                   : () => _play(collection.tracks, reference: reference),
               icon: const Icon(Icons.play_arrow),
               label: Text(locals.musicPlayAll)),
-          if (reference != null)
-            MusicPlaylistResume(
-                reference: reference,
-                videos:
-                    collection.tracks.map((track) => track.toVideo()).toList(),
-                enabled: !_starting,
-                onPlay: (index, position) => _play(collection.tracks,
-                    reference: reference,
-                    startIndex: index,
-                    startAt: position)),
+          MusicPlaylistResume(
+              reference: reference,
+              videos:
+                  collection.tracks.map((track) => track.toVideo()).toList(),
+              enabled: !_starting,
+              onPlay: (index, position) => _play(collection.tracks,
+                  reference: reference, startIndex: index, startAt: position)),
           const SizedBox(height: 8),
           MusicBookmarkButton(
-              entry: MusicLibraryEntry.collection(collection,
-                  album: _collectionIsAlbum)),
+              entry: MusicLibraryEntry.collection(collection, album: false)),
           MusicLibraryActions(
               videos:
                   collection.tracks.map((track) => track.toVideo()).toList(),
@@ -610,7 +605,10 @@ class _MusicScreenState extends State<MusicScreen> {
       Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _artwork(artistPage.artist.thumbnails),
+          ChannelAvatar(
+              name: artistPage.artist.name,
+              images: artistPage.artist.thumbnails,
+              size: 56),
           const SizedBox(height: 12),
           Text(artistPage.artist.name,
               style: Theme.of(context).textTheme.titleLarge),
@@ -625,7 +623,7 @@ class _MusicScreenState extends State<MusicScreen> {
         ]),
       ),
       if (artistPage.songs.isNotEmpty) ...[
-        _sectionTitle(locals.musicArtistSongs),
+        _sectionTitle(locals.musicChannelUploads),
         Align(
           alignment: Alignment.centerLeft,
           child: Padding(
@@ -640,17 +638,7 @@ class _MusicScreenState extends State<MusicScreen> {
         for (var i = 0; i < artistPage.songs.length; i++)
           _song(artistPage.songs[i], index: i, queue: artistPage.songs),
       ],
-      if (artistPage.albums.isNotEmpty) ...[
-        _sectionTitle(locals.musicArtistAlbums),
-        for (final album in artistPage.albums) _albumTile(album),
-      ],
-      if (artistPage.singles.isNotEmpty) ...[
-        _sectionTitle(locals.musicArtistSingles),
-        for (final single in artistPage.singles) _albumTile(single),
-      ],
-      if (artistPage.songs.isEmpty &&
-          artistPage.albums.isEmpty &&
-          artistPage.singles.isEmpty)
+      if (artistPage.songs.isEmpty)
         Padding(
             padding: const EdgeInsets.all(24),
             child: Text(locals.musicArtistEmpty)),
@@ -664,8 +652,7 @@ class _MusicScreenState extends State<MusicScreen> {
   String _searchLabel(_MusicSearch search, AppLocalizations locals) =>
       switch (search) {
         _MusicSearch.songs => locals.musicSongs,
-        _MusicSearch.albums => locals.musicAlbums,
-        _MusicSearch.artists => locals.musicArtists,
+        _MusicSearch.artists => locals.channels,
         _MusicSearch.playlists => locals.musicPlaylists,
       };
 
@@ -681,32 +668,37 @@ class _MusicScreenState extends State<MusicScreen> {
           (!before.sessionRecoveryRequired && after.sessionRecoveryRequired),
       listener: (context, state) => _clearForSession(),
       child: PopScope(
-        canPop: !_hasBrowsePage || _returnToOrigin,
+        canPop: !TickerMode.of(context) || !_hasBrowsePage || _returnToOrigin,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && !_returnToOrigin) _backToSearch();
+          if (!didPop && TickerMode.of(context) && !_returnToOrigin) {
+            _backToSearch();
+          }
         },
         child: Shortcuts(
           shortcuts: {
             LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
           },
           child: Scaffold(
-            appBar: AppBar(
-              title: Text(locals.music),
-              leading: !_hasBrowsePage
-                  ? null
-                  : IconButton(
-                      tooltip: _browseHistory.isEmpty && !_returnToOrigin
-                          ? locals.musicBackToSearch
-                          : MaterialLocalizations.of(context).backButtonTooltip,
-                      onPressed: () {
-                        if (_returnToOrigin) {
-                          Navigator.of(context).maybePop();
-                        } else {
-                          _backToSearch();
-                        }
-                      },
-                      icon: const Icon(Icons.arrow_back)),
-            ),
+            appBar: widget.embedded && !_hasBrowsePage
+                ? null
+                : AppBar(
+                    title: Text(locals.music),
+                    leading: !_hasBrowsePage
+                        ? null
+                        : IconButton(
+                            tooltip: _browseHistory.isEmpty && !_returnToOrigin
+                                ? locals.musicBackToSearch
+                                : MaterialLocalizations.of(context)
+                                    .backButtonTooltip,
+                            onPressed: () {
+                              if (_returnToOrigin) {
+                                Navigator.of(context).maybePop();
+                              } else {
+                                _backToSearch();
+                              }
+                            },
+                            icon: const Icon(Icons.arrow_back)),
+                  ),
             body: SafeArea(
               child: Padding(
                 padding: isTv
@@ -723,7 +715,7 @@ class _MusicScreenState extends State<MusicScreen> {
                       textInputAction: TextInputAction.search,
                       onSubmitted: (_) => _submit(),
                       decoration: InputDecoration(
-                          labelText: locals.musicSearchHint,
+                          labelText: locals.musicInvidiousSearchHint,
                           border: const OutlineInputBorder(),
                           suffixIcon: IconButton(
                               autofocus: isTv,
@@ -756,7 +748,9 @@ class _MusicScreenState extends State<MusicScreen> {
                                 onSelected: (_) {
                                   if (_type == type) return;
                                   setState(() => _type = type);
-                                  if (_search.text.trim().isNotEmpty) _submit();
+                                  if (_search.text.trim().isNotEmpty) {
+                                    _submit();
+                                  }
                                 }),
                           ),
                       ]),
@@ -825,11 +819,19 @@ class _MusicTvPlayer extends StatelessWidget {
                 }
                 if (state.currentlyPlaying == null &&
                     state.offlineCurrentlyPlaying == null) {
-                  return const Center(child: CircularProgressIndicator());
+                  return PlayerRetryIndicator.visibleFor(state)
+                      ? const PlayerRetryIndicator()
+                      : const Center(child: CircularProgressIndicator());
                 }
-                return _MusicTvAudio(
-                    video: state.currentlyPlaying,
-                    offlineVideo: state.offlineCurrentlyPlaying);
+                return Stack(
+                  fit: StackFit.passthrough,
+                  children: [
+                    _MusicTvAudio(
+                        video: state.currentlyPlaying,
+                        offlineVideo: state.offlineCurrentlyPlaying),
+                    const Positioned.fill(child: PlayerRetryIndicator()),
+                  ],
+                );
               },
             ),
           ),
@@ -893,10 +895,9 @@ class _MusicTvAudio extends StatelessWidget {
             if (audio.error != null ||
                 state.mediaEvent.state == MediaState.error) {
               return _MusicPlaybackFailure(
-                  onRetry: current == null
+                  onRetry: current == null && offline == null
                       ? player.resumeSession
-                      : () => player.switchToVideo(current,
-                          startAt: state.position));
+                      : player.retryCurrentVideo);
             }
             return Padding(
               padding: EdgeInsets.symmetric(
@@ -914,7 +915,6 @@ class _MusicTvAudio extends StatelessWidget {
                               images: musicImages.isNotEmpty
                                   ? musicImages
                                   : current?.videoThumbnails,
-                              useInvidiousProxy: musicImages.isEmpty,
                               decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(16))),
                     ),

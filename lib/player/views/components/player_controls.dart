@@ -10,12 +10,14 @@ import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/player/views/components/backend_request_indicator.dart';
+import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/sleep_timer.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/playback_speed_quick_controls.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
+import 'package:clipious/player/views/components/video_display_mode_picker.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:flutter/material.dart';
@@ -112,6 +114,16 @@ class PlayerControls extends StatelessWidget {
                 onChanged: pc.setSpeed,
                 onAdvanced: () => showPlaybackSpeedSelection(context, pc),
               ),
+              if (pc is VideoPlayerCubit)
+                ListTile(
+                  key: const ValueKey('player-video-display-open'),
+                  leading: const Icon(Icons.aspect_ratio),
+                  title: Text(locals.videoDisplay),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    showVideoDisplayModePicker(context);
+                  },
+                ),
               if (canChoosePlayerBackend(player.state))
                 ListTile(
                   key: const ValueKey('player-backend-open'),
@@ -254,6 +266,8 @@ class PlayerControls extends StatelessWidget {
                 (PlayerCubit cubit) => canChoosePlayerBackend(cubit.state));
             final requestedBackend = context
                 .select((PlayerCubit cubit) => cubit.state.requestedBackend);
+            final retryingMetadata = context.select((PlayerCubit cubit) =>
+                PlayerRetryIndicator.visibleFor(cubit.state));
             int totalFastForward = context
                 .select((PlayerCubit cubit) => cubit.state.totalFastForward);
             int totalRewind =
@@ -282,17 +296,15 @@ class PlayerControls extends StatelessWidget {
                     .scale(indicatorStyle?.fontSize ?? 12) *
                 (indicatorStyle?.height ?? 1.33);
             final requestIndicatorTop = max(
-                playerState.displayControls &&
-                        playerState.fullScreenState ==
-                            FullScreenState.fullScreen
+                playerState.fullScreenState == FullScreenState.fullScreen
                     ? 52.0
                     : 8.0,
                 playerState.showSponsorBlocked
                     ? indicatorLineHeight + 34
                     : 8.0);
-            final showRequestedBackend = requestedBackend != null &&
-                !(recovery != null && (isMini || isPip));
-            final retryTop = showRequestedBackend
+            final showRequestedBackend =
+                requestedBackend != null && !isMini && !isPip;
+            final retryTop = showRequestedBackend && playerState.displayControls
                 ? requestIndicatorTop + indicatorLineHeight + 16
                 : 0.0;
 
@@ -743,7 +755,9 @@ class PlayerControls extends StatelessWidget {
                             ],
                           ),
                         ),
-                      if (playerState.buffering && recovery == null)
+                      if (playerState.buffering &&
+                          recovery == null &&
+                          !retryingMetadata)
                         const Center(
                           child: FractionallySizedBox(
                             heightFactor: 0.3,
@@ -872,23 +886,7 @@ class PlayerControls extends StatelessWidget {
                                               TextButton.icon(
                                                 onPressed: () {
                                                   cubit.removeError();
-                                                  if (currentlyPlaying !=
-                                                      null) {
-                                                    player.switchToVideo(
-                                                      Video(
-                                                          videoId:
-                                                              currentlyPlaying
-                                                                  .videoId),
-                                                      startAt:
-                                                          player.state.position,
-                                                    );
-                                                  } else if (player.state
-                                                          .offlineCurrentlyPlaying !=
-                                                      null) {
-                                                    player.switchToOfflineVideo(
-                                                        player.state
-                                                            .offlineCurrentlyPlaying!);
-                                                  }
+                                                  player.retryCurrentVideo();
                                                 },
                                                 icon: const Icon(Icons.refresh),
                                                 label: Text(locals.retry),
@@ -930,15 +928,21 @@ class PlayerControls extends StatelessWidget {
                       if (showRequestedBackend)
                         Positioned(
                           left: 8,
-                          right:
-                              playerState.displayControls && !isMini && !isPip
-                                  ? 152
-                                  : 8,
+                          right: 152,
                           top: requestIndicatorTop,
-                          child: BackendRequestIndicator(
-                            playback: requestedBackend,
-                            overlay: true,
-                            compact: isMini || isPip || retryingBackend,
+                          // Request details belong to the controls. Recovery
+                          // notices above retain their independent lifetime.
+                          child: ExcludeSemantics(
+                            excluding: !playerState.displayControls,
+                            child: AnimatedOpacity(
+                              opacity: playerState.displayControls ? 1 : 0,
+                              duration: AppMotion.fadeDuration(context),
+                              child: BackendRequestIndicator(
+                                playback: requestedBackend,
+                                overlay: true,
+                                compact: retryingBackend,
+                              ),
+                            ),
                           ),
                         ),
                     ],
