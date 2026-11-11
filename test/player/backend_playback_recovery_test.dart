@@ -277,14 +277,18 @@ void main() {
           if (retryable != null) {
             await error(retryable: retryable);
           } else {
+            final initialPosition = source['initialPositionMs'] as int?;
+            if (initialPosition != null) nativePosition = initialPosition;
             await messenger.handlePlatformMessage(
                 events.name,
                 const StandardMethodCodec().encodeSuccessEnvelope({
                   'event': 'initialized',
+                  'key': source['key'],
                   'duration': 60000,
                   'width': 640,
                   'height': 360,
                   'isLiveStream': false,
+                  if (initialPosition != null) 'position': initialPosition,
                 }),
                 (_) {});
           }
@@ -363,22 +367,44 @@ void main() {
     }
   });
 
-  test('early seeks wait for initialization and retain the latest position',
+  test('Android VOD starts at resume and a reused source can start at zero',
+      () async {
+    final video = cubit();
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 12));
+      expect(sources.single['initialPositionMs'], 12000);
+      expect(video.position(), const Duration(seconds: 12));
+      expect(player.state.position, const Duration(seconds: 12));
+      expect(seeks, isEmpty);
+
+      video.switchVideo(_video('replacement', BackendPlayback(preferred)));
+      await _flush();
+      expect(sources.last['initialPositionMs'], 0);
+      expect(video.position(), Duration.zero);
+      expect(seeks, isEmpty);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('early seeks wait for initialization and override the native start',
       () async {
     final held = heldSources['https://instance.example/video-a-1.mp4'] =
         Completer<void>();
     final video = cubit();
-    final loading = video.playVideo(false);
+    final loading =
+        video.playVideo(false, startAt: const Duration(seconds: 12));
     try {
       await _flush();
       await video.seek(const Duration(seconds: 10));
       await video.seek(const Duration(seconds: 25));
       video.pause();
+      expect(sources.single['initialPositionMs'], 12000);
       expect(seeks, isEmpty);
       held.complete();
       await loading;
       await _flush();
-      expect(seeks.last, 25000);
+      expect(seeks, [25000]);
       expect(nativePlaying, isFalse);
     } finally {
       if (!held.isCompleted) held.complete();
@@ -994,7 +1020,9 @@ void main() {
       held.complete();
       await _flush();
       expect(sources.last['uri'], 'https://instance.example/refreshed-a-2.mp4');
-      expect(seeks.last, 27000);
+      expect(sources.last['initialPositionMs'], 27000);
+      expect(nativePosition, 27000);
+      expect(seeks.last, 23000);
       expect(speeds.last, 1.75);
       expect(pitches.last, 0.5);
       expect(nativePlaying, isFalse);
@@ -1197,6 +1225,7 @@ void main() {
       await video.selectVideoTrack(0);
       await _flush();
       expect(sources.last['uri'], 'https://instance.example/video-a-2.mp4');
+      expect(sources.last['initialPositionMs'], 18000);
       expect(seeks.last, 18000,
           reason: 'Quality changes must restore the latest requested seek.');
       held.complete();

@@ -78,6 +78,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   Video video,
   Server server, {
   required bool preferDash,
+  required bool preferProgressiveStartup,
   int? preferredQuality,
   String? lastSubtitle,
 }) {
@@ -133,7 +134,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
     }
   }
 
-  final streams = <({String resolution, String url})>[];
+  final streams = <({String resolution, String url, bool isVideo})>[];
   final streamUrls = <String>{};
   for (final stream in (video.formatStreams ?? []).reversed) {
     if (stream.isLegacyHd720) continue;
@@ -147,38 +148,68 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
       stream.quality,
       stream.itag,
     ]);
-    streams.add((resolution: resolution, url: safeUrl));
+    streams.add((
+      resolution: resolution,
+      url: safeUrl,
+      isVideo: stream.type.toLowerCase().startsWith('video/'),
+    ));
     if (streams.length >= _maxPlaybackSources) {
       break;
     }
   }
 
+  // NerdVPN's signed DASH route adds a watch request and separate audio/video
+  // buffering. Try one suitable combined stream, then keep DASH next in line.
+  final startupStream = preferDash &&
+          preferProgressiveStartup &&
+          hls == null &&
+          dash != null &&
+          video.liveNow != true &&
+          (video.lengthSeconds ?? 0) > 0
+      ? streams.where((stream) {
+          final height = videoQualityHeight(stream.resolution);
+          return stream.isVideo &&
+              height != null &&
+              height > 0 &&
+              (preferredQuality == null || height == preferredQuality) &&
+              _sourceKey(stream.url) != _sourceKey(dash);
+        }).firstOrNull
+      : null;
+
   void addProgressive() {
+    final reservedDash = startupStream == null ? 0 : 1;
     final accepted = streams
         .where((stream) => !seen.contains(_sourceKey(stream.url)))
-        .take(_maxPlaybackSources - sources.length)
+        .take(_maxPlaybackSources - sources.length - reservedDash)
         .toList();
+    if (startupStream != null && !accepted.contains(startupStream)) {
+      accepted.removeLast();
+      accepted.add(startupStream);
+    }
     final resolutions = <String, String>{};
     for (final stream in accepted) {
       resolutions.putIfAbsent(stream.resolution, () => stream.url);
     }
     // Change playback priority without reordering the quality menu.
-    final preferred = preferredVideoQualityIndex(
-        accepted.map((s) => videoQualityHeight(s.resolution)).toList(),
-        preferredQuality);
+    final preferred = startupStream != null
+        ? accepted.indexOf(startupStream)
+        : preferredVideoQualityIndex(
+            accepted.map((s) => videoQualityHeight(s.resolution)).toList(),
+            preferredQuality);
     if (preferred != null) {
       accepted.insert(0, accepted.removeAt(preferred));
     }
-    for (final stream in accepted) {
+    for (final (index, stream) in accepted.indexed) {
       final sourceResolutions = resolutions[stream.resolution] == stream.url
           ? resolutions
           : {...resolutions, stream.resolution: stream.url};
       add(stream.url, BetterPlayerVideoFormat.other,
           resolutions: sourceResolutions);
+      if (index == 0 && startupStream != null) addDash();
     }
   }
 
-  if (preferDash) addDash();
+  if (preferDash && startupStream == null) addDash();
   addProgressive();
   if (!preferDash) addDash();
   return sources;
@@ -218,6 +249,17 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   BetterPlayerSubtitlesSource? _failedSubtitle;
 
   bool get _shouldPlay => _requestedPlaying && player.shouldStartPlayback;
+
+  bool get _canStartNerdVpnProgressive {
+    final server = _playbackServer;
+    return !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        !isTv &&
+        !settings.state.hasDashPreference &&
+        server != null &&
+        NerdVpnAccess.supports(server) &&
+        !isNerdVpnOnionUrl(server.url);
+  }
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
     onInit();
@@ -805,10 +847,25 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         ? source.videoFormat.toString()
         : 'DASH supplied in memory';
     log.info('Playing $format source from ${Uri.parse(source.url).host}');
+    final startPosition = _pendingSeek ?? _playbackStartAt;
+    final startSeekRevision = _seekRevision;
+    final length = Duration(seconds: state.video?.lengthSeconds ?? 0);
+    final nativeStart = !kIsWeb &&
+            defaultTargetPlatform == TargetPlatform.android &&
+            !_playbackOffline &&
+            source.type == BetterPlayerDataSourceType.network &&
+            source.videoFormat != BetterPlayerVideoFormat.hls &&
+            state.video?.liveNow != true &&
+            startPosition >= Duration.zero &&
+            startPosition < length
+        ? startPosition
+        : null;
     var setupFailed = false;
     var setup = Future<void>.value();
     try {
-      setup = videoController?.setupDataSource(source) ?? Future<void>.value();
+      setup = videoController?.setupDataSource(source,
+              initialPosition: nativeStart) ??
+          Future<void>.value();
       _controllerSetup = setup;
       _controllerSetupAttempt =
           (generation: generation, sourceIndex: sourceIndex);
@@ -844,8 +901,18 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         videoController?.setTrack(BetterPlayerAsmsTrack(
             null, 2147483647, _videoQuality, 2147483647, null, null, null));
       }
+      if (nativeStart != null && startSeekRevision == _seekRevision) {
+        _pendingSeek = null;
+        _waitingForInitialSeek = false;
+        // The decoder starts at the resume position without a seek event.
+        // Publish it even if playback was paused before initialization.
+        player.setEvent(MediaEvent(
+            state: MediaState.ready,
+            type: MediaEventType.progress,
+            value: position()));
+      }
       final pendingSeek = _pendingSeek;
-      if (seekAfterSetup || pendingSeek != null) {
+      if ((nativeStart == null && seekAfterSetup) || pendingSeek != null) {
         await seek(pendingSeek ?? _playbackStartAt);
       }
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
@@ -876,8 +943,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   toggleDash() async {
     log.fine('toggle dash');
     final newState = state.copyWith();
+    final useDash = !isUsingDash();
     await player.saveProgress(position().inSeconds);
-    await settings.toggleDash(!isUsingDash());
+    await settings.toggleDash(useDash);
     emit(newState);
     playVideo(false);
   }
@@ -996,7 +1064,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         final sources = _buildPlaybackDataSources(
           newState.video!,
           server,
-          preferDash: isUsingDash(),
+          preferDash: settings.state.useDash,
+          preferProgressiveStartup: _canStartNerdVpnProgressive,
           preferredQuality: _videoQuality,
           lastSubtitle: settings.state.rememberSubtitles
               ? settings.state.lastSubtitles
@@ -1158,6 +1227,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final revision = ++_seekRevision;
     _pendingSeek = position;
     if (_backendRecoveryPending ||
+        !_playbackInitialized ||
+        _controllerSetupAttempt != null ||
         controller?.videoPlayerController?.value.duration == null) {
       // TV remote input can arrive before native source initialization. Apply
       // only the latest position once that source is ready.
@@ -1449,6 +1520,14 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   bool isUsingDash() {
+    if (_canStartNerdVpnProgressive &&
+        _playbackSources.firstOrNull?.videoFormat ==
+            BetterPlayerVideoFormat.other &&
+        _playbackSources.any(
+            (source) => source.videoFormat == BetterPlayerVideoFormat.dash)) {
+      return videoController?.betterPlayerDataSource?.videoFormat ==
+          BetterPlayerVideoFormat.dash;
+    }
     return settings.state.useDash;
   }
 

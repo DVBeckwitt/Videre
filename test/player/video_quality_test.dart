@@ -4,6 +4,8 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/player/states/player.dart';
@@ -18,6 +20,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,11 +39,13 @@ class _VideoPlayer extends VideoPlayerCubit {
   void onInit() {}
 }
 
-Video _video(String id, {List<int> heights = const [1080, 480, 360]}) =>
+Video _video(String id,
+        {List<int> heights = const [1080, 480, 360],
+        String serverUrl = 'https://instance.example'}) =>
     Video(videoId: id, lengthSeconds: 60, formatStreams: [
       for (final height in heights)
         FormatStream(
-            'https://instance.example/$id-$height.mp4',
+            '$serverUrl/$id-$height.mp4',
             '$height',
             'video/mp4',
             'medium',
@@ -430,5 +435,154 @@ void main() {
     } finally {
       await video.close();
     }
+  });
+
+  group('NerdVPN automatic startup', () {
+    const nerdVpn = 'https://invidious.nerdvpn.de';
+    const dashPath = '/api/manifest/dash/id/startup';
+    const dashQuery = '$dashPath?local=true';
+    late List<Uri> manifestRequests;
+
+    setUp(() async {
+      final platform = debugDefaultTargetPlatformOverride;
+      final tv = app_main.isTv;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      app_main.isTv = false;
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = platform;
+        app_main.isTv = tv;
+      });
+      await db.deleteSetting(useDashSettingName);
+      settings.emit(SettingsState.init());
+
+      manifestRequests = [];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        manifestRequests.add(request.url);
+        return http.Response('<MPD type="static"/>', 200, request: request);
+      }));
+    });
+
+    Future<_VideoPlayer> createStartupVideo({
+      String serverUrl = nerdVpn,
+      bool liveNow = false,
+    }) async {
+      final server = Server(url: serverUrl);
+      await db.upsertServer(server);
+      await db.useServer(server);
+      return create(_video('startup', heights: [480, 360], serverUrl: serverUrl)
+          .copyWith(dashUrl: '$serverUrl$dashPath', liveNow: liveNow));
+    }
+
+    test('starts progressive without probing DASH and can enable DASH',
+        () async {
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn/startup-360.mp4']);
+      expect(manifestRequests, isEmpty);
+      expect(video.isUsingDash(), isFalse);
+      expect(video.getVideoTracks()[video.selectedVideoTrack()], '360p');
+      expect(db.getSettings(useDashSettingName), isNull);
+
+      video.toggleDash();
+      await _flush();
+      expect(sources.last, '$nerdVpn$dashQuery');
+      expect(manifestRequests, [Uri.parse('$nerdVpn$dashQuery')]);
+      expect(video.isUsingDash(), isTrue);
+      expect(db.getSettings(useDashSettingName)?.value, 'true');
+    });
+
+    test('a failed progressive startup tries DASH before another quality',
+        () async {
+      failedSources.add('$nerdVpn/startup-360.mp4');
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn/startup-360.mp4', '$nerdVpn$dashQuery']);
+      expect(manifestRequests, [Uri.parse('$nerdVpn$dashQuery')]);
+      expect(video.isUsingDash(), isTrue);
+      expect(db.getSettings(useDashSettingName), isNull);
+    });
+
+    test('a remembered matching height starts at that progressive quality',
+        () async {
+      await settings.setLastVideoQuality(480);
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn/startup-480.mp4']);
+      expect(manifestRequests, isEmpty);
+      expect(video.getVideoTracks()[video.selectedVideoTrack()], '480p');
+      expect(settings.state.lastVideoQuality, 480);
+    });
+
+    for (final height in [0, 720]) {
+      test('retains DASH for remembered quality $height without a match',
+          () async {
+        await settings.setLastVideoQuality(height);
+        final video = await createStartupVideo();
+        addTearDown(video.close);
+
+        await video.playVideo(false);
+        await _flush();
+        expect(sources, ['$nerdVpn$dashQuery']);
+        expect(video.isUsingDash(), isTrue);
+        expect(settings.state.lastVideoQuality, height);
+      });
+    }
+
+    test('retains explicitly enabled DASH', () async {
+      await settings.setUseDash(true);
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn$dashQuery']);
+      expect(video.isUsingDash(), isTrue);
+    });
+
+    for (final serverUrl in [
+      'https://invidious.dvbeckwitt.duckdns.org',
+      'http://$nerdVpnOnionHost',
+    ]) {
+      test('keeps DASH priority on $serverUrl', () async {
+        final video = await createStartupVideo(serverUrl: serverUrl);
+        addTearDown(video.close);
+
+        await video.playVideo(false);
+        await _flush();
+        expect(sources, ['$serverUrl$dashQuery']);
+        expect(video.isUsingDash(), isTrue);
+      });
+    }
+
+    test('keeps DASH priority for live NerdVPN streams', () async {
+      final video = await createStartupVideo(liveNow: true);
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn$dashQuery']);
+      expect(video.isUsingDash(), isTrue);
+    });
+
+    test('keeps DASH priority on TV without an in-player toggle', () async {
+      app_main.isTv = true;
+      final video = await createStartupVideo();
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$nerdVpn$dashQuery']);
+      expect(video.isUsingDash(), isTrue);
+    });
   });
 }

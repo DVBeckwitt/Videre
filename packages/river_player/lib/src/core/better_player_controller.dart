@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:collection/collection.dart' show IterableExtension;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:river_player/river_player.dart';
@@ -235,9 +237,12 @@ class BetterPlayerController {
     return betterPLayerControllerProvider.controller;
   }
 
-  ///Setup new data source in Better Player.
-  Future setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
-    ++_sourceGeneration;
+  ///Sets up a new data source. An explicit [initialPosition], including zero,
+  ///overrides the configured start position for this load. On Android, network
+  ///VOD sources can prepare directly at that position.
+  Future<void> setupDataSource(BetterPlayerDataSource betterPlayerDataSource,
+      {Duration? initialPosition}) async {
+    final sourceGeneration = ++_sourceGeneration;
     ++_subtitleLoadGeneration;
     _betterPlayerSubtitlesSource = null;
     subtitlesLines.clear();
@@ -293,8 +298,11 @@ class BetterPlayerController {
     }
 
     ///Process data source
-    await _setupDataSource(betterPlayerDataSource);
-    setTrack(BetterPlayerAsmsTrack.defaultTrack());
+    await _setupDataSource(betterPlayerDataSource,
+        initialPosition: initialPosition);
+    if (!_disposed && sourceGeneration == _sourceGeneration) {
+      setTrack(BetterPlayerAsmsTrack.defaultTrack());
+    }
   }
 
   ///Configure subtitles based on subtitles source.
@@ -485,7 +493,15 @@ class BetterPlayerController {
   }
 
   ///Internal method which invokes videoPlayerController source setup.
-  Future _setupDataSource(BetterPlayerDataSource betterPlayerDataSource) async {
+  Future<void> _setupDataSource(BetterPlayerDataSource betterPlayerDataSource,
+      {Duration? initialPosition}) async {
+    final sourceGeneration = _sourceGeneration;
+    final nativeInitialPosition = !kIsWeb &&
+            defaultTargetPlatform == TargetPlatform.android &&
+            betterPlayerDataSource.type == BetterPlayerDataSourceType.network &&
+            betterPlayerDataSource.liveStream != true
+        ? initialPosition
+        : null;
     switch (betterPlayerDataSource.type) {
       case BetterPlayerDataSourceType.network:
         await videoPlayerController?.setNetworkDataSource(
@@ -510,6 +526,7 @@ class BetterPlayerController {
           overriddenDuration: _betterPlayerDataSource!.overriddenDuration,
           formatHint: _getVideoFormat(_betterPlayerDataSource!.videoFormat),
           inlineDashManifest: betterPlayerDataSource.inlineDashManifest,
+          initialPosition: nativeInitialPosition,
           licenseUrl: _betterPlayerDataSource?.drmConfiguration?.licenseUrl,
           certificateUrl:
               _betterPlayerDataSource?.drmConfiguration?.certificateUrl,
@@ -570,7 +587,11 @@ class BetterPlayerController {
         }
         break;
     }
-    await _initializeVideo();
+    if (_disposed || sourceGeneration != _sourceGeneration) return;
+    await _initializeVideo(
+        startAt: nativeInitialPosition == null
+            ? initialPosition ?? betterPlayerConfiguration.startAt
+            : null);
   }
 
   ///Create file from provided list of bytes. File will be created in temporary
@@ -586,7 +607,8 @@ class BetterPlayerController {
 
   ///Initializes video based on configuration. Invoke actions which need to be
   ///run on player start.
-  Future _initializeVideo() async {
+  Future<void> _initializeVideo({Duration? startAt}) async {
+    final sourceGeneration = _sourceGeneration;
     setLooping(betterPlayerConfiguration.looping);
     _videoEventStreamSubscription?.cancel();
     _videoEventStreamSubscription = null;
@@ -616,8 +638,9 @@ class BetterPlayerController {
       }
     }
 
-    final startAt = betterPlayerConfiguration.startAt;
-    if (startAt != null) {
+    if (startAt != null &&
+        !_disposed &&
+        sourceGeneration == _sourceGeneration) {
       // Finish the resume seek before the caller can play. Its captured paused
       // state must not arrive later and override that explicit play command.
       await seekTo(startAt);

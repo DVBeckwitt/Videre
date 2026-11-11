@@ -157,6 +157,7 @@ internal class RiverPlayer(
     private var isInitialized = false
     private var surface: Surface? = null
     private var key: String? = null
+    private var reportInitialPosition = false
     private var playerNotificationManager: PlayerNotificationManager? = null
     private var refreshHandler: Handler? = null
     private var refreshRunnable: Runnable? = null
@@ -208,10 +209,9 @@ internal class RiverPlayer(
         drmHeaders: Map<String, String>?,
         cacheKey: String?,
         clearKey: String?,
-        inlineDashManifest: String? = null
+        inlineDashManifest: String? = null,
+        initialPositionMs: Long? = null
     ) {
-        this.key = key
-        isInitialized = false
         val uri = Uri.parse(dataSource)
         var dataSourceFactory: DataSource.Factory?
         val userAgent = getUserAgent(headers)
@@ -283,11 +283,18 @@ internal class RiverPlayer(
             result.error("InvalidDashManifest", "Could not open the supplied DASH manifest.", null)
             return
         }
-        if (overriddenDuration != 0L) {
-            val clippingMediaSource = ClippingMediaSource(mediaSource, 0, overriddenDuration * 1000)
-            exoPlayer?.setMediaSource(clippingMediaSource)
+        val playbackSource = if (overriddenDuration != 0L) {
+            ClippingMediaSource(mediaSource, 0, overriddenDuration * 1000)
         } else {
-            exoPlayer?.setMediaSource(mediaSource)
+            mediaSource
+        }
+        this.key = key
+        isInitialized = false
+        reportInitialPosition = initialPositionMs != null
+        if (initialPositionMs != null) {
+            exoPlayer?.setMediaSource(playbackSource, initialPositionMs.coerceAtLeast(0L))
+        } else {
+            exoPlayer?.setMediaSource(playbackSource)
         }
         exoPlayer?.prepare()
         result.success(null)
@@ -569,6 +576,11 @@ internal class RiverPlayer(
                     }
 
                     Player.STATE_ENDED -> {
+                        // A start position at the end can skip STATE_READY.
+                        if (reportInitialPosition && !isInitialized && getDuration() >= 0L) {
+                            isInitialized = true
+                            sendInitialized()
+                        }
                         val event: MutableMap<String, Any?> = HashMap()
                         event["event"] = "completed"
                         event["key"] = key
@@ -701,6 +713,9 @@ internal class RiverPlayer(
             event["event"] = "initialized"
             event["key"] = key
             event["duration"] = getDuration()
+            if (reportInitialPosition) {
+                event["position"] = position
+            }
             event["isLiveStream"] = exoPlayer?.isCurrentWindowLive
             if (exoPlayer?.videoFormat != null) {
                 val videoFormat = exoPlayer.videoFormat

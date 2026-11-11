@@ -648,6 +648,8 @@ sealed class SettingsState with _$SettingsState {
 
   bool get useDash => (_get(useDashSettingName)?.value ?? 'true') == 'true';
 
+  bool get hasDashPreference => _get(useDashSettingName) != null;
+
   bool get autoplayVideoOnLoad => _get(playerAutoplayOnLoad)?.value == 'true';
 
   bool get autoplayQueue => _get(playerAutoplayQueue)?.value != 'false';

@@ -1,22 +1,29 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:river_player/river_player.dart';
 
 class _DelayedSeekPlatform extends VideoPlayerPlatform {
   final streams = <int, StreamController<VideoEvent>>{};
   final commands = <String>[];
+  final sources = <({int textureId, DataSource source})>[];
   Completer<void> seekStarted = Completer<void>();
   Completer<void> seekReleased = Completer<void>();
   bool playing = false;
+  bool holdInitialization = false;
+  Duration? reportedInitialPosition;
   int nextId = 0;
   Duration duration = const Duration(minutes: 3);
 
   void reset() {
     commands.clear();
+    sources.clear();
     seekStarted = Completer<void>();
     seekReleased = Completer<void>();
     playing = false;
+    holdInitialization = false;
+    reportedInitialPosition = null;
     duration = const Duration(minutes: 3);
   }
 
@@ -36,10 +43,16 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
       streams[textureId]!.stream;
   @override
   Future<void> setDataSource(int? textureId, DataSource source) async {
-    streams[textureId]!.add(VideoEvent(
-      key: source.key,
+    sources.add((textureId: textureId!, source: source));
+    if (!holdInitialization) initialize(sources.last);
+  }
+
+  void initialize(({int textureId, DataSource source}) load) {
+    streams[load.textureId]!.add(VideoEvent(
+      key: load.source.key,
       eventType: VideoEventType.initialized,
       duration: duration,
+      position: reportedInitialPosition ?? load.source.initialPosition,
     ));
   }
 
@@ -85,6 +98,103 @@ void main() {
   final platform = _DelayedSeekPlatform();
   VideoPlayerPlatform.instance = platform;
   setUp(platform.reset);
+
+  group('explicit initial position', () {
+    setUp(() {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      // A regression to the post-prepare seek should fail an assertion
+      // rather than block the test waiting on the seek fake.
+      platform.seekReleased.complete();
+    });
+
+    BetterPlayerController controllerWithResume() => BetterPlayerController(
+          const BetterPlayerConfiguration(
+            startAt: Duration(seconds: 40),
+            autoPlay: false,
+            handleLifecycle: false,
+            allowedScreenSleep: true,
+          ),
+        );
+
+    BetterPlayerDataSource video() => BetterPlayerDataSource(
+          BetterPlayerDataSourceType.network,
+          'https://example.com/video.mp4',
+          videoFormat: BetterPlayerVideoFormat.other,
+        );
+
+    test('prepares at the requested position and keeps native position',
+        () async {
+      final controller = controllerWithResume();
+      final source = video();
+      const requested = Duration(seconds: 21);
+      const reported = Duration(milliseconds: 20500);
+      try {
+        platform.reportedInitialPosition = reported;
+        await controller.setupDataSource(source, initialPosition: requested);
+        expect(platform.sources.single.source.initialPosition, requested);
+        expect(controller.videoPlayerController!.value.position, reported);
+        expect(platform.commands, isNot(contains(startsWith('seek:'))));
+
+        platform.reportedInitialPosition = null;
+        await controller.setupDataSource(source,
+            initialPosition: Duration.zero);
+        expect(platform.sources.last.source.initialPosition, Duration.zero);
+        expect(controller.videoPlayerController!.value.position, Duration.zero);
+        expect(platform.commands, isNot(contains(startsWith('seek:'))));
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test('same URL ignores initialization from a replaced load', () async {
+      final controller = controllerWithResume();
+      final source = video();
+      platform.holdInitialization = true;
+      try {
+        final first = controller.setupDataSource(source,
+            initialPosition: const Duration(seconds: 20));
+        await Future<void>.delayed(Duration.zero);
+        expect(platform.sources, hasLength(1));
+        final second = controller.setupDataSource(source,
+            initialPosition: const Duration(seconds: 5));
+        await Future<void>.delayed(Duration.zero);
+        expect(platform.sources, hasLength(2));
+        await first.timeout(const Duration(seconds: 1));
+
+        platform.initialize(platform.sources.first);
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.videoPlayerController!.value.initialized, isFalse);
+
+        platform.initialize(platform.sources.last);
+        await second;
+        expect(controller.videoPlayerController!.value.position,
+            const Duration(seconds: 5));
+        expect(platform.commands, isNot(contains(startsWith('seek:'))));
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test('uses the existing seek path on a platform without native support',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      final controller = controllerWithResume();
+      try {
+        await controller.setupDataSource(video(),
+            initialPosition: const Duration(seconds: 21));
+        expect(platform.sources.single.source.initialPosition, isNull);
+        expect(platform.commands, contains('seek:21'));
+        expect(controller.videoPlayerController!.value.position,
+            const Duration(seconds: 21));
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+  });
 
   test('changing videos discards a pending subtitle selection', () async {
     final controller = BetterPlayerController(const BetterPlayerConfiguration(

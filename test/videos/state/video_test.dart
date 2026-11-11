@@ -225,7 +225,8 @@ class RecordingPlayerController extends BetterPlayerController {
   }
 
   @override
-  Future<void> setupDataSource(BetterPlayerDataSource source) async {
+  Future<void> setupDataSource(BetterPlayerDataSource source,
+      {Duration? initialPosition}) async {
     if (disposed) throw StateError('Cannot set up a disposed controller');
     sources.add(source);
     for (final waiter in sourceWaiters.remove(source.url) ?? const []) {

@@ -82,6 +82,8 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
           'formatHint': dataSource.rawFormalHint,
           if (dataSource.inlineDashManifest != null)
             'inlineDashManifest': dataSource.inlineDashManifest,
+          if (dataSource.initialPosition != null)
+            'initialPositionMs': dataSource.initialPosition!.inMilliseconds,
           'headers': dataSource.headers,
           'useCache': dataSource.useCache,
           'maxCacheSize': dataSource.maxCacheSize,
@@ -369,6 +371,9 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             duration: Duration(milliseconds: map['duration'] as int),
             size: size,
             isLiveStream: map['isLiveStream'] as bool,
+            position: map['position'] is int
+                ? Duration(milliseconds: map['position'] as int)
+                : null,
           );
         case 'completed':
           return VideoEvent(

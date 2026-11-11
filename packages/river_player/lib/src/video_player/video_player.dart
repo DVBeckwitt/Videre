@@ -211,7 +211,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   int _playPauseGeneration = 0;
   int _sourceGeneration = 0;
   int _seekRevision = 0;
-  late Completer<void> _initializingCompleter;
+  Completer<void>? _initializingCompleter;
+  String? _initializingSourceKey;
   StreamSubscription<dynamic>? _eventSubscription;
 
   bool get _created => _creatingCompleter.isCompleted;
@@ -236,6 +237,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       if (_isDisposed) {
         return;
       }
+      final initializing = _initializingCompleter;
+      if (event.eventType == VideoEventType.initialized &&
+          (initializing == null ||
+              initializing.isCompleted ||
+              (event.key != null && event.key != _initializingSourceKey))) {
+        return;
+      }
       videoEventStreamController.add(event);
 
       switch (event.eventType) {
@@ -245,8 +253,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           value = value.copyWith(
               duration: event.duration,
               size: event.size,
+              position: event.position,
               isLiveStream: event.isLiveStream);
-          _initializingCompleter.complete(null);
+          if (!initializing!.isCompleted) initializing.complete();
           _applyPlayPause();
           break;
         case VideoEventType.completed:
@@ -301,8 +310,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         );
       }
       _timer?.cancel();
-      if (!_initializingCompleter.isCompleted) {
-        _initializingCompleter.completeError(object);
+      final initializing = _initializingCompleter;
+      if (initializing != null && !initializing.isCompleted) {
+        initializing.completeError(object);
       }
     }
 
@@ -355,6 +365,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     String dataSource, {
     VideoFormat? formatHint,
     String? inlineDashManifest,
+    Duration? initialPosition,
     Map<String, String?>? headers,
     bool useCache = false,
     int? maxCacheSize,
@@ -379,6 +390,8 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         uri: dataSource,
         formatHint: formatHint,
         inlineDashManifest: inlineDashManifest,
+        initialPosition: initialPosition,
+        loadId: initialPosition == null ? null : _sourceGeneration + 1,
         headers: headers,
         useCache: useCache,
         maxCacheSize: maxCacheSize,
@@ -433,7 +446,13 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       return;
     }
 
-    ++_sourceGeneration;
+    final sourceGeneration = ++_sourceGeneration;
+    final previousInitialization = _initializingCompleter;
+    if (previousInitialization != null && !previousInitialization.isCompleted) {
+      previousInitialization.complete();
+    }
+    _initializingCompleter = null;
+    _initializingSourceKey = dataSourceDescription.key;
     _timer?.cancel();
     _seekPosition = null;
 
@@ -445,12 +464,22 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     );
 
     if (!_creatingCompleter.isCompleted) await _creatingCompleter.future;
+    if (_isDisposed || sourceGeneration != _sourceGeneration) return;
 
-    _initializingCompleter = Completer<void>();
-
-    await VideoPlayerPlatform.instance
-        .setDataSource(_textureId, dataSourceDescription);
-    return _initializingCompleter.future;
+    final initializing = Completer<void>();
+    _initializingCompleter = initializing;
+    try {
+      await Future.wait([
+        VideoPlayerPlatform.instance
+            .setDataSource(_textureId, dataSourceDescription),
+        initializing.future,
+      ], eagerError: true);
+    } finally {
+      if (identical(_initializingCompleter, initializing)) {
+        _initializingCompleter = null;
+        _initializingSourceKey = null;
+      }
+    }
   }
 
   @override
@@ -458,6 +487,10 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     await _creatingCompleter.future;
     if (!_isDisposed) {
       _isDisposed = true;
+      final initializing = _initializingCompleter;
+      if (initializing != null && !initializing.isCompleted) {
+        initializing.complete();
+      }
       value = VideoPlayerValue.uninitialized();
       _timer?.cancel();
       await _eventSubscription?.cancel();
