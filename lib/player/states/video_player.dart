@@ -722,13 +722,20 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         server != null &&
         videoId != null) {
       String? resolved;
+      String? downloadedManifest;
+      final canUseInlineManifest = !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.android &&
+          state.video?.liveNow != true;
       var missingCheck = false;
       try {
         resolved = await Future.any([
           service.dashManifestResolver.resolve(source.url, videoId, server,
               throwRetryable: state.video?.backendPlayback != null ||
                   _recoveringInitializedPlayback,
-              onMissingCheck: () => missingCheck = true),
+              onMissingCheck: () => missingCheck = true,
+              onManifest: canUseInlineManifest
+                  ? (content) => downloadedManifest = content
+                  : null),
           cancelled.then<String?>((_) => null),
         ]);
       } on BackendPlaybackFailure {
@@ -748,7 +755,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       }
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
       final video = state.video;
-      String? inlineManifest;
+      String? inlineManifest = resolved == null ? null : downloadedManifest;
+      var generatedManifest = false;
       if (resolved == null &&
           missingCheck &&
           !_sourceBackendRetryable &&
@@ -772,6 +780,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             return target;
           },
         );
+        generatedManifest = inlineManifest != null;
       }
       if (resolved == null && inlineManifest == null) {
         _sourceFailurePending = true;
@@ -782,7 +791,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         url: resolved,
         inlineDashManifest: inlineManifest,
         // Generated audio groups lack language labels. Media3 selects audio.
-        useAsmsAudioTracks: inlineManifest == null ? null : false,
+        useAsmsAudioTracks: generatedManifest ? false : null,
       );
       _playbackSources[sourceIndex] = source;
     }
@@ -794,7 +803,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     }
     final format = source.inlineDashManifest == null
         ? source.videoFormat.toString()
-        : 'DASH assembled from adaptive tracks';
+        : 'DASH supplied in memory';
     log.info('Playing $format source from ${Uri.parse(source.url).host}');
     var setupFailed = false;
     var setup = Future<void>.value();

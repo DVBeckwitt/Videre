@@ -19,6 +19,11 @@ import 'package:http/testing.dart';
 
 const _videoJson =
     '{"videoId":"test-video","title":"Test","adaptiveFormats":[],"formatStreams":[],"captions":[]}';
+const _startingBackend =
+    'This backend is still starting and not yet available. '
+    'Please wait for a short time or use another backend.';
+const _blockedBackend = 'This backend is blocked by Youtube. Please wait '
+    'until it has refreshed itself or switch to another backend.';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -116,6 +121,90 @@ void main() {
       expect(calls, 1);
     });
   }
+
+  for (final message in [_startingBackend, _blockedBackend]) {
+    test(
+        'explicit backend-unavailable HTTP 500 tries a healthy alternative: $message',
+        () async {
+      final routes = <String?>[];
+      respond((request) async {
+        routes.add(requestCookieValue(request.headers, 'ROUTE'));
+        return routes.length == 1
+            ? http.Response(jsonEncode({'error': message}), 500,
+                request: request, headers: {'content-type': 'application/json'})
+            : ok();
+      });
+      final video = await api.getVideo('test-video');
+      expect(routes, ['0', '1']);
+      expect(video.backendPlayback!.retryIndex, 1);
+      expect((await db.getCurrentlySelectedServer()).customHeaders,
+          instance.customHeaders);
+    });
+
+    test(
+        'explicit backend-unavailable HTTP 500 shares the two-alternative budget: $message',
+        () async {
+      final routes = <String?>[];
+      respond((request) async {
+        routes.add(requestCookieValue(request.headers, 'ROUTE'));
+        return http.Response(jsonEncode({'error': message}), 500,
+            request: request, headers: {'content-type': 'application/json'});
+      });
+      await expectLater(
+          api.getVideo('test-video'), throwsA(isA<InvidiousServiceError>()));
+      expect(routes, ['0', '1', '2']);
+    });
+
+    test(
+        'explicit backend-unavailable HTTP 500 obeys automatic fallback opt-out: $message',
+        () async {
+      await db.upsertServer(configured(enabled: false).copyWith(inUse: true));
+      var calls = 0;
+      respond((request) async {
+        calls++;
+        return http.Response(jsonEncode({'error': message}), 500,
+            request: request, headers: {'content-type': 'application/json'});
+      });
+      await expectLater(
+          api.getVideo('test-video'), throwsA(isA<InvidiousServiceError>()));
+      expect(calls, 1);
+    });
+  }
+
+  test('only structured, exact backend-unavailable HTTP 500 is eligible', () {
+    final normalized = _blockedBackend
+        .replaceAll('Youtube', 'YouTube')
+        .replaceAll(' Please wait ', '\n  Please wait\n');
+    expect(
+        isBackendRetryable(InvidiousServiceError('Display text',
+            statusCode: 500, errorCode: normalized)),
+        isTrue);
+    for (final error in [
+      InvidiousServiceError(_startingBackend, statusCode: 500),
+      InvidiousServiceError('Unrelated',
+          statusCode: 500, errorCode: 'unavailable'),
+      InvidiousServiceError('Similar wording',
+          statusCode: 500, errorCode: '$_startingBackend Please retry.'),
+      InvidiousServiceError('HTML',
+          statusCode: 500, errorCode: _startingBackend, responseWasHtml: true),
+      for (final status in [401, 403, 404, 429])
+        InvidiousServiceError('Refused',
+            statusCode: status, errorCode: _startingBackend),
+      InvidiousServiceError('Cooldown',
+          statusCode: 500,
+          errorCode: _startingBackend,
+          retryAfter: const Duration(seconds: 1)),
+      InvidiousServiceError('Invalid cooldown',
+          statusCode: 500,
+          errorCode: _startingBackend,
+          retryAfterIsInvalid: true),
+      InvidiousServiceError('Gateway',
+          statusCode: 500, errorCode: 'unavailable', isGatewayResponse: true),
+    ]) {
+      expect(isBackendRetryable(error), isFalse,
+          reason: '${error.message}/${error.statusCode}');
+    }
+  });
 
   test(
       'explicit fallback opt-out prevents retries and preserves the preference',

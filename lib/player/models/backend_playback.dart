@@ -12,6 +12,22 @@ class BackendPlaybackFailure implements Exception {
   const BackendPlaybackFailure();
 }
 
+bool _isUnavailableBackend(InvidiousServiceError error) {
+  if (error.statusCode != 500 || error.responseWasHtml) return false;
+  final code =
+      error.errorCode?.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  // An explicit Companion message can identify a backend condition even with
+  // HTTP 500, which would otherwise be an unclassified server error.
+  // Match complete structured messages. Arbitrary 500s keep their error path,
+  // and BackendPlayback still requires automatic fallback.
+  return const {
+    'this backend is still starting and not yet available. '
+        'please wait for a short time or use another backend.',
+    'this backend is blocked by youtube. please wait '
+        'until it has refreshed itself or switch to another backend.',
+  }.contains(code);
+}
+
 bool isBackendRetryable(Object error) =>
     error is BackendPlaybackFailure ||
     error is TimeoutException ||
@@ -22,7 +38,8 @@ bool isBackendRetryable(Object error) =>
         // Invalid values must not become permission to dispatch immediately.
         !error.retryAfterIsInvalid &&
         (error.retryAfter ?? Duration.zero) <= Duration.zero &&
-        const [502, 503, 504].contains(error.statusCode));
+        (const [502, 503, 504].contains(error.statusCode) ||
+            _isUnavailableBackend(error)));
 
 class _BackendRetryBudget {
   final attempted = <String>{};

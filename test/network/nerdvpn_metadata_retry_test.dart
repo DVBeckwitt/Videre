@@ -7,9 +7,11 @@ import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/request_cookies.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -17,6 +19,8 @@ import 'package:http/testing.dart';
 const _videoId = '4D7u5KF7SP8';
 const _starting = 'This backend is still starting and not yet available. '
     'Please wait for a short time or use another backend.';
+const _blocked = 'This backend is blocked by Youtube. Please wait '
+    'until it has refreshed itself or switch to another backend.';
 const _account = Server(
     url: 'https://invidious.nerdvpn.de',
     id: 'nerdvpn',
@@ -165,6 +169,90 @@ void main() {
     expect(requests, hasLength(2));
     expect(delays, hasLength(1));
   });
+
+  for (final interactive in [false, true]) {
+    for (final message in [_starting, _blocked]) {
+      test(
+          'unavailable NerdVPN backend recovers on another route, interactive=$interactive: $message',
+          () async {
+        final selector = BackendSelector(
+            'COMPANION_ID',
+            const [
+              BackendOption('1', 'First'),
+              BackendOption('2', 'Second'),
+              BackendOption('3', 'Third'),
+              BackendOption('4', 'Fourth'),
+            ],
+            automaticFallback: true);
+        final account = selector.withSelection(
+            _account.copyWith(backendSelector: selector), '1');
+        await database.upsertServer(account);
+        await database.useServer(account);
+        respond = (request) async =>
+            requestCookieValue(request.headers, 'COMPANION_ID') == '1'
+                ? _response(request, 500, {'error': message})
+                : _success(request);
+        final loaded = await api.getVideo(_videoId,
+            loadObserver: interactive
+                ? VideoLoadObserver(isCurrent: () => true, onRetry: () {})
+                : null);
+        expect(loaded.videoId, _videoId);
+        expect(
+            requests
+                .map((request) =>
+                    requestCookieValue(request.headers, 'COMPANION_ID'))
+                .toList(),
+            [
+              '1',
+              if (interactive || message == _starting) '1',
+              '2',
+            ]);
+        expect(
+            delays,
+            interactive || message == _starting
+                ? [const Duration(seconds: 1)]
+                : []);
+        expect(loaded.backendPlayback!.retryIndex, 1);
+        expect((await database.getCurrentlySelectedServer()).customHeaders,
+            account.customHeaders);
+      });
+    }
+  }
+
+  for (final message in [_starting, _blocked]) {
+    test(
+        'interactive unavailable backends keep one retry and two alternatives: $message',
+        () async {
+      final selector = BackendSelector(
+          'COMPANION_ID',
+          const [
+            BackendOption('1', 'First'),
+            BackendOption('2', 'Second'),
+            BackendOption('3', 'Third'),
+            BackendOption('4', 'Fourth'),
+          ],
+          automaticFallback: true);
+      final account = selector.withSelection(
+          _account.copyWith(backendSelector: selector), '1');
+      await database.upsertServer(account);
+      await database.useServer(account);
+      respond = (request) async => _response(request, 500, {'error': message});
+      await expectLater(
+          api.getVideo(_videoId,
+              loadObserver:
+                  VideoLoadObserver(isCurrent: () => true, onRetry: () {})),
+          throwsA(isA<InvidiousServiceError>()));
+      expect(
+          requests
+              .map((request) =>
+                  requestCookieValue(request.headers, 'COMPANION_ID'))
+              .toList(),
+          ['1', '1', '2', '3']);
+      expect(delays, [const Duration(seconds: 1)]);
+      expect((await database.getCurrentlySelectedServer()).customHeaders,
+          account.customHeaders);
+    });
+  }
 
   test('a rate limit after startup recovery cannot schedule a third request',
       () async {

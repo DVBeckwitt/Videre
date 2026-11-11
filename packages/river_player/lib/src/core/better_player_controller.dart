@@ -11,7 +11,6 @@ import 'package:river_player/src/dash/better_player_dash_utils.dart';
 import 'package:river_player/src/subtitles/better_player_subtitle.dart';
 import 'package:river_player/src/subtitles/better_player_subtitles_factory.dart';
 import 'package:river_player/src/video_player/video_player.dart';
-import 'package:river_player/src/video_player/video_player_platform_interface.dart';
 
 ///Class used to control overall Better Player behavior. Main class to change
 ///state of Better Player.
@@ -324,6 +323,7 @@ class BetterPlayerController {
   ///This method configures tracks, subtitles and audio tracks from given
   ///master playlist.
   Future _setupAsmsDataSource(BetterPlayerDataSource source) async {
+    final sourceGeneration = _sourceGeneration;
     final manifest = source.inlineDashManifest;
     final data = manifest ??
         await BetterPlayerAsmsUtils.getDataFromUrl(source.url, _getHeaders());
@@ -331,7 +331,9 @@ class BetterPlayerController {
       final response = manifest != null
           ? await BetterPlayerDashUtils.parse(data, source.url)
           : await BetterPlayerAsmsUtils.parse(data, source.url);
-      if (_disposed || !identical(_betterPlayerDataSource, source)) return;
+      if (_disposed ||
+          sourceGeneration != _sourceGeneration ||
+          !identical(_betterPlayerDataSource, source)) return;
 
       /// Load tracks
       if (_betterPlayerDataSource?.useAsmsTracks == true) {
@@ -361,7 +363,8 @@ class BetterPlayerController {
       if (betterPlayerDataSource?.useAsmsAudioTracks == true &&
           _isDataSourceAsms(betterPlayerDataSource!)) {
         _betterPlayerAsmsAudioTracks = response.audios ?? [];
-        if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true) {
+        if (_betterPlayerAsmsAudioTracks?.isNotEmpty == true &&
+            _betterPlayerAsmsAudioTrack == null) {
           setAudioTrack(_betterPlayerAsmsAudioTracks!.first);
         }
       }
@@ -847,6 +850,7 @@ class BetterPlayerController {
     if (currentVideoPlayerValue.initialized &&
         !_hasCurrentDataSourceInitialized) {
       _hasCurrentDataSourceInitialized = true;
+      _applyAudioTrack();
       debugPrint(
           "BetterPlayerController: Video initialized ${currentVideoPlayerValue.isLiveStream}");
       _postEvent(
@@ -1268,6 +1272,7 @@ class BetterPlayerController {
 
   ///Set [audioTrack] in player. Works only for HLS or DASH streams.
   void setAudioTrack(BetterPlayerAsmsAudioTrack audioTrack) {
+    if (_disposed) return;
     if (videoPlayerController == null) {
       throw StateError("The data source has not been initialized");
     }
@@ -1278,7 +1283,15 @@ class BetterPlayerController {
     }
 
     _betterPlayerAsmsAudioTrack = audioTrack;
-    videoPlayerController!.setAudioTrack(audioTrack.label, audioTrack.id);
+    _applyAudioTrack();
+  }
+
+  void _applyAudioTrack() {
+    final track = _betterPlayerAsmsAudioTrack;
+    // Inline discovery can finish before native creation or source setup. Keep
+    // the current choice and apply it when this source's tracks are available.
+    if (_disposed || !_hasCurrentDataSourceInitialized || track == null) return;
+    videoPlayerController?.setAudioTrack(track.label, track.id);
   }
 
   ///Enable or disable audio mixing with other sound within device.

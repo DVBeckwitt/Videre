@@ -27,6 +27,7 @@ import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -35,6 +36,26 @@ import 'package:http/testing.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+
+const _staticDashManifest = '''<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"
+ mediaPresentationDuration="PT60S" minBufferTime="PT1.5S">
+ <Period>
+  <AdaptationSet mimeType="video/mp4">
+   <Representation id="137" width="1920" height="1080" bandwidth="1000000"
+    frameRate="30" codecs="avc1.640028">
+    <BaseURL>../../../videoplayback?itag=137&amp;signature=fixture%2Bvideo</BaseURL>
+    <SegmentBase indexRange="100-200"><Initialization range="0-99"/></SegmentBase>
+   </Representation>
+  </AdaptationSet>
+  <AdaptationSet mimeType="audio/mp4" lang="en" label="English">
+   <Representation id="140" bandwidth="128000" codecs="mp4a.40.2">
+    <BaseURL>../../../videoplayback?itag=140&amp;signature=fixture%2Baudio</BaseURL>
+    <SegmentBase indexRange="100-200"><Initialization range="0-99"/></SegmentBase>
+   </Representation>
+  </AdaptationSet>
+ </Period>
+</MPD>''';
 
 class _VideoWithoutAutostart extends VideoPlayerCubit {
   _VideoWithoutAutostart(super.initialState, super.player, super.settings);
@@ -484,6 +505,132 @@ void main() {
       await video.close();
     }
   });
+
+  test('recovered DASH response reaches native playback with its signed base',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const original =
+        'https://instance.example/companion/api/manifest/dash/id/dash-video?local=true';
+    const signed = '$original&check=fixture%2Bsignature';
+    final requests = <http.Request>[];
+    retryService.httpClient.close();
+    service =
+        retryService = _RetryService(httpClient: MockClient((request) async {
+      requests.add(request);
+      expect(request.headers['Cookie'], 'backend=a');
+      if (request.url.path == '/watch') {
+        return http.Response(
+            '<video id="player"><source type="application/dash+xml" '
+            'src="${signed.replaceAll('&', '&amp;')}"></video>',
+            200,
+            request: request);
+      }
+      return request.url.queryParameters.containsKey('check')
+          ? http.Response(_staticDashManifest, 200, request: request)
+          : http.Response('No check ID.', 400, request: request);
+    }));
+    final video = cubit();
+    try {
+      video.switchVideo(_video('dash-video', BackendPlayback(preferred))
+          .copyWith(formatStreams: [], dashUrl: original));
+      await _flush();
+
+      expect(requests.map((request) => request.url.path), [
+        '/companion/api/manifest/dash/id/dash-video',
+        '/watch',
+        '/companion/api/manifest/dash/id/dash-video',
+      ]);
+      expect(sources, hasLength(1));
+      expect(sources.single['uri'], signed);
+      expect(sources.single['inlineDashManifest'], _staticDashManifest);
+      expect((sources.single['headers'] as Map)['Cookie'], 'backend=a');
+      final controller = video.videoController!;
+      expect(controller.betterPlayerDataSource!.useAsmsAudioTracks, isTrue);
+      expect(controller.betterPlayerAsmsAudioTracks!.single.language, 'en');
+      expect(controller.betterPlayerAsmsTracks.single.height, 1080);
+      expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('advertised live video keeps network DASH even for a static response',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    retryService.httpClient.close();
+    service =
+        retryService = _RetryService(httpClient: MockClient((request) async {
+      return http.Response(_staticDashManifest, 200, request: request);
+    }));
+    final video = cubit();
+    try {
+      video.switchVideo(_video('live-video', BackendPlayback(preferred))
+          .copyWith(
+              formatStreams: [],
+              liveNow: true,
+              dashUrl: 'https://instance.example/manifest.mpd'));
+      await _flush();
+      expect(sources, hasLength(1));
+      expect(sources.single['uri'],
+          'https://instance.example/manifest.mpd?local=true');
+      expect(sources.single['inlineDashManifest'], isNull);
+      expect(video.videoController!.betterPlayerDataSource!.inlineDashManifest,
+          isNull);
+      expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  for (final cancel in ['stop', 'new video']) {
+    test('a late downloaded DASH manifest cannot reopen after $cancel',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final response = Completer<http.Response>();
+      final started = Completer<http.Request>();
+      retryService.httpClient.close();
+      service =
+          retryService = _RetryService(httpClient: MockClient((request) async {
+        started.complete(request);
+        return response.future;
+      }));
+      final video = cubit();
+      try {
+        video.switchVideo(_video('old-video', BackendPlayback(preferred))
+            .copyWith(
+                formatStreams: [],
+                dashUrl: 'https://instance.example/old.mpd'));
+        final request = await started.future;
+        if (cancel == 'stop') {
+          await video.stopForProxyChange();
+        } else {
+          video.switchVideo(_video('new-video', BackendPlayback(preferred)));
+          await _flush();
+        }
+        response.complete(
+            http.Response(_staticDashManifest, 200, request: request));
+        await _flush();
+        if (cancel == 'stop') {
+          expect(sources, isEmpty);
+          expect(video.videoController, isNull);
+        } else {
+          expect(sources.map((source) => source['uri']),
+              ['https://instance.example/new-video-a-1.mp4']);
+          expect(sources.single['inlineDashManifest'], isNull);
+          expect(video.state.video!.videoId, 'new-video');
+        }
+        expect(retryService.retriedVideos, isEmpty);
+      } finally {
+        if (!response.isCompleted) {
+          response.complete(http.Response('Unavailable', 503));
+        }
+        await video.close();
+      }
+    });
+  }
 
   test('typed manifest failure can recover before a native source is installed',
       () async {

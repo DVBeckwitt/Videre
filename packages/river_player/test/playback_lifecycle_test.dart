@@ -13,6 +13,10 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   Completer<void> positionStarted = Completer<void>();
   Completer<void> absolutePositionStarted = Completer<void>();
   Duration position = const Duration(seconds: 1);
+  Completer<void>? heldCreate;
+  bool holdInitialization = false;
+  final pendingSources = <int, DataSource>{};
+  final audioSelections = <(int?, String?, int?)>[];
 
   void reset() {
     pendingPlays.clear();
@@ -21,6 +25,10 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
     positionStarted = Completer<void>();
     absolutePositionStarted = Completer<void>();
     position = const Duration(seconds: 1);
+    heldCreate = null;
+    holdInitialization = false;
+    pendingSources.clear();
+    audioSelections.clear();
   }
 
   @override
@@ -32,6 +40,7 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   }) async {
     final id = ++nextId;
     streams[id] = StreamController<VideoEvent>.broadcast();
+    await heldCreate?.future;
     return id;
   }
 
@@ -41,6 +50,14 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
 
   @override
   Future<void> setDataSource(int? textureId, DataSource source) async {
+    if (holdInitialization) {
+      pendingSources[textureId!] = source;
+      return;
+    }
+    initialize(textureId!, source);
+  }
+
+  void initialize(int textureId, DataSource source) {
     streams[textureId]!.add(VideoEvent(
       key: source.key,
       eventType: VideoEventType.initialized,
@@ -66,6 +83,14 @@ class _DelayedPlayPlatform extends VideoPlayerPlatform {
   Future<void> pause(int? textureId) async {}
   @override
   Future<void> seekTo(int? textureId, Duration? position) async {}
+  @override
+  Future<void> setTrackParameters(
+      int? textureId, int? width, int? height, int? bitrate) async {}
+  @override
+  Future<void> setAudioTrack(int? textureId, String? name, int? index) async {
+    audioSelections.add((textureId, name, index));
+  }
+
   @override
   Future<Duration> getPosition(int? textureId) async {
     if (!positionStarted.isCompleted) positionStarted.complete();
@@ -107,6 +132,99 @@ void main() {
   final platform = _DelayedPlayPlatform();
   VideoPlayerPlatform.instance = platform;
   setUp(platform.reset);
+
+  BetterPlayerController adaptivePlayer() =>
+      BetterPlayerController(const BetterPlayerConfiguration(
+        autoPlay: false,
+        handleLifecycle: false,
+        allowedScreenSleep: true,
+      ));
+
+  BetterPlayerDataSource dashSource(String name) => BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/$name.mpd',
+        videoFormat: BetterPlayerVideoFormat.dash,
+        inlineDashManifest: '<MPD type="static"><Period>'
+            '<AdaptationSet mimeType="audio/mp4" lang="en"/>'
+            '<AdaptationSet mimeType="audio/mp4" lang="es"/>'
+            '</Period></MPD>',
+      );
+
+  Future<void> flush() async {
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+  }
+
+  for (final chooseBeforeReady in [false, true]) {
+    test('inline audio waits for native creation ($chooseBeforeReady)',
+        () async {
+      final created = platform.heldCreate = Completer<void>();
+      final controller = adaptivePlayer();
+      final setup = controller.setupDataSource(dashSource('first'));
+      try {
+        if (chooseBeforeReady) {
+          controller.setAudioTrack(
+              BetterPlayerAsmsAudioTrack(id: 1, label: 'es', language: 'es'));
+        }
+        await flush();
+        final beforeCreation = List.of(platform.audioSelections);
+        created.complete();
+        await setup;
+        await flush();
+        expect(beforeCreation, isEmpty,
+            reason: 'Native creation has not supplied a texture ID yet.');
+        expect(platform.audioSelections, [
+          (
+            platform.nextId,
+            chooseBeforeReady ? 'es' : 'en',
+            chooseBeforeReady ? 1 : 0
+          )
+        ]);
+      } finally {
+        if (!created.isCompleted) created.complete();
+        controller.dispose();
+        await flush();
+      }
+    });
+  }
+
+  test('replacement audio waits for its own initialization', () async {
+    final controller = adaptivePlayer();
+    try {
+      await controller.setupDataSource(dashSource('first'));
+      platform.audioSelections.clear();
+      platform.holdInitialization = true;
+      final setup = controller.setupDataSource(dashSource('replacement'));
+      await flush();
+      controller.setAudioTrack(controller.betterPlayerAsmsAudioTracks!.last);
+      final beforeInitialization = List.of(platform.audioSelections);
+      final pending = platform.pendingSources.entries.single;
+      platform.initialize(pending.key, pending.value);
+      await setup;
+      await flush();
+      expect(beforeInitialization, isEmpty);
+      expect(platform.audioSelections, [(pending.key, 'es', 1)]);
+    } finally {
+      controller.dispose();
+      await flush();
+    }
+  });
+
+  test('disposing discards a pending inline audio selection', () async {
+    final controller = adaptivePlayer();
+    platform.holdInitialization = true;
+    unawaited(controller.setupDataSource(dashSource('pending')));
+    await flush();
+    final pendingTrack = controller.betterPlayerAsmsAudioTracks!.last;
+    final beforeDisposal = List.of(platform.audioSelections);
+    controller.dispose();
+    await flush();
+    platform.audioSelections.clear();
+    controller.setAudioTrack(pendingTrack);
+    await flush();
+    expect(beforeDisposal, isEmpty);
+    expect(platform.audioSelections, isEmpty);
+  });
 
   Future<VideoPlayerController> player() async {
     final controller = VideoPlayerController();

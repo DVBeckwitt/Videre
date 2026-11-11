@@ -12,6 +12,7 @@ import 'models/backend_playback.dart';
 /// Checks instance DASH manifests before the native player can retry a known
 /// failure. Signed URLs are kept only for this playback attempt.
 class DashManifestResolver {
+  static const maxInlineManifestBytes = 1024 * 1024;
   final http.Client client;
   final Duration timeout;
   final DateTime Function() _now;
@@ -55,6 +56,53 @@ class DashManifestResolver {
     }
   }
 
+  String? _inlineManifest(http.Response response, Uri requested) {
+    if (response.request?.url != requested ||
+        response.bodyBytes.length > maxInlineManifestBytes) {
+      return null;
+    }
+    final String content;
+    try {
+      // HTTP's default text encoding may be Latin-1. The native inline source
+      // uses UTF-8, so preserve XML text without changing its declared encoding.
+      content = utf8.decode(response.bodyBytes);
+    } on FormatException {
+      return null;
+    }
+    final encoding = RegExp(
+      r'''^\s*<\?xml\b[^>]*\bencoding\s*=\s*["']([^"']+)["']''',
+      caseSensitive: false,
+    ).firstMatch(content)?.group(1)?.toLowerCase();
+    if (encoding != null && encoding != 'utf-8' && encoding != 'utf8') {
+      return null;
+    }
+    // HTML parsing supplies its own html/body wrappers. Check the original
+    // document's first element before using it to classify the MPD attributes.
+    if (!RegExp(
+            r'^\s*(?:<\?xml\b[^>]*\?>\s*)?(?:<!--[^>]*-->\s*)*<MPD(?=[\s/>])')
+        .hasMatch(content)) {
+      return null;
+    }
+    final document = html.parse(content);
+    final body = document.body;
+    if (body == null ||
+        body.children.length != 1 ||
+        document.head?.children.isNotEmpty == true) {
+      return null;
+    }
+    final root = body.children.single;
+    if (root.localName != 'mpd' || root.attributes['type'] != 'static') {
+      return null;
+    }
+    // Do not freeze a live manifest into Media3's static sideloaded source.
+    // Unrecognized documents retain the ordinary network/parser path.
+    if (body.nodes.any(
+        (node) => node.nodeType == 3 && node.text?.trim().isNotEmpty == true)) {
+      return null;
+    }
+    return content;
+  }
+
   Future<http.Response> _get(Uri uri, Server server) async {
     // Do not forward custom instance credentials through an untrusted redirect.
     return (() async {
@@ -81,8 +129,18 @@ class DashManifestResolver {
 
   /// Null means this source failed; the caller should use its normal fallback.
   /// [onMissingCheck] signals that this route requires a signed manifest.
+  /// [onManifest] receives a bounded static UTF-8 response for this attempt.
+  /// Its base URL is unchanged and neither the body nor its signature is cached.
   Future<String?> resolve(String url, String videoId, Server server,
-      {bool throwRetryable = false, void Function()? onMissingCheck}) async {
+      {bool throwRetryable = false,
+      void Function()? onMissingCheck,
+      void Function(String content)? onManifest}) async {
+    void provideManifest(http.Response response, Uri requested) {
+      if (onManifest == null) return;
+      final content = _inlineManifest(response, requested);
+      if (content != null) onManifest(content);
+    }
+
     void checkRetryable(http.Response response) {
       if (NerdVpnAccess.supports(server) && response.statusCode >= 400) {
         dynamic body;
@@ -148,6 +206,7 @@ class DashManifestResolver {
         checkRetryable(response);
         if (response.statusCode == 200) {
           remember(false);
+          provideManifest(response, manifest);
           return url;
         }
         // Leave cross-origin redirect handling to the native player.
@@ -189,7 +248,11 @@ class DashManifestResolver {
         // and proxy parameters. Retry once; never loop on a rejected signature.
         final retry = await _get(recovered, server);
         checkRetryable(retry);
-        return retry.statusCode == 200 ? recovered.toString() : null;
+        if (retry.statusCode == 200) {
+          provideManifest(retry, recovered);
+          return recovered.toString();
+        }
+        return null;
       }
     } catch (error) {
       if (error is NerdVpnAccessRequired ||
