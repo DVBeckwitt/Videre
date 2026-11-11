@@ -296,7 +296,10 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 cacheKey,
                 clearKey,
                 dataSource["inlineDashManifest"] as? String,
-                (dataSource["initialPositionMs"] as? Number)?.toLong()
+                (dataSource["initialPositionMs"] as? Number)?.toLong(),
+                dataSource["fastDashStartupFallback"] == true,
+                dataSource["initialDashHeight"] as? Int,
+                (dataSource["retryDashTrackFromLoadId"] as? Number)?.toLong()
             )
         }
     }

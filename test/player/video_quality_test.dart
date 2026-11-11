@@ -74,6 +74,7 @@ void main() {
   late TestSettingsCubit settings;
   late TestPlayerCubit player;
   late List<String> sources;
+  late List<int?> initialDashHeights;
   late List<int> trackHeights;
   late Set<String> failedSources;
   late Service previousService;
@@ -94,6 +95,7 @@ void main() {
     await settings.setUseDash(false);
     player = TestPlayerCubit(PlayerState.init(null), settings);
     sources = [];
+    initialDashHeights = [];
     trackHeights = [];
     failedSources = {};
     messenger.setMockMessageHandler(
@@ -108,8 +110,10 @@ void main() {
         trackHeights.add(call.arguments['height'] as int);
       }
       if (call.method == 'setDataSource') {
-        final uri = call.arguments['dataSource']['uri'] as String;
+        final source = call.arguments['dataSource'] as Map;
+        final uri = source['uri'] as String;
         sources.add(uri);
+        initialDashHeights.add(source['initialDashHeight'] as int?);
         if (failedSources.contains(uri)) {
           throw PlatformException(code: 'VideoError');
         }
@@ -417,6 +421,8 @@ void main() {
 
   test('DASH startup and progressive fallback both honor remembered quality',
       () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     await settings.setUseDash(true);
     await settings.setLastVideoQuality(480);
     final video = create(_video('first')
@@ -425,16 +431,44 @@ void main() {
       await video.playVideo(false);
       await _flush();
       expect(sources.first, 'https://instance.example/first.dash?local=true');
-      expect(trackHeights.last, 480);
+      expect(initialDashHeights, [480]);
+      expect(trackHeights, isEmpty,
+          reason: 'The cap must accompany native preparation');
       failedSources.add('https://instance.example/second.dash?local=true');
       video.switchVideo(_video('second')
           .copyWith(dashUrl: 'https://instance.example/second.dash'));
       await _flush();
       expect(sources.last, endsWith('second-480.mp4'));
+      expect(initialDashHeights, [480, 480, null]);
       expect(settings.state.lastVideoQuality, 480);
     } finally {
       await video.close();
     }
+  });
+
+  test('DASH prepares with Auto on a reused player when quality is disabled',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    await settings.setUseDash(true);
+    await settings.setLastVideoQuality(480);
+    final video = create(_video('first')
+        .copyWith(dashUrl: 'https://instance.example/first.dash'));
+    addTearDown(video.close);
+
+    await video.playVideo(false);
+    final controller = video.videoController;
+    expect(controller?.betterPlayerAsmsTrack?.height, 480);
+    await settings.setRememberVideoQuality(false);
+    video.switchVideo(_video('second')
+        .copyWith(dashUrl: 'https://instance.example/second.dash'));
+    await _flush();
+
+    expect(video.videoController, same(controller));
+    expect(initialDashHeights, [480, 0]);
+    expect(controller?.betterPlayerAsmsTrack?.height, 0);
+    expect(trackHeights, isEmpty);
+    expect(settings.state.lastVideoQuality, 480);
   });
 
   group('NerdVPN automatic startup', () {

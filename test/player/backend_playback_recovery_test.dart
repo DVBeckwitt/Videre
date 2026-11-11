@@ -570,6 +570,7 @@ void main() {
       expect(sources, hasLength(1));
       expect(sources.single['uri'], signed);
       expect(sources.single['inlineDashManifest'], _staticDashManifest);
+      expect(sources.single['fastDashStartupFallback'], isNull);
       expect((sources.single['headers'] as Map)['Cookie'], 'backend=a');
       final controller = video.videoController!;
       expect(controller.betterPlayerDataSource!.useAsmsAudioTracks, isTrue);
@@ -580,6 +581,51 @@ void main() {
       await video.close();
     }
   });
+
+  for (final (live, height, expected) in [
+    (false, 360, true),
+    (false, 720, false),
+    (true, 360, false),
+  ]) {
+    test('DASH fast fallback respects live=$live and quality=$height',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      await settings.setUseDash(true);
+      await settings.setLastVideoQuality(height);
+      retryService.httpClient.close();
+      service =
+          retryService = _RetryService(httpClient: MockClient((request) async {
+        return http.Response(_staticDashManifest, 200, request: request);
+      }));
+      final video = cubit();
+      try {
+        video.switchVideo(
+            _video('dash-video', BackendPlayback(preferred)).copyWith(
+          liveNow: live,
+          dashUrl: 'https://instance.example/manifest.mpd',
+          formatStreams: [
+            FormatStream(
+                'https://instance.example/video.mp4',
+                '18',
+                'video/mp4',
+                'medium',
+                'mp4',
+                'h264',
+                '360p',
+                '360p',
+                '640x360'),
+          ],
+        ));
+        await _flush();
+        expect(sources.single['formatHint'], 'dash');
+        expect(
+            sources.single['fastDashStartupFallback'], expected ? true : null);
+      } finally {
+        await video.close();
+      }
+    });
+  }
 
   test('advertised live video keeps network DASH even for a static response',
       () async {

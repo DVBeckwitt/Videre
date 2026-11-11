@@ -360,12 +360,17 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   /// null.
   /// **Android only**: The [formatHint] option allows the caller to override
   /// the video format detection code.
+  /// Set [retryDashTrack] when retrying the same managed DASH load to retain
+  /// its current native track constraints.
   /// ClearKey DRM only supported on Android.
   Future<void> setNetworkDataSource(
     String dataSource, {
     VideoFormat? formatHint,
     String? inlineDashManifest,
     Duration? initialPosition,
+    int? initialDashHeight,
+    bool retryDashTrack = false,
+    bool fastDashStartupFallback = false,
     Map<String, String?>? headers,
     bool useCache = false,
     int? maxCacheSize,
@@ -391,7 +396,14 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         formatHint: formatHint,
         inlineDashManifest: inlineDashManifest,
         initialPosition: initialPosition,
-        loadId: initialPosition == null ? null : _sourceGeneration + 1,
+        initialDashHeight: initialDashHeight,
+        retryDashTrackFromLoadId: retryDashTrack && initialDashHeight != null
+            ? _sourceGeneration
+            : null,
+        fastDashStartupFallback: fastDashStartupFallback,
+        loadId: initialPosition == null && initialDashHeight == null
+            ? null
+            : _sourceGeneration + 1,
         headers: headers,
         useCache: useCache,
         maxCacheSize: maxCacheSize,
@@ -714,6 +726,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
   /// [height] specifies height of the selected track
   /// [bitrate] specifies bitrate of the selected track
   Future<void> setTrackParameters(int? width, int? height, int? bitrate) async {
+    final sourceGeneration = _sourceGeneration;
+    if (!_creatingCompleter.isCompleted) await _creatingCompleter.future;
+    if (_isDisposed || sourceGeneration != _sourceGeneration) return;
     await _videoPlayerPlatform.setTrackParameters(
         _textureId, width, height, bitrate);
   }

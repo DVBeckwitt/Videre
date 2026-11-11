@@ -1917,10 +1917,12 @@ class Service {
     return VideoComments.fromJson(handleResponse(response));
   }
 
-  Future<Channel> getChannel(String channelId) async {
+  Future<Channel> getChannel(String channelId,
+      {bool saveLastSeen = true, Server? serverOverride}) async {
     // sometimes the api gives the channel with /channel/<channelid> format
     channelId = channelId.replaceAll("/channel/", '');
-    var req = await buildRequest(urlGetChannel, pathParams: {':id': channelId});
+    var req = await buildRequest(urlGetChannel,
+        pathParams: {':id': channelId}, serverOverride: serverOverride);
 
     final response = await _get(req);
 
@@ -1928,7 +1930,7 @@ class Service {
     channel.latestVideos =
         (await postProcessVideos(channel.latestVideos ?? [])).cast();
 
-    if (channel.latestVideos != null && channel.latestVideos!.isNotEmpty) {
+    if (saveLastSeen && channel.latestVideos!.isNotEmpty) {
       await fileDb
           .forAccount(req.server!)
           .setChannelNotificationLastViewedVideo(

@@ -7,6 +7,7 @@ import 'package:clipious/channels/views/tv/screens/channel.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,7 +16,8 @@ class _ChannelService extends Service {
   final responses = <Completer<Channel>>[];
 
   @override
-  Future<Channel> getChannel(String channelId) {
+  Future<Channel> getChannel(String channelId,
+      {bool saveLastSeen = true, Server? serverOverride}) {
     final response = Completer<Channel>();
     responses.add(response);
     return response.future;

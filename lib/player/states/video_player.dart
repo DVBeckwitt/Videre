@@ -850,21 +850,38 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     final startPosition = _pendingSeek ?? _playbackStartAt;
     final startSeekRevision = _seekRevision;
     final length = Duration(seconds: state.video?.lengthSeconds ?? 0);
-    final nativeStart = !kIsWeb &&
-            defaultTargetPlatform == TargetPlatform.android &&
-            !_playbackOffline &&
-            source.type == BetterPlayerDataSourceType.network &&
+    final androidNetworkVod = !kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        !_playbackOffline &&
+        source.type == BetterPlayerDataSourceType.network &&
+        state.video?.liveNow != true;
+    final nativeStart = androidNetworkVod &&
             source.videoFormat != BetterPlayerVideoFormat.hls &&
-            state.video?.liveNow != true &&
             startPosition >= Duration.zero &&
             startPosition < length
         ? startPosition
         : null;
+    final initialDashHeight =
+        androidNetworkVod && source.videoFormat == BetterPlayerVideoFormat.dash
+            ? _videoQuality ?? 0
+            : null;
     var setupFailed = false;
     var setup = Future<void>.value();
+    final nextSource = _playbackSources.skip(sourceIndex + 1).firstOrNull;
+    final nextHeight = nextSource == null
+        ? null
+        : videoQualityHeight(_selectedResolution(nextSource) ?? '');
+    final fastDashStartupFallback =
+        source.videoFormat == BetterPlayerVideoFormat.dash &&
+            nextSource?.videoFormat == BetterPlayerVideoFormat.other &&
+            nextHeight != null &&
+            nextHeight > 0 &&
+            (_videoQuality == null || nextHeight == _videoQuality);
     try {
       setup = videoController?.setupDataSource(source,
-              initialPosition: nativeStart) ??
+              initialPosition: nativeStart,
+              initialDashHeight: initialDashHeight,
+              fastDashStartupFallback: fastDashStartupFallback) ??
           Future<void>.value();
       _controllerSetup = setup;
       _controllerSetupAttempt =
@@ -891,7 +908,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else {
-      if (!_playbackOffline &&
+      if (initialDashHeight == null &&
+          !_playbackOffline &&
           (source.videoFormat == BetterPlayerVideoFormat.dash ||
               source.videoFormat == BetterPlayerVideoFormat.hls) &&
           (_videoQuality ?? 0) > 0) {

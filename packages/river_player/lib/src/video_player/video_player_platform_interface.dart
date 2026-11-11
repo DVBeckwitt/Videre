@@ -219,6 +219,9 @@ class DataSource {
     this.formatHint,
     this.inlineDashManifest,
     this.initialPosition,
+    this.initialDashHeight,
+    this.retryDashTrackFromLoadId,
+    this.fastDashStartupFallback = false,
     this.loadId,
     this.asset,
     this.package,
@@ -265,6 +268,15 @@ class DataSource {
 
   /// Optional start position applied before preparing an Android network VOD.
   final Duration? initialPosition;
+
+  /// Android DASH height cap applied before preparation. Zero selects Auto.
+  final int? initialDashHeight;
+
+  /// Previous Android DASH load whose active video constraints may be reused.
+  final int? retryDashTrackFromLoadId;
+
+  /// Shorten eligible Android DASH startup retries when a fallback is available.
+  final bool fastDashStartupFallback;
 
   /// Identifies an individual load when the platform reports its start position.
   final int? loadId;

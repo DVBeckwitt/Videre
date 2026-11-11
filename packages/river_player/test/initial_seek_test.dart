@@ -8,6 +8,8 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   final streams = <int, StreamController<VideoEvent>>{};
   final commands = <String>[];
   final sources = <({int textureId, DataSource source})>[];
+  final trackChanges = <({int? textureId, int? height, int sourceCount})>[];
+  Completer<void>? creationReleased;
   Completer<void> seekStarted = Completer<void>();
   Completer<void> seekReleased = Completer<void>();
   bool playing = false;
@@ -19,6 +21,8 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   void reset() {
     commands.clear();
     sources.clear();
+    trackChanges.clear();
+    creationReleased = null;
     seekStarted = Completer<void>();
     seekReleased = Completer<void>();
     playing = false;
@@ -33,6 +37,7 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   Future<int?> create({
     BetterPlayerBufferingConfiguration? bufferingConfiguration,
   }) async {
+    if (creationReleased != null) await creationReleased!.future;
     final id = ++nextId;
     streams[id] = StreamController<VideoEvent>.broadcast();
     return id;
@@ -65,7 +70,11 @@ class _DelayedSeekPlatform extends VideoPlayerPlatform {
   Future<void> setVolume(int? textureId, double volume) async {}
   @override
   Future<void> setTrackParameters(
-      int? textureId, int? width, int? height, int? bitrate) async {}
+      int? textureId, int? width, int? height, int? bitrate) async {
+    trackChanges.add(
+        (textureId: textureId, height: height, sourceCount: sources.length));
+  }
+
   @override
   Future<void> play(int? textureId) async {
     commands.add('play');
@@ -173,6 +182,64 @@ void main() {
             const Duration(seconds: 5));
         expect(platform.commands, isNot(contains(startsWith('seek:'))));
       } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test(
+        'a DASH track picked during native creation survives readiness and retry',
+        () async {
+      final controller = controllerWithResume();
+      final releaseCreation = platform.creationReleased = Completer<void>();
+      platform.holdInitialization = true;
+      final source = BetterPlayerDataSource(
+        BetterPlayerDataSourceType.network,
+        'https://example.com/video.mpd',
+        videoFormat: BetterPlayerVideoFormat.dash,
+        inlineDashManifest: '''<MPD><Period><AdaptationSet mimeType="video/mp4">
+          <Representation id="1" width="640" height="360"
+            bandwidth="500000" codecs="avc1.42001E" />
+          </AdaptationSet></Period></MPD>''',
+      );
+      try {
+        final setup = controller.setupDataSource(source,
+            initialPosition: Duration.zero, initialDashHeight: 360);
+        expect(controller.betterPlayerAsmsTrack?.height, 360);
+        final picked = BetterPlayerAsmsTrack(
+            'manual', 854, 480, 1000000, null, null, 'video/mp4');
+        controller.setTrack(picked);
+        expect(platform.trackChanges, isEmpty);
+        releaseCreation.complete();
+        await Future<void>.delayed(Duration.zero);
+
+        final load = platform.sources.single;
+        expect(load.source.initialDashHeight, 360);
+        expect(platform.trackChanges, [
+          (textureId: load.textureId, height: 480, sourceCount: 1),
+        ]);
+        platform.initialize(load);
+        await setup;
+        expect(controller.betterPlayerAsmsTrack, same(picked));
+        expect(platform.trackChanges, hasLength(1),
+            reason: 'Readiness must not send a late Auto reset');
+
+        platform.holdInitialization = false;
+        await controller.retryDataSource();
+        final retry = platform.sources.last.source;
+        expect(retry.initialDashHeight, 480);
+        expect(retry.retryDashTrackFromLoadId, load.source.loadId);
+        expect(retry.key, isNot(load.source.key));
+        expect(controller.betterPlayerAsmsTrack, same(picked));
+        expect(platform.trackChanges, hasLength(1));
+
+        await controller.setupDataSource(source,
+            initialPosition: Duration.zero, initialDashHeight: 0);
+        expect(platform.sources.last.source.initialDashHeight, 0);
+        expect(platform.sources.last.source.retryDashTrackFromLoadId, isNull);
+        expect(controller.betterPlayerAsmsTrack?.height, 0);
+      } finally {
+        if (!releaseCreation.isCompleted) releaseCreation.complete();
         controller.dispose();
         await Future<void>.delayed(Duration.zero);
       }

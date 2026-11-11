@@ -125,7 +125,6 @@ import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 //import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
 import androidx.media3.session.MediaSession
 
-import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.TrackSelectionOverride
 
 // import com.google.android.exoplayer2.upstream.DataSource
@@ -155,6 +154,8 @@ internal class RiverPlayer(
     private val trackSelector: DefaultTrackSelector = DefaultTrackSelector(context)
     private val loadControl: LoadControl
     private var isInitialized = false
+    private var dashStartupRetry: DashStartupLoadErrorPolicy? = null
+    private var hadInitialDashHeight = false
     private var surface: Surface? = null
     private var key: String? = null
     private var reportInitialPosition = false
@@ -210,7 +211,10 @@ internal class RiverPlayer(
         cacheKey: String?,
         clearKey: String?,
         inlineDashManifest: String? = null,
-        initialPositionMs: Long? = null
+        initialPositionMs: Long? = null,
+        fastDashStartupFallback: Boolean = false,
+        initialDashHeight: Int? = null,
+        retryDashTrackFromLoadId: Long? = null
     ) {
         val uri = Uri.parse(dataSource)
         var dataSourceFactory: DataSource.Factory?
@@ -275,8 +279,11 @@ internal class RiverPlayer(
             dataSourceFactory = ProxyDataSource.withLocalSources(context,
                 getDataSourceFactory(userAgent, headers, dataSource))
         }
+        val startupRetry = if (fastDashStartupFallback && isHTTP(uri) && formatHint == FORMAT_DASH) {
+            DashStartupLoadErrorPolicy(uri)
+        } else null
         val mediaSource = try {
-            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest)
+            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest, startupRetry)
         } catch (error: Exception) {
             if (inlineDashManifest == null) throw error
             // Parser errors can contain signed media URLs from the manifest.
@@ -288,9 +295,21 @@ internal class RiverPlayer(
         } else {
             mediaSource
         }
+        val dashHeight = initialDashHeight?.takeIf { it >= 0 && isHTTP(uri) && formatHint == FORMAT_DASH }
+        val preserveDashTrack = dashHeight != null && hadInitialDashHeight &&
+            retryDashTrackFromLoadId != null && this.key == "load:$retryDashTrackFromLoadId"
         this.key = key
         isInitialized = false
+        dashStartupRetry = startupRetry
         reportInitialPosition = initialPositionMs != null
+        if (!preserveDashTrack) {
+            if (dashHeight != null && dashHeight > 0) {
+                setTrackParameters(Int.MAX_VALUE, dashHeight, Int.MAX_VALUE)
+            } else if (dashHeight != null || hadInitialDashHeight) {
+                setTrackParameters(0, 0, 0)
+            }
+        }
+        hadInitialDashHeight = dashHeight != null
         if (initialPositionMs != null) {
             exoPlayer?.setMediaSource(playbackSource, initialPositionMs.coerceAtLeast(0L))
         } else {
@@ -476,7 +495,8 @@ internal class RiverPlayer(
         formatHint: String?,
         cacheKey: String?,
         context: Context,
-        inlineDashManifest: String?
+        inlineDashManifest: String?,
+        startupRetry: DashStartupLoadErrorPolicy?
     ): MediaSource {
         val type: Int
         if (formatHint == null) {
@@ -510,7 +530,7 @@ internal class RiverPlayer(
             C.TYPE_DASH -> DashMediaSource.Factory(
                 DefaultDashChunkSource.Factory(mediaDataSourceFactory),
                 ProxyDataSource.withLocalSources(context, mediaDataSourceFactory)
-            )
+            ).apply { startupRetry?.let { setLoadErrorHandlingPolicy(it) } }
 
             C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
 
@@ -567,6 +587,7 @@ internal class RiverPlayer(
 
                     Player.STATE_READY -> {
                         if (!isInitialized) {
+                            dashStartupRetry?.finishStartup()
                             isInitialized = true
                             sendInitialized()
                         }
@@ -578,6 +599,7 @@ internal class RiverPlayer(
                     Player.STATE_ENDED -> {
                         // A start position at the end can skip STATE_READY.
                         if (reportInitialPosition && !isInitialized && getDuration() >= 0L) {
+                            dashStartupRetry?.finishStartup()
                             isInitialized = true
                             sendInitialized()
                         }
@@ -839,33 +861,12 @@ internal class RiverPlayer(
     }
 
     private fun setAudioTrack(rendererIndex: Int, groupIndex: Int, groupElementIndex: Int) {
-        val mappedTrackInfo = trackSelector.currentMappedTrackInfo
-        if (mappedTrackInfo != null) {
-            /*
-            val builder = trackSelector.parameters.buildUpon()
-                .setRendererDisabled(rendererIndex, false)
-                .setTrackSelectionParameters(
-                    TrackSelectionParameters.Builder().addOverride(
-                        TrackSelectionOverride(
-                            mappedTrackInfo.getTrackGroups(
-                                rendererIndex
-                            ).get(groupIndex), groupElementIndex
-                        )
-                    ).build()
-                )
-
-            trackSelector.setParameters(builder)
-            */
-
-
-            exoPlayer?.trackSelectionParameters = TrackSelectionParameters.Builder().addOverride(
-                TrackSelectionOverride(
-                    mappedTrackInfo.getTrackGroups(
-                        rendererIndex
-                    ).get(groupIndex), groupElementIndex
-                )
-            ).build()
-        }
+        val mappedTrackInfo = trackSelector.currentMappedTrackInfo ?: return
+        val group = mappedTrackInfo.getTrackGroups(rendererIndex).get(groupIndex)
+        val parameters = trackSelector.buildUponParameters()
+            .setOverrideForType(TrackSelectionOverride(group, groupElementIndex))
+            .build()
+        trackSelector.setParameters(parameters)
     }
 
     private fun sendSeekToEvent(positionMs: Long) {

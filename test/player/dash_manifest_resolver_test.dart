@@ -30,20 +30,20 @@ src="$src"></video></body></html>
 ''';
 
 void main() {
-  test('successful static manifest can be handed directly to this playback',
+  test('each eligible play receives its own static manifest on a warm route',
       () async {
     final bodies = <String>[];
     var calls = 0;
     final resolver = DashManifestResolver(MockClient((request) async {
       calls++;
-      return http.Response(staticMpd, 200, request: request);
+      return http.Response('$staticMpd<!--$calls-->', 200, request: request);
     }));
 
     expect(
         await resolver.resolve(original, videoId, server,
             onManifest: bodies.add),
         original);
-    expect(bodies, [staticMpd]);
+    expect(bodies, ['$staticMpd<!--1-->']);
     expect(calls, 1);
 
     bodies.clear();
@@ -52,9 +52,8 @@ void main() {
         await resolver.resolve(second, 'next-video', server,
             onManifest: bodies.add),
         second);
-    expect(calls, 1);
-    expect(bodies, isEmpty,
-        reason: 'A healthy-route cache must never supply another video body');
+    expect(calls, 2);
+    expect(bodies, ['$staticMpd<!--2-->']);
   });
 
   test('missing-check recovery supplies only the fresh signed manifest body',
@@ -126,7 +125,40 @@ void main() {
     expect(bodies.last, '$staticMpd<!--3-->');
   });
 
-  test('redirected manifest body keeps native URL loading for relative sources',
+  test('a static same-origin redirect uses the final URI for relative media',
+      () async {
+    const redirected = 'https://inv.example/redirected/manifest.mpd';
+    const body = '<?xml version="1.0"?>'
+        '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static">'
+        '<BaseURL>segments/</BaseURL></MPD>';
+    final bodies = <String>[];
+    final requested = <Uri>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      expect(request.followRedirects, isFalse);
+      expect(request.headers['X-Instance-Auth'], 'test-only');
+      if (request.url.toString() == original) {
+        return http.Response('', 302,
+            headers: {'location': '/redirected/manifest.mpd'},
+            request: request);
+      }
+      expect(request.url.toString(), redirected);
+      return http.Response(body, 200, request: request);
+    }));
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final base = await resolver.resolve(original, videoId, server,
+          onManifest: bodies.add);
+      expect(base, redirected);
+      expect(Uri.parse(base!).resolve('segments/').toString(),
+          'https://inv.example/redirected/segments/');
+    }
+    expect(requested.map((uri) => uri.toString()),
+        [original, redirected, original, redirected]);
+    expect(bodies, [body, body]);
+  });
+
+  test('a redirected response attributed to the original URL is not reused',
       () async {
     final bodies = <String>[];
     final requested = <Uri>[];
@@ -137,7 +169,10 @@ void main() {
             headers: {'location': '/redirected/manifest.mpd'},
             request: request);
       }
-      return http.Response(staticMpd, 200, request: request);
+      final responseRequest = requested.length == 2
+          ? http.Request('GET', Uri.parse(original))
+          : request;
+      return http.Response(staticMpd, 200, request: responseRequest);
     }));
 
     expect(
@@ -147,6 +182,68 @@ void main() {
     expect(requested, hasLength(2));
     expect(requested.last.path, '/redirected/manifest.mpd');
     expect(bodies, isEmpty);
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(requested, hasLength(2));
+    expect(bodies, isEmpty);
+
+    final next = original.replaceAll(videoId, 'next-video');
+    expect(
+        await resolver.resolve(next, 'next-video', server,
+            onManifest: bodies.add),
+        next);
+    expect(requested.last.toString(), next);
+    expect(requested, hasLength(3));
+    expect(bodies, [staticMpd]);
+  });
+
+  test('same-origin manifest redirect refusal remains terminal', () async {
+    final bodies = <String>[];
+    var calls = 0;
+    final resolver = DashManifestResolver(MockClient((request) async {
+      calls++;
+      if (calls == 1) {
+        return http.Response('', 302,
+            headers: {'location': '/refused.mpd'}, request: request);
+      }
+      expect(request.url.path, '/refused.mpd');
+      return http.Response('Refused', 403, request: request);
+    }));
+    await expectLater(
+        resolver.resolve(original, videoId, server,
+            throwRetryable: true, onManifest: bodies.add),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'status', 403)));
+    expect(calls, 2);
+    expect(bodies, isEmpty);
+  });
+
+  test('a redirected signed manifest keeps its validated final base', () async {
+    const finalPath = '/redirected/signed.mpd?local=true';
+    final requested = <Uri>[];
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      return switch (requested.length) {
+        1 => http.Response('No check ID.', 400, request: request),
+        2 => http.Response(watchPage(recovered), 200, request: request),
+        3 => http.Response('', 302,
+            headers: {'location': finalPath}, request: request),
+        _ => http.Response(staticMpd, 200, request: request),
+      };
+    }));
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        'https://inv.example$finalPath');
+    expect(requested, hasLength(4));
+    expect(requested[2].toString(), recovered);
+    expect(requested.last.toString(), 'https://inv.example$finalPath');
+    expect(bodies, [staticMpd]);
   });
 
   test('unattributed or mismatched response bodies cannot be reused', () async {
@@ -178,12 +275,18 @@ void main() {
     test('non-static or unrecognized response preserves native loading: $body',
         () async {
       final bodies = <String>[];
-      final resolver = DashManifestResolver(MockClient(
-          (request) async => http.Response(body, 200, request: request)));
-      expect(
-          await resolver.resolve(original, videoId, server,
-              onManifest: bodies.add),
-          original);
+      var calls = 0;
+      final resolver = DashManifestResolver(MockClient((request) async {
+        calls++;
+        return http.Response(body, 200, request: request);
+      }));
+      for (var attempt = 0; attempt < 2; attempt++) {
+        expect(
+            await resolver.resolve(original, videoId, server,
+                onManifest: bodies.add),
+            original);
+      }
+      expect(calls, 1);
       expect(bodies, isEmpty);
     });
   }
@@ -309,6 +412,183 @@ void main() {
     await resolver.resolve(second, 'next-video', server);
     expect(calls, 5);
   });
+
+  test('a warmed unsigned route can begin requiring signed manifests',
+      () async {
+    final urls = <String>[];
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      urls.add(request.url.toString());
+      return switch (urls.length) {
+        1 => http.Response(staticMpd, 200, request: request),
+        2 => http.Response('No check ID.', 400, request: request),
+        3 => http.Response(watchPage(recovered), 200, request: request),
+        _ => http.Response('$staticMpd<!--signed-->', 200, request: request),
+      };
+    }));
+
+    expect(await resolver.resolve(original, videoId, server), original);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        recovered);
+    expect(urls, hasLength(4));
+    expect(urls.take(2), [original, original]);
+    expect(Uri.parse(urls[2]).path, '/watch');
+    expect(urls.last, recovered);
+    expect(bodies, ['$staticMpd<!--signed-->']);
+  });
+
+  test('a warm optional manifest fetch failure keeps native URL loading',
+      () async {
+    var calls = 0;
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      calls++;
+      if (calls == 1) return http.Response(staticMpd, 200, request: request);
+      throw http.ClientException('Transient manifest failure');
+    }));
+    await resolver.resolve(original, videoId, server);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            throwRetryable: true, onManifest: bodies.add),
+        original);
+    expect(calls, 2);
+    expect(bodies, isEmpty);
+  });
+
+  test('a slow warm manifest uses native loading and drops a late redirect',
+      () async {
+    final pending = Completer<http.Response>();
+    final requested = <Uri>[];
+    final bodies = <String>[];
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requested.add(request.url);
+      if (requested.length == 1) {
+        return http.Response(staticMpd, 200, request: request);
+      }
+      return pending.future;
+    }), timeout: const Duration(milliseconds: 20));
+
+    await resolver.resolve(original, videoId, server);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    pending.complete(
+        http.Response('', 302, headers: {'location': '/late-manifest.mpd'}));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
+    expect(requested, [Uri.parse(original), Uri.parse(original)]);
+    expect(bodies, isEmpty);
+  });
+
+  test('a warm refusal survives a stalled response body and cancellation',
+      () async {
+    final cancellation = Completer<void>();
+    var cancelled = false;
+    final body = StreamController<List<int>>(onCancel: () {
+      cancelled = true;
+      return cancellation.future;
+    });
+    var calls = 0;
+    final resolver =
+        DashManifestResolver(MockClient.streaming((request, _) async {
+      if (++calls == 1) {
+        return http.StreamedResponse(Stream.value(utf8.encode(staticMpd)), 200,
+            request: request);
+      }
+      return http.StreamedResponse(body.stream, 429,
+          request: request, headers: {'retry-after': '60'});
+    }), timeout: const Duration(milliseconds: 20));
+
+    try {
+      await resolver.resolve(original, videoId, server);
+      await expectLater(
+          resolver
+              .resolve(original, videoId, server, onManifest: (_) {})
+              .timeout(const Duration(seconds: 1)),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.statusCode, 'status', 429)
+              .having((error) => error.retryAfter, 'retry delay',
+                  const Duration(seconds: 60))));
+      expect(calls, 2);
+      expect(cancelled, isTrue);
+    } finally {
+      cancellation.complete();
+      await body.close();
+    }
+  });
+
+  for (final timeoutFirst in [false, true]) {
+    testWidgets('signature evidence wins over a warm timeout ($timeoutFirst)',
+        (tester) async {
+      const nextId = 'next-video';
+      final next = original.replaceAll(videoId, nextId);
+      final signedNext = recovered.replaceAll(videoId, nextId);
+      final pending = Completer<http.Response>();
+      final signature = Completer<http.Response>();
+      final requested = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        final url = request.url.toString();
+        requested.add(url);
+        if (url == original && requested.length == 2) return pending.future;
+        if (url == next) return signature.future;
+        if (request.url.path == '/watch') {
+          final signed = request.url.queryParameters['v'] == nextId
+              ? signedNext
+              : recovered;
+          return http.Response(watchPage(signed), 200);
+        }
+        return http.Response(staticMpd, 200, request: request);
+      }), timeout: const Duration(milliseconds: 20));
+
+      await resolver.resolve(original, videoId, server);
+      final slow =
+          resolver.resolve(original, videoId, server, onManifest: (_) {});
+      await tester.pump(const Duration(milliseconds: 10));
+      final signed = resolver.resolve(next, nextId, server, onManifest: (_) {});
+      if (timeoutFirst) await tester.pump(const Duration(milliseconds: 10));
+      signature.complete(http.Response('No check ID.', 400));
+      expect(await signed, signedNext);
+      if (!timeoutFirst) await tester.pump(const Duration(milliseconds: 10));
+      expect(await slow, original);
+      pending.complete(http.Response(staticMpd, 200));
+
+      expect(
+          await resolver.resolve(original, videoId, server, onManifest: (_) {}),
+          recovered);
+      expect(requested.where((url) => url == original), hasLength(2));
+    });
+  }
+
+  for (final (status, retryAfter) in [(401, null), (429, null), (503, '10')]) {
+    test('warm manifest refusal $status cannot reach native fallback',
+        () async {
+      var calls = 0;
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        calls++;
+        if (calls == 1) return http.Response(staticMpd, 200, request: request);
+        return http.Response('Refused', status,
+            request: request,
+            headers: {if (retryAfter != null) 'retry-after': retryAfter});
+      }));
+      await resolver.resolve(original, videoId, server);
+      await expectLater(
+          resolver.resolve(original, videoId, server,
+              throwRetryable: true, onManifest: bodies.add),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.statusCode, 'status', status)
+              .having(isBackendRetryable, 'backend retry', isFalse)));
+      expect(calls, 2);
+      expect(bodies, isEmpty);
+    });
+  }
 
   test('known affected routes get fresh signatures without repeating the 400',
       () async {
@@ -573,13 +853,18 @@ void main() {
   test('redirects retain native handling without forwarding credentials',
       () async {
     var calls = 0;
+    final bodies = <String>[];
     final resolver = DashManifestResolver(MockClient((_) async {
       calls++;
       return http.Response('', 302,
           headers: {'location': 'https://elsewhere/'});
     }));
-    expect(await resolver.resolve(original, videoId, server), original);
+    expect(
+        await resolver.resolve(original, videoId, server,
+            onManifest: bodies.add),
+        original);
     expect(calls, 1);
+    expect(bodies, isEmpty);
   });
 
   test('network failure and timeout use fallback', () async {

@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/notifications/models/db/channel_notifications.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -350,6 +353,47 @@ void main() {
     await expectLater(
         catalog.getArtist(_channelId), throwsA(isA<MusicCatalogException>()));
     expect(requests, hasLength(1));
+  });
+
+  test('opening a Music artist preserves the channel notification cursor',
+      () async {
+    final documents =
+        await Directory.systemTemp.createTemp('videre-music-artist-test-');
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+        pathProvider, (_) async => documents.path);
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(pathProvider, null);
+      await documents.delete(recursive: true);
+    });
+    final account = await db.getCurrentlySelectedServer();
+    final notificationStore = fileDb.forAccount(account);
+    const channelUrl = '/channel/$_channelId';
+    await notificationStore.upsertChannelNotification(
+        ChannelNotification(channelUrl, 'Test artist', 'previous-video', 42));
+    respond = (request) async => request.url.path.endsWith('/videos')
+        ? _json({
+            'videos': [_song()]
+          }, request)
+        : _json({
+            ..._channel(),
+            'latestVideos': [_song()]
+          }, request);
+
+    final api = Service(httpClient: client);
+    catalog = InvidiousMusicCatalogService(api: api);
+    expect((await catalog.getArtist(_channelId)).songs, hasLength(1));
+    final cursor = await notificationStore.getChannelNotification(channelUrl);
+    expect(cursor!.lastSeenVideoId, 'previous-video');
+    expect(cursor.timestamp, 42);
+
+    await api.getChannel(_channelId);
+    expect(
+        (await notificationStore.getChannelNotification(channelUrl))!
+            .lastSeenVideoId,
+        _songId);
   });
 
   test('a server switch discards search results from the previous account',

@@ -40,20 +40,22 @@ class _Service extends Service {
   Future<bool> isSubscribedToChannel(String channelId) async => false;
 
   @override
-  Future<Channel> getChannel(String channelId) async => Channel(
-      'A channel',
-      channelId,
-      '/channel/$channelId',
-      banners ?? [ImageObject(null, '/banner', 1060, 175)],
-      [],
-      100,
-      1000,
-      0,
-      false,
-      true,
-      List.filled(40, 'Channel description.').join(' '),
-      [],
-      []);
+  Future<Channel> getChannel(String channelId,
+          {bool saveLastSeen = true, Server? serverOverride}) async =>
+      Channel(
+          'A channel',
+          channelId,
+          '/channel/$channelId',
+          banners ?? [ImageObject(null, '/banner', 1060, 175)],
+          [],
+          100,
+          1000,
+          0,
+          false,
+          true,
+          List.filled(40, 'Channel description.').join(' '),
+          [],
+          []);
 
   @override
   Future<VideosWithContinuation> getChannelVideos(

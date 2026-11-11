@@ -165,7 +165,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       throw const MusicCatalogException('Invalid music artist.');
     }
     return _inSession((api, server, check) async {
-      final channel = await api.getChannel(id);
+      final channel =
+          await api.getChannel(id, saveLastSeen: false, serverOverride: server);
       await check();
       if (channel.authorId != id) {
         throw const MusicCatalogException(

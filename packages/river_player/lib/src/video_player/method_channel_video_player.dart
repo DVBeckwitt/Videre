@@ -84,6 +84,12 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             'inlineDashManifest': dataSource.inlineDashManifest,
           if (dataSource.initialPosition != null)
             'initialPositionMs': dataSource.initialPosition!.inMilliseconds,
+          if (dataSource.initialDashHeight != null)
+            'initialDashHeight': dataSource.initialDashHeight,
+          if (dataSource.retryDashTrackFromLoadId != null)
+            'retryDashTrackFromLoadId': dataSource.retryDashTrackFromLoadId,
+          if (dataSource.fastDashStartupFallback)
+            'fastDashStartupFallback': true,
           'headers': dataSource.headers,
           'useCache': dataSource.useCache,
           'maxCacheSize': dataSource.maxCacheSize,

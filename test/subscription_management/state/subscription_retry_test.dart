@@ -5,6 +5,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/subscription_management/models/subscription.dart';
 import 'package:clipious/subscription_management/states/manage_subscriptions.dart';
@@ -57,7 +58,8 @@ class _RetryDetectingService extends Service {
   }
 
   @override
-  Future<Channel> getChannel(String channelId) =>
+  Future<Channel> getChannel(String channelId,
+          {bool saveLastSeen = true, Server? serverOverride}) =>
       channel?.future ?? Future.error(StateError('Channel unavailable'));
 }
 
