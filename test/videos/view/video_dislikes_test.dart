@@ -16,9 +16,11 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/dislike.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video.dart';
+import 'package:clipious/videos/views/components/info.dart';
 import 'package:clipious/videos/views/components/video_dislike_metrics.dart';
 import 'package:clipious/videos/views/screens/info_tab.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -56,6 +58,21 @@ class _Downloads extends DownloadManagerCubit {
 
   @override
   Future<void> onReady() async {}
+}
+
+class _SelectableVideoInfo extends VideoInfo {
+  const _SelectableVideoInfo(this.onChannelOpen)
+      : super(
+            video: const Video(
+                videoId: 'first',
+                title: 'Selectable title',
+                author: 'Selectable channel'),
+            descriptionAndTags: false);
+
+  final VoidCallback onChannelOpen;
+
+  @override
+  void openChannel(BuildContext context) => onChannelOpen();
 }
 
 void main() {
@@ -111,6 +128,82 @@ void main() {
     ));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('video title and channel support selection and channel taps',
+      (tester) async {
+    var channelOpens = 0;
+    final info = _SelectableVideoInfo(() => channelOpens++);
+    final copied = <String>[];
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.hasStrings') return {'value': false};
+      if (call.method == 'Clipboard.setData') {
+        copied.add((call.arguments as Map)['text'] as String);
+      }
+      return null;
+    });
+    addTearDown(() =>
+        messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await show(tester, info);
+
+    for (final text in ['Selectable title', 'Selectable channel']) {
+      final target = find.widgetWithText(SelectableText, text);
+      await tester.longPress(target);
+      await tester.pumpAndSettle();
+      final editable = tester.state<EditableTextState>(
+          find.descendant(of: target, matching: find.byType(EditableText)));
+      editable.selectAll(SelectionChangedCause.toolbar);
+      editable.showToolbar();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Copy'));
+      await tester.pumpAndSettle();
+      expect(copied.last, text);
+      expect(channelOpens, 0);
+    }
+
+    await tester.tap(find.widgetWithText(SelectableText, 'Selectable channel'));
+    expect(channelOpens, 1);
+  });
+
+  testWidgets('channel name exposes one accessible navigation target',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      var channelOpens = 0;
+      await show(tester, _SelectableVideoInfo(() => channelOpens++));
+
+      final channel = find.semantics.byValue('Selectable channel');
+      expect(channel.evaluate(), hasLength(1));
+      tester.semantics.tap(channel);
+      expect(channelOpens, 1);
+      expect(find.semantics.byLabel('Selectable channel').evaluate(), isEmpty);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('channel name retains keyboard traversal and activation',
+      (tester) async {
+    var channelOpens = 0;
+    await show(
+        tester,
+        Column(children: [
+          TextButton(
+              autofocus: true, onPressed: () {}, child: const Text('Before')),
+          _SelectableVideoInfo(() => channelOpens++),
+          TextButton(onPressed: () {}, child: const Text('After')),
+        ]));
+
+    // The avatar remains the first target, followed by the named channel.
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    final channel = find.widgetWithText(SelectableText, 'Selectable channel');
+    expect(Focus.maybeOf(tester.element(channel))?.hasPrimaryFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(channelOpens, 1);
+  });
 
   for (final (label, widget) in [
     ('phone', const ExpandedPlayer()),

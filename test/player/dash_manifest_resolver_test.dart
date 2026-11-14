@@ -30,6 +30,82 @@ src="$src"></video></body></html>
 ''';
 
 void main() {
+  for (final scheme in ['http', 'https']) {
+    testWidgets('slow $scheme onion manifests retain adaptive playback',
+        (tester) async {
+      final onion = Server(url: '$scheme://instance.onion');
+      final url = '${onion.url}/api/manifest/dash/id/$videoId?local=true';
+      final response = Completer<http.Response>();
+      late http.Request request;
+      final resolver = DashManifestResolver(MockClient((value) {
+        request = value;
+        return response.future;
+      }));
+      final bodies = <String>[];
+      var finished = false;
+      final resolving = resolver
+          .resolve(url, videoId, onion, onManifest: bodies.add)
+          .whenComplete(() => finished = true);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 6));
+      expect(finished, isFalse,
+          reason: 'Tor startup must not discard DASH after five seconds');
+      response.complete(http.Response(staticMpd, 200, request: request));
+      await tester.pump();
+      expect(await resolving, url);
+      expect(bodies, [staticMpd]);
+    });
+  }
+
+  testWidgets('onion manifest requests keep a bounded transport budget',
+      (tester) async {
+    const onion = Server(url: 'http://instance.onion');
+    final url = '${onion.url}/api/manifest/dash/id/$videoId?local=true';
+    final response = Completer<http.Response>();
+    final resolver = DashManifestResolver(MockClient((_) => response.future));
+    var finished = false;
+    final resolving = resolver
+        .resolve(url, videoId, onion)
+        .whenComplete(() => finished = true);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 44));
+    expect(finished, isFalse);
+    await tester.pump(const Duration(seconds: 2));
+    expect(await resolving, isNull);
+    response.complete(http.Response(mpd, 200));
+    await tester.pump();
+  });
+
+  for (final host in ['instance.onion.example', 'onion.example']) {
+    testWidgets('$host retains the normal manifest deadline', (tester) async {
+      final account = Server(url: 'https://$host');
+      final response = Completer<http.Response>();
+      final resolver = DashManifestResolver(MockClient((_) => response.future));
+      final resolving = resolver.resolve(
+          '${account.url}/api/manifest/dash/id/$videoId', videoId, account);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 6));
+      expect(await resolving, isNull);
+      response.complete(http.Response(mpd, 200));
+      await tester.pump();
+    });
+  }
+
+  testWidgets('an explicit timeout also applies to onion manifests',
+      (tester) async {
+    const onion = Server(url: 'https://instance.onion');
+    final response = Completer<http.Response>();
+    final resolver = DashManifestResolver(MockClient((_) => response.future),
+        timeout: const Duration(milliseconds: 10));
+    final resolving = resolver.resolve(
+        '${onion.url}/api/manifest/dash/id/$videoId', videoId, onion);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 11));
+    expect(await resolving, isNull);
+    response.complete(http.Response(mpd, 200));
+    await tester.pump();
+  });
+
   test('each eligible play receives its own static manifest on a warm route',
       () async {
     final bodies = <String>[];

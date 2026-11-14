@@ -508,7 +508,7 @@ void main() {
         expect(video.state, same(snapshot));
       });
 
-      testWidgets('loaded details follow only their active playback request',
+      testWidgets('loaded details hide metadata and playback requests',
           (tester) async {
         Future<void> update(VoidCallback change) async {
           // The real player lifecycle persists session changes in the database.
@@ -521,10 +521,7 @@ void main() {
             requestedBackend: initialRequest,
             video: Video(videoId: 'metadata-status'));
         final alternate = initialRequest.next()!;
-        final active = player.state.copyWith(
-            currentlyPlaying: loaded.video, requestedBackend: initialRequest);
         try {
-          await update(() => player.showState(active));
           await tester.pumpWidget(MaterialApp(
             localizationsDelegates: AppLocalizations.localizationsDelegates,
             supportedLocales: AppLocalizations.supportedLocales,
@@ -532,27 +529,20 @@ void main() {
                 value: player,
                 child: Scaffold(body: VideoBackendStatus(state: loaded))),
           ));
-          expect(find.textContaining('First'), findsOneWidget);
+          expect(find.byType(BackendRequestIndicator), findsNothing);
+          await update(() => player.showState(player.state.copyWith(
+              currentlyPlaying: loaded.video,
+              requestedBackend: initialRequest)));
+          expect(find.byType(BackendRequestIndicator), findsNothing);
           await update(() {
             expect(player.setRequestedBackend('metadata-status', alternate),
                 isTrue);
           });
-          expect(find.textContaining('Second'), findsOneWidget);
-          expect(find.textContaining('First'), findsNothing);
+          expect(find.byType(BackendRequestIndicator), findsNothing);
           await update(() {
             expect(player.setRequestedBackend('metadata-status', null), isTrue);
-            expect(player.state.requestedBackend, isNull);
           });
-          expect(find.textContaining('Second'), findsNothing);
-          expect(find.textContaining('First'), findsNothing);
-          await update(() => player.showState(active.copyWith(
-              currentlyPlaying: Video(videoId: 'different'),
-              requestedBackend: alternate)));
-          expect(find.textContaining('First'), findsOneWidget);
-          await update(() => player.showState(
-              active.copyWith(requestedBackend: alternate, isClosing: true)));
-          expect(find.textContaining('First'), findsOneWidget);
-          expect(find.textContaining('Second'), findsNothing);
+          expect(find.byType(BackendRequestIndicator), findsNothing);
           expect(tester.takeException(), isNull);
         } finally {
           // Drain session writes outside fake async even if an assertion fails.
@@ -564,8 +554,7 @@ void main() {
         }
       });
 
-      testWidgets(
-          'details show retry only while loading and retain last request',
+      testWidgets('details show the last backend request during load and error',
           (tester) async {
         Future<void> show(VideoState state) => tester.pumpWidget(MaterialApp(
               localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -583,15 +572,13 @@ void main() {
         await show(retrying);
         expect(find.byType(BackendRetryNotice), findsOneWidget);
         expect(find.textContaining('Second'), findsNWidgets(2));
-        for (final terminal in [
-          retrying.copyWith(loadingVideo: false, error: 'Unavailable'),
-          retrying.copyWith(
-              loadingVideo: false, video: Video(videoId: 'metadata-status')),
-        ]) {
-          await show(terminal);
-          expect(find.byType(BackendRetryNotice), findsNothing);
-          expect(find.textContaining('Second'), findsOneWidget);
-        }
+        await show(
+            retrying.copyWith(loadingVideo: false, error: 'Unavailable'));
+        expect(find.byType(BackendRetryNotice), findsNothing);
+        expect(find.textContaining('Second'), findsOneWidget);
+        expect(
+            find.text('Couldn’t resume playback after trying 1 alternative.'),
+            findsOneWidget);
         await show(initial.copyWith(
             requestedBackend: null,
             video: Video(videoId: 'old', backendPlayback: alternate)));

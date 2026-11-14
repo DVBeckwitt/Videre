@@ -721,6 +721,90 @@ Future<void> main() async {
     }
   });
 
+  test('subtitle size changes from separate controls save in order', () async {
+    final database = db;
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final first = settingsCubit.changeSubtitleSize(increase: true);
+    await started.future;
+    final second = settingsCubit.changeSubtitleSize(increase: true);
+    pending.complete();
+    await Future.wait([first, second]);
+    db = database;
+    expect(settingsCubit.state.subtitleSize, 16);
+    expect(db.getSettings(subtitleSizeSettingName)?.value, '16.0');
+  });
+
+  test('absolute subtitle size writes keep their order with queued steps',
+      () async {
+    final database = db;
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final first = settingsCubit.changeSubtitleSize(increase: true);
+    await started.future;
+    final Future<void> absolute = settingsCubit.setSubtitleSize(24);
+    final decrement = settingsCubit.changeSubtitleSize(increase: false);
+    pending.complete();
+    await Future.wait([first, absolute, decrement]);
+    db = database;
+    expect(settingsCubit.state.subtitleSize, 23);
+    expect(db.getSettings(subtitleSizeSettingName)?.value, '23.0');
+  });
+
+  test('a failed subtitle save leaves later changes usable', () async {
+    final database = db;
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final first = settingsCubit.changeSubtitleSize(increase: true);
+    final failure = expectLater(first, throwsStateError);
+    await started.future;
+    db = database;
+    final retry = settingsCubit.changeSubtitleSize(increase: true);
+    pending.completeError(StateError('Save failed'));
+    await failure;
+    await retry;
+    expect(settingsCubit.state.subtitleSize, 15);
+    expect(db.getSettings(subtitleSizeSettingName)?.value, '15.0');
+  });
+
+  for (final changeProfile in [false, true]) {
+    test(
+        'queued subtitle changes stop at session replacement (profile=$changeProfile)',
+        () async {
+      final database = db;
+      final other = await database.createProfile('Other');
+      final pending = Completer<void>();
+      final started = Completer<void>();
+      db = _DelayedSettingsDb(database, pending, started);
+      final first = settingsCubit.changeSubtitleSize(increase: true);
+      await started.future;
+      final queued = settingsCubit.changeSubtitleSize(increase: true);
+      db = database;
+      if (changeProfile) {
+        await db.useProfile(other.id);
+        await fileDb.useProfile(other.id);
+      }
+      appCubit.advanceSession();
+      await settingsCubit.reloadForProfile();
+      final Future<void> replacement = settingsCubit.setSubtitleSize(20);
+      pending.complete();
+      await Future.wait([first, queued, replacement]);
+      expect(settingsCubit.state.subtitleSize, 20);
+      expect(db.getSettings(subtitleSizeSettingName)?.value, '20.0');
+      if (changeProfile) {
+        expect(
+            database
+                .forProfile('default')
+                .getSettings(subtitleSizeSettingName)
+                ?.value,
+            '15.0');
+      }
+    });
+  }
+
   test('Generic set settings method', () async {
     var setting = db.getSettings('test');
     expect(setting, null);
@@ -754,7 +838,7 @@ class _DelayedSettingsDb implements IDbClient {
 
   @override
   Future<void> saveSetting(SettingsValue setting) async {
-    started.complete();
+    if (!started.isCompleted) started.complete();
     await pending.future;
     await delegate.saveSetting(setting);
   }

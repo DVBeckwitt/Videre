@@ -1,19 +1,15 @@
 import 'dart:async';
 
-import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:clipious/player/states/player.dart';
-import 'package:clipious/router.dart';
-
-import '../../../globals.dart';
 import '../../models/timestamp_linkifier.dart';
 import 'external_link.dart';
 
-class TextLinkified extends StatelessWidget {
+class TextLinkified extends StatefulWidget {
   final String text;
   final Video? video;
   final PlayerCubit player;
@@ -22,35 +18,14 @@ class TextLinkified extends StatelessWidget {
       {super.key, required this.text, this.video, required this.player});
 
   @override
-  Widget build(BuildContext context) {
-    var colorScheme = Theme.of(context).colorScheme;
-    return SelectableLinkify(
-      text: text,
-      linkStyle: TextStyle(
-          color: colorScheme.primary, decoration: TextDecoration.none),
-      onOpen: (link) => openLink(context, link),
-      options: const LinkifyOptions(humanize: true, removeWww: true),
-      linkifiers: const [UrlLinkifier(), TimestampLinkifier()],
-    );
-  }
+  State<TextLinkified> createState() => _TextLinkifiedState();
 
   void openLink(BuildContext context, LinkableElement link) {
     if (link is UrlElement) {
       var uri = Uri.parse(link.url);
-      if (uri.host == youtubeMusicHost) {
-        unawaited(context.read<AppCubit>().openAppLink(link.url, false));
-      } else if (youtubeHosts.contains(uri.host)) {
-        if (uri.pathSegments.length == 1 &&
-            uri.pathSegments.contains("watch") &&
-            uri.queryParameters.containsKey('v')) {
-          String videoId = uri.queryParameters['v']!;
-          AutoRouter.of(context).push(VideoRoute(videoId: videoId));
-        }
-        if (uri.host == 'youtu.be' && uri.pathSegments.length == 1) {
-          String videoId = uri.pathSegments[0];
-
-          AutoRouter.of(context).push(VideoRoute(videoId: videoId));
-        }
+      final app = context.read<AppCubit>();
+      if (app.canOpenAppLink(uri)) {
+        unawaited(app.openAppLink(link.url, false));
       } else {
         unawaited(openExternalLink(context, uri));
       }
@@ -71,5 +46,40 @@ class TextLinkified extends StatelessWidget {
         }
       }
     }
+  }
+}
+
+class _TextLinkifiedState extends State<TextLinkified> {
+  SelectableLinkify? _text;
+
+  @override
+  void didUpdateWidget(TextLinkified oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.text != oldWidget.text) _text = null;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _text = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    // Linkify creates new gesture recognizers on every build. Rebuilding the
+    // same paragraph would replace SelectableText's controller and erase an
+    // active selection when the surrounding player updates.
+    return _text ??= SelectableLinkify(
+      text: widget.text,
+      contextMenuBuilder: (context, editableTextState) =>
+          AdaptiveTextSelectionToolbar.editableText(
+              editableTextState: editableTextState),
+      linkStyle: TextStyle(
+          color: colorScheme.primary, decoration: TextDecoration.none),
+      onOpen: (link) => widget.openLink(context, link),
+      options: const LinkifyOptions(humanize: true, removeWww: true),
+      linkifiers: const [UrlLinkifier(), TimestampLinkifier()],
+    );
   }
 }

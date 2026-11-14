@@ -18,17 +18,18 @@ class BetterPlayerDashUtils {
       final document = XmlDocument.parse(data);
       final adaptationSets = document.findAllElements('AdaptationSet');
       adaptationSets.forEach((node) {
-        final mimeType = node.getAttribute('mimeType');
+        final mimeType = _mimeType(node);
+        final contentType = node.getAttribute('contentType');
 
-        if (mimeType != null) {
-          if (MimeTypes.isVideo(mimeType)) {
-            tracks = tracks + parseVideo(node);
-          } else if (MimeTypes.isAudio(mimeType)) {
-            audios.add(parseAudio(node, audiosCount));
-            audiosCount += 1;
-          } else if (MimeTypes.isText(mimeType)) {
-            subtitles.add(parseSubtitle(masterPlaylistUrl, node));
-          }
+        if ((mimeType != null && MimeTypes.isVideo(mimeType)) ||
+            contentType == 'video') {
+          tracks = tracks + parseVideo(node);
+        } else if ((mimeType != null && MimeTypes.isAudio(mimeType)) ||
+            contentType == 'audio') {
+          audios.add(parseAudio(node, audiosCount));
+          audiosCount += 1;
+        } else if (MimeTypes.isText(node.getAttribute('mimeType'))) {
+          subtitles.add(parseSubtitle(masterPlaylistUrl, node));
         }
       });
     } catch (exception) {
@@ -39,22 +40,41 @@ class BetterPlayerDashUtils {
         tracks: tracks, audios: audios, subtitles: subtitles);
   }
 
+  static String? _mimeType(XmlElement node) =>
+      node.getAttribute('mimeType') ??
+      node.getElement('Representation')?.getAttribute('mimeType');
+
+  static int _frameRate(String? value) {
+    final parts = value?.trim().split('/') ?? [];
+    if (parts.isEmpty || parts.length > 2) return 0;
+    final numerator = int.tryParse(parts.first);
+    final denominator = parts.length == 2 ? int.tryParse(parts.last) : 1;
+    if (numerator == null ||
+        denominator == null ||
+        numerator <= 0 ||
+        denominator <= 0) {
+      return 0;
+    }
+    // The track model stores integer FPS, while DASH also permits ratios.
+    return (numerator / denominator).round();
+  }
+
   static List<BetterPlayerAsmsTrack> parseVideo(XmlElement node) {
     final List<BetterPlayerAsmsTrack> tracks = [];
 
     final representations = node.findAllElements('Representation');
 
     representations.forEach((representation) {
+      String? attribute(String name) =>
+          representation.getAttribute(name) ?? node.getAttribute(name);
       final String? id = representation.getAttribute('id');
-      final int width = int.parse(representation.getAttribute('width') ?? '0');
-      final int height =
-          int.parse(representation.getAttribute('height') ?? '0');
-      final int bitrate =
-          int.parse(representation.getAttribute('bandwidth') ?? '0');
-      final int frameRate =
-          int.parse(representation.getAttribute('frameRate') ?? '0');
-      final String? codecs = representation.getAttribute('codecs');
-      final String? mimeType = MimeTypes.getMediaMimeType(codecs ?? '');
+      final int width = int.tryParse(attribute('width') ?? '') ?? 0;
+      final int height = int.tryParse(attribute('height') ?? '') ?? 0;
+      final int bitrate = int.tryParse(attribute('bandwidth') ?? '') ?? 0;
+      final int frameRate = _frameRate(attribute('frameRate'));
+      final String? codecs = attribute('codecs');
+      final String? mimeType =
+          MimeTypes.getMediaMimeType(codecs ?? '') ?? attribute('mimeType');
       tracks.add(BetterPlayerAsmsTrack(
           id, width, height, bitrate, frameRate, codecs, mimeType));
     });
@@ -67,7 +87,7 @@ class BetterPlayerDashUtils {
         node.getAttribute('segmentAlignment') ?? '';
     String? label = node.getAttribute('label');
     final String? language = node.getAttribute('lang');
-    final String? mimeType = node.getAttribute('mimeType');
+    final String? mimeType = _mimeType(node);
 
     label ??= language;
 

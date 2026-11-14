@@ -16,15 +16,17 @@ import 'models/backend_playback.dart';
 class DashManifestResolver {
   static const maxInlineManifestBytes = 1024 * 1024;
   static const _warmFetchBudget = Duration(milliseconds: 1250);
+  static const _onionFetchBudget = Duration(seconds: 45);
   final http.Client client;
-  final Duration timeout;
+  final Duration? _timeout;
   final DateTime Function() _now;
   final _routes = <(Server, String, String?),
       ({DateTime expires, bool needsCheck, String? nativeManifestPath})>{};
 
   DashManifestResolver(this.client,
-      {this.timeout = const Duration(seconds: 5), DateTime Function()? now})
-      : _now = now ?? DateTime.now;
+      {Duration? timeout, DateTime Function()? now})
+      : _timeout = timeout,
+        _now = now ?? DateTime.now;
 
   (Server, String, String?) _route(Uri manifest, Server server) => (
         server,
@@ -133,6 +135,13 @@ class DashManifestResolver {
       {Duration? budget}) async {
     // Do not forward custom instance credentials through an untrusted redirect.
     var expired = false;
+    // A cold Tor circuit can outlast the ordinary five-second probe. Allow the
+    // native transport's 15-second connection and 30-second read budgets before
+    // abandoning adaptive playback. Explicit and optional warm limits win.
+    final timeout = _timeout ??
+        (uri.host.toLowerCase().endsWith('.onion')
+            ? _onionFetchBudget
+            : const Duration(seconds: 5));
     final limit = budget != null && budget < timeout ? budget : timeout;
     InvidiousServiceError? refusal;
     StreamIterator<List<int>>? activeBody;

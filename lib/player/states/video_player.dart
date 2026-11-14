@@ -247,6 +247,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   String? _qualityVideoId;
   int? _videoQuality;
   BetterPlayerSubtitlesSource? _failedSubtitle;
+  late final StreamSubscription<double> _subtitleSizeSubscription;
 
   bool get _shouldPlay => _requestedPlaying && player.shouldStartPlayback;
 
@@ -262,6 +263,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   VideoPlayerCubit(super.initialState, super.player, this.settings) {
+    _subtitleSizeSubscription = settings.stream
+        .map((state) => state.subtitleSize)
+        .distinct()
+        .listen((size) => videoController?.setSubtitleFontSize(size));
     onInit();
   }
 
@@ -272,6 +277,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   Future<void> close() async {
+    await _subtitleSizeSubscription.cancel();
     await stopForProxyChange();
     await super.close();
   }
@@ -768,46 +774,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       final canUseInlineManifest = !kIsWeb &&
           defaultTargetPlatform == TargetPlatform.android &&
           state.video?.liveNow != true;
-      var missingCheck = false;
-      try {
-        resolved = await Future.any([
-          service.dashManifestResolver.resolve(source.url, videoId, server,
-              throwRetryable: state.video?.backendPlayback != null ||
-                  _recoveringInitializedPlayback,
-              onMissingCheck: () => missingCheck = true,
-              onManifest: canUseInlineManifest
-                  ? (content) => downloadedManifest = content
-                  : null),
-          cancelled.then<String?>((_) => null),
-        ]);
-      } on BackendPlaybackFailure {
-        if (!_isCurrentAttempt(generation, sourceIndex)) return;
-        _sourceBackendRetryable = true;
-      } catch (error) {
-        if (error is! NerdVpnAccessRequired &&
-            error is! InvidiousServiceError &&
-            error is! HandshakeException &&
-            !(error is SocketException && error.osError == null)) {
-          rethrow;
-        }
-        if (_isCurrentAttempt(generation, sourceIndex)) {
-          _emitTerminalPlaybackError();
-        }
-        return;
-      }
-      if (!_isCurrentAttempt(generation, sourceIndex)) return;
-      final video = state.video;
-      String? inlineManifest = resolved == null ? null : downloadedManifest;
-      var generatedManifest = false;
-      if (resolved == null &&
-          missingCheck &&
-          !_sourceBackendRetryable &&
-          !kIsWeb &&
-          defaultTargetPlatform == TargetPlatform.android &&
-          video != null &&
-          video.liveNow != true) {
+      String? generateManifest() {
+        final video = state.video;
+        if (!canUseInlineManifest || video == null) return null;
         final manifestUri = Uri.parse(source.url);
-        inlineManifest = buildAdaptiveDashManifest(
+        return buildAdaptiveDashManifest(
           formats: video.adaptiveFormats ?? const [],
           duration: Duration(seconds: video.lengthSeconds ?? 0),
           resolveMediaUrl: (value) {
@@ -822,6 +793,50 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             return target;
           },
         );
+      }
+
+      // The onion API already supplies signed adaptive media URLs. Its browser
+      // manifest redirects to the public origin and requires a separate watch
+      // session, so use complete API tracks directly through the selected onion.
+      String? inlineManifest =
+          isNerdVpnOnionUrl(server.url) ? generateManifest() : null;
+      var generatedManifest = inlineManifest != null;
+      var missingCheck = false;
+      if (!generatedManifest) {
+        try {
+          resolved = await Future.any([
+            service.dashManifestResolver.resolve(source.url, videoId, server,
+                throwRetryable: state.video?.backendPlayback != null ||
+                    _recoveringInitializedPlayback,
+                onMissingCheck: () => missingCheck = true,
+                onManifest: canUseInlineManifest
+                    ? (content) => downloadedManifest = content
+                    : null),
+            cancelled.then<String?>((_) => null),
+          ]);
+        } on BackendPlaybackFailure {
+          if (!_isCurrentAttempt(generation, sourceIndex)) return;
+          _sourceBackendRetryable = true;
+        } catch (error) {
+          if (error is! NerdVpnAccessRequired &&
+              error is! InvidiousServiceError &&
+              error is! HandshakeException &&
+              !(error is SocketException && error.osError == null)) {
+            rethrow;
+          }
+          if (_isCurrentAttempt(generation, sourceIndex)) {
+            _emitTerminalPlaybackError();
+          }
+          return;
+        }
+        inlineManifest = resolved == null ? null : downloadedManifest;
+      }
+      if (!_isCurrentAttempt(generation, sourceIndex)) return;
+      if (resolved == null &&
+          inlineManifest == null &&
+          missingCheck &&
+          !_sourceBackendRetryable) {
+        inlineManifest = generateManifest();
         generatedManifest = inlineManifest != null;
       }
       if (resolved == null && inlineManifest == null) {
@@ -1371,6 +1386,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         : [];
   }
 
+  bool get hasSubtitleTracks =>
+      videoController?.betterPlayerSubtitlesSourceList.any(
+        (source) => source.type != BetterPlayerSubtitlesSourceType.none,
+      ) ??
+      false;
+
   @override
   int selectedSubtitle() {
     var tracks = getSubtitles();
@@ -1538,14 +1559,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   bool isUsingDash() {
-    if (_canStartNerdVpnProgressive &&
-        _playbackSources.firstOrNull?.videoFormat ==
-            BetterPlayerVideoFormat.other &&
-        _playbackSources.any(
-            (source) => source.videoFormat == BetterPlayerVideoFormat.dash)) {
-      return videoController?.betterPlayerDataSource?.videoFormat ==
-          BetterPlayerVideoFormat.dash;
-    }
+    final format = videoController?.betterPlayerDataSource?.videoFormat;
+    if (format == BetterPlayerVideoFormat.dash) return true;
+    // A failed DASH source can leave progressive playback active even while
+    // DASH remains the preference. Reflect that fallback so the toggle retries
+    // adaptive playback instead of silently disabling it for later videos.
+    if (format == BetterPlayerVideoFormat.other) return false;
     return settings.state.useDash;
   }
 

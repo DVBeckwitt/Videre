@@ -12,6 +12,8 @@ import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/player/views/components/subtitle_failure_notice.dart';
+import 'package:clipious/player/views/tv/components/player_settings.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -35,10 +37,26 @@ class _VideoWithoutNative extends VideoPlayerCubit {
   void disposeControllers() => videoController = null;
 }
 
+class _SettingsWithHeldSubtitleWrite extends TestSettingsCubit {
+  _SettingsWithHeldSubtitleWrite(super.initialState, super.appCubit);
+
+  final firstChangeStarted = Completer<void>();
+  final releaseFirstChange = Completer<void>();
+
+  @override
+  Future<void> changeSubtitleSize({required bool increase}) async {
+    if (!firstChangeStarted.isCompleted) {
+      firstChangeStarted.complete();
+      await releaseFirstChange.future;
+    }
+    await super.changeSubtitleSize(increase: increase);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late TestAppCubit app;
-  late TestSettingsCubit settings;
+  late _SettingsWithHeldSubtitleWrite settings;
   late TestPlayerCubit player;
   late _VideoWithoutNative video;
   late BetterPlayerController controller;
@@ -59,7 +77,7 @@ void main() {
     await app.initState();
     app.intentDataStreamSubscription =
         const Stream<void>.empty().listen((_) {});
-    settings = TestSettingsCubit(SettingsState.init(), app);
+    settings = _SettingsWithHeldSubtitleWrite(SettingsState.init(), app);
     player = TestPlayerCubit(PlayerState.init(null), settings);
     video = _VideoWithoutNative(
       VideoPlayerState(
@@ -175,6 +193,105 @@ void main() {
     expect(find.textContaining('Subtitles unavailable'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  for (final television in [false, true]) {
+    testWidgets(
+        '${television ? 'TV' : 'phone'} changes saved subtitle size in the player',
+        (tester) async {
+      app_main.darkColorScheme = const ColorScheme.dark();
+      player.showBigPlayer();
+      player.setEvent(const MediaEvent(state: MediaState.pause));
+      await tester.pumpWidget(MultiBlocProvider(
+        providers: [
+          BlocProvider<PlayerCubit>.value(value: player),
+          BlocProvider<VideoPlayerCubit>.value(value: video),
+          BlocProvider<SettingsCubit>.value(value: settings),
+        ],
+        child: host(
+          width: 790,
+          height: 390,
+          child: television
+              ? const TvPlayerSettings()
+              : PlayerControls(mediaPlayerCubit: video),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final open = find.byKey(const ValueKey('player-subtitle-size-open'));
+      if (television) {
+        expect(open, findsOneWidget);
+        bool sizeButtonHasFocus() {
+          var hasFocus = false;
+          FocusManager.instance.primaryFocus?.context
+              ?.visitAncestorElements((element) {
+            hasFocus = element == open.evaluate().single;
+            return !hasFocus;
+          });
+          return hasFocus;
+        }
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        if (!sizeButtonHasFocus()) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+          await tester.pumpAndSettle();
+        }
+        expect(sizeButtonHasFocus(), isTrue);
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(find.byIcon(Icons.more_vert));
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(open);
+        await tester.tap(open);
+      }
+      await tester.pumpAndSettle();
+
+      final increase =
+          find.byKey(const ValueKey('player-subtitle-size-increase'));
+      expect(increase, findsOneWidget);
+      await tester.runAsync(() async {
+        final sizes = <double>[];
+        final changes = settings.stream
+            .map((state) => state.subtitleSize)
+            .where((size) => size > 14)
+            .distinct()
+            .listen(sizes.add);
+        Future<void> increaseSize() async {
+          if (television) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.select);
+          } else {
+            await tester.tap(increase);
+          }
+        }
+
+        await increaseSize();
+        await settings.firstChangeStarted.future
+            .timeout(const Duration(seconds: 2));
+        await increaseSize();
+        await increaseSize();
+        if (!television) {
+          await tester.tap(find.text('Close'));
+          await tester.pumpAndSettle();
+          expect(increase, findsNothing);
+        }
+        final complete = settings.stream
+            .firstWhere((state) => state.subtitleSize == 17)
+            .timeout(const Duration(seconds: 2));
+        settings.releaseFirstChange.complete();
+        try {
+          await complete;
+          expect(sizes, [15, 16, 17]);
+        } finally {
+          await changes.cancel();
+        }
+      });
+      await tester.pumpAndSettle();
+      expect(controller.subtitleFontSize.value, 17);
+      expect(db.getSettings(subtitleSizeSettingName)?.value, '17.0');
+      expect(player.state.mediaEvent.state, MediaState.pause);
+      if (television) expect(find.text('17'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets(
       'mini player retains the failure without overflowing its controls',

@@ -52,7 +52,7 @@ class VideoInfo extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (titleAndChannelInfo)
-            Text(
+            SelectableText(
               video.title ?? '',
               style: textTheme.titleLarge?.copyWith(color: colorScheme.primary),
               textAlign: TextAlign.start,
@@ -88,12 +88,15 @@ class VideoInfo extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                    child: InkWell(
-                        onTap: () => openChannel(context),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                          child: Text(video.author ?? ''),
-                        ))),
+                  child: InkWell(
+                    onTap: () => openChannel(context),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                      child: SelectableText(video.author ?? '',
+                          onTap: () => openChannel(context)),
+                    ),
+                  ),
+                ),
               ],
             ),
           if (titleAndChannelInfo)

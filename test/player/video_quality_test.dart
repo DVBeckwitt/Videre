@@ -17,6 +17,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -500,12 +501,111 @@ void main() {
     Future<_VideoPlayer> createStartupVideo({
       String serverUrl = nerdVpn,
       bool liveNow = false,
+      List<AdaptiveFormat>? adaptiveFormats,
     }) async {
       final server = Server(url: serverUrl);
       await db.upsertServer(server);
       await db.useServer(server);
       return create(_video('startup', heights: [480, 360], serverUrl: serverUrl)
-          .copyWith(dashUrl: '$serverUrl$dashPath', liveNow: liveNow));
+          .copyWith(
+              dashUrl: '$serverUrl$dashPath',
+              liveNow: liveNow,
+              adaptiveFormats: adaptiveFormats));
+    }
+
+    AdaptiveFormat adaptive(String url, String itag, {int? height}) =>
+        AdaptiveFormat(
+            '500-999',
+            '100000',
+            '0-499',
+            url,
+            itag,
+            height == null
+                ? 'audio/mp4; codecs="mp4a.40.2"'
+                : 'video/mp4; codecs="avc1.640028"',
+            '1000000',
+            '',
+            'RECTANGULAR',
+            'mp4',
+            null,
+            null,
+            null,
+            size: height == null ? null : '1280x$height');
+
+    List<AdaptiveFormat> adaptiveFormats({bool foreignAudio = false}) => [
+          adaptive('$nerdVpn/videoplayback?itag=134', '134', height: 360),
+          adaptive('https://rr1.googlevideo.com/videoplayback?itag=136', '136',
+              height: 720),
+          adaptive(
+              foreignAudio
+                  ? 'https://unrelated.example/audio'
+                  : '$nerdVpn/videoplayback?itag=140',
+              '140'),
+          adaptive('https://unrelated.example/video', '137', height: 1080),
+        ];
+
+    test('onion API tracks provide HD without the protected browser manifest',
+        () async {
+      const onion = 'http://$nerdVpnOnionHost';
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        manifestRequests.add(request.url);
+        return http.Response('', 302,
+            headers: {'location': '$nerdVpn/companion$dashQuery'},
+            request: request);
+      }));
+      await settings.setLastVideoQuality(720);
+      final video = await createStartupVideo(
+          serverUrl: onion, adaptiveFormats: adaptiveFormats());
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(manifestRequests, isEmpty);
+      expect(sources, ['$onion$dashQuery']);
+      final source = video.videoController!.betterPlayerDataSource!;
+      expect(source.inlineDashManifest, contains('height="720"'));
+      expect(
+          source.inlineDashManifest,
+          contains(
+              '$onion/videoplayback?itag=136&amp;host=rr1.googlevideo.com'));
+      expect(
+          source.inlineDashManifest, contains('$onion/videoplayback?itag=140'));
+      expect(source.inlineDashManifest, isNot(contains(nerdVpn)));
+      expect(source.inlineDashManifest, isNot(contains('unrelated.example')));
+      expect(source.useAsmsAudioTracks, isFalse);
+      expect(video.videoController!.betterPlayerAsmsTracks.map((t) => t.height),
+          [360, 720]);
+      expect(initialDashHeights, [720]);
+      expect(video.isUsingDash(), isTrue);
+    });
+
+    for (final (live, enabled, foreignAudio) in [
+      (true, true, false),
+      (false, false, false),
+      (false, true, true),
+    ]) {
+      test(
+          'onion generated DASH respects live=$live enabled=$enabled foreignAudio=$foreignAudio',
+          () async {
+        const onion = 'http://$nerdVpnOnionHost';
+        await settings.setUseDash(enabled);
+        final video = await createStartupVideo(
+            serverUrl: onion,
+            liveNow: live,
+            adaptiveFormats: adaptiveFormats(foreignAudio: foreignAudio));
+        addTearDown(video.close);
+
+        await video.playVideo(false);
+        await _flush();
+        expect(
+            video.videoController!.betterPlayerDataSource!.inlineDashManifest,
+            enabled && !live ? '<MPD type="static"/>' : isNull);
+        expect(manifestRequests,
+            enabled ? [Uri.parse('$onion$dashQuery')] : isEmpty);
+        expect(
+            sources, [enabled ? '$onion$dashQuery' : '$onion/startup-360.mp4']);
+      });
     }
 
     test('starts progressive without probing DASH and can enable DASH',
@@ -606,6 +706,28 @@ void main() {
       await _flush();
       expect(sources, ['$nerdVpn$dashQuery']);
       expect(video.isUsingDash(), isTrue);
+    });
+
+    test('onion progressive fallback shows DASH off and can retry DASH',
+        () async {
+      const onion = 'http://$nerdVpnOnionHost';
+      failedSources.add('$onion$dashQuery');
+      final video = await createStartupVideo(serverUrl: onion);
+      addTearDown(video.close);
+
+      await video.playVideo(false);
+      await _flush();
+      expect(sources, ['$onion$dashQuery', '$onion/startup-360.mp4']);
+      expect(video.isUsingDash(), isFalse);
+      expect(settings.state.useDash, isTrue,
+          reason: 'A failed source must not change the saved preference');
+
+      failedSources.clear();
+      video.toggleDash();
+      await _flush();
+      expect(sources.last, '$onion$dashQuery');
+      expect(video.isUsingDash(), isTrue);
+      expect(settings.state.useDash, isTrue);
     });
 
     test('keeps DASH priority on TV without an in-player toggle', () async {

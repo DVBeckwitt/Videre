@@ -43,6 +43,7 @@ import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/utils/views/components/text_linkified.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -2427,9 +2428,12 @@ void main() {
             .position;
         position.jumpTo(scrollOffset);
         await tester.pump();
-        final text = find
-            .descendant(of: content, matching: find.byType(EditableText))
-            .first;
+        // The title and channel are also selectable; this gesture exercises
+        // multiline description selection while its containing page scrolls.
+        final text = find.descendant(
+            of: find.descendant(
+                of: content, matching: find.byType(TextLinkified)),
+            matching: find.byType(EditableText));
         final textTop = tester.getTopLeft(text);
         final contentTop = tester.getTopLeft(content);
         final start = Offset(textTop.dx + 80,
@@ -2465,6 +2469,43 @@ void main() {
       });
     }
   }
+
+  testWidgets('expanded description keeps its toolbar during playback updates',
+      (tester) async {
+    final service = globals.service as _TestService;
+    service.videos[0] = service.videos[0].copyWith(
+      description: 'Select description words\n'
+          '1:02 Introduction\nhttps://youtube.com/playlist?list=PLexample\n'
+          '${List.filled(60, 'A line from the description.').join('\n')}',
+    );
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    final text = find.descendant(
+        of: find.descendant(
+            of: find.byType(ExpandedPlayer),
+            matching: find.byType(TextLinkified)),
+        matching: find.byType(EditableText));
+    final start = tester.getTopLeft(text) + const Offset(30, 10);
+    final gesture = await tester.startGesture(start);
+    await tester.pump(const Duration(milliseconds: 600));
+    final selected = tester.widget<EditableText>(text).controller.selection;
+    expect(selected.isCollapsed, isFalse);
+    for (var second = 1; second <= 3; second++) {
+      player.setEvent(MediaEvent<Duration>(
+          type: MediaEventType.progress,
+          state: MediaState.playing,
+          value: Duration(seconds: second)));
+      await tester.pump(const Duration(milliseconds: 250));
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(tester.widget<EditableText>(text).controller.selection, selected);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Share'), findsOneWidget);
+    expect(player.state.isMini, isFalse);
+    expect(tester.takeException(), isNull);
+  });
 
   for (final sourceAspectRatio in [9 / 16, 21 / 9]) {
     testWidgets(

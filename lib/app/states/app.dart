@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:auto_route/auto_route.dart';
 import 'package:bloc/bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/router.dart';
@@ -10,6 +11,8 @@ import 'package:flutter/widgets.dart';
 import '../../globals.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../main.dart' show isTv;
+import '../../playlists/models/playlist.dart';
+import '../../playlists/models/playlist_reference.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
 import '../../settings/models/errors/no_server_selected.dart';
@@ -123,63 +126,67 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       return;
     }
     try {
-      Uri uri = Uri.parse(url);
-      String? videoId;
-      if (const {'http', 'https'}.contains(uri.scheme) &&
-          youtubeHosts.contains(uri.host)) {
-        if (uri.host == youtubeMusicHost) {
-          final route = _musicLinkRoute(uri);
-          if (route == null) return;
-          if (isTv && fullStack) {
-            await appRouter.replaceAll([const TvHomeRoute(), route]);
-          } else if (fullStack) {
-            await appRouter.replaceAll([
-              MainRoute(children: [const MainContentRoute(), route])
-            ]);
-          } else {
-            await appRouter.push(route);
-          }
-          return;
-        }
-        if (uri.pathSegments.length == 1 &&
-            uri.pathSegments.contains("watch") &&
-            uri.queryParameters.containsKey('v')) {
-          videoId = uri.queryParameters['v']!;
-        }
-        if (uri.host == 'youtu.be' && uri.pathSegments.length == 1) {
-          videoId = uri.pathSegments[0];
-        }
-
-        if (videoId != null &&
-            videoId.length == 11 &&
-            RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
-          log.fine('Opening video $videoId, full stack: $fullStack');
-          if (isTv) {
-            if (fullStack) {
-              await appRouter.replaceAll([
-                const TvHomeRoute(),
-                TvVideoRoute(videoId: videoId),
-              ]);
-            } else {
-              await appRouter.push(TvVideoRoute(videoId: videoId));
-            }
-          } else if (fullStack) {
-            await appRouter.replaceAll([
-              MainRoute(children: [
-                const MainContentRoute(),
-                VideoRoute(videoId: videoId)
-              ])
-            ]);
-          } else {
-            await appRouter.push(VideoRoute(videoId: videoId));
-          }
-        }
+      final route = _appLinkRoute(Uri.parse(url));
+      if (route == null) return;
+      log.fine('Opening ${route.routeName}, full stack: $fullStack');
+      if (isTv && fullStack) {
+        await appRouter.replaceAll([const TvHomeRoute(), route]);
+      } else if (fullStack) {
+        await appRouter.replaceAll([
+          MainRoute(children: [const MainContentRoute(), route])
+        ]);
+      } else {
+        await appRouter.push(route);
       }
     } catch (err, stacktrace) {
       // not a url;
       log.severe('Couldn\'t open external video link (${err.runtimeType})',
           null, stacktrace);
     }
+  }
+
+  bool canOpenAppLink(Uri uri) => _appLinkRoute(uri) != null;
+
+  PageRouteInfo? _appLinkRoute(Uri uri) {
+    if (!const {'http', 'https'}.contains(uri.scheme) ||
+        !youtubeHosts.contains(uri.host) ||
+        uri.userInfo.isNotEmpty ||
+        uri.authority.contains('@')) {
+      return null;
+    }
+    if (uri.host == youtubeMusicHost) return _musicLinkRoute(uri);
+    if (uri.pathSegments.length != 1) return null;
+
+    final path = uri.pathSegments.single;
+    if (uri.host != 'youtu.be' && path == 'playlist') {
+      final id = uri.queryParameters['list'];
+      if (id == null ||
+          id.length > 200 ||
+          !RegExp(r'^(?:PL|OLAK5uy_|RD|UU|LL|FL)[A-Za-z0-9_-]+$')
+              .hasMatch(id)) {
+        return null;
+      }
+      final playlist =
+          Playlist(title: '', playlistId: id, author: '', videoCount: 0);
+      final reference = PlaylistReference.forPlaylist(playlist, db);
+      if (isTv) {
+        return TvPlaylistRoute(
+            playlist: playlist, canDeleteVideos: false, reference: reference);
+      }
+      return PlaylistViewRoute(
+          playlist: playlist, canDeleteVideos: false, reference: reference);
+    }
+
+    final videoId = uri.host == 'youtu.be'
+        ? path
+        : path == 'watch'
+            ? uri.queryParameters['v']
+            : null;
+    if (videoId == null || !RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
+      return null;
+    }
+    if (isTv) return TvVideoRoute(videoId: videoId);
+    return VideoRoute(videoId: videoId);
   }
 
   MusicRoute? _musicLinkRoute(Uri uri) {

@@ -5,15 +5,21 @@ import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/services/playlist_load_session.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/models/timestamp_linkifier.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/text_linkified.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -62,6 +68,38 @@ class _RecordingRouter extends AppRouter {
     pushed = route;
     return null;
   }
+}
+
+class _PlaylistService extends Service {
+  final requests = <String>[];
+
+  @override
+  Future<Playlist> getPublicPlaylists(String playlistId,
+      {int? page, bool saveLastSeen = true, Server? serverOverride}) async {
+    requests.add(playlistId);
+    return Playlist(
+        title: 'Loaded playlist',
+        playlistId: playlistId,
+        author: 'Channel',
+        videoCount: 0);
+  }
+}
+
+Future<void> _expectPlaylistLoads(
+    Playlist playlist, PlaylistReference? reference) async {
+  final service = _PlaylistService();
+  final loader = PlaylistLoadSession(
+      playlist: playlist,
+      reference: reference,
+      database: db,
+      playlistService: service);
+  addTearDown(loader.release);
+  final completed = loader.changes.firstWhere((snapshot) => !snapshot.loading);
+  loader.retain();
+  await completed;
+  expect(service.requests, [playlist.playlistId]);
+  expect(loader.playlist.title, 'Loaded playlist');
+  expect(loader.error, isNull);
 }
 
 Future<void> _waitForRoute(String name, {StackRouter? router}) async {
@@ -125,6 +163,56 @@ void main() {
         [TvHomeRoute.name, TvVideoRoute.name]);
     expect(appRouter.current.argsAs<TvVideoRouteArgs>().videoId, 'dQw4w9WgXcQ');
   });
+
+  for (final tv in [true, false]) {
+    test('${tv ? 'TV' : 'phone'} playlist link retains the home stack',
+        () async {
+      appRouter.dispose();
+      app_globals.isTv = tv;
+      appRouter = AppRouter(hasServer: true);
+      const id = 'PLy8d1u7T3WWJIuwxN8QuoUHdKYp9JDBcm';
+      await app.openAppLink('https://www.youtube.com/playlist?list=$id', true);
+
+      if (tv) {
+        expect(appRouter.stack.map((page) => page.name),
+            [TvHomeRoute.name, TvPlaylistRoute.name]);
+        final args = appRouter.current.argsAs<TvPlaylistRouteArgs>();
+        expect(args.playlist.playlistId, id);
+        expect(args.canDeleteVideos, isFalse);
+        await _expectPlaylistLoads(args.playlist, args.reference);
+      } else {
+        final children = appRouter.current.pendingChildren;
+        expect(children.map((route) => route.name),
+            [MainContentRoute.name, PlaylistViewRoute.name]);
+        final args = children.last.args as PlaylistViewRouteArgs;
+        expect(args.playlist.playlistId, id);
+        expect(args.canDeleteVideos, isFalse);
+        await _expectPlaylistLoads(args.playlist, args.reference);
+      }
+    });
+
+    testWidgets(
+        '${tv ? 'TV' : 'phone'} description playlist link opens internally',
+        (tester) async {
+      appRouter.dispose();
+      app_globals.isTv = tv;
+      final router = _RecordingRouter();
+      appRouter = router;
+      final linkified = TextLinkified(
+          text: 'https://youtube.com/playlist?list=PLsupported_playlist',
+          player: _LinkPlayer(PlayerState.init(null)));
+      await tester.pumpWidget(MaterialApp(
+        home: BlocProvider<AppCubit>.value(
+            value: app, child: Scaffold(body: Column(children: [linkified]))),
+      ));
+
+      await tester.tapAt(
+          tester.getTopLeft(find.byType(EditableText)) + const Offset(20, 10));
+      await tester.pump();
+      expect(router.pushed?.routeName,
+          tv ? TvPlaylistRoute.name : PlaylistViewRoute.name);
+    });
+  }
 
   test('phone cold link retains the nested phone route stack', () async {
     appRouter.dispose();
@@ -294,6 +382,11 @@ void main() {
     await appRouter.replaceAll([const TvHomeRoute()]);
     for (final link in [
       'https://www.youtube.com/watch?v=',
+      'https://www.youtube.com/playlist?list=',
+      'https://www.youtube.com/playlist?list=PL..%2Fprivate',
+      'https://www.youtube.com/playlist?list=${'PL' * 101}',
+      'https://youtu.be/playlist?list=PLsupported_playlist',
+      'https://user:private@www.youtube.com/playlist?list=PLsupported_playlist',
       'https://www.youtube.com/watch?v=..%2Flogin%3Ftoken%3Dprivate',
       'https://youtu.be/too-short',
       'https://music.youtube.com/watch?v=',
@@ -361,6 +454,153 @@ void main() {
 
     linkified.openLink(context, TimestampElement('1:23'));
     expect(player.sought, const Duration(minutes: 1, seconds: 23));
+  });
+
+  testWidgets('unsupported description links show the existing blocked notice',
+      (tester) async {
+    final linkified = TextLinkified(
+        text: 'https://www.youtube.com/redirect?q=https://instance.example',
+        player: _LinkPlayer(PlayerState.init(null)));
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: BlocProvider<AppCubit>.value(
+          value: app, child: Scaffold(body: Column(children: [linkified]))),
+    ));
+
+    await tester.tapAt(
+        tester.getTopLeft(find.byType(EditableText)) + const Offset(20, 10));
+    await tester.pumpAndSettle();
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(AlertDialog)))!;
+    expect(find.text(locals.externalLinkBlocked), findsOneWidget);
+  });
+
+  for (final action in ['Copy', 'Share']) {
+    testWidgets('selected description/comment text can $action',
+        (tester) async {
+      final calls = <MethodCall>[];
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        calls.add(call);
+        if (call.method == 'Clipboard.hasStrings') return {'value': false};
+        return null;
+      });
+      addTearDown(() =>
+          messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: TextLinkified(
+              text: 'Select these words only',
+              player: _LinkPlayer(PlayerState.init(null))),
+        ),
+      ));
+
+      await tester.longPress(find.byType(SelectableText));
+      await tester.pumpAndSettle();
+      final editable =
+          tester.state<EditableTextState>(find.byType(EditableText));
+      editable.userUpdateTextEditingValue(
+          const TextEditingValue(
+              text: 'Select these words only',
+              selection: TextSelection(baseOffset: 7, extentOffset: 18)),
+          SelectionChangedCause.longPress);
+      editable.showToolbar();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(action));
+      await tester.pumpAndSettle();
+
+      if (action == 'Copy') {
+        expect(
+            calls
+                .lastWhere((call) => call.method == 'Clipboard.setData')
+                .arguments,
+            {'text': 'these words'});
+      } else {
+        expect(
+            calls.lastWhere((call) => call.method == 'Share.invoke').arguments,
+            'these words');
+      }
+    });
+  }
+
+  testWidgets('linkified selection survives parent rebuilds after long press',
+      (tester) async {
+    late StateSetter rebuild;
+    const text = 'Select these words https://example.com';
+    final player = _LinkPlayer(PlayerState.init(null));
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: StatefulBuilder(builder: (context, setState) {
+          rebuild = setState;
+          return Column(children: [TextLinkified(text: text, player: player)]);
+        }),
+      ),
+    ));
+
+    final gesture = await tester.startGesture(
+        tester.getTopLeft(find.byType(EditableText)) + const Offset(20, 10));
+    await tester.pump(const Duration(milliseconds: 600));
+    final before = tester.widget<EditableText>(find.byType(EditableText));
+    final selection = before.controller.selection;
+    expect(selection.isCollapsed, isFalse);
+
+    rebuild(() {});
+    await tester.pump();
+    await gesture.up();
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .controller
+            .selection,
+        selection);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Share'), findsOneWidget);
+
+    rebuild(() {});
+    await tester.pumpAndSettle();
+    final after = tester.widget<EditableText>(find.byType(EditableText));
+    expect(after.controller.selection, selection);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Share'), findsOneWidget);
+  });
+
+  testWidgets('cached linkified text uses the current video and updated text',
+      (tester) async {
+    late StateSetter rebuild;
+    const firstVideo = Video(videoId: 'first');
+    const secondVideo = Video(videoId: 'second');
+    final firstPlayer = _LinkPlayer(PlayerState.init([firstVideo])
+        .copyWith(currentlyPlaying: firstVideo, isPlaying: true));
+    final secondPlayer = _LinkPlayer(PlayerState.init([secondVideo])
+        .copyWith(currentlyPlaying: secondVideo, isPlaying: true));
+    var video = firstVideo;
+    var player = firstPlayer;
+    var text = '1:23 https://example.com';
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: StatefulBuilder(builder: (context, setState) {
+        rebuild = setState;
+        return Column(children: [
+          TextLinkified(text: text, player: player, video: video)
+        ]);
+      })),
+    ));
+    rebuild(() {
+      video = secondVideo;
+      player = secondPlayer;
+    });
+    await tester.pump();
+    await tester.tapAt(
+        tester.getTopLeft(find.byType(EditableText)) + const Offset(20, 10));
+    expect(firstPlayer.sought, isNull);
+    expect(secondPlayer.sought, const Duration(minutes: 1, seconds: 23));
+
+    rebuild(() => text = 'Updated description https://example.org');
+    await tester.pump();
+    expect(
+        tester.widget<EditableText>(find.byType(EditableText)).controller.text,
+        'Updated description example.org');
   });
 
   test('shared link query data and malformed input stay out of logs', () async {

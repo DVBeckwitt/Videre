@@ -2,7 +2,7 @@
 
 [![Videre — GitHub star history, refreshed daily](./assets/star-history.svg)](./docs/star-history.md)
 
-**An open-source [Invidious](https://invidious.io) client for Android phones, tablets, and TVs.**
+**Videre brings [Invidious](https://invidious.io)’s privacy-first approach to Android phones, tablets, and TVs, keeping you in control of your server and connection.**
 
 Watch, listen, and download through a public Invidious instance or your own server. No Google account required; Invidious accounts are optional.
 

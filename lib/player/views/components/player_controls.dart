@@ -17,6 +17,7 @@ import 'package:clipious/player/views/components/playback_speed_quick_controls.d
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
+import 'package:clipious/player/views/components/subtitle_size_picker.dart';
 import 'package:clipious/player/views/components/video_display_mode_picker.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
@@ -148,6 +149,16 @@ class PlayerControls extends StatelessWidget {
                   },
                   leading: const Icon(Icons.subtitles),
                   title: Text(locals.subtitles),
+                ),
+              if (pc is VideoPlayerCubit && pc.hasSubtitleTracks)
+                ListTile(
+                  key: const ValueKey('player-subtitle-size-open'),
+                  leading: const Icon(Icons.format_size),
+                  title: Text(locals.subtitleFontSize),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    showSubtitleSizePicker(context);
+                  },
                 ),
               if (videoTracks.isNotEmpty)
                 ListTile(

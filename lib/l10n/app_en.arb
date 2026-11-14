@@ -569,6 +569,9 @@
     "description": "Settings label for the size of the subtitles"
   },
   "subtitleFontSizeDescription": "Change the size of the subtitles if it is too small or too big on your device",
+  "subtitleFontSizeDecrease": "Decrease subtitle size",
+  "subtitleFontSizeIncrease": "Increase subtitle size",
+  "subtitleFontSizeSaveFailed": "Could not save the subtitle size. Please try again.",
   "@subtitleFontSizeDescription": {
     "description": "Settings description for subtitle size"
   },

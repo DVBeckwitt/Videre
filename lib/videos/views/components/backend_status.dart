@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../../l10n/generated/app_localizations.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
 
-import '../../../player/states/player.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../player/views/components/backend_request_indicator.dart';
 import '../../../player/views/components/backend_retry_notice.dart';
 import '../../states/video.dart';
@@ -10,7 +8,6 @@ import '../../states/video.dart';
 bool showVideoMetadataRetry(VideoState state) =>
     state.retryingVideo && (state.requestedBackend?.retryIndex ?? 0) == 0;
 
-/// Retains the metadata request, then follows active playback of this video.
 class VideoBackendStatus extends StatelessWidget {
   final VideoState state;
 
@@ -18,16 +15,10 @@ class VideoBackendStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final request = context.select((PlayerCubit player) {
-      final active = player.state;
-      if (!state.loadingVideo &&
-          state.error.isEmpty &&
-          !active.isClosing &&
-          active.currentlyPlaying?.videoId == state.videoId) {
-        return active.requestedBackend;
-      }
-      return state.requestedBackend;
-    });
+    if (!state.loadingVideo && state.error.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final request = state.requestedBackend;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,

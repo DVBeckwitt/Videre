@@ -44,6 +44,7 @@ enum EnableBackGroundNotificationResponse {
 class SettingsCubit extends Cubit<SettingsState> {
   final AppCubit appCubit;
   bool _backupBusy = false;
+  Future<void> _pendingSubtitleSize = Future<void>.value();
 
   SettingsCubit(super.initialState, this.appCubit) {
     onReady();
@@ -134,23 +135,12 @@ class SettingsCubit extends Cubit<SettingsState> {
     }
   }
 
-  changeSubtitleSize({required bool increase}) async {
-    if (increase) {
-      await _setSubtitleSize(state.subtitleSize + 1);
-    } else {
-      if (state.subtitleSize > 1) {
-        await _setSubtitleSize(state.subtitleSize - 1);
-      }
-    }
-  }
+  Future<void> changeSubtitleSize({required bool increase}) =>
+      _updateSubtitleSize((current) =>
+          increase ? current + 1 : (current - 1).clamp(1.0, double.infinity));
 
-  setSubtitleSize(int value) async {
-    if (value < 1) {
-      await _setSubtitleSize(1);
-    } else {
-      await _setSubtitleSize(value.toDouble());
-    }
-  }
+  Future<void> setSubtitleSize(int value) =>
+      _updateSubtitleSize((_) => value < 1 ? 1 : value.toDouble());
 
   toggleRememberSubtitles(bool value) async {
     await setRememberSubtitles(value);
@@ -465,7 +455,31 @@ class SettingsCubit extends Cubit<SettingsState> {
   setUseReturnYoutubeDislike(bool b) async =>
       await _set(useReturnYoutubeDislikeSettingName, b);
 
-  _setSubtitleSize(double d) async => await _set(subtitleSizeSettingName, d);
+  Future<void> _updateSubtitleSize(double Function(double) update) {
+    final owner = db.forProfile(db.profileId);
+    final profile = owner.profileId;
+    final session = appCubit.state.sessionRevision;
+    bool isCurrentSession() =>
+        !isClosed &&
+        db.profileId == profile &&
+        appCubit.state.sessionRevision == session;
+
+    Future<void> save() async {
+      if (!isCurrentSession()) return;
+      final size = update(state.subtitleSize);
+      final setting = SettingsValue(subtitleSizeSettingName, size.toString());
+      await owner.saveSetting(setting);
+      if (isCurrentSession()) {
+        emit(state
+            .copyWith(settings: {...state.settings, setting.name: setting}));
+      }
+    }
+
+    // All subtitle controls share ordering, including a reopened dialog.
+    final saving = _pendingSubtitleSize.then((_) => save());
+    _pendingSubtitleSize = saving.catchError((Object _) {});
+    return saving;
+  }
 
   setSkipSslVerification(bool b) async =>
       await _set(skipSslVerificationSettingName, b);

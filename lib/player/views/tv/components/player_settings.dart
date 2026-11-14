@@ -4,9 +4,11 @@ import 'package:clipious/player/states/tv_player_settings.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
+import 'package:clipious/player/views/components/subtitle_size_picker.dart';
 import 'package:clipious/player/views/components/video_display_mode_picker.dart';
 import 'package:clipious/player/views/tv/components/sleep_timer.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -185,6 +187,19 @@ class TvPlayerSettings extends StatelessWidget {
               Wrap(
                 alignment: WrapAlignment.center,
                 children: [
+                  if (cubit.player.hasSubtitleTracks)
+                    Shortcuts(
+                      shortcuts: {
+                        for (final key in selectKeys)
+                          SingleActivator(key): const ActivateIntent(),
+                      },
+                      child: TextButton.icon(
+                        key: const ValueKey('player-subtitle-size-open'),
+                        onPressed: () => showSubtitleSizePicker(context),
+                        icon: const Icon(Icons.format_size),
+                        label: Text(locals.subtitleFontSize),
+                      ),
+                    ),
                   TextButton.icon(
                     key: const ValueKey('player-video-display-open'),
                     onPressed: () => showVideoDisplayModePicker(context),

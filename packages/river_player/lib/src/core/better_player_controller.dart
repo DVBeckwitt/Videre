@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:collection/collection.dart' show IterableExtension;
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show TargetPlatform, ValueListenable, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:river_player/river_player.dart';
@@ -90,6 +90,17 @@ class BetterPlayerController {
   ///Currently used subtitles source.
   BetterPlayerSubtitlesSource? get betterPlayerSubtitlesSource =>
       _betterPlayerSubtitlesSource;
+
+  final _subtitleFontSize = ValueNotifier<double?>(null);
+
+  ValueListenable<double?> get subtitleFontSize => _subtitleFontSize;
+
+  ///Resizes rendered captions without changing the active subtitle track.
+  void setSubtitleFontSize(double size) {
+    if (!_disposed && size.isFinite && size > 0) {
+      _subtitleFontSize.value = size;
+    }
+  }
 
   ///Subtitles lines for current data source.
   List<BetterPlayerSubtitle> subtitlesLines = [];
@@ -1453,6 +1464,7 @@ class BetterPlayerController {
       _controlsVisibilityStreamController.close();
       _videoEventStreamSubscription?.cancel();
       _disposed = true;
+      _subtitleFontSize.dispose();
       _controllerEventStreamController.close();
 
       ///Delete files async
