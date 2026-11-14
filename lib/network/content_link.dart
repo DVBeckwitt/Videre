@@ -29,6 +29,14 @@ class ContentLink {
         uri.authority.contains('@')) {
       return null;
     }
+    try {
+      return _parseContent(uri, host);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  static ContentLink? _parseContent(Uri uri, String host) {
     final music = host == youtubeMusicHost;
     final parts = uri.pathSegments;
     final query = uri.queryParameters;

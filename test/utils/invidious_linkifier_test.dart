@@ -39,4 +39,12 @@ void main() {
           '[Unavailable]');
     }
   });
+
+  test('bad URL encoding cannot break a description or disclose the address',
+      () {
+    expect(
+        links.rewriteText(
+            'See https://youtu.be/%FF https://www.youtube.com/watch?v=%FF'),
+        'See [Unavailable] [Unavailable]');
+  });
 }
