@@ -6,6 +6,8 @@
 
 Watch, listen, and download through a public Invidious instance or your own server. No Google account required; Invidious accounts are optional.
 
+Videre connects to your chosen Invidious instance, which retrieves YouTube content on your behalf.
+
 Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Videre, ask questions, and share ideas.
 
 **[Download the latest APK](https://github.com/DVBeckwitt/Videre/releases/latest)** · Android 7.0+ · [Report a bug](https://github.com/DVBeckwitt/Videre/issues)
@@ -55,6 +57,8 @@ For an HTTPS instance behind Authentik, select **Sign in to protected server**, 
 For `invidious.nerdvpn.de`, adding the instance opens browser sign-in. Your account stays saved if API access is not yet available, and settings show the eligibility date returned by the instance. Existing accounts can sign in again to grant API-key access or enter a manual key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**.
 
 The official NerdVPN onion address also supports this API-key flow. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, then add the onion instance. Sign-in opens inside Videre through that proxy. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
+
+Onion playback offers the compatible qualities provided by the instance. Tor bandwidth and latency can make higher qualities buffer; lower the player’s quality setting when needed. Playback stays on the selected onion connection.
 
 For playback problems, **Connection help** checks the video API and lets you switch instances or copy the instance's video address. Transient video-detail failures receive one automatic same-route retry with visible feedback. Server cooldowns and access/privacy refusals are respected; manual Retry remains available after recovery is exhausted.
 
