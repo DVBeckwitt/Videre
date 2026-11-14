@@ -2920,7 +2920,7 @@ void main() {
       });
     });
 
-    testWidgets('strip instance headers from every off-origin request',
+    testWidgets('omit off-instance artwork without disabling the controls',
         (tester) async {
       const thumbnailUrls = [
         'https://example.com.evil/lookalike.jpg',
@@ -2937,13 +2937,6 @@ void main() {
           onPressed: () => taps++,
         );
 
-        for (var index = 0; index < thumbnailUrls.length; index++) {
-          await _pumpUntilRequestCount(tester, cacheManager, index + 1);
-          expect(cacheManager.requests[index].url, thumbnailUrls[index]);
-          expect(cacheManager.requests[index].headers, isNull);
-          cacheManager.failRequest(index);
-        }
-
         for (var attempt = 0;
             attempt < 20 && find.byIcon(Icons.error_outline).evaluate().isEmpty;
             attempt++) {
@@ -2951,7 +2944,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 10));
         }
 
-        expect(cacheManager.requests, hasLength(thumbnailUrls.length));
+        expect(cacheManager.requests, isEmpty);
         expect(find.byIcon(Icons.error_outline), findsOneWidget);
         final control = find.byKey(const ValueKey('video-thumbnail-control'));
         expect(control, findsOneWidget);
