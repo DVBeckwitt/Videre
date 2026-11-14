@@ -10,18 +10,22 @@ void main() {
   tearDown(() async => await cleanUpTestServer());
 
   test('test subscribe button', () async {
-    var channelId = 'UCHDxYLv8iovIbhrfl16CNyg';
-    var button = SubscribeButtonCubit(SubscribeButtonState.init(channelId));
+    const channelId = 'UCHDxYLv8iovIbhrfl16CNyg';
+    final button = SubscribeButtonCubit(SubscribeButtonState.init(channelId));
+    addTearDown(button.close);
 
     // the cubit checks subscription status on start
-    await button.onReady();
-    var subscribed = await service.isSubscribedToChannel(channelId);
-    // we unsubscribe just to make sure server is clean
+    await button.stream.firstWhere((state) => !state.loading);
+    expect(button.state.isLoggedIn, isTrue);
+    expect(button.state.isAccountSubscribed,
+        await service.isSubscribedToChannel(channelId));
+
+    await button.setAccountSubscription(true);
+    expect(await service.isSubscribedToChannel(channelId), isTrue);
+    expect(button.state.isAccountSubscribed, isTrue);
+
     await button.unsubscribe();
-    var sub1 = await service.isSubscribedToChannel(channelId);
-    expect(sub1, !subscribed);
-    await button.setAccountSubscription(subscribed);
-    var sub2 = await service.isSubscribedToChannel(channelId);
-    expect(sub2, subscribed);
+    expect(await service.isSubscribedToChannel(channelId), isFalse);
+    expect(button.state.isAccountSubscribed, isFalse);
   });
 }
