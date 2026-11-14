@@ -238,16 +238,34 @@ class TvPlayerSettings extends StatelessWidget {
                   ),
                 )
               else
-                SizedBox(
-                  height: 90,
-                  child: ListView(
-                    shrinkWrap: true,
-                    scrollDirection: Axis.horizontal,
-                    children: getContent(context)
-                        .map((e) => Center(
-                              child: e,
-                            ))
-                        .toList(),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (playerState.selected == Tabs.video &&
+                            cubit.player.isOnionPlayback)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 24, vertical: 8),
+                            child: Text(
+                              locals.onionVideoQualityHint,
+                              key: const ValueKey('onion-quality-help'),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        SizedBox(
+                          height: 90,
+                          child: ListView(
+                            shrinkWrap: true,
+                            scrollDirection: Axis.horizontal,
+                            children: getContent(context)
+                                .map((e) => Center(child: e))
+                                .toList(),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 )
             ],

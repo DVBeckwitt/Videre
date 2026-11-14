@@ -22,7 +22,14 @@ class NativeProxyHttpClient extends http.BaseClient {
   }
 
   @override
-  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+  Future<http.StreamedResponse> send(http.BaseRequest request) =>
+      _send(request);
+
+  Future<http.StreamedResponse> sendWithinOrigin(http.BaseRequest request) =>
+      _send(request, sameOriginOnly: true);
+
+  Future<http.StreamedResponse> _send(http.BaseRequest request,
+      {bool sameOriginOnly = false}) async {
     final url = request.url;
     _checkOpen(url);
     if (isOfficialYoutubeUrl(url)) {
@@ -53,6 +60,7 @@ class NativeProxyHttpClient extends http.BaseClient {
         'body': builder.takeBytes(),
         'followRedirects': request.followRedirects,
         'maxRedirects': request.maxRedirects,
+        'sameOriginOnly': sameOriginOnly,
       });
     } on PlatformException catch (error) {
       if (error.code == 'GATEWAY_AUTH_REQUIRED') {

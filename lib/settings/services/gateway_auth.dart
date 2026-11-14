@@ -62,10 +62,14 @@ class GatewayAuth {
 
   /// A null token means the user cancelled. Only the requested account is used.
   static Future<String?> signIn(Server server,
-      {String title = 'Sign in to protected server',
+      {bool persistSession = true,
+      String title = 'Sign in to protected server',
       String cancel = 'Cancel',
       String help =
           'Sign in to your gateway, then authorize this Invidious account. Page scripts are disabled for privacy; sign-in pages that require JavaScript are unsupported.'}) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      throw const GatewayUnsupported();
+    }
     final context = _context(server);
     final intent = _beginIntent(context.key);
     final proxy = NetworkProxy.instance;
@@ -95,6 +99,7 @@ class GatewayAuth {
       final token = await _browser.invokeMethod<String>('signIn', {
         'context': context.encoded,
         'serverUrl': server.url,
+        'persistSession': persistSession,
         'title': title,
         'cancel': cancel,
         'help': help,

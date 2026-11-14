@@ -23,6 +23,7 @@ import androidx.webkit.WebViewCompat
 import com.github.dvbeckwitt.videre.proxy.GatewayContext
 import com.github.dvbeckwitt.videre.proxy.BrowserPrivacySettings
 import com.github.dvbeckwitt.videre.proxy.GatewaySessions
+import com.github.dvbeckwitt.videre.proxy.invidiousTokenFromCallback
 import com.github.dvbeckwitt.videre.proxy.NerdVpnPkce
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 import io.flutter.plugin.common.MethodCall
@@ -45,8 +46,10 @@ class GatewayAuthBrowser(private val activity: Activity) {
     private data class Policy(val enabled: Boolean, val host: String, val port: Int)
     private class Request(val result: MethodChannel.Result, val context: GatewayContext,
         val policy: Policy, val loginUrl: String,
-        val nonce: String, val pkce: NerdVpnPkce?, val title: String, val help: String, val cancel: String) {
+        val nonce: String, val pkce: NerdVpnPkce?, val persistSession: Boolean,
+        val title: String, val help: String, val cancel: String) {
         var revision: Long? = null
+        var profileName: String? = null
         var finishing = false
         var token: String? = null
         var error: String? = null
@@ -111,6 +114,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
             .addQueryParameter("scopes", ":feed,:subscriptions*,:playlists*,:history*")
             .addQueryParameter("callback_url", "videre-gateway://callback/$nonce").build().toString()
         val request = Request(result, context, policy, login, nonce, pkce,
+            call.argument<Boolean>("persistSession") ?: true,
             call.argument<String>("title") ?: "Sign in to protected server",
             call.argument<String>("help") ?: "Sign in to your gateway, then authorize Invidious.",
             call.argument<String>("cancel") ?: "Cancel")
@@ -129,19 +133,28 @@ class GatewayAuthBrowser(private val activity: Activity) {
                 }
                 // Creating the isolated profile can initialize browser state.
                 // Wait until the process-wide (still denied) route is installed.
-                val revision = try { GatewaySessions.beginSignIn(context) } catch (_: Exception) {
+                try {
+                    if (request.persistSession) {
+                        val revision = GatewaySessions.beginSignIn(context)
+                        request.revision = revision
+                        request.profileName = GatewaySessions.signInProfileName(context, revision)
+                    } else {
+                        // A token-only login must never alter a saved gateway's
+                        // status, cookies or revision, even while it is pending.
+                        request.profileName = "${context.profileName}_token_$nonce"
+                    }
+                } catch (_: Exception) {
                     finish(error = "GATEWAY_UNAVAILABLE")
                     return@install
                 }
-                request.revision = revision
-                show(request, revision)
+                show(request)
             }
         } catch (_: Exception) {
             finish(error = "GATEWAY_PROXY_UNAVAILABLE")
         }
     }
 
-    private fun show(request: Request, revision: Long) {
+    private fun show(request: Request) {
         if (current !== request || request.finishing) return
         if (closed || activity.isFinishing || activity.isDestroyed || readPolicy() != request.policy) {
             finish(error = "GATEWAY_BROWSER_UNAVAILABLE"); return
@@ -171,7 +184,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
             val web = WebView(activity)
             browser = web
             BrowserPrivacySettings.apply(web)
-            val profileName = GatewaySessions.signInProfileName(request.context, revision)
+            val profileName = checkNotNull(request.profileName)
             ProfileStore.getInstance().getOrCreateProfile(profileName).serviceWorkerController
                 .serviceWorkerWebSettings.blockNetworkLoads = true
             WebViewCompat.setProfile(web, profileName)
@@ -223,13 +236,9 @@ class GatewayAuthBrowser(private val activity: Activity) {
                 }
                 return true
             }
-            val token = uri.getQueryParameter("token")
-            if (uri.host == "callback" && uri.path == "/${request.nonce}" &&
-                previous != null && request.context.allows(previous) &&
-                !token.isNullOrBlank() && token.length <= 65536) {
-                val revision = request.revision ?: return true
-                if (GatewaySessions.completeSignIn(request.context, revision)) finish(token = token)
-                else finish(error = "GATEWAY_LOGIN_CANCELLED")
+            val token = invidiousTokenFromCallback(uri.toString(), request.nonce)
+            if (previous != null && request.context.allows(previous) && token != null) {
+                acceptToken(request, token)
             }
             return true
         }
@@ -254,11 +263,10 @@ class GatewayAuthBrowser(private val activity: Activity) {
 
     private fun exchangeCode(request: Request, web: WebView, code: String) {
         val pkce = request.pkce ?: return
-        val revision = request.revision ?: return
         try {
             // Keep the old session intact until the new code is exchanged. The
             // pending profile supplies cookies only to this exact origin.
-            val profileName = GatewaySessions.signInProfileName(request.context, revision)
+            val profileName = checkNotNull(request.profileName)
             val manager = ProfileStore.getInstance().getOrCreateProfile(profileName).cookieManager
             val url = request.context.origin.newBuilder().encodedPath("/api/v1/token").build()
             val cookie = manager.getCookie(url.toString())
@@ -314,11 +322,10 @@ class GatewayAuthBrowser(private val activity: Activity) {
                         if (readPolicy() != request.policy) { finish(error = "GATEWAY_PROXY_CHANGED"); return@post }
                         if (exchanged == null) { finish(error = failure, details = failureDetails); return@post }
                         try {
-                            val pendingName = GatewaySessions.signInProfileName(request.context, revision)
+                            val pendingName = checkNotNull(request.profileName)
                             val pendingCookies = ProfileStore.getInstance().getOrCreateProfile(pendingName).cookieManager
                             returnedCookies.forEach { value -> pendingCookies.setCookie(url.toString(), value) }
-                            if (GatewaySessions.completeSignIn(request.context, revision)) finish(token = exchanged)
-                            else finish(error = "GATEWAY_LOGIN_CANCELLED")
+                            acceptToken(request, exchanged)
                         } catch (_: Exception) { finish(error = "GATEWAY_TOKEN_EXCHANGE_FAILED") }
                     }
                 }
@@ -327,6 +334,14 @@ class GatewayAuthBrowser(private val activity: Activity) {
     }
 
     fun close() { closed = true; finish() }
+
+    private fun acceptToken(request: Request, token: String) {
+        val accepted = !request.persistSession || request.revision?.let {
+            GatewaySessions.completeSignIn(request.context, it)
+        } == true
+        if (accepted) finish(token = token)
+        else finish(error = "GATEWAY_LOGIN_CANCELLED")
+    }
 
     private fun finish(token: String? = null, error: String? = null, details: Map<String, Any>? = null) {
         val request = current ?: return
@@ -353,6 +368,16 @@ class GatewayAuthBrowser(private val activity: Activity) {
             runCatching { it.destroy() }
         }
         browser = null
+        if (!request.persistSession) request.profileName?.let { name ->
+            // Destroy the WebView first: deleting an attached profile is unsafe.
+            // No token is delivered if Chromium cannot discard its private data.
+            try {
+                ProfileStore.getInstance().deleteProfile(name)
+            } catch (_: Exception) {
+                request.token = null
+                request.error = "GATEWAY_BROWSER_UNAVAILABLE"
+            }
+        }
         if (token == null) request.revision?.let { revision ->
             runCatching { GatewaySessions.cancelSignIn(request.context, revision) }
         }

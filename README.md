@@ -54,11 +54,11 @@ Open **Profiles** from the home screen or Settings to add, rename, or switch peo
 
 For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
 
-For `invidious.nerdvpn.de`, adding the instance opens browser sign-in. Your account stays saved if API access is not yet available, and settings show the eligibility date returned by the instance. Existing accounts can sign in again to grant API-key access or enter a manual key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**.
+For `invidious.nerdvpn.de`, adding the instance opens sign-in in Videre's protected Android WebView. Browser sign-in needs WebView's isolated-profile and proxy support. For ordinary HTTP instances, use the cookie sign-in form. Your NerdVPN account stays saved if API access is not yet available, and settings show the eligibility date returned by the instance. Existing accounts can sign in again to grant API-key access or enter a manual key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**.
 
 The official NerdVPN onion address also supports this API-key flow. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, then add the onion instance. Sign-in opens inside Videre through that proxy. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
 
-Onion playback offers the compatible qualities provided by the instance. Tor bandwidth and latency can make higher qualities buffer; lower the player’s quality setting when needed. Playback stays on the selected onion connection.
+Onion playback offers the compatible qualities provided by the instance. With adaptive playback, the quality picker sets a maximum and can play at a lower quality as bandwidth changes. Tor bandwidth and latency can cause buffering at higher bitrates, and lowering the maximum can help. Videre keeps requests on the selected onion address, including when a stream cannot load there.
 
 For playback problems, **Connection help** checks the video API and lets you switch instances or copy the instance's video address. Transient video-detail failures receive one automatic same-route retry with visible feedback. Server cooldowns and access/privacy refusals are respected; manual Retry remains available after recovery is exhausted.
 
@@ -117,6 +117,8 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 **Moving from Clipious.** Videre (`com.github.dvbeckwitt.videre`) and Clipious (`com.github.lamarios.clipious`) install separately. Set up Videre before removing Clipious: Android does not transfer their data, and Videre cannot import Clipious app storage directly.
 
 **Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, video thumbnails, and saved Music covers use the selected Invidious instance's image proxy, including notification and download artwork. Unsupported Google artwork is skipped; image failures do not retry the original Google URL. Music browsing and search use the selected Invidious server without contacting YouTube Music directly. Third-party artwork such as DeArrow still uses its own service. Video, audio, and downloads always use the selected Invidious media proxy. Direct YouTube/Google playback is unavailable, including through old preferences or a server redirect; if the instance cannot proxy a stream, playback fails without a direct fallback. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
+
+**Sharing.** Videre shares links on your selected Invidious instance. Supported links in descriptions and comments open within Videre and use the selected Invidious address when copied.
 
 ## Contributing
 

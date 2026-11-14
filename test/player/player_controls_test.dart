@@ -32,6 +32,14 @@ class _SpeedBoostVideo extends VideoPlayerCubit {
   _SpeedBoostVideo(super.initialState, super.player, super.settings);
 
   final speedChanges = <double>[];
+  bool onionPlayback = false;
+  List<String> qualityTracks = [];
+
+  @override
+  bool get isOnionPlayback => onionPlayback;
+
+  @override
+  List<String> getVideoTracks() => qualityTracks;
 
   @override
   void onInit() {}
@@ -68,7 +76,7 @@ void main() {
     await db.close();
   });
 
-  Widget hostControls(Widget child) {
+  Widget hostControls(Widget child, {Locale? locale}) {
     app_main.darkColorScheme = ColorScheme.fromSeed(
         seedColor: Colors.blue, brightness: Brightness.dark);
     return MultiBlocProvider(
@@ -77,6 +85,7 @@ void main() {
         BlocProvider<SettingsCubit>.value(value: settings),
       ],
       child: MaterialApp(
+        locale: locale,
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(body: Center(child: child)),
@@ -440,6 +449,55 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  for (final television in [false, true]) {
+    for (final onion in [false, true]) {
+      testWidgets(
+          '${television ? 'TV' : 'phone'} quality guidance for onion=$onion playback',
+          (tester) async {
+        tester.view.physicalSize =
+            television ? const Size(720, 360) : const Size(320, 480);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final videoPlayer = (await createPlayingVideo(tester))
+          ..onionPlayback = onion
+          ..qualityTracks = ['360p', '720p', '1080p'];
+        final originalQuality = settings.state.lastVideoQuality;
+        await tester.pumpWidget(hostControls(
+          BlocProvider<VideoPlayerCubit>.value(
+            value: videoPlayer,
+            child: television
+                ? const TvPlayerSettings()
+                : PlayerControls(mediaPlayerCubit: videoPlayer),
+          ),
+          // The English template supplies new strings until translations arrive.
+          locale: const Locale('de'),
+        ));
+        await tester.pumpAndSettle();
+        if (!television) {
+          await tester.tap(find.byIcon(Icons.more_vert));
+          await tester.pumpAndSettle();
+          final locals =
+              AppLocalizations.of(tester.element(find.byType(PlayerControls)))!;
+          await tester.ensureVisible(find.text(locals.quality));
+          await tester.tap(find.text(locals.quality));
+          await tester.pumpAndSettle();
+        }
+        final hint = find.byKey(const ValueKey('onion-quality-help'));
+        expect(hint, onion ? findsOneWidget : findsNothing);
+        if (onion) {
+          expect(tester.widget<Text>(hint).data, contains('Higher bitrates'));
+          expect(
+              tester.widget<Text>(hint).data, contains('maximum you select'));
+        }
+        expect(find.text('1080p'), findsOneWidget);
+        expect(settings.state.lastVideoQuality, originalQuality);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
 
   testWidgets('a stale display picker cannot change another profile',
       (tester) async {

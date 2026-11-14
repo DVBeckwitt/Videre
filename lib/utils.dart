@@ -1,6 +1,7 @@
 import 'package:clipious/utils/motion.dart';
 import 'dart:math';
 
+import 'package:clipious/app/states/app.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
@@ -105,15 +106,27 @@ Future<void> showAlertDialog(
 void showSharingSheet(BuildContext context, ShareLinks links,
     {bool showTimestampOption = false}) {
   var locals = AppLocalizations.of(context)!;
-
+  final profileId = db.profileId;
+  final owner = db.forProfile(profileId);
+  final app = context.read<AppCubit?>();
+  final revision = app?.state.sessionRevision;
+  final selected = app?.state.server;
   bool shareWithTimestamp = false;
-  Future<Duration?> getTimestamp() async {
-    if (shareWithTimestamp) {
-      var player = context.read<PlayerCubit>();
-      return player.state.position;
-    }
-    return null;
-  }
+  bool sharing = false;
+  bool failed = false;
+  Duration? timestamp() =>
+      shareWithTimestamp ? context.read<PlayerCubit>().state.position : null;
+
+  bool currentSession() =>
+      context.mounted &&
+      db.profileId == profileId &&
+      (app == null ||
+          (!app.isClosed &&
+              !app.state.globalLoading &&
+              !app.state.sessionRecoveryRequired &&
+              app.state.sessionRevision == revision &&
+              app.state.server?.accountId == selected?.accountId &&
+              app.state.server?.url == selected?.url));
 
   showSafeModalBottomSheet<void>(
     context: context,
@@ -127,51 +140,58 @@ void showSharingSheet(BuildContext context, ShareLinks links,
             });
           }
 
-          return SizedBox(
-            height: showTimestampOption ? 200 : 150,
-            width: double.infinity,
+          return Padding(
+            padding: const EdgeInsets.all(16),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 FilledButton.tonal(
+                  onPressed: sharing
+                      ? null
+                      : () async {
+                          if (sharing || !currentSession()) return;
+                          final position = timestamp();
+                          setState(() {
+                            sharing = true;
+                            failed = false;
+                          });
+                          try {
+                            final server =
+                                await owner.getCurrentlySelectedServer();
+                            if (!context.mounted ||
+                                !currentSession() ||
+                                ModalRoute.of(context)?.isCurrent != true) {
+                              return;
+                            }
+                            final saved = owner.getAccount(server.accountId);
+                            if (saved?.inUse != true ||
+                                saved!.url != server.url ||
+                                server.profileId != profileId) {
+                              return;
+                            }
+                            final link = links.getInvidiousLink(
+                                server, position?.inSeconds);
+                            await SharePlus.instance
+                                .share(ShareParams(text: link.toString()));
+                            if (context.mounted &&
+                                currentSession() &&
+                                ModalRoute.of(context)?.isCurrent == true) {
+                              Navigator.of(context).pop();
+                            }
+                          } catch (_) {
+                            if (context.mounted && currentSession()) {
+                              setState(() => failed = true);
+                            }
+                          } finally {
+                            if (context.mounted) {
+                              setState(() => sharing = false);
+                            }
+                          }
+                        },
                   child: Text(locals.shareInvidiousLink),
-                  onPressed: () async {
-                    final timestamp = await getTimestamp();
-
-                    SharePlus.instance.share(ShareParams(
-                        uri: links.getInvidiousLink(
-                            await db.getCurrentlySelectedServer(),
-                            timestamp?.inSeconds)));
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                    }
-                  },
                 ),
-                FilledButton.tonal(
-                  child: Text(locals.redirectInvidiousLink),
-                  onPressed: () async {
-                    final timestamp = await getTimestamp();
-
-                    SharePlus.instance.share(ShareParams(
-                        uri: links.getRedirectLink(timestamp?.inSeconds)));
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                    }
-                  },
-                ),
-                FilledButton.tonal(
-                  child: Text(locals.shareYoutubeLink),
-                  onPressed: () async {
-                    final timestamp = await getTimestamp();
-
-                    SharePlus.instance.share(ShareParams(
-                        uri: links.getYoutubeLink(timestamp?.inSeconds)));
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                    }
-                  },
-                ),
+                if (failed) Text(locals.error),
                 if (showTimestampOption)
                   InkWell(
                     onTap: () => setShowTimeStamp(!shareWithTimestamp),

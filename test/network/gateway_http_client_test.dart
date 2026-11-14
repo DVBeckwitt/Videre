@@ -6,6 +6,7 @@ import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/gateway_http_client.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _DirectOverrides extends HttpOverrides {}
@@ -294,8 +295,7 @@ void main() {
         isTrue);
   });
 
-  test(
-      'redirect to another origin strips every caller header and gateway cookie',
+  test('redirect to another origin is rejected before opening another request',
       () async {
     final raw = _Client([
       _Response(302, headers: {'location': 'https://media.example/segment'}),
@@ -310,8 +310,8 @@ void main() {
     pending.headers.set('X-Custom-Secret', 'private');
     pending.headers.set('Authorization', 'Bearer private');
     pending.headers.set('Cookie', 'SID=private');
-    await (await pending.close()).drain<void>();
-    expect(raw.requests.last.headers.values, isEmpty);
+    await expectLater(pending.close(), throwsA(isA<HttpException>()));
+    expect(raw.requests, hasLength(1));
     expect(lookups, [origin.resolve('/api/v1/auth/history')]);
   });
 
@@ -328,9 +328,58 @@ void main() {
     final first = await pending.close();
     expect(raw.requests, hasLength(1));
     await first.drain<void>();
-    final next = await first.redirect();
-    await next.drain<void>();
-    expect(raw.requests.last.headers.values, isEmpty);
+    await expectLater(first.redirect(), throwsA(isA<HttpException>()));
+    expect(raw.requests, hasLength(1));
+  });
+
+  for (final sameOrigin in [true, false]) {
+    test('plain HTTP asset redirects retain selected origin ($sameOrigin)',
+        () async {
+      const server = Server(
+          url: 'http://selected.example:8080',
+          customHeaders: {
+            'X-Instance-Access': 'fixture',
+            'Cookie': 'SID=fixture'
+          });
+      final raw = _Client([
+        _Response(302, headers: {
+          'location': sameOrigin ? '/next' : 'http://other.example/cover.jpg'
+        }),
+        _Response(200),
+      ]);
+      final client = GatewayHttpClient(raw,
+          resolve: (_, __) =>
+              throw StateError('Plain origin has no auth context'),
+          ingest: ingest);
+      final url = Uri.parse('${server.url}/cover.jpg');
+      final pending = await client.getUrl(url);
+      server.headersForUrl(url.toString())!.forEach(pending.headers.set);
+      if (sameOrigin) {
+        await (await pending.close()).drain<void>();
+        expect(raw.requests, hasLength(2));
+        expect(raw.requests.last.headers.value('X-Instance-Access'), 'fixture');
+        expect(raw.requests.last.headers.value('Cookie'), 'SID=fixture');
+      } else {
+        await expectLater(pending.close(), throwsA(isA<HttpException>()));
+        expect(raw.requests, hasLength(1));
+      }
+      expect(
+          raw.requests.every((request) =>
+              request.headers[instanceOriginHeader] == null &&
+              request.headers[gatewayContextHeader] == null),
+          isTrue);
+    });
+  }
+
+  test('plain origin marker does not authorize a different request origin',
+      () async {
+    final raw = _Client([_Response(200)]);
+    final client = GatewayHttpClient(raw, resolve: resolve, ingest: ingest);
+    final pending =
+        await client.getUrl(Uri.parse('http://other.example/cover'));
+    pending.headers.set(instanceOriginHeader, 'http://selected.example');
+    await expectLater(pending.close(), throwsA(isA<HttpException>()));
+    expect(raw.requests.single.sent, isFalse);
   });
 
   test('POST redirects never replay a body and only 303 changes it to GET',
@@ -606,7 +655,7 @@ void main() {
         expect(resolveCalls, 1);
       });
 
-      test('keeps the managed key on its approved origin across redirects',
+      test('keeps redirects and the managed key on their approved origin',
           () async {
         final raw = _Client([
           _Response(302, headers: {'location': '/media'}),
@@ -617,11 +666,12 @@ void main() {
             resolve: (_, __) async => const GatewayResolvedSession(
                 enabled: false, needsSignIn: false, apiKey: newKey),
             ingest: ingest);
-        await (await (await nerdRequest(client)).close()).drain<void>();
+        final pending = await nerdRequest(client);
+        await expectLater(pending.close(), throwsA(isA<HttpException>()));
+        expect(raw.requests, hasLength(2));
         expect(
             raw.requests.take(2).map((r) => r.headers.value(nerdVpnKeyHeader)),
             [newKey, newKey]);
-        expect(raw.requests.last.headers.values, isEmpty);
       });
 
       test('does not share credentials with another managed origin', () async {
@@ -646,10 +696,10 @@ void main() {
           }, ingest: ingest);
           final pending = await nerdRequest(client);
           pending.headers.set('Authorization', 'Bearer synthetic');
-          await (await pending.close()).drain<void>();
+          await expectLater(pending.close(), throwsA(isA<HttpException>()));
           expect(lookups, 1);
           expect(raw.requests.first.headers.value(nerdVpnKeyHeader), newKey);
-          expect(raw.requests.last.headers.values, isEmpty);
+          expect(raw.requests, hasLength(1));
         }
       });
 

@@ -5,8 +5,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 import 'package:http/http.dart';
@@ -51,6 +49,7 @@ import 'network/origin_scoped_http_client.dart';
 import 'network/gateway_context.dart';
 import 'network/gateway_session_bridge.dart';
 import 'network/nerdvpn_access.dart';
+import 'network/youtube_privacy.dart';
 import 'settings/services/gateway_auth.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
@@ -119,6 +118,8 @@ class _InteractiveVideoRequest {
 class Service {
   final log = Logger('Service');
   final Client httpClient;
+  late final Client _instanceHttpClient =
+      OriginScopedHttpClient(httpClient, sameOriginOnly: true);
   late final dashManifestResolver = DashManifestResolver(httpClient);
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
@@ -211,13 +212,15 @@ class Service {
   }
 
   Future<Response> _sendGet(ServerRequest request) async {
-    var response = await httpClient.get(request.uri, headers: request.headers);
+    var response =
+        await _instanceHttpClient.get(request.uri, headers: request.headers);
     if (response.statusCode == 429) {
       final delay = _retryAfter(response);
       // A long server cooldown belongs in the UI, not a hidden retry loop.
       if (delay != null && delay <= const Duration(seconds: 2)) {
         if (delay > Duration.zero) await _wait(delay);
-        response = await httpClient.get(request.uri, headers: request.headers);
+        response = await _instanceHttpClient.get(request.uri,
+            headers: request.headers);
       }
     }
     return response;
@@ -772,7 +775,8 @@ class Service {
       await checkCurrent();
       Response? response;
       try {
-        response = await httpClient.get(request.uri, headers: request.headers);
+        response = await _instanceHttpClient.get(request.uri,
+            headers: request.headers);
         await checkCurrent();
         return Video.fromJson(handleResponse(response));
       } catch (error) {
@@ -785,8 +789,8 @@ class Service {
         await checkCurrent();
         // Keep one budget for transient failures and rate limits. The follow-up
         // uses the exact original request, with no second retry wrapper.
-        final retried =
-            await httpClient.get(request.uri, headers: request.headers);
+        final retried = await _instanceHttpClient.get(request.uri,
+            headers: request.headers);
         await checkCurrent();
         return Video.fromJson(handleResponse(retried));
       }
@@ -973,7 +977,7 @@ class Service {
     Future<Response> read() async {
       final get = http.Request('GET', request.uri)..followRedirects = false;
       get.headers.addAll(request.headers);
-      final response = await httpClient.send(get);
+      final response = await _instanceHttpClient.send(get);
       final retryAfter = _retryAfter(response);
       final retryAfterIsInvalid =
           response.headers.containsKey('retry-after') && retryAfter == null;
@@ -1199,8 +1203,8 @@ class Service {
       String url = '$serverUrl/login?type=invidious';
       var map = {'email': username, 'password': password};
 
-      final response =
-          await httpClient.post(Uri.parse(url), body: map, headers: headers);
+      final response = await _instanceHttpClient.post(Uri.parse(url),
+          body: map, headers: headers);
       if (response.statusCode == 302 &&
           response.headers.containsKey('set-cookie')) {
         // we have a cookie to parse
@@ -1221,118 +1225,35 @@ class Service {
   }
 
   Future<String?> _browserToken(Server original) async {
+    final origin = Uri.tryParse(original.url);
+    if (origin == null ||
+        !const {'http', 'https'}.contains(origin.scheme) ||
+        origin.host.isEmpty ||
+        origin.userInfo.isNotEmpty ||
+        isOfficialYoutubeUrl(origin)) {
+      throw InvidiousServiceError('Select an Invidious instance to sign in.');
+    }
     final access = NerdVpnAccess.supports(original)
         ? await NerdVpnAccess.instance.status(original)
         : null;
     if (access?.retryAt?.isAfter(_now().toUtc()) == true) {
       throw const NerdVpnAccessRequired('unavailable');
     }
-    final nonce = const Uuid().v4();
-    final serverUrl = NerdVpnAccess.supports(original)
-        ? Uri.parse(original.url).origin
-        : original.url;
-    final pkce = NerdVpnAccess.supports(original) ? NerdVpnPkce.create() : null;
-    final callback = Uri(
-        scheme: 'videre-auth',
-        host: 'callback',
-        queryParameters: {'state': nonce});
-    final url =
-        Uri.parse('$serverUrl/authorize_token').replace(queryParameters: {
-      'scopes': ':feed,:subscriptions*,:playlists*,:history*'
-          '${pkce == null ? '' : ',:api_key'}',
-      'callback_url': callback.toString(),
-      if (pkce != null) ...{
-        'code_challenge': pkce.challenge,
-        'code_challenge_method': 'S256',
-      },
-    }).toString();
-    String result;
-    try {
-      result = await FlutterWebAuth2.authenticate(
-          url: url, callbackUrlScheme: 'videre-auth');
-    } on PlatformException catch (error) {
-      if (error.code == 'CANCELED') return null;
-      rethrow;
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        GatewayRequestContext.forAccount(
+                original.profileId, original.accountId, original.url) ==
+            null) {
+      throw const GatewayUnsupported();
     }
-
-    final returned = Uri.parse(result);
-    if (returned.scheme != callback.scheme ||
-        returned.host != callback.host ||
-        returned.path != callback.path ||
-        returned.userInfo.isNotEmpty ||
-        returned.hasPort ||
-        returned.hasFragment ||
-        returned.queryParametersAll['state']?.length != 1 ||
-        returned.queryParameters['state'] != nonce) {
-      throw InvidiousServiceError('Sign-in returned an unexpected callback');
-    }
-    if (pkce == null) return returned.queryParameters['token'];
-    final code = returned.queryParameters['code'];
-    if (code == null ||
-        code.isEmpty ||
-        code.length > 65536 ||
-        returned.queryParametersAll['code']?.length != 1) {
-      throw InvidiousServiceError(
-          'Sign-in did not return an authorization code');
-    }
-    final request = http.Request('POST', Uri.parse('$serverUrl/api/v1/token'))
-      ..followRedirects = false
-      ..headers.addAll({
-        ...?original.headersForUrl('$serverUrl/api/v1/token'),
-        'Content-Type': 'application/json',
-      })
-      ..body = jsonEncode({
-        'code': code,
-        'code_verifier': pkce.verifier,
-        'callback_url': callback.toString(),
-      });
-    final http.Response exchange;
-    try {
-      exchange = await httpClient
-          .send(request)
-          .then(http.Response.fromStream)
-          .timeout(const Duration(seconds: 30));
-    } catch (error) {
-      if (error is http.ClientException ||
-          error is TimeoutException ||
-          error is IOException) {
-        // The server may have consumed the one-use code before the connection
-        // failed. A fresh browser sign-in is required; never replay this POST.
-        throw const GatewaySignInFailed(
-            'NerdVPN could not complete sign-in because the connection failed or timed out. Check your connection, then sign in again.');
-      }
-      rethrow;
-    }
-    // Never log the authorization code, verifier, callback or token body.
-    if (exchange.statusCode != 200) {
-      if (const {429, 503}.contains(exchange.statusCode)) {
-        final context = GatewayRequestContext.forAccount(
-            original.profileId, original.accountId, original.url)!;
-        await NerdVpnAccess.instance.recover(context.encoded,
-            error: exchange.statusCode == 429 ? 'rate_limited' : 'unavailable',
-            statusCode: exchange.statusCode,
-            retryAfter: exchange.headers['retry-after'],
-            failedIntent: access?.apiKeyIntent,
-            revision: access?.revision,
-            retry: false);
-      }
-      throw InvidiousServiceError(
-          'NerdVPN sign-in could not be completed. Please sign in again.',
-          statusCode: exchange.statusCode,
-          retryAfter: _retryAfter(exchange));
-    }
-    dynamic value;
-    try {
-      value = jsonDecode(utf8.decode(exchange.bodyBytes));
-    } on FormatException {
-      throw InvidiousServiceError(
-          'NerdVPN returned an invalid sign-in response');
-    }
-    final token = value is Map ? value['token'] : null;
-    if (token is! String || token.isEmpty || token.length > 65536) {
-      throw InvidiousServiceError('NerdVPN did not return an account token');
-    }
-    return token;
+    // Token login uses the same guarded native browser as protected login,
+    // without turning an ordinary account into a persistent gateway session.
+    return GatewayAuth.signIn(original,
+        persistSession: original.gatewayEnabled,
+        title: 'Sign in to Invidious',
+        help:
+            'Sign in, then authorize this Invidious account. Page scripts are '
+            'disabled for privacy; sign-in pages that require JavaScript are unsupported.');
   }
 
   /// Used before a newly added account has a database record. Pending access is
@@ -1342,7 +1263,7 @@ class Service {
       throw ArgumentError('This server does not support NerdVPN sign-in');
     }
     if (isNerdVpnOnionUrl(original.url)) {
-      // An external browser does not inherit Videre's SOCKS routing policy.
+      // Onion gateway cookies remain account-owned alongside the API token.
       return authenticateProtected(original);
     }
     final intent = await NerdVpnAccess.instance.beginAuth(original);
@@ -1862,7 +1783,8 @@ class Service {
         authenticated: true,
         serverOverride: account);
 
-    final response = await httpClient.post(req.uri, headers: req.headers);
+    final response =
+        await _instanceHttpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
     return true;
   }
@@ -1877,7 +1799,8 @@ class Service {
         authenticated: true,
         serverOverride: account);
 
-    final response = await httpClient.delete(req.uri, headers: req.headers);
+    final response =
+        await _instanceHttpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
     return true;
   }
@@ -2092,7 +2015,7 @@ class Service {
 
     log.info(jsonEncode(body));
 
-    final response = await httpClient.post(req.uri,
+    final response = await _instanceHttpClient.post(req.uri,
         headers: req.headers, body: jsonEncode(body));
     Map<String, dynamic> playlist = handleResponse(response);
     return playlist['playlistId'] as String;
@@ -2143,7 +2066,7 @@ class Service {
       'videoId': videoId,
     };
 
-    final response = await httpClient.post(req.uri,
+    final response = await _instanceHttpClient.post(req.uri,
         headers: req.headers, body: jsonEncode(body));
     handleResponse(response);
   }
@@ -2166,7 +2089,8 @@ class Service {
         serverOverride:
             serverOverride ?? await owner.getCurrentlySelectedServer());
 
-    final response = await httpClient.delete(req.uri, headers: req.headers);
+    final response =
+        await _instanceHttpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -2191,7 +2115,8 @@ class Service {
         serverOverride:
             serverOverride ?? await owner.getCurrentlySelectedServer());
 
-    final response = await httpClient.delete(req.uri, headers: req.headers);
+    final response =
+        await _instanceHttpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
   }
 
@@ -2307,8 +2232,10 @@ class Service {
                     forceJson: true,
                     serverOverride: server);
                 final response = present
-                    ? await httpClient.post(req.uri, headers: req.headers)
-                    : await httpClient.delete(req.uri, headers: req.headers);
+                    ? await _instanceHttpClient.post(req.uri,
+                        headers: req.headers)
+                    : await _instanceHttpClient.delete(req.uri,
+                        headers: req.headers);
                 handleResponse(response);
               },
               accountIsCurrent: (server) async {
@@ -2332,7 +2259,8 @@ class Service {
     Future<void> deleteRemote() async {
       final req = await buildRequest(urlGetClearHistory,
           authenticated: true, forceJson: true, serverOverride: account);
-      final response = await httpClient.delete(req.uri, headers: req.headers);
+      final response =
+          await _instanceHttpClient.delete(req.uri, headers: req.headers);
       handleResponse(response);
     }
 
@@ -2351,7 +2279,8 @@ class Service {
           authenticated: true,
           forceJson: true,
           serverOverride: account);
-      final response = await httpClient.delete(req.uri, headers: req.headers);
+      final response =
+          await _instanceHttpClient.delete(req.uri, headers: req.headers);
       handleResponse(response);
     }
 
@@ -2365,7 +2294,8 @@ class Service {
     var req = await buildRequest(urlAddDeleteHistory,
         pathParams: {':id': videoId}, authenticated: true, forceJson: true);
 
-    final response = await httpClient.post(req.uri, headers: req.headers);
+    final response =
+        await _instanceHttpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
   }
 

@@ -13,16 +13,21 @@ internal const val MAX_API_BODY_BYTES = 4 * 1024 * 1024
 
 internal class ApiBodyTooLarge : IOException("Network response exceeds 4 MiB.")
 
-internal data class ApiRedirectOptions(val followRedirects: Boolean = true, val maxRedirects: Int = 5) {
+internal data class ApiRedirectOptions(
+    val followRedirects: Boolean = true,
+    val maxRedirects: Int = 5,
+    val sameOriginOnly: Boolean = false,
+) {
     companion object {
         fun fromMap(values: Map<*, *>): ApiRedirectOptions {
             val follow = values["followRedirects"] ?: true
             val max = values["maxRedirects"] ?: 5
-            require(follow is Boolean && max is Number &&
+            val sameOrigin = values["sameOriginOnly"] ?: false
+            require(follow is Boolean && sameOrigin is Boolean && max is Number &&
                 max.toDouble() == max.toInt().toDouble() && max.toInt() in 0..20) {
                 "Invalid HTTP redirect options."
             }
-            return ApiRedirectOptions(follow, max.toInt())
+            return ApiRedirectOptions(follow, max.toInt(), sameOrigin)
         }
     }
 }

@@ -39,6 +39,9 @@ class _LinkApp extends AppCubit {
   void requireSessionRecovery() {
     emit(state.copyWith(sessionRecoveryRequired: true));
   }
+
+  void selectForLinkDisplay(Server server) =>
+      emit(state.copyWith(server: server));
 }
 
 class _LinkPlayer implements PlayerCubit {
@@ -522,6 +525,51 @@ void main() {
             'these words');
       }
     });
+
+    testWidgets('$action uses the selected Invidious address', (tester) async {
+      final calls = <MethodCall>[];
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        calls.add(call);
+        if (call.method == 'Clipboard.hasStrings') return {'value': false};
+        return null;
+      });
+      addTearDown(() =>
+          messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      app.selectForLinkDisplay(
+          const Server(url: 'http://selected-instance.onion/iv'));
+      await tester.pumpWidget(MaterialApp(
+        home: BlocProvider<AppCubit>.value(
+          value: app,
+          child: const Scaffold(
+            body: TextLinkified(
+                text: 'https://youtu.be/dQw4w9WgXcQ?t=42&si=tracking'),
+          ),
+        ),
+      ));
+      final editable =
+          tester.state<EditableTextState>(find.byType(EditableText));
+      const expected =
+          'http://selected-instance.onion/iv/watch?v=dQw4w9WgXcQ&t=42';
+      expect(editable.widget.controller.text, expected);
+      await tester.longPress(find.byType(SelectableText));
+      await tester.pumpAndSettle();
+      editable.userUpdateTextEditingValue(
+          const TextEditingValue(
+              text: expected,
+              selection:
+                  TextSelection(baseOffset: 0, extentOffset: expected.length)),
+          SelectionChangedCause.longPress);
+      editable.showToolbar();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(action));
+      await tester.pumpAndSettle();
+
+      final method = action == 'Copy' ? 'Clipboard.setData' : 'Share.invoke';
+      final arguments =
+          calls.lastWhere((call) => call.method == method).arguments;
+      expect(arguments, action == 'Copy' ? {'text': expected} : expected);
+    });
   }
 
   testWidgets('linkified selection survives parent rebuilds after long press',
@@ -656,9 +704,10 @@ void main() {
     expect(musicFilter, contains('android:pathPrefix="/channel/"'));
     expect(musicFilter, contains('android:pathPrefix="/playlist"'));
     expect(musicFilter, isNot(contains('android:host="youtube.com"')));
+    expect(mainActivity, isNot(contains('android:autoVerify="true"')));
     expect(mainActivity, isNot(contains('videre-auth')));
-    expect(
-        manifest, contains('com.linusu.flutter_web_auth_2.CallbackActivity'));
-    expect(manifest, contains('android:scheme="videre-auth"'));
+    expect(manifest,
+        isNot(contains('com.linusu.flutter_web_auth_2.CallbackActivity')));
+    expect(manifest, isNot(contains('android:scheme="videre-auth"')));
   });
 }

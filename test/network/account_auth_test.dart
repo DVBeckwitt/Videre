@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
@@ -27,16 +28,6 @@ const _disabledGateway = {
   'needsSignIn': false,
 };
 
-Uri _callback(MethodCall call) {
-  final arguments = Map<String, dynamic>.from(call.arguments as Map);
-  final authorization = Uri.parse(arguments['url'] as String);
-  expect(authorization.path, '/authorize_token');
-  return Uri.parse(authorization.queryParameters['callback_url']!);
-}
-
-String _tokenCallback(Uri callback, String token) => callback.replace(
-    queryParameters: {...callback.queryParameters, 'token': token}).toString();
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final messenger =
@@ -48,6 +39,20 @@ void main() {
   final requests = <http.Request>[];
   const account = Server(url: 'https://instance.example', id: 'person-account');
 
+  void browser(FutureOr<String?> Function(GatewayRequestContext) handler) {
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+      if (call.method == 'close') return null;
+      expect(call.method, 'signIn');
+      final arguments = Map<String, Object?>.from(call.arguments as Map);
+      expect(arguments['persistSession'], false);
+      expect(arguments['serverUrl'], account.url);
+      final context =
+          GatewayRequestContext.tryParse(arguments['context'] as String)!;
+      expect(context.origin, Uri.parse(account.url));
+      return handler(context);
+    });
+  }
+
   setUp(() async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     documents = await Directory.systemTemp.createTemp('videre-account-auth-');
@@ -56,6 +61,9 @@ void main() {
     messenger.setMockMethodCallHandler(
         _gatewaySessions, (_) async => _disabledGateway);
     messenger.setMockMethodCallHandler(_gatewayBrowser, (_) async => null);
+    messenger.setMockMethodCallHandler(_webAuth, (call) async {
+      fail('Videre must not launch an external authentication browser');
+    });
     db = database = await SembastSqfDb.createInMemory();
     await database.upsertServer(account);
     await fileDb.useServer(await database.getCurrentlySelectedServer());
@@ -85,20 +93,19 @@ void main() {
   });
 
   test('logout cancels an older pending token callback', () async {
-    final opened = Completer<Uri>();
+    final opened = Completer<void>();
     final response = Completer<String>();
-    messenger.setMockMethodCallHandler(_webAuth, (call) {
-      opened.complete(_callback(call));
+    browser((_) {
+      opened.complete();
       return response.future;
     });
     final pending = api.logIn(account.accountId);
-    final rejected =
-        expectLater(pending, throwsA(isA<InvidiousServiceError>()));
-    final callback = await opened.future;
+    final cancelled = expectLater(pending, completion(isNull));
+    await opened.future;
 
     await api.logOutProtected(database.getServer(account.accountId)!);
-    response.complete(_tokenCallback(callback, 'late-token'));
-    await rejected;
+    response.complete('late-token');
+    await cancelled;
 
     expect(database.getServer(account.accountId)!.authToken, isNull);
     expect((await fileDb.getCurrentlySelectedServer()).authToken, isNull);
@@ -114,9 +121,9 @@ void main() {
     await database.upsertServer(replacement);
     await database.deleteServer(removed);
     var browserOpened = false;
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
+    browser((_) {
       browserOpened = true;
-      return _tokenCallback(_callback(call), 'unexpected-login');
+      return 'unexpected-login';
     });
 
     await expectLater(
@@ -130,30 +137,29 @@ void main() {
 
   test('the newest token login wins and preserves intervening account edits',
       () async {
-    final opened = Completer<Uri>();
+    final opened = Completer<void>();
     final oldResponse = Completer<String>();
     var calls = 0;
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
-      final callback = _callback(call);
+    browser((_) async {
       if (calls++ == 0) {
-        opened.complete(callback);
+        opened.complete();
         return oldResponse.future;
       }
-      return _tokenCallback(callback, 'fresh%2Fliteral');
+      return 'fresh%2Fliteral';
     });
     final pending = api.logIn(account.accountId);
-    final rejected =
-        expectLater(pending, throwsA(isA<InvidiousServiceError>()));
-    final oldCallback = await opened.future;
+    final cancelled = expectLater(pending, completion(isNull));
+    await opened.future;
     await database.upsertServer(database.getServer(account.accountId)!.copyWith(
         name: 'Updated name', customHeaders: {'X-Preference': 'kept'}));
 
     await api.logIn(account.accountId);
-    oldResponse.complete(_tokenCallback(oldCallback, 'stale-token'));
-    await rejected;
+    oldResponse.complete('stale-token');
+    await cancelled;
 
     final saved = database.getServer(account.accountId)!;
     expect(saved.authToken, 'fresh%2Fliteral');
+    expect(saved.gatewayEnabled, isFalse);
     expect(saved.name, 'Updated name');
     expect(saved.customHeaders, {'X-Preference': 'kept'});
     expect((await fileDb.getCurrentlySelectedServer()).authToken,
@@ -173,8 +179,7 @@ void main() {
     });
     addTearDown(delayedClient.close);
     service = api = Service(httpClient: delayedClient);
-    messenger.setMockMethodCallHandler(
-        _webAuth, (call) async => _tokenCallback(_callback(call), 'new-token'));
+    browser((_) => 'new-token');
     final pending = api.logInAccountWithCookie(
         database.getServer(account.accountId)!, 'person', 'password');
     final rejected =
@@ -197,25 +202,25 @@ void main() {
     final other = await database.createProfile('Second person');
     final otherOwner = database.forProfile(other.id);
     await otherOwner.upsertServer(account.copyWith(profileId: other.id));
-    final opened = Completer<Uri>();
+    final opened = Completer<String>();
     final firstResponse = Completer<String>();
     var calls = 0;
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
-      final callback = _callback(call);
+    browser((context) async {
       if (calls++ == 0) {
-        opened.complete(callback);
+        opened.complete(context.key);
         return firstResponse.future;
       }
-      return _tokenCallback(callback, 'second-person-token');
+      expect(context.key, isNot(await opened.future));
+      return 'second-person-token';
     });
 
     final firstLogin = api.logIn(account.accountId);
-    final firstCallback = await opened.future;
+    await opened.future;
     await database.useProfile(other.id);
     await fileDb.useProfile(other.id);
     await fileDb.useServer(await otherOwner.getCurrentlySelectedServer());
     await api.logIn(account.accountId);
-    firstResponse.complete(_tokenCallback(firstCallback, 'first-person-token'));
+    firstResponse.complete('first-person-token');
     await firstLogin;
 
     expect(
@@ -249,8 +254,7 @@ void main() {
         request.url.path.endsWith('/subscriptions') ? 401 : 200));
     addTearDown(validationClient.close);
     service = api = Service(httpClient: validationClient);
-    messenger.setMockMethodCallHandler(_webAuth,
-        (call) async => _tokenCallback(_callback(call), 'fresh-token'));
+    browser((_) => 'fresh-token');
 
     final validation = api.validateCurrentSession();
     await statusStarted.future;
@@ -282,8 +286,7 @@ void main() {
     });
     addTearDown(validationClient.close);
     service = api = Service(httpClient: validationClient);
-    messenger.setMockMethodCallHandler(_webAuth,
-        (call) async => _tokenCallback(_callback(call), 'same-token'));
+    browser((_) => 'same-token');
 
     final validation = api.validateCurrentSession();
     await requested.future;
@@ -322,33 +325,29 @@ void main() {
       // read. The native session remains disabled after this ordinary login.
       return Future.value(_disabledGateway);
     });
-    messenger.setMockMethodCallHandler(_webAuth,
-        (call) async => _tokenCallback(_callback(call), 'newer-login'));
+    browser((_) => 'newer-login');
 
     final loggingOut = oldSettings.logOut();
     await statusStarted.future;
-    await reopened.logInWithToken();
+    final loggingIn = reopened.logInWithToken();
+    await Future<void>.delayed(Duration.zero);
     statusResponse.complete(_disabledGateway);
+    await loggingIn;
     await loggingOut;
 
-    expect(statusReads, 2);
+    expect(statusReads, 1);
     expect(database.getServer(account.accountId)!.authToken, 'newer-login');
     expect(
         (await fileDb.getCurrentlySelectedServer()).authToken, 'newer-login');
   });
 
-  test('a token callback with the wrong state does not persist credentials',
+  test('a rejected protected authentication does not persist credentials',
       () async {
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
-      final callback = _callback(call);
-      return callback.replace(queryParameters: {
-        'state': 'wrong-state',
-        'token': 'untrusted-token',
-      }).toString();
+    browser((_) {
+      throw PlatformException(code: 'GATEWAY_PROXY_UNSUPPORTED');
     });
 
-    await expectLater(
-        api.logIn(account.accountId), throwsA(isA<InvidiousServiceError>()));
+    await expectLater(api.logIn(account.accountId), throwsException);
 
     expect(database.getServer(account.accountId)!.authToken, isNull);
     expect(requests, isEmpty);

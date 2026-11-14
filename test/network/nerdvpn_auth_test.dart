@@ -14,7 +14,6 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,17 +28,6 @@ const _pathProvider = MethodChannel('plugins.flutter.io/path_provider');
 const _account =
     Server(url: 'https://invidious.nerdvpn.de', id: 'nerdvpn-account');
 
-Uri _authorization(MethodCall call) {
-  final arguments = Map<String, dynamic>.from(call.arguments as Map);
-  return Uri.parse(arguments['url'] as String);
-}
-
-Uri _callback(Uri authorization) =>
-    Uri.parse(authorization.queryParameters['callback_url']!);
-
-String _codeCallback(Uri callback, String code) => callback.replace(
-    queryParameters: {...callback.queryParameters, 'code': code}).toString();
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final messenger =
@@ -52,6 +40,7 @@ void main() {
   late Future<http.Response> Function(http.Request) respond;
   final requests = <http.Request>[];
   final authorizations = <Map<String, dynamic>>[];
+  final browserRequests = <Map<String, dynamic>>[];
   final nativeIntents = <String, int>{};
 
   setUp(() async {
@@ -62,7 +51,12 @@ void main() {
     messenger.setMockMethodCallHandler(_gatewaySessions, (_) async {
       return {'supported': true, 'enabled': false, 'needsSignIn': false};
     });
-    messenger.setMockMethodCallHandler(_gatewayBrowser, (_) async => null);
+    browserRequests.clear();
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+      if (call.method != 'signIn') return null;
+      browserRequests.add(Map<String, dynamic>.from(call.arguments as Map));
+      return 'account-token';
+    });
     accessStatus = {
       'state': 'waiting',
       'availableAt': '2026-11-14T09:30:00Z',
@@ -85,10 +79,9 @@ void main() {
       }
       return accessStatus;
     });
-    messenger.setMockMethodCallHandler(
-        _webAuth,
-        (call) async =>
-            _codeCallback(_callback(_authorization(call)), 'one-use-code'));
+    messenger.setMockMethodCallHandler(_webAuth, (_) async {
+      fail('Sign-in must stay in the native browser transport');
+    });
     db = database = await SembastSqfDb.createInMemory();
     await database.upsertServer(_account);
     await fileDb.useServer(await database.getCurrentlySelectedServer());
@@ -126,47 +119,31 @@ void main() {
     await documents.delete(recursive: true);
   });
 
-  test('PKCE binds the browser challenge, verifier and exact callback',
+  test(
+      'ordinary NerdVPN login uses account-scoped native PKCE without saving a gateway session',
       () async {
-    late Uri authorization;
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
-      authorization = _authorization(call);
-      return _codeCallback(_callback(authorization), 'one-use-code');
-    });
-
     await api.logIn(_account.accountId);
 
-    expect(authorization.origin, _account.url);
-    expect(authorization.path, '/authorize_token');
-    expect(authorization.queryParameters['scopes']!.split(','),
-        contains(':api_key'));
-    expect(authorization.queryParameters['code_challenge_method'], 'S256');
-    final exchange = requests.single;
-    expect(exchange.method, 'POST');
-    expect(exchange.url.toString(), '${_account.url}/api/v1/token');
-    expect(exchange.headers['content-type'], contains('application/json'));
-    final body = jsonDecode(exchange.body) as Map<String, dynamic>;
-    expect(body['code'], 'one-use-code');
-    expect(body['callback_url'], authorization.queryParameters['callback_url']);
-    final verifier = body['code_verifier'] as String;
-    expect(verifier, matches(RegExp(r'^[A-Za-z0-9._~-]{43,128}$')));
-    expect(
-        authorization.queryParameters['code_challenge'],
-        base64Url
-            .encode(sha256.convert(ascii.encode(verifier)).bytes)
-            .replaceAll('=', ''));
-    expect(authorization.queryParameters.containsKey('code_verifier'), isFalse);
+    final context = GatewayRequestContext.forAccount(
+            _account.profileId, _account.accountId, _account.url)!
+        .encoded;
+    expect(browserRequests, hasLength(1));
+    expect(browserRequests.single['serverUrl'], _account.url);
+    expect(browserRequests.single['context'], context);
+    expect(browserRequests.single['persistSession'], isFalse);
+    expect(requests, isEmpty);
     expect(authorizations.single['token'], 'account-token');
-    expect(
-        authorizations.single['context'],
-        GatewayRequestContext.forAccount(
-                _account.profileId, _account.accountId, _account.url)!
-            .encoded);
+    expect(authorizations.single['context'], context);
+    expect(authorizations.single['intent'], nativeIntents[context]);
     expect(database.getAccount(_account.accountId)!.authToken, 'account-token');
+    expect(database.getAccount(_account.accountId)!.gatewayEnabled, isFalse);
     expect(
         (await fileDb.getCurrentlySelectedServer()).authToken, 'account-token');
   });
 
+  // NerdVpnPkceTest.kt covers the native S256/verifier, exact nonce callback,
+  // duplicate-code and token-downgrade checks. Dart observes only its result;
+  // the one-use code and verifier must never return to the Dart HTTP client.
   for (final state in ['waiting', 'disabled']) {
     test('$state access keeps the account signed in and pauses history sync',
         () async {
@@ -174,70 +151,35 @@ void main() {
         'state': state,
         if (state == 'waiting') 'availableAt': '2026-11-14T09:30:00Z',
       };
-
       await api.logIn(_account.accountId);
-
       expect(
           database.getAccount(_account.accountId)!.authToken, 'account-token');
       expect(authorizations, hasLength(1));
-      expect(requests.map((request) => request.url.path), ['/api/v1/token']);
+      expect(requests, isEmpty);
     });
   }
 
-  test('an unsuccessful code exchange preserves the previous account login',
-      () async {
-    await database.upsertServer(_account.copyWith(authToken: 'previous-token'));
-    respond = (_) async => http.Response('{"error":"invalid_grant"}', 400,
-        headers: {'content-type': 'application/json'});
-
-    await expectLater(
-        api.logIn(_account.accountId), throwsA(isA<InvidiousServiceError>()));
-
-    expect(
-        database.getAccount(_account.accountId)!.authToken, 'previous-token');
-    expect(authorizations, isEmpty);
-    expect(requests, hasLength(1));
-  });
-
-  test('a code exchange redirect cannot supply credentials from another origin',
-      () async {
-    respond = (request) async => request.url.host == 'invidious.nerdvpn.de'
-        ? http.Response('', 303,
-            headers: {'location': 'https://other.example/token'})
-        : http.Response('{"token":"untrusted-token"}', 200);
-
-    await expectLater(
-        api.logIn(_account.accountId), throwsA(isA<InvidiousServiceError>()));
-
-    expect(requests, hasLength(1));
-    expect(requests.single.url.origin, _account.url);
-    expect(database.getAccount(_account.accountId)!.authToken, isNull);
-    expect(authorizations, isEmpty);
-  });
-
-  for (final failure in <Exception>[
-    http.ClientException('private transport detail'),
-    TimeoutException('private transport detail'),
-    const SocketException('private transport detail'),
-    const HttpException('private transport detail'),
-    const HandshakeException('private transport detail'),
+  for (final code in [
+    'GATEWAY_TOKEN_EXPIRED',
+    'GATEWAY_TOKEN_EXCHANGE_FAILED',
+    'GATEWAY_TOKEN_UNAVAILABLE',
   ]) {
-    test('${failure.runtimeType} during exchange asks for a fresh sign-in',
+    test('$code preserves the previous login and redacts native details',
         () async {
       final previous = _account.copyWith(authToken: 'previous-token');
       await database.upsertServer(previous);
       await fileDb.useServer(previous);
-      respond = (_) async => throw failure;
+      messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+        if (call.method != 'signIn') return null;
+        throw PlatformException(
+            code: code, message: 'private transport detail');
+      });
 
       await expectLater(
           api.logIn(_account.accountId),
-          throwsA(isA<GatewaySignInFailed>()
-              .having(
-                  (error) => error.message, 'advice', contains('sign in again'))
-              .having((error) => error.toString(), 'safe message',
-                  isNot(contains('private transport detail')))));
-
-      expect(requests, hasLength(1));
+          throwsA(isA<GatewaySignInFailed>().having((error) => error.toString(),
+              'safe message', isNot(contains('private transport detail')))));
+      expect(requests, isEmpty);
       expect(authorizations, isEmpty);
       expect(
           database.getAccount(_account.accountId)!.authToken, 'previous-token');
@@ -246,70 +188,45 @@ void main() {
     });
   }
 
-  test('an interrupted token response requires a fresh sign-in', () async {
-    client.close();
-    var exchanges = 0;
-    client = MockClient.streaming((_, __) async {
-      exchanges++;
-      return http.StreamedResponse(
-          Stream<List<int>>.error(
-              http.ClientException('private response detail')),
-          200);
-    });
-    service = api = Service(httpClient: client);
-
-    await expectLater(
-        api.logIn(_account.accountId),
-        throwsA(isA<GatewaySignInFailed>().having(
-            (error) => error.message, 'advice', contains('sign in again'))));
-
-    expect(exchanges, 1);
-    expect(authorizations, isEmpty);
-    expect(database.getAccount(_account.accountId)!.authToken, isNull);
-  });
-
-  test('retrying a failed exchange opens the browser for a new one-use code',
+  test('retrying a failed native exchange opens a fresh sign-in attempt',
       () async {
     var browserOpens = 0;
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+      if (call.method != 'signIn') return null;
       browserOpens++;
-      return _codeCallback(
-          _callback(_authorization(call)), 'one-use-code-$browserOpens');
-    });
-    final successfulResponse = respond;
-    respond = (request) async {
-      if (requests.length == 1) {
-        throw http.ClientException('Connection closed before full header');
+      if (browserOpens == 1) {
+        throw PlatformException(code: 'GATEWAY_TOKEN_EXCHANGE_FAILED');
       }
-      return successfulResponse(request);
-    };
-
+      return 'fresh-account-token';
+    });
     await expectLater(
         api.logIn(_account.accountId), throwsA(isA<GatewaySignInFailed>()));
     expect(browserOpens, 1);
-    expect(requests, hasLength(1));
     expect(database.getAccount(_account.accountId)!.authToken, isNull);
 
     await api.logIn(_account.accountId);
-
     expect(browserOpens, 2);
-    expect(requests.map((request) => jsonDecode(request.body)['code']),
-        ['one-use-code-1', 'one-use-code-2']);
+    expect(requests, isEmpty);
     expect(authorizations, hasLength(1));
-    expect(database.getAccount(_account.accountId)!.authToken, 'account-token');
+    expect(authorizations.single['intent'], 2);
+    expect(database.getAccount(_account.accountId)!.authToken,
+        'fresh-account-token');
   });
 
-  test('a rate-limited code exchange pauses subsequent browser sign-in',
+  test('a rate-limited native exchange pauses subsequent browser sign-in',
       () async {
-    final now = DateTime.utc(2026, 11, 8, 12);
+    final now = DateTime.now().toUtc();
     service = api = Service(httpClient: client, now: () => now);
     accessStatus = {'state': 'missing', 'revision': 0};
     var browserOpens = 0;
     var intent = 0;
     final recoveries = <Map<String, dynamic>>[];
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+      if (call.method != 'signIn') return null;
       browserOpens++;
-      return _codeCallback(_callback(_authorization(call)), 'one-use-code');
+      throw PlatformException(
+          code: 'GATEWAY_TOKEN_UNAVAILABLE',
+          details: {'statusCode': 429, 'retryAfter': '17'});
     });
     messenger.setMockMethodCallHandler(_access, (call) async {
       if (call.method == 'beginAuth') return {'intent': ++intent};
@@ -323,110 +240,81 @@ void main() {
       }
       return accessStatus;
     });
-    respond = (_) async => http.Response('{"error":"rate_limited"}', 429,
-        headers: {'content-type': 'application/json', 'retry-after': '17'});
 
     await expectLater(
-        api.logIn(_account.accountId),
-        throwsA(isA<InvidiousServiceError>()
-            .having((error) => error.statusCode, 'status', 429)));
+        api.logIn(_account.accountId), throwsA(isA<GatewaySignInFailed>()));
     await expectLater(
         api.logIn(_account.accountId), throwsA(isA<NerdVpnAccessRequired>()));
-
     expect(recoveries.single['error'], 'rate_limited');
     expect(recoveries.single['retryAfter'], '17');
     expect(recoveries.single['revision'], 0);
     expect(recoveries.single['retry'], isFalse);
     expect(browserOpens, 1);
-    expect(requests, hasLength(1));
+    expect(requests, isEmpty);
     expect(database.getAccount(_account.accountId)!.authToken, isNull);
   });
 
-  final invalidCallbacks = <String, String Function(Uri)>{
-    'wrong state': (callback) => callback.replace(queryParameters: {
-          'state': 'different-state',
-          'code': 'one-use-code',
-        }).toString(),
-    'wrong host': (callback) =>
-        _codeCallback(callback.replace(host: 'different-host'), 'one-use-code'),
-    'unexpected path': (callback) =>
-        _codeCallback(callback.replace(path: '/unexpected'), 'one-use-code'),
-    'duplicate code': (callback) =>
-        '${_codeCallback(callback, 'first-code')}&code=second-code',
-    'raw token without a code': (callback) =>
-        callback.replace(queryParameters: {
-          ...callback.queryParameters,
-          'token': 'unprotected-token',
-        }).toString(),
-  };
-  for (final entry in invalidCallbacks.entries) {
-    test('${entry.key} is rejected before exchanging or saving credentials',
-        () async {
-      messenger.setMockMethodCallHandler(_webAuth,
-          (call) async => entry.value(_callback(_authorization(call))));
+  test('native cancellation preserves the previous ordinary account login',
+      () async {
+    await database.upsertServer(_account.copyWith(authToken: 'previous-token'));
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (_) async => null);
+    expect(await api.logIn(_account.accountId), isNull);
+    expect(
+        database.getAccount(_account.accountId)!.authToken, 'previous-token');
+    expect(authorizations, isEmpty);
+    expect(requests, isEmpty);
+  });
 
-      await expectLater(
-          api.logIn(_account.accountId), throwsA(isA<InvidiousServiceError>()));
+  test('an empty native account token is rejected before saving credentials',
+      () async {
+    messenger.setMockMethodCallHandler(
+        _gatewayBrowser, (call) async => call.method == 'signIn' ? '' : null);
+    await expectLater(
+        api.logIn(_account.accountId), throwsA(isA<InvidiousServiceError>()));
+    expect(database.getAccount(_account.accountId)!.authToken, isNull);
+    expect(authorizations, isEmpty);
+    expect(requests, isEmpty);
+  });
 
-      expect(database.getAccount(_account.accountId)!.authToken, isNull);
-      expect(requests, isEmpty);
-      expect(authorizations, isEmpty);
-    });
-  }
-
-  test('logout supersedes a pending PKCE callback', () async {
-    final opened = Completer<Uri>();
+  test('logout supersedes a pending native PKCE result', () async {
+    final opened = Completer<void>();
     final returned = Completer<String>();
-    messenger.setMockMethodCallHandler(_webAuth, (call) {
-      opened.complete(_callback(_authorization(call)));
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) {
+      if (call.method != 'signIn') return Future.value(null);
+      opened.complete();
       return returned.future;
     });
     final pending = api.logIn(_account.accountId);
-    final rejected =
-        expectLater(pending, throwsA(isA<InvidiousServiceError>()));
-    final callback = await opened.future;
-
+    await opened.future;
     await api.logOutProtected(database.getAccount(_account.accountId)!);
-    returned.complete(_codeCallback(callback, 'late-code'));
-    await rejected;
-
+    returned.complete('late-token');
+    expect(await pending, isNull);
     expect(database.getAccount(_account.accountId)!.authToken, isNull);
     expect(authorizations, isEmpty);
   });
 
-  test('a newer PKCE sign-in supersedes an older callback', () async {
-    final opened = Completer<Uri>();
+  test('a newer native PKCE sign-in supersedes an older result', () async {
+    final opened = Completer<void>();
     final firstResult = Completer<String>();
     var calls = 0;
-    messenger.setMockMethodCallHandler(_webAuth, (call) {
-      final callback = _callback(_authorization(call));
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) {
+      if (call.method != 'signIn') return Future.value(null);
       if (calls++ == 0) {
-        opened.complete(callback);
+        opened.complete();
         return firstResult.future;
       }
-      return Future.value(_codeCallback(callback, 'new-code'));
+      return Future.value('new-account-token');
     });
-    respond = (request) async {
-      final body = jsonDecode(request.body) as Map<String, dynamic>;
-      return http.Response(
-          jsonEncode({'token': '${body['code']}-token', 'username': 'person'}),
-          200,
-          headers: {'content-type': 'application/json'});
-    };
     final firstLogin = api.logIn(_account.accountId);
-    final rejected =
-        expectLater(firstLogin, throwsA(isA<InvidiousServiceError>()));
-    final callback = await opened.future;
-
+    await opened.future;
     await api.logIn(_account.accountId);
-    firstResult.complete(_codeCallback(callback, 'old-code'));
-    await rejected;
-
+    firstResult.complete('old-account-token');
+    expect(await firstLogin, isNull);
+    expect(database.getAccount(_account.accountId)!.authToken,
+        'new-account-token');
     expect(
-        database.getAccount(_account.accountId)!.authToken, 'new-code-token');
-    expect(authorizations.map((value) => value['token']), ['new-code-token']);
+        authorizations.map((value) => value['token']), ['new-account-token']);
   });
-
   for (final rejection in [
     (403, 'Invalid scope'),
     (401, 'Unknown upstream rejection'),
@@ -468,7 +356,8 @@ void main() {
         GatewayRequestContext.forAccount(
                 added.profileId, added.accountId, added.url)!
             .encoded);
-    expect(requests.map((request) => request.url.path), ['/api/v1/token']);
+    expect(requests, isEmpty);
+    expect(browserRequests.single['persistSession'], isFalse);
   });
 
   test('accounts with the same ID in separate profiles use distinct key stores',
@@ -495,23 +384,20 @@ void main() {
         _account.profileId);
   });
 
-  test('a lookalike hostname retains the existing token sign-in protocol',
+  test('a lookalike hostname does not gain managed NerdVPN authorization',
       () async {
     const other = Server(
         url: 'https://invidious.nerdvpn.de.attacker.example',
         id: 'other-instance');
     await database.upsertServer(other);
-    messenger.setMockMethodCallHandler(_webAuth, (call) async {
-      final authorization = _authorization(call);
-      expect(
-          authorization.queryParameters.containsKey('code_challenge'), isFalse);
-      expect(authorization.queryParameters['scopes']!.split(','),
-          isNot(contains(':api_key')));
-      final callback = _callback(authorization);
-      return callback.replace(queryParameters: {
-        ...callback.queryParameters,
-        'token': 'legacy-token',
-      }).toString();
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (call) async {
+      if (call.method != 'signIn') return null;
+      final arguments = Map<String, dynamic>.from(call.arguments as Map);
+      expect(arguments['serverUrl'], other.url);
+      expect(arguments['persistSession'], isFalse);
+      expect(GatewayRequestContext.tryParse(arguments['context'])!.origin,
+          Uri.parse(other.url));
+      return 'legacy-token';
     });
 
     await api.logIn(other.accountId);
@@ -822,6 +708,7 @@ void main() {
         expect(call.method, 'signIn');
         final arguments = Map<String, dynamic>.from(call.arguments as Map);
         expect(arguments['serverUrl'], onion.url);
+        expect(arguments['persistSession'], isTrue);
         expect(GatewayRequestContext.tryParse(arguments['context'])!.origin,
             Uri.parse(onion.url));
         browserOpens++;
@@ -866,6 +753,7 @@ void main() {
     messenger.setMockMethodCallHandler(_webAuth, (_) async {
       fail('Onion sign-in must not open the external browser');
     });
+    messenger.setMockMethodCallHandler(_gatewayBrowser, (_) async => null);
 
     expect(await api.logIn(onion.accountId), isNull);
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:clipious/router.dart';
 
 import '../../../../utils.dart';
+import '../../../models/invidious_linkifier.dart';
 
 class TvExpandableText extends StatelessWidget {
   final String text;
@@ -13,19 +14,18 @@ class TvExpandableText extends StatelessWidget {
   const TvExpandableText(
       {super.key, required this.text, this.maxLines, this.fontSize});
 
-  showText(BuildContext context) {
-    AutoRouter.of(context).push(TvPlainTextRoute(text: text));
-  }
-
   @override
   Widget build(BuildContext context) {
     ColorScheme colors = Theme.of(context).colorScheme;
     TextTheme textTheme = Theme.of(context).textTheme;
+    final displayText = InvidiousLinkifier.of(context).rewriteText(text);
     return DefaultTextStyle(
       style: textTheme.bodyLarge!,
       child: Focus(
-          onKeyEvent: (node, event) =>
-              onTvSelect(event, context, (context) => showText(context)),
+          onKeyEvent: (node, event) => onTvSelect(event, context, (context) {
+                AutoRouter.of(context)
+                    .push(TvPlainTextRoute(text: displayText));
+              }),
           child: Builder(builder: (ctx) {
             final FocusNode focusNode = Focus.of(ctx);
             final bool hasFocus = focusNode.hasFocus;
@@ -41,7 +41,7 @@ class TvExpandableText extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(10),
                 child: Text(
-                  text,
+                  displayText,
                   maxLines: maxLines,
                   overflow: TextOverflow.ellipsis,
                 ),

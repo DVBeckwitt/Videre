@@ -55,6 +55,7 @@ void main() {
     expect(utf8.decode(args['body'] as Uint8List), '{"id":"abc"}');
     expect(args['followRedirects'], isTrue);
     expect(args['maxRedirects'], 5);
+    expect(args['sameOriginOnly'], isFalse);
     expect(result.statusCode, 201);
     expect(result.headers['content-type'], 'application/json');
     expect(result.headers['x-test'], 'value');

@@ -3,7 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/network/native_proxy_http_client.dart';
+import 'package:clipious/network/origin_scoped_http_client.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -33,7 +36,7 @@ void main() {
     return result;
   }
 
-  test('instance headers do not cross origins through an API redirect',
+  test('general requests strip supplied headers on cross-origin redirects',
       () async {
     Map<String, List<String>>? received;
     final destination = await server((request) async {
@@ -193,5 +196,145 @@ void main() {
         .httpClient
         .get(Uri.parse('https://instance.invalid/'));
     expect(response.statusCode, 200);
+  });
+
+  group('selected instance redirects', () {
+    for (final destination in [
+      'https://other.invalid/next',
+      'http://instance.invalid/next',
+      'https://instance.invalid:8443/next',
+    ]) {
+      test('rejects $destination before a second request', () async {
+        final received = <http.Request>[];
+        final inner = MockClient((request) async {
+          received.add(request);
+          return http.Response('', 302, headers: {'location': destination});
+        });
+        addTearDown(inner.close);
+        final scoped = OriginScopedHttpClient(inner, sameOriginOnly: true);
+
+        await expectLater(
+            scoped.get(Uri.parse('https://instance.invalid/api/v1/stats')),
+            throwsA(isA<http.ClientException>()));
+        expect(received, hasLength(1));
+      });
+    }
+
+    test('follows same-origin paths and retains instance headers', () async {
+      final received = <http.Request>[];
+      final inner = MockClient((request) async {
+        received.add(request);
+        return received.length == 1
+            ? http.Response('', 302, headers: {'location': '/next'})
+            : http.Response('ok', 200);
+      });
+      addTearDown(inner.close);
+      final scoped = OriginScopedHttpClient(inner, sameOriginOnly: true);
+
+      final response = await scoped.get(Uri.parse('https://instance.invalid/'),
+          headers: {'X-Instance-Access': 'synthetic-access'});
+      expect(response.body, 'ok');
+      expect(received.map((request) => request.url.path), ['/', '/next']);
+      expect(received.last.headers['X-Instance-Access'], 'synthetic-access');
+    });
+
+    test('service validation rejects an off-origin API response', () async {
+      final received = <http.Request>[];
+      final inner = MockClient((request) async {
+        received.add(request);
+        return http.Response('', 302,
+            headers: {'location': 'https://other.invalid/api/v1/stats'});
+      });
+      final api = Service(httpClient: inner);
+      addTearDown(api.httpClient.close);
+
+      await expectLater(api.validateServer('http://instance.invalid', null),
+          throwsA(isA<CannotAddServerError>()));
+      expect(received, hasLength(1));
+      expect(received.single.url.host, 'instance.invalid');
+    });
+
+    test('cookie login refuses cross-origin see-other redirects', () async {
+      final received = <http.Request>[];
+      final inner = MockClient((request) async {
+        received.add(request);
+        return http.Response('', 303,
+            headers: {'location': 'https://other.invalid/login'});
+      });
+      final api = Service(httpClient: inner);
+      addTearDown(api.httpClient.close);
+
+      await expectLater(
+          api.loginWithCookies('https://instance.invalid', 'user', 'password'),
+          throwsA(isA<InvidiousServiceError>()));
+      expect(received, hasLength(1));
+    });
+
+    test('cookie login retains the expected session redirect response',
+        () async {
+      var calls = 0;
+      final inner = MockClient((request) async {
+        calls++;
+        return http.Response('', 302, headers: {
+          'location': '/',
+          'set-cookie': 'SID=synthetic-session; Path=/; HttpOnly',
+        });
+      });
+      final api = Service(httpClient: inner);
+      addTearDown(api.httpClient.close);
+
+      expect(
+          await api.loginWithCookies(
+              'https://instance.invalid', 'user', 'password'),
+          'SID=synthetic-session');
+      expect(calls, 1);
+    });
+
+    test('explicit no-follow requests retain the redirect for admission',
+        () async {
+      var calls = 0;
+      final inner = MockClient((request) async {
+        calls++;
+        return http.Response('', 302,
+            headers: {'location': 'https://other.invalid/'});
+      });
+      addTearDown(inner.close);
+      final scoped = OriginScopedHttpClient(inner, sameOriginOnly: true);
+      final request =
+          http.Request('GET', Uri.parse('https://instance.invalid/'))
+            ..followRedirects = false;
+
+      final response = await scoped.send(request);
+      await response.stream.drain<void>();
+      expect(response.statusCode, 302);
+      expect(calls, 1);
+    });
+
+    test('native instance calls retain the chain and request origin admission',
+        () async {
+      const channel = MethodChannel('videre/proxy');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      var calls = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls++;
+        final arguments = call.arguments as Map;
+        expect(arguments['followRedirects'], isTrue);
+        expect(arguments['maxRedirects'], 5);
+        expect(arguments['sameOriginOnly'], isTrue);
+        return {
+          'statusCode': 200,
+          'headers': <String, String>{},
+          'body': Uint8List.fromList(
+              utf8.encode('{"software":{"name":"invidious"}}')),
+        };
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final api = Service(httpClient: NativeProxyHttpClient());
+      addTearDown(api.httpClient.close);
+
+      await api.validateServer('http://instance.invalid', null);
+      expect(calls, 1);
+    });
   });
 }

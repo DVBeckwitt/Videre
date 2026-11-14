@@ -70,6 +70,10 @@ class NativeHttpRequestTest {
     fun `redirect options validate their native transport limit`() {
         assertEquals(ApiRedirectOptions(), ApiRedirectOptions.fromMap(emptyMap<Any, Any>()))
         assertEquals(ApiRedirectOptions(false, 0), ApiRedirectOptions.fromMap(mapOf("followRedirects" to false, "maxRedirects" to 0)))
+        assertEquals(ApiRedirectOptions(sameOriginOnly = true), ApiRedirectOptions.fromMap(mapOf("sameOriginOnly" to true)))
+        assertThrows(IllegalArgumentException::class.java) {
+            ApiRedirectOptions.fromMap(mapOf("sameOriginOnly" to "true"))
+        }
         listOf(-1, 21, 1.5, "5").forEach { max ->
             assertThrows(IllegalArgumentException::class.java) {
                 ApiRedirectOptions.fromMap(mapOf("maxRedirects" to max))
@@ -127,22 +131,28 @@ class NativeHttpRequestTest {
     }
 
     @Test
+    fun `origin-pinned worker preserves same-origin credentials and redirects`() {
+        checkRedirectHeaders(useWorkerBridge = true, includeCustomCredentials = true, sameOriginOnly = true,
+            includeInstanceMarker = true)
+    }
+
+    @Test
     fun `media retains same-origin session headers and strips them across origins`() {
         checkRedirectHeaders(useWorkerBridge = false)
     }
 
     @Test
-    fun `manifest header scope survives independent child calls and redirects`() {
+    fun `same-origin manifest headers survive independent child calls and redirects`() {
         ServerSocket(0, 5, InetAddress.getByName("127.0.0.1")).use { listener ->
             val executor = Executors.newSingleThreadExecutor()
             val served = executor.submit<List<Map<String, String>>> {
                 listener.soTimeout = 5000
-                (0..4).map { index ->
+                (0..3).map { index ->
                     listener.accept().use { socket ->
                         socket.soTimeout = 5000
                         val headers = captureHeaders(socket.getInputStream())
-                        val response = if (index == 3) {
-                            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${listener.localPort}/redirected-segment\r\n"
+                        val response = if (index == 2) {
+                            "HTTP/1.1 302 Found\r\nLocation: /redirected-segment\r\n"
                         } else {
                             "HTTP/1.1 200 OK\r\n"
                         }
@@ -161,7 +171,6 @@ class NativeHttpRequestTest {
                 listOf(
                     "$origin/manifest.mpd",
                     "$origin/same-origin-segment",
-                    "http://127.0.0.1:${listener.localPort}/external-segment",
                     "$origin/redirect",
                 ).forEach { url ->
                     val request = Request.Builder().url(url)
@@ -175,11 +184,10 @@ class NativeHttpRequestTest {
                     source.newCall(request).execute().use { assertEquals(200, it.code) }
                 }
                 val captured = served.get(10, TimeUnit.SECONDS)
-                captured.forEachIndexed { index, headers ->
-                    val sameOrigin = index in setOf(0, 1, 3)
-                    assertEquals(if (sameOrigin) "instance-secret" else null, headers["authorization"])
-                    assertEquals(if (sameOrigin) "session=secret" else null, headers["cookie"])
-                    assertEquals(if (sameOrigin) "custom-secret" else null, headers["x-instance-key"])
+                captured.forEach { headers ->
+                    assertEquals("instance-secret", headers["authorization"])
+                    assertEquals("session=secret", headers["cookie"])
+                    assertEquals("custom-secret", headers["x-instance-key"])
                     assertEquals("bytes=100-199", headers["range"])
                 }
             } finally {
@@ -189,8 +197,9 @@ class NativeHttpRequestTest {
         }
     }
 
-    private fun checkRedirectHeaders(useWorkerBridge: Boolean, includeCustomCredentials: Boolean = false) {
-        listOf(false, true).forEach { crossOrigin ->
+    private fun checkRedirectHeaders(useWorkerBridge: Boolean, includeCustomCredentials: Boolean = false,
+        sameOriginOnly: Boolean = false, includeInstanceMarker: Boolean = false) {
+        (if (sameOriginOnly) listOf(false) else listOf(false, true)).forEach { crossOrigin ->
             ServerSocket(0, 2, InetAddress.getByName("127.0.0.1")).use { listener ->
                 val executor = Executors.newSingleThreadExecutor()
                 val served = executor.submit<Pair<Map<String, String>, Map<String, String>>> {
@@ -218,11 +227,15 @@ class NativeHttpRequestTest {
                         if (includeCustomCredentials) listOf("X-Instance-Key", "CF-Access-Client-Secret") else emptyList()
                     val builder = Request.Builder().url("http://127.0.0.1:${listener.localPort}/first")
                         .header("X-Marker", "kept")
+                    if (includeInstanceMarker) builder.header(INSTANCE_ORIGIN_HEADER, "http://127.0.0.1:${listener.localPort}")
                     sensitive.forEach { builder.header(it, "session-secret") }
                     val request = builder.build()
-                    val call = if (useWorkerBridge) factory.newApiCall(request, ApiRedirectOptions()) else factory.newCall(request)
+                    val call = if (useWorkerBridge) factory.newApiCall(request,
+                        ApiRedirectOptions(sameOriginOnly = sameOriginOnly)) else factory.newCall(request)
                     call.execute().use { assertEquals(200, it.code) }
                     val (original, redirected) = served.get(10, TimeUnit.SECONDS)
+                    assertEquals(null, original[INSTANCE_ORIGIN_HEADER.lowercase(java.util.Locale.ROOT)])
+                    assertEquals(null, redirected[INSTANCE_ORIGIN_HEADER.lowercase(java.util.Locale.ROOT)])
                     sensitive.forEach {
                         val name = it.lowercase(java.util.Locale.ROOT)
                         assertEquals("session-secret", original[name])

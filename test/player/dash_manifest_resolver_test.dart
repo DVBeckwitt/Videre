@@ -943,6 +943,31 @@ void main() {
     expect(bodies, isEmpty);
   });
 
+  for (final scheme in ['http', 'https']) {
+    for (final destination in [
+      'https://invidious.nerdvpn.de',
+      'http://other.onion'
+    ]) {
+      test('$scheme onion manifest refuses redirect to $destination', () async {
+        final onion = Server(url: '$scheme://instance.onion');
+        final requests = <Uri>[];
+        final bodies = <String>[];
+        final resolver = DashManifestResolver(MockClient((request) async {
+          requests.add(request.url);
+          return http.Response('', 302,
+              headers: {'location': '$destination/companion/manifest'},
+              request: request);
+        }));
+        final url = '${onion.url}/api/manifest/dash/id/$videoId';
+        expect(
+            await resolver.resolve(url, videoId, onion, onManifest: bodies.add),
+            isNull);
+        expect(requests, [Uri.parse(url)]);
+        expect(bodies, isEmpty);
+      });
+    }
+  }
+
   test('network failure and timeout use fallback', () async {
     final resolver = DashManifestResolver(MockClient((_) async {
       throw http.ClientException('offline');

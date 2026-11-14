@@ -1,7 +1,3 @@
-import 'dart:convert';
-import 'dart:math';
-
-import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
 import '../settings/models/db/server.dart';
@@ -11,22 +7,6 @@ import 'nerdvpn_origin.dart';
 export 'nerdvpn_origin.dart';
 
 const nerdVpnKeyHeader = 'X-Invidious-Token';
-
-class NerdVpnPkce {
-  final String verifier;
-  final String challenge;
-
-  NerdVpnPkce._(this.verifier)
-      : challenge = base64Url
-            .encode(sha256.convert(ascii.encode(verifier)).bytes)
-            .replaceAll('=', '');
-
-  factory NerdVpnPkce.create() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
-    return NerdVpnPkce._(base64Url.encode(bytes).replaceAll('=', ''));
-  }
-}
 
 class NerdVpnAccessStatus {
   final String state;

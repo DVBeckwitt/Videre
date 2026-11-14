@@ -124,7 +124,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
 
   void initPlayer() {
     if (audioPlayer == null) {
-      final current = audioPlayer = AudioPlayer();
+      // Android's shared native transport needs the selected instance URL to
+      // enforce media origins. A localhost header proxy would hide that anchor.
+      final current = audioPlayer = AudioPlayer(
+          useProxyForRequestHeaders:
+              kIsWeb || defaultTargetPlatform != TargetPlatform.android);
       unawaited(_listenForAudioInterruptions(current));
       bool active() =>
           !isClosed &&

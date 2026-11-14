@@ -92,6 +92,8 @@ void main() {
       'https://user:password@inv.example',
       'https://inv.example/watch?v=video',
       'https://inv.example/#fragment',
+      'https://www.youtube.com',
+      'https://www.youtube.co.uk',
     ]) {
       expect(AddServerCubit.normalizeUrl(address), isNull, reason: address);
     }

@@ -150,9 +150,11 @@ internal class PolicyCallFactory : Call.Factory {
             .readTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
             .addInterceptor(YoutubeRequestGuard())
+            .addInterceptor(SelectedOriginRequestGuard())
             .addInterceptor(ReadHeaderEofRecovery())
             .addInterceptor(NerdVpnRecoveryInterceptor())
             .addNetworkInterceptor(YoutubeRedirectGuard())
+            .addNetworkInterceptor(SelectedOriginRedirectGuard())
             .addNetworkInterceptor { chain ->
                 var outgoing = chain.request()
                 val scope = outgoing.tag(SourceHeaderScope::class.java)
@@ -214,14 +216,17 @@ internal class PolicyCallFactory : Call.Factory {
 
     override fun newCall(request: Request): Call = synchronized(lock) {
         val active = client ?: throw IOException("SOCKS5 transport settings have not been loaded or are invalid.")
-        trackCall(active.newCall(prepareGatewayRequest(request)))
+        trackCall(active.newCall(prepareSelectedOriginRequest(prepareGatewayRequest(request))))
     }
 
     fun forSource(sourceUri: String?, headerNames: Set<String>, gateway: GatewayContext? = null): Call.Factory {
         val scope = SourceHeaderScope(sourceUri?.toHttpUrlOrNull(), headerNames.toSet())
         return object : Call.Factory {
             override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
-                prepareGatewayRequest(request.newBuilder().tag(SourceHeaderScope::class.java, scope).build(), gateway),
+                prepareGatewayRequest(request.newBuilder()
+                    .tag(SourceHeaderScope::class.java, scope)
+                    .tag(SelectedOriginScope::class.java, scope.origin?.let(::SelectedOriginScope))
+                    .build(), gateway),
             )
         }
     }
@@ -231,10 +236,15 @@ internal class PolicyCallFactory : Call.Factory {
         // Instance access controls can use arbitrary header names, not only
         // Authorization or Cookie. Anchor all caller-provided headers before
         // OkHttp adds transport headers such as Host and Accept-Encoding.
-        val scopedRequest = prepareGatewayRequest(request).newBuilder().tag(
+        val preparedRequest = prepareSelectedOriginRequest(prepareGatewayRequest(request), options.followRedirects)
+        val scopedRequest = preparedRequest.newBuilder().tag(
             SourceHeaderScope::class.java,
             SourceHeaderScope(request.url, request.headers.names().toSet()),
-        ).build()
+        ).apply {
+            if (options.sameOriginOnly && options.followRedirects && preparedRequest.tag(SelectedOriginScope::class.java) == null) {
+                tag(SelectedOriginScope::class.java, SelectedOriginScope(request.url))
+            }
+        }.build()
         val builder = active.newBuilder().followRedirects(options.followRedirects)
         var redirects = 0
         builder.addNetworkInterceptor { chain ->

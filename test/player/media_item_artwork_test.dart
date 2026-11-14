@@ -138,13 +138,13 @@ void main() {
         item.artHeaders, recoveredServer.headersForUrl(item.artUri.toString()));
   });
 
-  test('unrelated external artwork never receives instance headers', () async {
+  test('unrelated external metadata artwork is omitted', () async {
     const imageUrl = 'https://cdn.example/artwork.jpg';
     final controller = createPlayer(video(imageUrl));
 
     final item = (await controller.getMediaItem(0))!;
 
-    expect(item.artUri, Uri.parse(imageUrl));
+    expect(item.artUri, isNull);
     expect(item.artHeaders, isNull);
   });
 

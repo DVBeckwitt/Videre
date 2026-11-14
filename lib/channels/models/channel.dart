@@ -46,16 +46,6 @@ class Channel implements ShareLinks {
 
   @override
   Uri getInvidiousLink(Server server, int? timestamp) {
-    return Uri.parse('${server.url}/channel/$authorId');
-  }
-
-  @override
-  Uri getRedirectLink(int? timestamp) {
-    return Uri.parse('https://redirect.invidious.io/channel/$authorId');
-  }
-
-  @override
-  Uri getYoutubeLink(int? timestamp) {
-    return Uri.parse('https://www.youtube.com/channel/$authorId');
+    return invidiousShareLink(server, pathSegments: ['channel', authorId]);
   }
 }

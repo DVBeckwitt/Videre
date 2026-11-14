@@ -184,13 +184,29 @@ class _GatewayRequest implements HttpClientRequest {
 
   Future<void> _prepare() => _preparing ??= () async {
         final markers = _delegate.headers[gatewayContextHeader];
-        if (markers == null) return;
+        final origins = _delegate.headers[instanceOriginHeader];
         _delegate.headers.removeAll(gatewayContextHeader);
-        final context = markers.length == 1
+        _delegate.headers.removeAll(instanceOriginHeader);
+        if (markers == null && origins == null) return;
+        final context = markers != null && markers.length == 1
             ? GatewayRequestContext.tryParse(markers.single)
             : null;
-        if (context == null || !context.allows(uri)) {
+        final origin = origins != null && origins.length == 1
+            ? Uri.tryParse(origins.single)
+            : null;
+        if (markers != null && (context == null || !context.allows(uri))) {
           throw const HttpException('Invalid gateway request context.');
+        }
+        if (origins != null &&
+            (origin == null ||
+                !const {'http', 'https'}.contains(origin.scheme) ||
+                origin.host.isEmpty ||
+                origin.userInfo.isNotEmpty ||
+                origin.hasQuery ||
+                origin.hasFragment ||
+                (origin.path.isNotEmpty && origin.path != '/') ||
+                origin.origin != uri.origin)) {
+          throw const HttpException('Invalid instance request origin.');
         }
         final original = <String, List<String>>{};
         headers.forEach((name, values) => original[name] = List.of(values));
@@ -201,7 +217,8 @@ class _GatewayRequest implements HttpClientRequest {
           cookies.clear();
         }
         final exchange = _GatewayExchange(_client, context, original,
-            followRedirects, maxRedirects, persistentConnection);
+            followRedirects, maxRedirects, persistentConnection,
+            origin: origin);
         _exchange = exchange;
         _requestedRedirects = _delegate.followRedirects;
         _delegate.followRedirects = false;
@@ -343,7 +360,8 @@ class _GatewayRequest implements HttpClientRequest {
 
 class _GatewayExchange {
   final GatewayHttpClient client;
-  final GatewayRequestContext context;
+  final GatewayRequestContext? context;
+  final Uri origin;
   final Map<String, List<String>> originalHeaders;
   final bool followRedirects;
   final int maxRedirects;
@@ -355,13 +373,33 @@ class _GatewayExchange {
   int? _apiKeyIntent;
   bool _recoveredKey = false;
 
-  bool get _isNerdVpn => isNerdVpnUrl(context.origin.toString());
+  bool get _isNerdVpn => context != null && isNerdVpnUrl(origin.toString());
+
+  bool _allows(Uri target) =>
+      const {'http', 'https'}.contains(target.scheme) &&
+      target.userInfo.isEmpty &&
+      target.origin == origin.origin;
 
   _GatewayExchange(this.client, this.context, this.originalHeaders,
-      this.followRedirects, this.maxRedirects, this.persistentConnection);
+      this.followRedirects, this.maxRedirects, this.persistentConnection,
+      {Uri? origin})
+      : origin = origin ?? context!.origin;
 
   Future<int?> authenticate(HttpClientRequest request) async {
     request.headers.removeAll(gatewayContextHeader);
+    request.headers.removeAll(instanceOriginHeader);
+    final context = this.context;
+    if (context == null) {
+      final cookies = originalHeaders.entries
+          .where((entry) => entry.key.toLowerCase() == HttpHeaders.cookieHeader)
+          .expand((entry) => entry.value)
+          .join('; ');
+      request.headers.removeAll(HttpHeaders.cookieHeader);
+      if (cookies.isNotEmpty) {
+        request.headers.set(HttpHeaders.cookieHeader, cookies);
+      }
+      return null;
+    }
     if (!context.allows(request.uri)) return null;
     final session = await client._resolve(context.encoded, request.uri);
     if (session.needsSignIn) throw const GatewayAuthenticationRequired();
@@ -402,7 +440,10 @@ class _GatewayExchange {
       HttpClientResponse response, Uri uri, String method,
       {bool? follow, int? revision}) async {
     visited.add(uri);
-    if (client._updateSessionFromResponse && context.allows(uri)) {
+    final context = this.context;
+    if (client._updateSessionFromResponse &&
+        context != null &&
+        context.allows(uri)) {
       try {
         await client._ingest(context.encoded, uri,
             response.headers[HttpHeaders.setCookieHeader] ?? const [],
@@ -417,6 +458,7 @@ class _GatewayExchange {
     }
     final status = response.statusCode;
     if (client._updateSessionFromResponse &&
+        context != null &&
         _isNerdVpn &&
         context.allows(uri) &&
         !const {'/api/v1/token', '/api/v1/auth/api_key'}.contains(uri.path) &&
@@ -490,6 +532,10 @@ class _GatewayExchange {
         target.userInfo.isNotEmpty) {
       throw const HttpException('Invalid HTTP redirect.');
     }
+    if (!_allows(target)) {
+      throw const HttpException(
+          'Redirects must stay on the selected Invidious instance.');
+    }
     if (!followLoops && visited.contains(target)) {
       throw RedirectException('HTTP redirect loop.', List.of(redirects));
     }
@@ -507,7 +553,7 @@ class _GatewayExchange {
     request.persistentConnection = persistentConnection;
     // No supplied headers leave the protected origin. Fresh transport defaults
     // (e.g. User-Agent and Accept-Encoding) remain the HTTP client's concern.
-    if (context.allows(target)) {
+    if (_allows(target)) {
       for (final entry in originalHeaders.entries) {
         if (!const {
           'host',

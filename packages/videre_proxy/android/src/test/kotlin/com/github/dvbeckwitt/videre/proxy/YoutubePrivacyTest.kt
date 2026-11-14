@@ -24,6 +24,7 @@ class YoutubePrivacyTest {
     fun `official host boundaries and shared API routes are classified`() {
         listOf("MUSIC.YOUTUBE.COM.", "youtu.be", "yt.be", "www.youtube-nocookie.com",
             "youtubekids.com", "www.youtubeeducation.com", "about.youtube",
+            "www.youtube.co.uk", "youtube.de", "g.co", "www.google.com", "www.google.co.jp",
             "youtubei.googleapis.com", "youtube.googleapis.com", "rr1.googlevideo.com",
             "content-youtube.googleapis.com", "youtubeembeddedplayer.googleapis.com", "www.googleapis.com",
             "i.ytimg.com", "s.ytimg.com", "yt3.ggpht.com", "lh3.googleusercontent.com",

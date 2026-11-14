@@ -11,6 +11,7 @@ import 'package:flutter/widgets.dart';
 import '../../globals.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../main.dart' show isTv;
+import '../../network/content_link.dart';
 import '../../playlists/models/playlist.dart';
 import '../../playlists/models/playlist_reference.dart';
 import '../../settings/models/db/server.dart';
@@ -148,26 +149,18 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   bool canOpenAppLink(Uri uri) => _appLinkRoute(uri) != null;
 
   PageRouteInfo? _appLinkRoute(Uri uri) {
-    if (!const {'http', 'https'}.contains(uri.scheme) ||
-        !youtubeHosts.contains(uri.host) ||
-        uri.userInfo.isNotEmpty ||
-        uri.authority.contains('@')) {
-      return null;
+    final link = ContentLink.parse(uri);
+    if (link == null) return null;
+    if (link.music) {
+      return switch (link.kind) {
+        ContentLinkKind.video => MusicRoute(videoId: link.id),
+        ContentLinkKind.channel => MusicRoute(artistId: link.id),
+        ContentLinkKind.playlist => MusicRoute(playlistId: link.id),
+      };
     }
-    if (uri.host == youtubeMusicHost) return _musicLinkRoute(uri);
-    if (uri.pathSegments.length != 1) return null;
-
-    final path = uri.pathSegments.single;
-    if (uri.host != 'youtu.be' && path == 'playlist') {
-      final id = uri.queryParameters['list'];
-      if (id == null ||
-          id.length > 200 ||
-          !RegExp(r'^(?:PL|OLAK5uy_|RD|UU|LL|FL)[A-Za-z0-9_-]+$')
-              .hasMatch(id)) {
-        return null;
-      }
+    if (link.kind == ContentLinkKind.playlist) {
       final playlist =
-          Playlist(title: '', playlistId: id, author: '', videoCount: 0);
+          Playlist(title: '', playlistId: link.id, author: '', videoCount: 0);
       final reference = PlaylistReference.forPlaylist(playlist, db);
       if (isTv) {
         return TvPlaylistRoute(
@@ -177,42 +170,12 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
           playlist: playlist, canDeleteVideos: false, reference: reference);
     }
 
-    final videoId = uri.host == 'youtu.be'
-        ? path
-        : path == 'watch'
-            ? uri.queryParameters['v']
-            : null;
-    if (videoId == null || !RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
-      return null;
+    if (link.kind == ContentLinkKind.channel) {
+      if (isTv) return TvChannelRoute(channelId: link.id);
+      return ChannelRoute(channelId: link.id);
     }
-    if (isTv) return TvVideoRoute(videoId: videoId);
-    return VideoRoute(videoId: videoId);
-  }
-
-  MusicRoute? _musicLinkRoute(Uri uri) {
-    if (uri.pathSegments.length == 1 && uri.pathSegments.single == 'watch') {
-      final videoId = uri.queryParameters['v'];
-      if (videoId != null && RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
-        return MusicRoute(videoId: videoId);
-      }
-    } else if (uri.pathSegments.length == 2 &&
-        (uri.pathSegments.first == 'browse' ||
-            uri.pathSegments.first == 'channel')) {
-      final id = uri.pathSegments.last;
-      if (RegExp(r'^UC[A-Za-z0-9_-]{22}$').hasMatch(id)) {
-        return MusicRoute(artistId: id);
-      }
-    } else if (uri.pathSegments.length == 1 &&
-        uri.pathSegments.single == 'playlist') {
-      final playlistId = uri.queryParameters['list'];
-      if (playlistId != null &&
-          playlistId.length <= 200 &&
-          RegExp(r'^(?:VL)?(?:PL|OLAK5uy_|RD)[A-Za-z0-9_-]+$')
-              .hasMatch(playlistId)) {
-        return MusicRoute(playlistId: playlistId);
-      }
-    }
-    return null;
+    if (isTv) return TvVideoRoute(videoId: link.id);
+    return VideoRoute(videoId: link.id);
   }
 
   rebuildApp() {

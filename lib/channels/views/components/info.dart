@@ -5,8 +5,7 @@ import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:flutter/material.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:flutter_linkify/flutter_linkify.dart';
-import 'package:clipious/utils/views/components/external_link.dart';
+import 'package:clipious/utils/views/components/text_linkified.dart';
 
 import '../../../subscription_management/view/components/subscribe_button.dart';
 import '../../../utils/models/image_object.dart';
@@ -51,12 +50,7 @@ class ChannelInfo extends StatelessWidget {
       ),
       Padding(
         padding: const EdgeInsets.symmetric(vertical: 8.0),
-        child: SelectableLinkify(
-            text: channel.description,
-            linkStyle: TextStyle(
-                color: colors.primary, decoration: TextDecoration.none),
-            onOpen: (link) => openExternalLink(context, Uri.parse(link.url)),
-            options: const LinkifyOptions(humanize: true, removeWww: true)),
+        child: TextLinkified(text: channel.description),
       ),
       Padding(
         padding: const EdgeInsets.symmetric(vertical: 8.0),

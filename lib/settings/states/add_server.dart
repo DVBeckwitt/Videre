@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../../globals.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../network/network_proxy.dart';
+import '../../network/youtube_privacy.dart';
 import '../../utils/invidious_image.dart';
 import '../models/db/server.dart';
 import '../models/errors/invidious_service_error.dart';
@@ -211,9 +212,18 @@ class AddServerCubit extends Cubit<AddServerState> {
             .timeout(const Duration(seconds: 15));
 
         final thumbnails = video.videoThumbnails
-            .map((thumbnail) => thumbnail.url.trim().isEmpty
-                ? ''
-                : invidiousImageUrl(thumbnail.url, server))
+            .map((thumbnail) {
+              final value = thumbnail.url.trim();
+              final uri = Uri.tryParse(value);
+              if (value.isEmpty ||
+                  uri == null ||
+                  (uri.hasScheme &&
+                      !const {'http', 'https'}.contains(uri.scheme)) ||
+                  (uri.hasAuthority && uri.host.isEmpty)) {
+                return '';
+              }
+              return invidiousImageUrl(value, server);
+            })
             .whereType<String>()
             .toList();
         // Validate the resolved URLs that the image loader uses. One usable
@@ -353,6 +363,7 @@ class AddServerCubit extends Cubit<AddServerState> {
       final uri = Uri.parse(value.contains('://') ? value : 'https://$value');
       if (!['http', 'https'].contains(uri.scheme) ||
           uri.host.isEmpty ||
+          isOfficialYoutubeUrl(uri) ||
           uri.userInfo.isNotEmpty ||
           uri.hasQuery ||
           uri.hasFragment ||

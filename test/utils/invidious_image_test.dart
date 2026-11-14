@@ -102,62 +102,50 @@ void main() {
     }
   });
 
-  test('NerdVPN thumbnail rebasing admits only exact origins and root vi paths',
-      () {
-    const public = 'https://invidious.nerdvpn.de';
-    const onion = 'http://$nerdVpnOnionHost';
-    const path = '/vi/M7lc1UVf-VE/mqdefault.jpg';
-    const selected = Server(url: onion);
-    for (final url in [
-      'https://invidious.nerdvpn.de.example$path',
-      'https://user@invidious.nerdvpn.de$path',
-      'https://@invidious.nerdvpn.de$path',
-      r'https://invidious.nerdvpn.de\vi\M7lc1UVf-VE\mqdefault.jpg',
-      'https://invidious.nerdvpn.de:8443$path',
-      'http://invidious.nerdvpn.de$path',
-      'http://$nerdVpnOnionHost:8080$path',
-      '$public/prefix$path',
-      '$public/vi/../vi/M7lc1UVf-VE/mqdefault.jpg',
-      '$public/vi/%2e%2e/vi/M7lc1UVf-VE/mqdefault.jpg',
-      '$public/vi/M7lc1UVf-VE/%2e%2e%2fadmin.jpg',
-      '$public/vi/short-id/mqdefault.jpg',
-      '$public/vi/M7lc1UVf-VE/mqdefault.webp',
-      '$public/ggpht/avatar',
-      '$public/login',
-      'https://dearrow-thumb.ajay.app$path',
+  test('alternate Invidious image routes stay on the selected origin', () {
+    const selected = Server(url: 'http://selected.example:8080/invidious');
+    for (final path in [
+      '/vi/M7lc1UVf-VE/mqdefault.jpg',
+      '/ggpht/avatar=s88',
+      '/sb/i1/video/L2/M0.jpg',
+      '/s_p/id/image.jpg',
+      '/pl_c/id/image.jpg',
+      '/tvfilm_banner/id/image.jpg',
     ]) {
-      expect(invidiousImageUrl(url, selected), url, reason: url);
+      for (final origin in [
+        'https://other-instance.example',
+        '//cdn.example'
+      ]) {
+        expect(invidiousImageUrl('$origin$path?sig=a%2Fb', selected),
+            '${selected.url}$path?sig=a%2Fb');
+      }
     }
-    for (final destination in [
-      'https://other.example',
-      '$onion/invidious',
-      '$onion?account=other',
-      '$onion#fragment',
-      'http://user@$nerdVpnOnionHost',
-      'http://$nerdVpnOnionHost:8080',
-    ]) {
-      expect(invidiousImageUrl('$public$path', Server(url: destination)),
-          '$public$path',
-          reason: destination);
-    }
+    expect(
+        invidiousImageUrl(
+            'https://other-instance.example/vi_webp/video/default.webp',
+            selected),
+        '${selected.url}/vi/video/default.jpg');
   });
 
-  test('external providers and lookalike hosts are not rewritten', () {
+  test('DeArrow retains its explicit independent thumbnail endpoint', () {
+    const url = 'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=id';
+    expect(invidiousImageUrl(url, server), url);
+  });
+
+  test('unsupported third-origin metadata artwork is omitted', () {
     for (final url in [
-      'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=id',
       'https://yt3.ggpht.com.evil.example/avatar',
       'https://lh3.googleusercontent.com.evil.example/avatar',
       'https://evil.example/yt3.googleusercontent.com/avatar',
-      'https://i.ytimg.com.evil.example/vi/id/default.jpg',
-      'https://other-instance.example/ggpht/avatar',
+      'https://other-instance.example/prefix/ggpht/avatar',
+      'https://other-instance.example/login',
       'file:///offline/thumbnail.jpg',
-      '',
       'http://[invalid',
     ]) {
-      expect(invidiousImageUrl(url, server), url, reason: url);
+      expect(invidiousImageUrl(url, server), isNull, reason: url);
     }
-    expect(invidiousImageUrl('//cdn.example/image.jpg', server),
-        'https://cdn.example/image.jpg');
+    expect(invidiousImageUrl('//cdn.example/image.jpg', server), isNull);
+    expect(invidiousImageUrl('', server), '');
   });
 
   test('unsupported official artwork never falls back to a direct URL', () {
@@ -199,8 +187,9 @@ void main() {
             .encoded,
       });
     }
-    final external =
-        invidiousImageUrl('https://cdn.example/image.jpg', authenticated);
+    final external = invidiousImageUrl(
+        'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=id',
+        authenticated);
     expect(authenticated.headersForUrl(external!), isNull);
   });
 

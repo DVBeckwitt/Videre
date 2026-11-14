@@ -578,6 +578,7 @@ void main() {
           [360, 720]);
       expect(initialDashHeights, [720]);
       expect(video.isUsingDash(), isTrue);
+      expect(video.isOnionPlayback, isTrue);
     });
 
     for (final (live, enabled, foreignAudio) in [

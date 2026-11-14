@@ -6,11 +6,15 @@ import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.Response
 
+private val regionalVideoHost = Regex("""(?:^|\.)(?:youtube|google)\.(?:com(?:\.[a-z]{2})?|co\.[a-z]{2}|[a-z]{2})$""")
+
 /** Match destination host boundaries, never signed query parameters. */
 internal fun isOfficialYoutubeHost(input: String): Boolean {
-    val host = input.lowercase(Locale.ROOT).trimEnd('.')
+    val host = input.lowercase(Locale.ROOT)
+        .replace('\u3002', '.').replace('\uff0e', '.').replace('\uff61', '.').trimEnd('.')
+    if (regionalVideoHost.containsMatchIn(host)) return true
     return listOf(
-        "youtube.com", "youtu.be", "yt.be", "youtube-nocookie.com",
+        "youtube.com", "youtu.be", "yt.be", "g.co", "youtube-nocookie.com",
         "youtubekids.com", "youtubeeducation.com", "youtube",
         // Shared API batch endpoints and service aliases can also dispatch YouTube
         // requests. Path filtering cannot establish the privacy boundary here.

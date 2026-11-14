@@ -176,29 +176,12 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
 
   @override
   Uri getInvidiousLink(Server server, int? timestamp) {
-    String link = '${server.url}/watch?v=$videoId';
-
-    if (timestamp != null) link += '&t=$timestamp';
-
-    return Uri.parse(link);
-  }
-
-  @override
-  Uri getRedirectLink(int? timestamp) {
-    String link = 'https://redirect.invidious.io/watch?v=$videoId';
-
-    if (timestamp != null) link += '&t=$timestamp';
-
-    return Uri.parse(link);
-  }
-
-  @override
-  Uri getYoutubeLink(int? timestamp) {
-    String link = 'https://youtu.be/$videoId';
-
-    if (timestamp != null) link += '?t=$timestamp';
-
-    return Uri.parse(link);
+    return invidiousShareLink(server, pathSegments: [
+      'watch'
+    ], queryParameters: {
+      'v': videoId,
+      if (timestamp != null) 't': timestamp.toString(),
+    });
   }
 
   List<String> get thumbnails {

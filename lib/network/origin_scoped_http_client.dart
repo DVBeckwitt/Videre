@@ -1,15 +1,24 @@
 import 'package:http/http.dart' as http;
 
+import 'native_proxy_http_client.dart';
+
 /// Instance access controls may use arbitrary header names. Keep all supplied
 /// headers on their original origin instead of relying on the transport's list
-/// of standard credentials to strip during redirects.
+/// of standard credentials to strip during redirects. Instance requests also
+/// refuse redirects that would leave the original origin.
 class OriginScopedHttpClient extends http.BaseClient {
   final http.Client _inner;
+  final bool sameOriginOnly;
 
-  OriginScopedHttpClient(this._inner);
+  OriginScopedHttpClient(this._inner, {this.sameOriginOnly = false});
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final inner = _inner;
+    if (sameOriginOnly && inner is NativeProxyHttpClient) {
+      // Preserve the native worker's single timeout for the entire chain.
+      return inner.sendWithinOrigin(request);
+    }
     final followRedirects = request.followRedirects;
     final maxRedirects = request.maxRedirects;
     var current = request;
@@ -38,6 +47,10 @@ class OriginScopedHttpClient extends http.BaseClient {
           target.host.isEmpty ||
           target.userInfo.isNotEmpty) {
         throw http.ClientException('Invalid HTTP redirect.');
+      }
+      if (sameOriginOnly && target.origin != request.url.origin) {
+        throw http.ClientException(
+            'Redirects must stay on the selected Invidious instance.');
       }
       final next = http.Request(
           current.method == 'POST' ? 'GET' : current.method, target)

@@ -16,6 +16,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../globals.dart';
 import '../../main.dart';
 import '../../network/nerdvpn_access.dart';
+import '../../network/tor_browser.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/pretty_bytes.dart';
@@ -250,6 +251,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   late final StreamSubscription<double> _subtitleSizeSubscription;
 
   bool get _shouldPlay => _requestedPlaying && player.shouldStartPlayback;
+
+  bool get isOnionPlayback =>
+      _playbackServer != null &&
+      TorBrowser.isOnionAddress(Uri.parse(_playbackServer!.url));
 
   bool get _canStartNerdVpnProgressive {
     final server = _playbackServer;

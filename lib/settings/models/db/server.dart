@@ -47,14 +47,19 @@ sealed class Server with _$Server {
         targetUri.port == serverUri.port;
 
     _log.fine('Use server headers: $useHeaders');
-    return useHeaders
-        ? gatewayContextHeaders(
-            profileId: profileId,
-            accountId: accountId,
-            serverUrl: this.url,
-            targetUrl: url,
-            headers: customHeaders)
-        : null;
+    if (!useHeaders) return null;
+    final result = gatewayContextHeaders(
+        profileId: profileId,
+        accountId: accountId,
+        serverUrl: this.url,
+        targetUrl: url,
+        headers: customHeaders)
+      ..removeWhere((name, _) =>
+          name.toLowerCase() == instanceOriginHeader.toLowerCase());
+    if (!result.containsKey(gatewayContextHeader)) {
+      result[instanceOriginHeader] = Uri.parse(this.url).origin;
+    }
+    return result;
   }
 
   factory Server.fromJson(Map<String, Object?> json) => _$ServerFromJson(json);

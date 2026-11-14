@@ -515,6 +515,10 @@
     "description": "Description for the use proxy settings"
   },
   "quality": "Quality",
+  "onionVideoQualityHint": "Higher bitrates can buffer on Tor. Lower the quality if needed. Adaptive playback may use a lower resolution than the maximum you select.",
+  "@onionVideoQualityHint": {
+    "description": "Help shown in the quality picker while playing through an onion instance. There is no fixed resolution limit."
+  },
   "@quality": {
     "description": "Name of TV ui video settings"
   },
@@ -1424,6 +1428,7 @@
   "openInBrowser": "Open in browser",
   "externalLinkTitle": "External link",
   "externalLinkBlocked": "This link cannot be opened from Videre. Direct YouTube connections and unsupported link types are disabled.",
+  "contentLinkUnavailable": "[Link unavailable]",
   "externalLinkCopyHelp": "Copy this address to open it yourself. Other apps do not use the privacy protections in Videre.",
   "externalLinkCopied": "Address copied.",
   "externalLinkCopyFailed": "The address could not be copied. Select and copy it below.",

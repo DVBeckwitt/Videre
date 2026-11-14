@@ -8,11 +8,17 @@ bool isOfficialYoutubeHost(String input) {
       .toLowerCase()
       .replaceAll(RegExp('[\u3002\uff0e\uff61]'), '.')
       .replaceFirst(RegExp(r'\.+$'), '');
+  // These regional aliases can redirect to the same service. Google domains
+  // can also host embedded player/API endpoints.
+  if (_regionalVideoHost.hasMatch(host)) {
+    return true;
+  }
   return const [
     'youtube',
     'youtube.com',
     'youtu.be',
     'yt.be',
+    'g.co',
     'youtube-nocookie.com',
     'youtubeeducation.com',
     'youtubekids.com',
@@ -29,3 +35,6 @@ bool isOfficialYoutubeHost(String input) {
 }
 
 bool isOfficialYoutubeUrl(Uri uri) => isOfficialYoutubeHost(uri.host);
+
+final _regionalVideoHost = RegExp(
+    r'(?:^|\.)(?:youtube|google)\.(?:com(?:\.[a-z]{2})?|co\.[a-z]{2}|[a-z]{2})$');

@@ -8,6 +8,8 @@ import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
+import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -99,6 +101,71 @@ void main() {
       expect(first.destinations, [host]);
       expect(second.destinations, [host]);
     });
+  }
+
+  for (final cached in [false, true]) {
+    for (final sameOrigin in [false, true]) {
+      test('HTTP asset boundary cache=$cached sameOrigin=$sameOrigin',
+          () async {
+        var outsideRequests = 0;
+        final outside = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => outside.close(force: true));
+        outside.listen((request) async {
+          outsideRequests++;
+          request.response.write('outside');
+          await request.response.close();
+        });
+        final origin = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => origin.close(force: true));
+        final server = Server(
+            url: 'http://127.0.0.1:${origin.port}',
+            customHeaders: const {'X-Instance-Access': 'fixture'});
+        final paths = <String>[];
+        origin.listen((request) async {
+          paths.add(request.uri.path);
+          expect(request.headers.value(instanceOriginHeader), isNull);
+          expect(request.headers.value('X-Instance-Access'), 'fixture');
+          if (request.uri.path == '/cover') {
+            await request.response.redirect(Uri.parse(sameOrigin
+                ? '/next'
+                : 'http://127.0.0.1:${outside.port}/cover'));
+          } else {
+            request.response.write('artwork');
+            await request.response.close();
+          }
+        });
+        final url = '${server.url}/cover';
+        final headers = server.headersForUrl(url)!;
+        late Future<void> Function() fetch;
+        if (cached) {
+          final client = HttpFileService();
+          fetch = () async {
+            final response = await client.get(url, headers: headers);
+            expect(await response.content.transform(utf8.decoder).join(),
+                'artwork');
+          };
+        } else {
+          final client = Dio();
+          addTearDown(() => client.close(force: true));
+          fetch = () async {
+            final response = await client.get<String>(url,
+                options: Options(headers: headers));
+            expect(response.data, 'artwork');
+          };
+        }
+        if (sameOrigin) {
+          await fetch();
+          expect(paths, ['/cover', '/next']);
+        } else {
+          await expectLater(
+              fetch(),
+              throwsA(
+                  cached ? isA<http.ClientException>() : isA<DioException>()));
+          expect(paths, ['/cover']);
+        }
+        expect(outsideRequests, 0);
+      });
+    }
   }
 }
 

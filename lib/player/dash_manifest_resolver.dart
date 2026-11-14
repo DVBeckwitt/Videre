@@ -7,6 +7,7 @@ import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 
 import '../network/nerdvpn_access.dart';
+import '../network/tor_browser.dart';
 import '../settings/models/db/server.dart';
 import '../settings/models/errors/invidious_service_error.dart';
 import 'models/backend_playback.dart';
@@ -301,8 +302,16 @@ class DashManifestResolver {
               nativeManifestPath: reused == false ? manifest.path : null);
           return reused == true && target != manifest ? target.toString() : url;
         }
-        // Leave cross-origin redirect handling to the native player.
+        // Keep onion playback on its selected origin even when the browser
+        // manifest advertises a public companion. Try a same-origin source.
         if (response.statusCode >= 300 && response.statusCode < 400) {
+          final location = response.headers['location'];
+          if (TorBrowser.isOnionAddress(instance) &&
+              (location == null ||
+                  !_sameOrigin(target.resolve(location), instance))) {
+            return null;
+          }
+          // Other instances retain their native redirect handling.
           if (probingWarmUnsigned) {
             remember(false, nativeManifestPath: manifest.path);
           }

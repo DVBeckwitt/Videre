@@ -57,8 +57,15 @@ class PlayerControls extends StatelessWidget {
       BuildContext context, PlayerControlsState _,
       {required List<String> tracks,
       required int selected,
-      required Function(int index) onSelected}) async {
-    List<ListTile> widgets = [];
+      required Function(int index) onSelected,
+      String? help}) async {
+    final widgets = <Widget>[
+      if (help != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+          child: Text(help, key: const ValueKey('onion-quality-help')),
+        ),
+    ];
 
     for (int i = 0; i < tracks.length; i++) {
       widgets.add(ListTile(
@@ -170,6 +177,9 @@ class PlayerControls extends StatelessWidget {
                       tracks: videoTracks,
                       selected: pc.selectedVideoTrack(),
                       onSelected: pc.selectVideoTrack,
+                      help: pc is VideoPlayerCubit && pc.isOnionPlayback
+                          ? locals.onionVideoQualityHint
+                          : null,
                     );
                   },
                   leading: const Icon(Icons.hd),

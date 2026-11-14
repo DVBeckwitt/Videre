@@ -6,6 +6,8 @@ import 'nerdvpn_origin.dart';
 
 /// Internal transport metadata. Every transport must remove this before sending.
 const gatewayContextHeader = 'X-Videre-Gateway-Context';
+// Redirect admission only: this marker never grants access to a session jar.
+const instanceOriginHeader = 'X-Videre-Instance-Origin';
 
 class GatewayRequestContext {
   final String key;
