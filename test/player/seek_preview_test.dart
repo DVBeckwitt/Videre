@@ -209,7 +209,7 @@ void main() {
   });
 
   testWidgets(
-      'storyboard requests never send instance headers to another origin',
+      'off-instance storyboards keep the seek time without an image request',
       (tester) async {
     final external = Storyboard.fromJson({
       ...board.toJson(),
@@ -220,9 +220,9 @@ void main() {
         position: Duration.zero,
         duration: const Duration(seconds: 40))));
     await settleImage(tester);
-    expect(
-        cacheManager.requests.single.url, 'https://images.example/sheet-0.png');
-    expect(cacheManager.requests.single.headers, isNull);
+    expect(cacheManager.requests, isEmpty);
+    expect(find.text('00:00'), findsOneWidget);
+    expect(find.byType(ClipRRect), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
