@@ -1225,7 +1225,8 @@ void main() {
     expect((musicCatalogService as _TestMusicCatalog).trendingCalls, 0);
     await _selectHomeMode(tester, 'Music');
     expect(find.byType(MusicModeScreen), findsOneWidget);
-    expect(find.text('Trending music'), findsOneWidget);
+    expect(find.text('Saved songs'), findsOneWidget);
+    expect((musicCatalogService as _TestMusicCatalog).trendingCalls, 0);
     expect(
         tester
             .widget<NavigationBar>(navigation)
@@ -1263,7 +1264,7 @@ void main() {
         .tap(find.descendant(of: navigation, matching: find.text('Home')));
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    expect(find.text('Fresh song'), findsOneWidget);
+    expect(find.text('Saved songs'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -1339,8 +1340,8 @@ void main() {
             musicOnly ? findsOneWidget : findsNothing);
         final catalog = musicCatalogService as _TestMusicCatalog;
         if (musicOnly) {
-          expect(catalog.trendingCalls, greaterThan(0));
-          expect(find.text('Fresh song'), findsOneWidget);
+          expect(catalog.trendingCalls, 0);
+          expect(find.text('Saved songs'), findsOneWidget);
           expect((globals.service as _TestService).discoveryRequests, 0);
           expect((globals.service as _TestService).feedRequests, isEmpty);
         } else {
@@ -1404,7 +1405,7 @@ void main() {
     expect(find.byType(ContentModeSelector), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
     await _selectHomeMode(tester, 'Music');
-    expect(find.text('Fresh song'), findsOneWidget);
+    expect(find.text('Saved songs'), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
     await _selectHomeMode(tester, 'Videos');
     expect(find.byType(ContentModeSelector), findsOneWidget);
@@ -1428,7 +1429,7 @@ void main() {
     app.restartSession();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    expect(find.text('Fresh song'), findsOneWidget);
+    expect(find.text('Saved songs'), findsOneWidget);
     await _selectHomeMode(tester, 'Videos');
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     expect(tester.takeException(), isNull);

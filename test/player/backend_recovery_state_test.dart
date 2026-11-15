@@ -70,6 +70,22 @@ void main() {
     return request;
   }
 
+  for (final ready in [false, true]) {
+    test(
+        'completion ends a pending backend notice without success, ready=$ready',
+        () async {
+      await settings.setAutoplayQueue(false);
+      final request = retry();
+      if (ready) {
+        player.reportBackendPlaybackReady('video', request, playing: false);
+      }
+      expect(player.state.backendRecovery, isNotNull);
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      expect(player.state.backendRecovery, isNull);
+      expect(player.state.mediaEvent.state, MediaState.completed);
+    });
+  }
+
   test('fallback stays trying through metadata, loading, and ready events', () {
     final request = retry();
     for (final event in [

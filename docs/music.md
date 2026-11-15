@@ -18,11 +18,35 @@ the active Videre profile.
 
 ## Home and Search
 
-**Home** shows the full **Trending music** feed returned by the server's standard
-`/api/v1/trending?type=Music` endpoint, with shortcuts to **Search** and **Library**.
-The existing browsing-country setting applies. Search and Library remain
-available when the instance's trending feed is empty or fails; there is no
-fallback to Google.
+**Home** centers on saved music, with suggestions based on saved artists, genre
+searches, and shortcuts to **Search** and **Library**. Suggestions open explicit
+Invidious searches; opening Home does not automatically fetch a general feed.
+An optional **Discover music** section loads only when you choose **Load music**.
+Discovery searches your selected instance, then checks
+each candidate's detailed metadata and only shows videos categorized as Music.
+Live, upcoming, missing-category, and unrelated results are excluded. This uses
+the instance's upload categories; it cannot independently verify the audio or
+correct an uploader's inaccurate category. Explicit Search remains unfiltered.
+
+Each discovery load inspects at most eight unique candidates and returns up to
+six tracks. It does not download media, poll in the background, or keep searching
+until the shelf is full. Existing bounded same-route metadata retries can add
+requests when the instance fails. On onion or SOCKS connections, candidate checks
+run one at a time. Other connections check at most two candidates concurrently.
+An instance cooldown stops further checks and keeps tracks already verified.
+Refresh is explicit, and session changes discard old results. An unavailable
+instance never causes a direct catalog fallback.
+Discovery uses the instance's original titles and artwork without optional
+DeArrow enrichment or related-video lookups. Your content filters apply to both
+search candidates and verified details; editing filters invalidates the shelf.
+
+Home does not load the instance's trending feed. Current Invidious versions route
+the former `type=Music` trending request to general livestreams, which caused
+unrelated videos to appear as music in [issue #33](https://github.com/DVBeckwitt/Videre/issues/33).
+The production music catalog therefore treats that feed as unsupported instead
+of relabeling the response or falling back to another service. See the
+[Invidious trending implementation](https://github.com/iv-org/invidious/blob/9f0b4c89f7a564c1e34ac00cca6cb8ae8f5bd7c9/src/invidious/feeds/trending.cr).
+The existing browsing-country setting applies to Search and discovery.
 
 Music provides Invidious search, channels, public playlists, and local playlists.
 YouTube Music's album, new-release, chart, and mood catalogs have no browsing
@@ -57,6 +81,15 @@ queue, local playlists, offline downloads, and Android media notification.
 Shuffle, repeat, seeking, playback speed, and the sleep timer reuse the existing
 player. The audio decoder remains mounted when the artwork player is minimized
 or expanded. TV uses focusable audio controls with the same playback engine.
+
+**Sound** opens the shared speed and independent pitch controls plus an optional
+Android equalizer. **Bass boost** and **Treble boost** adjust the appropriate
+device bands; individual frequency sliders use the device's actual gain range.
+**Reset equalizer** returns the bands to flat and disables the effect. The
+equalizer starts disabled, applies only to Music's current audio session, and
+resets when playback closes or accounts change. It does not change system-wide
+audio settings or edit downloaded files. Devices without a working equalizer
+show an unavailable state while speed, pitch and playback remain usable.
 
 ## Local library and downloads
 
@@ -112,7 +145,7 @@ again to acquire segment data, including any category enabled after downloading.
 
 ## Network boundary
 
-Music searches, trending, channel details, public playlists, and song metadata
+Music searches, channel details, public playlists, and song metadata
 use the selected server's standard Invidious API through the existing request
 and authentication layer. NerdVPN API-key access and protected-server gateway
 sessions follow the same rules as Videos. Missing access or a failed request
@@ -152,7 +185,7 @@ playlist pagination, and rejection of stale results. UI tests cover Home and
 search, local library actions, hidden legacy album bookmarks, and artwork proxying.
 Mocked endpoints do not establish live server availability or Android playback.
 
-Android acceptance should cover Music search and trending on both configured
+Android acceptance should cover Music search and local Home on both configured
 servers, authenticated artwork, playlist queues, screen-off playback, local
 saving, offline playback, session restoration, and TV D-pad access. A Windows
 APK build or widget test does not establish physical-device or Linux CI coverage.

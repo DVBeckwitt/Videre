@@ -14,4 +14,19 @@ requests. Generated media range headers remain available across origins.
 Truncated or disconnected local forwarding responses observe completion errors
 and promptly close their upstream client instead of leaving a detached failing
 future or waiting indefinitely for another origin chunk.
-Other source is unchanged.
+
+Music's optional Android equalizer uses lazy `AudioPlayer` helpers to read real
+band parameters, enable/disable the effect, and set band gains. These reuse the
+existing per-player effect method names with `lazyAndroidEqualizer` and an
+expected audio-session ID. The native handler checks an already-active session
+before effect creation; it cannot initialize a decoder. No effect is inserted
+into the ordinary `AudioPipeline`, so unsupported hardware cannot prevent media
+loading. Native control ownership, gain bounds, status codes and readback are
+checked. The existing session/disposal lifecycle releases effects; Videre's Music
+controller owns reapplication and clears its settings on playback/account exit.
+An explicit source-load revision rejects effect replies across source replacement
+or reload. Ordinary native playback events and successful load completion do not
+invalidate the session's effect operations. Focused regressions in
+`test/backend_retryability_test.dart` cover lazy creation, unsupported effects,
+stale/inactive/disposed sessions, failed native writes, and effect reads/writes
+which overlap ordinary playback updates.

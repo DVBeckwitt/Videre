@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:clipious/globals.dart';
 import 'package:clipious/http_overrides.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/service.dart';
@@ -208,13 +209,31 @@ void main() {
         catalog = InvidiousMusicCatalogService(api: service);
       });
 
-      test('trending music uses the selected instance', () async {
+      test('ambiguous trending is unsupported without a network fallback',
+          () async {
         final before = transport!.requests;
-        final songs = await catalog.getTrendingSongs();
-        expect(songs, isNotEmpty);
-        expect(songs.every((song) => song.title.isNotEmpty), isTrue);
-        expect(transport!.requests, greaterThan(before));
+        await expectLater(catalog.getTrendingSongs(),
+            throwsA(isA<MusicCatalogUnsupported>()));
+        expect(transport!.requests, before);
       }, skip: !enabled, timeout: const Timeout(Duration(minutes: 2)));
+
+      test('discovery returns songs verified by full instance metadata',
+          () async {
+        final songs = await catalog.getDiscoverySongs();
+        expect(songs, isNotEmpty);
+        expect(songs.length, lessThanOrEqualTo(6));
+        expect(
+            songs.map((song) => song.videoId).toSet(), hasLength(songs.length));
+        for (final song in songs) {
+          expect(song.playbackVideo, isNull);
+          final video = await service.getVideo(song.videoId,
+              serverOverride: await db.getCurrentlySelectedServer());
+          expect(video.videoId, song.videoId);
+          expect(video.genre?.trim().toLowerCase(), 'music');
+          expect(video.liveNow, isNot(true));
+          expect(video.isUpcoming, isNot(true));
+        }
+      }, skip: !enabled, timeout: const Timeout(Duration(minutes: 3)));
 
       test('search, recording, artist channel and playlist use the instance',
           () async {

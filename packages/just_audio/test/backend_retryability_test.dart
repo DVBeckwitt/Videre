@@ -9,10 +9,15 @@ import 'package:just_audio_platform_interface/just_audio_platform_interface.dart
 class _AudioPlatform extends JustAudioPlatform {
   PlatformException? loadError;
   _Player? player;
+  int initializations = 0;
+  List<AudioEffectMessage> initialEffects = [];
 
   @override
-  Future<AudioPlayerPlatform> init(InitRequest request) async =>
-      player = _Player(request.id, loadError);
+  Future<AudioPlayerPlatform> init(InitRequest request) async {
+    initializations++;
+    initialEffects = request.androidAudioEffects;
+    return player = _Player(request.id, loadError);
+  }
 
   @override
   Future<DisposeAllPlayersResponse> disposeAllPlayers(
@@ -36,18 +41,22 @@ class _Player extends AudioPlayerPlatform {
   @override
   Stream<PlaybackEventMessage> get playbackEventMessageStream => events.stream;
 
-  PlaybackEventMessage event({int? errorCode, String? errorMessage}) =>
+  PlaybackEventMessage event(
+          {int? errorCode,
+          String? errorMessage,
+          int? sessionId,
+          Duration position = Duration.zero}) =>
       PlaybackEventMessage(
         processingState: errorCode == null
             ? ProcessingStateMessage.ready
             : ProcessingStateMessage.idle,
         updateTime: DateTime.now(),
-        updatePosition: Duration.zero,
+        updatePosition: position,
         bufferedPosition: Duration.zero,
         duration: const Duration(seconds: 30),
         icyMetadata: null,
         currentIndex: 0,
-        androidAudioSessionId: null,
+        androidAudioSessionId: sessionId,
         errorCode: errorCode,
         errorMessage: errorMessage,
       );
@@ -158,6 +167,285 @@ void main() {
     expect((await unknown).backendRetryable, isFalse);
     expect(errors, hasLength(2));
     await subscription.cancel();
+  });
+
+  group('lazy Android equalizer', () {
+    Map<String, Object?> parameters({double gain = 0}) => {
+          'parameters': {
+            'minDecibels': -12.0,
+            'maxDecibels': 12.0,
+            'bands': [
+              {
+                'index': 0,
+                'lowerFrequency': 30.0,
+                'upperFrequency': 150.0,
+                'centerFrequency': 60.0,
+                'gain': gain,
+              },
+            ],
+          },
+        };
+
+    Future<MethodChannel> activate() async {
+      await player.setAudioSource(AudioSource.uri(
+        Uri.parse('https://example.com/audio.webm'),
+      ));
+      final sessionReady =
+          player.androidAudioSessionIdStream.firstWhere((id) => id == 42);
+      platform.player!.events.add(platform.player!.event(sessionId: 42));
+      await sessionReady;
+      final channel = MethodChannel(
+          'com.ryanheise.just_audio.methods.${platform.player!.id}');
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null);
+      });
+      return channel;
+    }
+
+    test('ordinary loading does not reserve equalizer hardware', () async {
+      await activate();
+      expect(platform.initialEffects, isEmpty);
+      expect(player.processingState, ProcessingState.ready);
+      expect(platform.initializations, 1);
+    });
+
+    test('inactive equalizer calls never initialize a native decoder',
+        () async {
+      await expectLater(
+          player.getAndroidEqualizerParameters(), throwsStateError);
+      await expectLater(
+          player.setAndroidEqualizerEnabled(false), throwsStateError);
+      await expectLater(
+          player.setAndroidEqualizerBandGain(0, 3), throwsStateError);
+      expect(platform.initializations, 0);
+    });
+
+    test('commands use the current session and return confirmed band values',
+        () async {
+      final channel = await activate();
+      var gain = 0.0;
+      var enabled = false;
+      final commands = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        expect(call.arguments['expectedSessionId'], 42);
+        expect(call.arguments['lazyAndroidEqualizer'], isTrue);
+        commands.add(call.method);
+        switch (call.method) {
+          case 'androidEqualizerGetParameters':
+            return parameters(gain: gain);
+          case 'audioEffectSetEnabled':
+            expect(call.arguments['type'], 'AndroidEqualizer');
+            enabled = call.arguments['enabled'] as bool;
+          case 'androidEqualizerBandSetGain':
+            expect(call.arguments['bandIndex'], 0);
+            gain = (call.arguments['gain'] as num).toDouble();
+        }
+        return <String, Object?>{};
+      });
+      final initial =
+          await player.getAndroidEqualizerParameters(expectedSessionId: 42);
+      expect(initial.minDecibels, -12);
+      expect(initial.bands.single.centerFrequency, 60);
+      await player.setAndroidEqualizerEnabled(true, expectedSessionId: 42);
+      await player.setAndroidEqualizerBandGain(0, 4, expectedSessionId: 42);
+      expect(enabled, isTrue);
+      expect(
+          (await player.getAndroidEqualizerParameters(expectedSessionId: 42))
+              .bands
+              .single
+              .gain,
+          4);
+      await player.setAndroidEqualizerBandGain(0, 0, expectedSessionId: 42);
+      await player.setAndroidEqualizerEnabled(false, expectedSessionId: 42);
+      expect(gain, 0);
+      expect(enabled, isFalse);
+      expect(commands.where((call) => call == 'androidEqualizerBandSetGain'),
+          hasLength(2));
+      expect(platform.initializations, 1);
+      expect(player.processingState, ProcessingState.ready);
+    });
+
+    for (final command in ['read', 'enable', 'gain']) {
+      test('$command survives ordinary playback updates in the same session',
+          () async {
+        final channel = await activate();
+        final dispatched = Completer<void>();
+        final response = Completer<Object?>();
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) {
+          expect(call.arguments['expectedSessionId'], 42);
+          expect(
+              call.method,
+              {
+                'read': 'androidEqualizerGetParameters',
+                'enable': 'audioEffectSetEnabled',
+                'gain': 'androidEqualizerBandSetGain',
+              }[command]);
+          dispatched.complete();
+          return response.future;
+        });
+        final Future<void> pending = switch (command) {
+          'read' => player
+              .getAndroidEqualizerParameters(expectedSessionId: 42)
+              .then((value) => expect(value.bands.single.gain, 4)),
+          'enable' =>
+            player.setAndroidEqualizerEnabled(true, expectedSessionId: 42),
+          _ => player.setAndroidEqualizerBandGain(0, 4, expectedSessionId: 42),
+        };
+        final checked = expectLater(pending, completes);
+        await dispatched.future;
+        const position = Duration(seconds: 4);
+        final updated = player.playbackEventStream
+            .firstWhere((event) => event.updatePosition == position);
+        platform.player!.events
+            .add(platform.player!.event(sessionId: 42, position: position));
+        await updated;
+        response.complete(command == 'read' ? parameters(gain: 4) : {});
+        await checked;
+        expect(player.androidAudioSessionId, 42);
+        expect(player.processingState, ProcessingState.ready);
+        expect(platform.initializations, 1);
+      });
+    }
+
+    test('unsupported effects do not emit playback errors or poison loading',
+        () async {
+      final channel = await activate();
+      final playbackErrors = <PlayerException>[];
+      final subscription = player.errorStream.listen(playbackErrors.add);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              channel,
+              (_) async => throw PlatformException(
+                  code: 'audio_effect_unavailable',
+                  message: 'No equalizer on this device'));
+      await expectLater(player.getAndroidEqualizerParameters(),
+          throwsA(isA<PlatformException>()));
+      await expectLater(player.setAndroidEqualizerEnabled(true),
+          throwsA(isA<PlatformException>()));
+      expect(player.processingState, ProcessingState.ready);
+      expect(playbackErrors, isEmpty);
+      await player.setAudioSource(AudioSource.uri(
+        Uri.parse('https://example.com/next.webm'),
+      ));
+      expect(player.processingState, ProcessingState.ready);
+      expect(playbackErrors, isEmpty);
+      await subscription.cancel();
+    });
+
+    test('missing plugin and failed setters report their actual failure',
+        () async {
+      final channel = await activate();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              channel, (_) async => throw MissingPluginException());
+      await expectLater(player.getAndroidEqualizerParameters(),
+          throwsA(isA<MissingPluginException>()));
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              channel,
+              (_) async => throw PlatformException(
+                  code: 'audio_effect_unavailable',
+                  message: 'Device rejected gain'));
+      await expectLater(player.setAndroidEqualizerBandGain(0, 3),
+          throwsA(isA<PlatformException>()));
+      expect(player.processingState, ProcessingState.ready);
+    });
+
+    test('invalid and stale commands never reach the native session', () async {
+      final channel = await activate();
+      var calls = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (_) async {
+        calls++;
+        return parameters();
+      });
+      await expectLater(
+          player.getAndroidEqualizerParameters(expectedSessionId: 41),
+          throwsStateError);
+      await expectLater(
+          player.setAndroidEqualizerEnabled(true, expectedSessionId: 41),
+          throwsStateError);
+      await expectLater(
+          player.setAndroidEqualizerBandGain(0, 3, expectedSessionId: 41),
+          throwsStateError);
+      for (final gain in [
+        double.nan,
+        double.infinity,
+        double.negativeInfinity
+      ]) {
+        await expectLater(
+            player.setAndroidEqualizerBandGain(0, gain), throwsArgumentError);
+      }
+      await expectLater(
+          player.setAndroidEqualizerBandGain(-1, 0), throwsArgumentError);
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      await expectLater(
+          player.getAndroidEqualizerParameters(), throwsUnsupportedError);
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      await player.dispose();
+      await expectLater(
+          player.getAndroidEqualizerParameters(), throwsStateError);
+      expect(calls, 0);
+      expect(platform.initializations, 1);
+    });
+
+    for (final action in [
+      'session change',
+      'stop',
+      'dispose',
+      'replace source'
+    ]) {
+      test('rejects an equalizer response completed after $action', () async {
+        final channel = await activate();
+        final dispatched = Completer<void>();
+        final response = Completer<Object?>();
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (_) {
+          dispatched.complete();
+          return response.future;
+        });
+        final pending =
+            player.getAndroidEqualizerParameters(expectedSessionId: 42);
+        await dispatched.future;
+        switch (action) {
+          case 'session change':
+            final changed =
+                player.androidAudioSessionIdStream.firstWhere((id) => id == 43);
+            platform.player!.events.add(platform.player!.event(sessionId: 43));
+            await changed;
+          case 'stop':
+            await player.stop();
+          case 'dispose':
+            await player.dispose();
+          case 'replace source':
+            await player.setAudioSource(AudioSource.uri(
+              Uri.parse('https://example.com/replacement.webm'),
+            ));
+        }
+        response.complete(parameters());
+        await expectLater(pending, throwsStateError);
+      });
+    }
+
+    test('malformed device capabilities are rejected', () async {
+      final channel = await activate();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              channel,
+              (_) async => {
+                    'parameters': {
+                      'minDecibels': 0.0,
+                      'maxDecibels': 0.0,
+                      'bands': <Object?>[],
+                    }
+                  });
+      await expectLater(
+          player.getAndroidEqualizerParameters(), throwsStateError);
+      expect(player.processingState, ProcessingState.ready);
+    });
   });
 
   group('native playback progress', () {

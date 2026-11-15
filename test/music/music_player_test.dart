@@ -167,6 +167,7 @@ void main() {
   for (final (size, scale) in [
     (const Size(320, 568), 2.5),
     (const Size(390, 844), 1.0),
+    (const Size(680, 320), 1.0),
     (const Size(1024, 720), 2.0),
   ]) {
     testWidgets('music artwork and controls fit $size at text scale $scale',
@@ -183,6 +184,42 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('short landscape keeps artwork beside reachable transport',
+      (tester) async {
+    await pump(tester, size: const Size(680, 256));
+    final art = find.byKey(const ValueKey('music-player-artwork'));
+    final before = tester.getRect(art);
+    final play =
+        tester.getRect(find.byKey(const ValueKey('music-player-play')));
+    expect(play.left, greaterThan(before.right));
+    expect(play.bottom, lessThanOrEqualTo(256));
+    await tap(tester, 'music-player-queue');
+    expect(find.byType(MusicQueue), findsOneWidget);
+    await tap(tester, 'music-player-close-queue');
+    expect(tester.getRect(art), before);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('secondary music actions remain reachable with large text',
+      (tester) async {
+    player.sleep(const SleepTimer(duration: Duration(minutes: 5)));
+    await pump(tester, size: const Size(320, 568), scale: 1.8);
+    await tap(tester, 'music-player-sleep');
+    expect(player.state.hasTimer, isFalse);
+    await tap(tester, 'music-player-sound');
+    await tester.pumpAndSettle();
+    final increase = find.byKey(const ValueKey('playback-speed-increase'));
+    await tester.ensureVisible(increase);
+    await tester.tap(increase);
+    await tester.pump();
+    expect(player.state.speed, 1.05);
+    Navigator.of(tester.element(increase)).pop();
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-player-queue');
+    expect(find.byType(MusicQueue), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
       'music controls use shared transport seek shuffle repeat and queue',
@@ -225,6 +262,34 @@ void main() {
     }
   });
 
+  testWidgets('unknown duration and live music cannot seek to a fabricated end',
+      (tester) async {
+    for (final track in [
+      song.copyWith(lengthSeconds: null),
+      song.copyWith(liveNow: true)
+    ]) {
+      await player.seed(player.state.copyWith(currentlyPlaying: track));
+      await pump(tester);
+      final slider = tester
+          .widget<Slider>(find.byKey(const ValueKey('music-player-progress')));
+      expect(slider.onChanged, isNull);
+      expect(slider.onChangeEnd, isNull);
+      expect(slider.value.isFinite, isTrue);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('completed song forwards Play to the shared audio decoder',
+      (tester) async {
+    await player.seed(player.state.copyWith(
+        position: const Duration(seconds: 180),
+        mediaEvent: const MediaEvent(state: MediaState.completed)));
+    await pump(tester);
+    await tap(tester, 'music-player-play');
+    expect(player.sought, isNull);
+    expect(player.state.mediaCommand!.type, MediaCommandType.play);
+  });
+
   testWidgets('a stale seek gesture cannot move a replacement song',
       (tester) async {
     await pump(tester);
@@ -242,6 +307,45 @@ void main() {
             .widget<Slider>(find.byKey(const ValueKey('music-player-progress')))
             .value,
         0);
+  });
+
+  testWidgets('rotation cancels an unfinished seek without moving the song',
+      (tester) async {
+    await pump(tester);
+    final oldSlider = tester
+        .widget<Slider>(find.byKey(const ValueKey('music-player-progress')));
+    oldSlider.onChanged!(120000);
+    await tester.pump();
+    await pump(tester, size: const Size(680, 256));
+    oldSlider.onChangeEnd!(120000);
+    await tester.pump();
+    expect(player.sought, isNull);
+    expect(
+        tester
+            .widget<Slider>(find.byKey(const ValueKey('music-player-progress')))
+            .value,
+        30000);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an active pointer seek cannot carry into the next song',
+      (tester) async {
+    await pump(tester);
+    final progress = find.byKey(const ValueKey('music-player-progress'));
+    await tester.ensureVisible(progress);
+    final rect = tester.getRect(progress);
+    final gesture = await tester.startGesture(rect.center);
+    await gesture.moveBy(const Offset(50, 0));
+    await tester.pump();
+    expect(player.sought, isNull);
+    await player.seed(
+        player.state.copyWith(currentlyPlaying: next, position: Duration.zero));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(player.sought, isNull);
+    expect(tester.widget<Slider>(progress).value, 0);
+    expect(tester.takeException(), isNull);
   });
 
   for (final size in [const Size(390, 844), const Size(1024, 720)]) {

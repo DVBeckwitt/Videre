@@ -14,6 +14,7 @@ import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
+import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
@@ -42,6 +43,7 @@ class MusicScreen extends StatefulWidget {
   final String? videoId;
   final String? playlistId;
   final String? artistId;
+  final String? initialQuery;
   final bool embedded;
 
   const MusicScreen(
@@ -49,6 +51,7 @@ class MusicScreen extends StatefulWidget {
       this.videoId,
       this.playlistId,
       this.artistId,
+      this.initialQuery,
       this.embedded = false});
 
   static Widget tvAudio({Video? video, DownloadedVideo? offlineVideo}) =>
@@ -125,7 +128,8 @@ class _MusicScreenState extends State<MusicScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoId != widget.videoId ||
         oldWidget.playlistId != widget.playlistId ||
-        oldWidget.artistId != widget.artistId) {
+        oldWidget.artistId != widget.artistId ||
+        oldWidget.initialQuery != widget.initialQuery) {
       // Clearing every route argument has no replacement request to invalidate
       // the old one. Revoke it before opening the new destination either way.
       _generation++;
@@ -182,6 +186,10 @@ class _MusicScreenState extends State<MusicScreen> {
       await _openSong(widget.videoId!);
     } else if (widget.artistId != null) {
       await _openArtist(widget.artistId!);
+    } else if (widget.initialQuery?.trim().isNotEmpty == true) {
+      _search.text = widget.initialQuery!.trim();
+      _type = _MusicSearch.songs;
+      await _submit();
     }
   }
 
@@ -964,6 +972,11 @@ class _MusicTvAudio extends StatelessWidget {
                       onPressed: state.hasQueue ? player.playNext : null,
                       icon: const Icon(Icons.skip_next)),
                 ]),
+                TextButton.icon(
+                    key: const ValueKey('music-tv-sound'),
+                    onPressed: () => showMusicSoundSheet(context, player),
+                    icon: const Icon(Icons.tune),
+                    label: Text(locals.musicSound)),
               ]),
             );
           },

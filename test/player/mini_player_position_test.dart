@@ -5,11 +5,11 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/music/views/components/music_mini_player.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/mini_player.dart';
-import 'package:clipious/player/views/components/mini_player_progress.dart';
 import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -127,6 +127,9 @@ void main() {
       await tester.pump();
     });
     await tester.pump(const Duration(milliseconds: 500));
+    // Decoder setup can mount animated status controls in the preceding frame.
+    // Flush their zero-delay startup callbacks before inspecting or disposing.
+    await tester.pump(Duration.zero);
     final decoder = tester.element(audioBuilder).read<AudioPlayerCubit>();
     addTearDown(() async {
       await tester.runAsync(() async {
@@ -159,10 +162,13 @@ void main() {
       ),
     );
 
-    final bounds = tester.getRect(find.byType(MiniPlayer));
-    expect(tester.getRect(find.text('$title - $artist')).top,
-        greaterThanOrEqualTo(bounds.top));
-    expect(tester.getRect(find.byType(MiniPlayerProgress)).bottom,
+    final bounds = tester.getRect(find.byType(MusicMiniPlayer));
+    expect(
+        tester.getRect(find.text(title)).top, greaterThanOrEqualTo(bounds.top));
+    expect(
+        tester
+            .getRect(find.byKey(const ValueKey('music-mini-progress')))
+            .bottom,
         lessThanOrEqualTo(bounds.bottom));
     expect(tester.takeException(), isNull);
   });
@@ -187,7 +193,7 @@ void main() {
     final native = decoder.audioPlayer;
     final docked = tester.getRect(positioned);
     expect(docked.top, greaterThan(window.height / 2));
-    await tester.tap(find.text('Position test - Artist'));
+    await tester.tap(find.byKey(const ValueKey('music-mini-expand')));
     await tester.pump();
     expect(player.state.isMini, isFalse);
     expect(player.state.isHidden, isFalse);
@@ -217,7 +223,7 @@ void main() {
       await tester.pump();
       await tester.pump(Duration(milliseconds: delay));
       expect(player.state.isMini, isTrue);
-      await tester.tap(find.text('Position test - Artist'));
+      await tester.tap(find.byKey(const ValueKey('music-mini-expand')));
       await tester.pump();
       for (var frame = 0; frame < 6; frame++) {
         await tester.pump(const Duration(milliseconds: 50));
@@ -270,6 +276,99 @@ void main() {
     final settled = tester.getRect(positioned);
     expect(settled.bottom, closeTo(500, 0.01));
     expect(settled.height, greaterThanOrEqualTo(targetHeight));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ordinary audio retains the existing video mini-player',
+      (tester) async {
+    await player.seed(player.state
+        .copyWith(currentlyPlaying: song.copyWith(musicMetadata: null)));
+    await pumpPlayer(tester);
+    expect(find.byType(MiniPlayer), findsOneWidget);
+    expect(find.byType(MusicMiniPlayer), findsNothing);
+    expect(find.text('Position test - Artist'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final music in [true, false]) {
+    testWidgets(
+        music
+            ? 'hidden Music decoder controls cannot receive keyboard focus'
+            : 'visible ordinary audio decoder controls retain keyboard focus',
+        (tester) async {
+      await player.seed(player.state.copyWith(
+          isMini: false,
+          top: 0,
+          currentlyPlaying: song.copyWith(
+              lengthSeconds: 180,
+              musicMetadata: music ? song.musicMetadata : null)));
+      await pumpPlayer(tester);
+      final controls = find.descendant(
+          of: audioBuilder,
+          matching: find.byWidgetPredicate((widget) => widget is Focus,
+              skipOffstage: false),
+          skipOffstage: false);
+      expect(controls, findsWidgets);
+      late FocusNode node;
+      tester.element(controls.first).visitChildElements((child) {
+        node = Focus.of(child, createDependency: false);
+      });
+      node.requestFocus();
+      await tester.pump();
+      expect(node.hasFocus, !music);
+      expect(node.canRequestFocus, !music);
+      node.unfocus();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Music artwork drag expands and settles with the same decoder',
+      (tester) async {
+    final decoder = await pumpPlayer(tester);
+    final native = decoder.audioPlayer;
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('music-mini-artwork'))));
+    await gesture.moveBy(const Offset(0, -40));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, -240));
+    await tester.pump();
+    expect(player.state.isDragging, isTrue);
+    expect(player.state.isMini, isFalse);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+    await gesture.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.isMini, isFalse);
+    expect(player.state.top, 0);
+    expect(tester.getRect(positioned).top, closeTo(0, 0.01));
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('cancelled Music artwork drag returns to the compact player',
+      (tester) async {
+    await pumpPlayer(tester);
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('music-mini-artwork'))));
+    await gesture.moveBy(const Offset(0, -40));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, -60));
+    await tester.pump();
+    expect(player.state.isDragging, isTrue);
+    await gesture.cancel();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(player.state.isDragging, isFalse);
+    expect(player.state.isMini, isTrue);
+    expect(player.state.top, isNull);
+    expect(find.byType(MusicMiniPlayer), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

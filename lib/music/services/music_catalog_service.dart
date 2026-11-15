@@ -38,6 +38,12 @@ abstract class MusicCatalogService {
   Future<List<MusicTrack>> getTrendingSongs() async =>
       throw const MusicCatalogUnsupported();
 
+  /// Bounded discovery verified against full Invidious video metadata.
+  /// Callers can revoke their request when its screen or session is replaced.
+  Future<List<MusicTrack>> getDiscoverySongs(
+          {bool Function()? isCurrent}) async =>
+      throw const MusicCatalogUnsupported();
+
   Future<MusicTrack> getSong(String videoId,
           {VideoLoadObserver? loadObserver}) async =>
       throw const MusicCatalogUnsupported();

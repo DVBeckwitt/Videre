@@ -434,6 +434,12 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     @Override
     public void onMethodCall(final MethodCall call, final Result result) {
+        // Optional sound controls must never initialise a decoder, and failures
+        // must stay on their own method result rather than the playback stream.
+        if (Boolean.TRUE.equals(call.argument("lazyAndroidEqualizer"))) {
+            handleLazyEqualizerCall(call, result);
+            return;
+        }
         // A diagnostic probe must not create or reactivate a decoder.
         if ("getPlaybackProgress".equals(call.method)) {
             result.success(player == null ? null : getPlaybackProgress());
@@ -824,6 +830,99 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private void audioEffectSetEnabled(String type, boolean enabled) {
         audioEffectsMap.get(type).setEnabled(enabled);
+    }
+
+    private void handleLazyEqualizerCall(MethodCall call, Result result) {
+        try {
+            Number expected = call.argument("expectedSessionId");
+            if (player == null || audioSessionId == null || audioSessionId <= 0 ||
+                    expected == null || expected.doubleValue() != expected.intValue() ||
+                    expected.intValue() != audioSessionId ||
+                    player.getAudioSessionId() != audioSessionId) {
+                throw new IllegalStateException("The Android audio session changed.");
+            }
+            switch (call.method) {
+            case "androidEqualizerGetParameters":
+                getLazyEqualizer();
+                result.success(equalizerAudioEffectGetParameters());
+                return;
+            case "audioEffectSetEnabled":
+                if (!"AndroidEqualizer".equals(call.argument("type"))) {
+                    throw new IllegalArgumentException("Unsupported lazy audio effect.");
+                }
+                Boolean enabled = call.argument("enabled");
+                if (enabled == null) throw new IllegalArgumentException("Enabled is required.");
+                Equalizer existing = (Equalizer)audioEffectsMap.get("AndroidEqualizer");
+                if (enabled || existing != null) {
+                    Equalizer equalizer = getLazyEqualizer();
+                    requireEffectSuccess(equalizer.setEnabled(enabled));
+                    if (equalizer.getEnabled() != enabled) {
+                        throw new IllegalStateException("Equalizer state was not applied.");
+                    }
+                }
+                result.success(new HashMap<String, Object>());
+                return;
+            case "androidEqualizerBandSetGain":
+                Number index = call.argument("bandIndex");
+                Number requestedGain = call.argument("gain");
+                if (index == null || requestedGain == null ||
+                        index.doubleValue() != index.intValue() ||
+                        !Double.isFinite(requestedGain.doubleValue())) {
+                    throw new IllegalArgumentException("A band and finite gain are required.");
+                }
+                Equalizer equalizer = getLazyEqualizer();
+                int band = index.intValue();
+                double gain = requestedGain.doubleValue();
+                short[] range = equalizer.getBandLevelRange();
+                if (band < 0 || band >= equalizer.getNumberOfBands() ||
+                        gain < range[0] / 100.0 || gain > range[1] / 100.0) {
+                    throw new IllegalArgumentException("Equalizer gain is outside the device range.");
+                }
+                short millibels = (short)Math.round(gain * 100.0);
+                equalizer.setBandLevel((short)band, millibels);
+                if (equalizer.getBandLevel((short)band) != millibels) {
+                    throw new IllegalStateException("Equalizer gain was not applied.");
+                }
+                result.success(new HashMap<String, Object>());
+                return;
+            default:
+                result.notImplemented();
+            }
+        } catch (Exception error) {
+            result.error("audio_effect_unavailable", error.getMessage(), null);
+        }
+    }
+
+    private Equalizer getLazyEqualizer() {
+        Equalizer existing = (Equalizer)audioEffectsMap.get("AndroidEqualizer");
+        if (existing != null) {
+            if (!existing.hasControl()) {
+                throw new IllegalStateException("Equalizer control is unavailable.");
+            }
+            return existing;
+        }
+        Equalizer equalizer = new Equalizer(0, audioSessionId);
+        try {
+            if (!equalizer.hasControl()) {
+                throw new IllegalStateException("Equalizer control is unavailable.");
+            }
+            requireEffectSuccess(equalizer.setEnabled(false));
+            if (equalizer.getNumberOfBands() <= 0) {
+                throw new IllegalStateException("Equalizer bands are unavailable.");
+            }
+            audioEffects.add(equalizer);
+            audioEffectsMap.put("AndroidEqualizer", equalizer);
+            return equalizer;
+        } catch (RuntimeException error) {
+            equalizer.release();
+            throw error;
+        }
+    }
+
+    private static void requireEffectSuccess(int status) {
+        if (status != AudioEffect.SUCCESS) {
+            throw new IllegalStateException("The device rejected the equalizer change.");
+        }
     }
 
     private void loudnessEnhancerSetTargetGain(double targetGain) {

@@ -40,6 +40,7 @@ class _RetainedAudioPlayer implements AudioPlayer {
   bool nativePlaying = false;
   double nativeSpeed = 1;
   double nativePitch = 1;
+  ProcessingState nativeProcessingState = ProcessingState.idle;
   Duration nativePosition = Duration.zero;
   final pitchesAtPlay = <double>[];
   final speedCalls = <double>[];
@@ -49,6 +50,9 @@ class _RetainedAudioPlayer implements AudioPlayer {
 
   @override
   double get speed => nativeSpeed;
+
+  @override
+  ProcessingState get processingState => nativeProcessingState;
 
   @override
   bool get playing => nativePlaying;
@@ -63,8 +67,12 @@ class _RetainedAudioPlayer implements AudioPlayer {
       Duration? initialPosition}) async {
     sources.add(source);
     nativePosition = initialPosition ?? Duration.zero;
-    if (heldSource != null) return heldSource!.future;
-    return const Duration(minutes: 1);
+    nativeProcessingState = ProcessingState.loading;
+    final duration = heldSource == null
+        ? const Duration(minutes: 1)
+        : await heldSource!.future;
+    nativeProcessingState = ProcessingState.ready;
+    return duration;
   }
 
   @override

@@ -73,17 +73,17 @@ void main() {
       final catalog = InvidiousMusicCatalogService(api: service);
       expect((await catalog.searchSongs('Get Lucky')).single.title,
           'first-route-visitor');
-      expect(await catalog.getTrendingSongs(), hasLength(1));
-      expect(
-          first.destinations, List.filled(2, ('music-instance.example', 443)));
-      expect(first.paths, ['/api/v1/search', '/api/v1/trending']);
+      await expectLater(
+          catalog.getTrendingSongs(), throwsA(isA<MusicCatalogUnsupported>()));
+      expect(first.destinations, [('music-instance.example', 443)]);
+      expect(first.paths, ['/api/v1/search']);
 
       // The retired direct client exists only as a test fixture. Even an
       // explicit attempt through the app transport cannot contact Google.
       final retired = LegacyMusicCatalogFixture(httpClient: service.httpClient);
       await expectLater(retired.searchSongs('Get Lucky'),
           throwsA(isA<MusicCatalogException>()));
-      expect(first.destinations, hasLength(2));
+      expect(first.destinations, hasLength(1));
 
       await proxy
           .apply(SocksProxyConfig(enabled: true, port: second.server.port));
@@ -91,14 +91,31 @@ void main() {
           'second-route-visitor');
       expect(second.paths, ['/api/v1/search']);
       expect(second.destinations, [('music-instance.example', 443)]);
-      expect(first.paths, hasLength(2));
+      expect(first.paths, hasLength(1));
 
       await second.close();
       await expectLater(catalog.searchSongs('Uncached song'), throwsException);
-      expect(first.paths, hasLength(2));
+      expect(first.paths, hasLength(1));
       expect(second.paths, hasLength(1));
     });
   }
+
+  test(
+      'verified discovery search and metadata both use the selected SOCKS origin',
+      () async {
+    final fixture = await _CatalogSocks.start('verified music');
+    addTearDown(fixture.close);
+    await proxy
+        .apply(SocksProxyConfig(enabled: true, port: fixture.server.port));
+    await db.upsertServer(const Server(url: 'https://music-instance.example'));
+    final catalog = InvidiousMusicCatalogService(api: service);
+    final songs = await catalog.getDiscoverySongs();
+    expect(songs.single.title, 'verified music');
+    expect(songs.single.playbackVideo, isNull);
+    expect(fixture.paths, ['/api/v1/search', '/api/v1/videos/4D7u5KF7SP8']);
+    expect(fixture.destinations,
+        [('music-instance.example', 443), ('music-instance.example', 443)]);
+  });
 }
 
 class _CatalogSocks {
@@ -165,17 +182,18 @@ class _CatalogSocks {
       expect(headers.containsKey('cookie'), isFalse);
       paths.add(path);
       expect(headers.containsKey('x-goog-visitor-id'), isFalse);
-      expect(['/api/v1/search', '/api/v1/trending'], contains(path));
-      final response = jsonEncode([
-        {
-          'type': 'video',
-          'videoId': '4D7u5KF7SP8',
-          'title': visitor,
-          'author': 'Fixture artist',
-          'lengthSeconds': 370,
-          'videoThumbnails': [],
-        },
-      ]);
+      expect(path, anyOf('/api/v1/search', '/api/v1/videos/4D7u5KF7SP8'));
+      final video = {
+        'type': 'video',
+        'videoId': '4D7u5KF7SP8',
+        'title': visitor,
+        'author': 'Fixture artist',
+        'lengthSeconds': 370,
+        'videoThumbnails': [],
+        // The full metadata is authoritative, even if search says otherwise.
+        'genre': path == '/api/v1/search' ? 'Sports' : 'Music',
+      };
+      final response = jsonEncode(path == '/api/v1/search' ? [video] : video);
       final bytes = utf8.encode(response);
       socket.add(ascii.encode('HTTP/1.1 200 OK\r\n'
           'Content-Type: application/json\r\n'

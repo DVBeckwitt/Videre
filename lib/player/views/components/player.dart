@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/views/components/music_mini_player.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/audio_player.dart';
@@ -71,6 +72,7 @@ class Player extends StatelessWidget {
             !isAudio &&
             !isMini &&
             !isFullScreen;
+        final canDragMusic = isMusic && !isFullScreen && (isMini || isDragging);
 
         // The player is a sibling of the routed Scaffolds, so their keyboard
         // resizing does not move this overlay. Keep it above the keyboard and
@@ -155,7 +157,18 @@ class Player extends StatelessWidget {
                 elevation: 0,
                 child: showPlayer
                     ? GestureDetector(
-                        onTap: isMini ? cubit.showBigPlayer : null,
+                        onTap: isMini && !isMusic ? cubit.showBigPlayer : null,
+                        // The Music artwork replaces the hidden decoder's drag
+                        // surface. Keep this recognizer above both presentations
+                        // so crossing into the expanded view retains the gesture.
+                        onVerticalDragStart:
+                            canDragMusic ? cubit.videoDragStarted : null,
+                        onVerticalDragUpdate:
+                            canDragMusic ? cubit.videoDragged : null,
+                        onVerticalDragEnd:
+                            canDragMusic ? cubit.videoDraggedEnd : null,
+                        onVerticalDragCancel:
+                            canDragMusic ? cubit.videoDragCancelled : null,
                         child: SafeArea(
                           bottom: !isFullScreen && !isDragging,
                           top: false,
@@ -241,73 +254,99 @@ class Player extends StatelessWidget {
                                                 fit: isMini
                                                     ? FlexFit.loose
                                                     : FlexFit.tight,
-                                                flex: deviceType ==
-                                                        DeviceType.tablet
-                                                    ? 2
-                                                    : 1,
-                                                child: Column(
-                                                  mainAxisSize: isMini
-                                                      ? MainAxisSize.min
-                                                      : MainAxisSize.max,
-                                                  mainAxisAlignment:
-                                                      isFullScreen
-                                                          ? MainAxisAlignment
-                                                              .center
-                                                          : MainAxisAlignment
-                                                              .start,
-                                                  crossAxisAlignment: isMini
-                                                      ? CrossAxisAlignment.start
-                                                      : CrossAxisAlignment
-                                                          .center,
-                                                  children: [
-                                                    Flexible(
-                                                      flex:
-                                                          isFullScreen ? 1 : 0,
-                                                      fit: FlexFit.tight,
-                                                      child: Container(
-                                                          width: isFullScreen
-                                                              ? double.infinity
-                                                              : null,
-                                                          constraints: BoxConstraints(
-                                                              maxHeight: isMini
-                                                                  ? targetHeight
-                                                                  : MediaQuery.sizeOf(
-                                                                          context)
-                                                                      .height),
-                                                          child:
-                                                              MinimizeOnSwipeDown(
-                                                            enabled:
-                                                                canSwipeDownToMinimize,
-                                                            onSwipeDown: cubit
-                                                                .showMiniPlayer,
-                                                            // Keep the audio decoder at the same location
-                                                            // while the artwork view expands or minimizes.
-                                                            child: Offstage(
-                                                              offstage: isMusic &&
-                                                                  !isMini &&
-                                                                  !isFullScreen,
-                                                              child:
-                                                                  videoPlayer,
+                                                flex: isMusic && isMini
+                                                    ? 0
+                                                    : deviceType ==
+                                                            DeviceType.tablet
+                                                        ? 2
+                                                        : 1,
+                                                child: Offstage(
+                                                    // Retain the decoder's element slot while the
+                                                    // compact Music bar uses the complete row.
+                                                    offstage: isMusic && isMini,
+                                                    child: SizedBox(
+                                                        width: isMusic && isMini
+                                                            ? targetHeight *
+                                                                16 /
+                                                                9
+                                                            : null,
+                                                        child: Column(
+                                                          mainAxisSize: isMini
+                                                              ? MainAxisSize.min
+                                                              : MainAxisSize
+                                                                  .max,
+                                                          mainAxisAlignment:
+                                                              isFullScreen
+                                                                  ? MainAxisAlignment
+                                                                      .center
+                                                                  : MainAxisAlignment
+                                                                      .start,
+                                                          crossAxisAlignment: isMini
+                                                              ? CrossAxisAlignment
+                                                                  .start
+                                                              : CrossAxisAlignment
+                                                                  .center,
+                                                          children: [
+                                                            Flexible(
+                                                              flex: isFullScreen
+                                                                  ? 1
+                                                                  : 0,
+                                                              fit:
+                                                                  FlexFit.tight,
+                                                              child: Container(
+                                                                  width: isFullScreen
+                                                                      ? double
+                                                                          .infinity
+                                                                      : null,
+                                                                  constraints: BoxConstraints(
+                                                                      maxHeight: isMini
+                                                                          ? targetHeight
+                                                                          : MediaQuery.sizeOf(context)
+                                                                              .height),
+                                                                  child:
+                                                                      MinimizeOnSwipeDown(
+                                                                    enabled:
+                                                                        canSwipeDownToMinimize,
+                                                                    onSwipeDown:
+                                                                        cubit
+                                                                            .showMiniPlayer,
+                                                                    // Keep the audio decoder at the same location
+                                                                    // while the artwork view expands or minimizes.
+                                                                    child:
+                                                                        Offstage(
+                                                                      offstage:
+                                                                          isMusic &&
+                                                                              !isFullScreen,
+                                                                      child:
+                                                                          ExcludeFocus(
+                                                                        excluding:
+                                                                            isMusic &&
+                                                                                !isFullScreen,
+                                                                        child:
+                                                                            videoPlayer,
+                                                                      ),
+                                                                    ),
+                                                                  )),
                                                             ),
-                                                          )),
-                                                    ),
-                                                    if (!isFullScreen)
-                                                      ConditionalWrap(
-                                                          wrapIf: !isMini,
-                                                          wrapper: (child) =>
-                                                              Expanded(
-                                                                  child: child),
-                                                          child: DeviceWidget(
-                                                              orientation:
-                                                                  orientation,
-                                                              portraitTabletAsPhone:
-                                                                  true,
-                                                              tablet:
-                                                                  const TabletExpandedPlayer(),
-                                                              phone:
-                                                                  const ExpandedPlayer()))
-                                                  ],
-                                                )),
+                                                            if (!isFullScreen)
+                                                              ConditionalWrap(
+                                                                  wrapIf:
+                                                                      !isMini,
+                                                                  wrapper: (child) =>
+                                                                      Expanded(
+                                                                          child:
+                                                                              child),
+                                                                  child: DeviceWidget(
+                                                                      orientation:
+                                                                          orientation,
+                                                                      portraitTabletAsPhone:
+                                                                          true,
+                                                                      tablet:
+                                                                          const TabletExpandedPlayer(),
+                                                                      phone:
+                                                                          const ExpandedPlayer()))
+                                                          ],
+                                                        )))),
                                             if (!isFullScreen &&
                                                 !isMini &&
                                                 !isMusic)
@@ -321,12 +360,14 @@ class Player extends StatelessWidget {
                                                       child:
                                                           ExpandedSideBar())),
                                             if (isMini)
-                                              const Flexible(
+                                              Flexible(
                                                 fit: FlexFit.tight,
                                                 flex: 2,
-                                                child: MiniPlayer(),
+                                                child: isMusic
+                                                    ? const MusicMiniPlayer()
+                                                    : const MiniPlayer(),
                                               ),
-                                            if (isMini)
+                                            if (isMini && !isMusic)
                                               GestureDetector(
                                                 onTap: cubit.hide,
                                                 child: const Padding(

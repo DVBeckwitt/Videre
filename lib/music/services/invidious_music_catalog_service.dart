@@ -14,6 +14,9 @@ import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/utils/video_post_processing.dart'
+    show privateVideoString;
 import 'package:clipious/videos/models/video.dart';
 
 /// Music browsing through the selected Invidious instance's standard API.
@@ -121,10 +124,103 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             .toList());
   }
 
+  // Do not override getTrendingSongs. Invidious's trending endpoint can ignore
+  // type=Music and return general livestreams. The inherited unsupported result
+  // keeps unrelated videos out of Music without another catalog or fallback.
+
   @override
-  Future<List<MusicTrack>> getTrendingSongs() =>
-      _inSession((api, _, __) async =>
-          (await api.getTrending(type: 'Music')).map(_track).toList());
+  Future<List<MusicTrack>> getDiscoverySongs({bool Function()? isCurrent}) {
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() async {
+        if (isCurrent?.call() == false) {
+          throw const MusicCatalogException('The music request was cancelled.');
+        }
+        await checkSession();
+        if (isCurrent?.call() == false) {
+          throw const MusicCatalogException('The music request was cancelled.');
+        }
+      }
+
+      await check();
+      final search = await api.search('official music video',
+          type: SearchType.video, serverOverride: server, enrichResults: false);
+      await check();
+      final candidates = <String>[];
+      final seen = <String>{};
+      for (final video in search.videos) {
+        if (!video.filtered &&
+            _videoId.hasMatch(video.videoId) &&
+            seen.add(video.videoId)) {
+          candidates.add(video.videoId);
+          if (candidates.length == 8) break;
+        }
+      }
+
+      Future<({MusicTrack? track, bool failed, bool cooldown})> inspect(
+          String id) async {
+        await check();
+        MusicTrack? track;
+        var failed = false;
+        var cooldown = false;
+        try {
+          // One noninteractive lookup per candidate. Service retains its own
+          // transport policy (short 429 and NerdVPN startup retries), but
+          // discovery neither rotates backends nor adds retries or refills.
+          final video =
+              await api.getDiscoveryVideoMetadata(id, serverOverride: server);
+          if (video.videoId != id) {
+            throw const MusicCatalogException(
+                'The server returned another music track.');
+          }
+          if (video.genre?.trim().toLowerCase() == 'music' &&
+              video.title != privateVideoString &&
+              video.liveNow != true &&
+              video.isUpcoming != true &&
+              (video.premiereTimestamp ?? 0) <=
+                  DateTime.now().millisecondsSinceEpoch ~/ 1000 &&
+              !db.getAllFilters().any((filter) => filter.filterVideo(video))) {
+            track = _track(video);
+          }
+        } catch (error) {
+          // One unavailable or malformed candidate must not hide other verified
+          // music. Session cancellation is checked outside this partial result.
+          failed = true;
+          cooldown = error is InvidiousServiceError &&
+              (error.isRateLimited ||
+                  error.retryAfterIsInvalid ||
+                  (error.retryAfter ?? Duration.zero) > Duration.zero);
+        }
+        await check();
+        return (track: track, failed: failed, cooldown: cooldown);
+      }
+
+      final host = Uri.parse(server.url).host.toLowerCase();
+      final concurrency = NetworkProxy.instance.config.enabled ||
+              host.replaceFirst(RegExp(r'\.+$'), '').endsWith('.onion')
+          ? 1
+          : 2;
+      final songs = <MusicTrack>[];
+      var failures = 0;
+      for (var offset = 0; offset < candidates.length;) {
+        await check();
+        final batch = candidates.skip(offset).take(concurrency).toList();
+        final inspected = await Future.wait(batch.map(inspect));
+        await check();
+        offset += batch.length;
+        for (final item in inspected) {
+          if (item.failed) failures++;
+          if (item.track case final track?) songs.add(track);
+        }
+        // An instance cooldown also applies to requests for other candidates.
+        if (songs.length >= 6 || inspected.any((item) => item.cooldown)) break;
+      }
+      if (songs.isEmpty && failures > 0) {
+        throw const MusicCatalogException(
+            'Music discovery could not verify any tracks. Retry the request.');
+      }
+      return songs.take(6).toList();
+    });
+  }
 
   @override
   Future<MusicTrack> getSong(String videoId,

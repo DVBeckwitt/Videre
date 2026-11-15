@@ -474,6 +474,36 @@ class Service {
     return server;
   }
 
+  /// Discovery inspects categories without enriching the video or its related
+  /// videos. Keep its bounded lookup budget entirely on the selected instance.
+  Future<Video> getDiscoveryVideoMetadata(String videoId,
+      {required Server serverOverride}) async {
+    final owner = db;
+    final profileId = owner.profileId;
+    final revision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
+    bool current() =>
+        identical(owner, db) &&
+        owner.profileId == profileId &&
+        revision == _sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(proxy, NetworkProxy.instance.config);
+    final server = await preparePlaybackServer(serverOverride: serverOverride);
+    final route = BackendPlayback(server);
+    Future<void> check() async {
+      if (!current()) throw StateError('The discovery connection changed.');
+      final selected = await owner.getCurrentlySelectedServer();
+      if (!current() || !route.matches(selected)) {
+        throw StateError('The discovery connection changed.');
+      }
+    }
+
+    await check();
+    final video = await _getVideoMetadata(videoId, server);
+    await check();
+    return video;
+  }
+
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
       void Function(BackendPlayback request)? onBackendRequest,
@@ -1445,9 +1475,12 @@ class Service {
       int? page,
       SearchSortBy? sortBy,
       SearchDate date = SearchDate.any,
-      SearchDuration duration = SearchDuration.any}) async {
+      SearchDuration duration = SearchDuration.any,
+      Server? serverOverride,
+      bool enrichResults = true}) async {
     String countryCode = db.getSettings(browsingCountry)?.value ?? 'US';
-    final req = await buildRequest(urlSearch, query: {
+    final req =
+        await buildRequest(urlSearch, serverOverride: serverOverride, query: {
       'q': query,
       'type': type?.name,
       'page': page?.toString() ?? '1',
@@ -1481,7 +1514,11 @@ class Service {
     _cacheBrowse(req, response,
         [...results.videos, ...results.playlists, ...results.channels]);
 
-    results.videos = (await postProcessVideos(results.videos)).cast();
+    results.videos = enrichResults
+        ? await postProcessVideos(results.videos)
+        : await VideoFilter.filterVideos(results.videos
+            .where((video) => video.title != privateVideoString)
+            .toList());
     return results;
   }
 

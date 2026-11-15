@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
@@ -81,6 +82,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   String? _speedVideoId;
   static Future<void> _sessionWrite = Future.value();
   final SettingsCubit settings;
+  final musicSound = MusicSoundController();
   final PlaylistReference? _initialPlaylistReference;
   final PlaylistLoadSession? _initialPlaylistLoader;
   final int _initialPlaylistIndex;
@@ -148,6 +150,58 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Timer? _backendSuccessTimer;
   final _timers = <String, Timer>{};
   Duration? _backendProgressPosition;
+  (int, String?, String, bool)? _playbackStatusOwner;
+  MediaState _playbackStatus = MediaState.idle;
+
+  /// Decoder status survives presentation events such as minimizing the player.
+  /// It belongs only to this queue occurrence, source generation and person.
+  MediaState get playbackStatus {
+    if (isClosed || _switchingProfile || state.isClosing || !state.hasVideo) {
+      return MediaState.idle;
+    }
+    if (_backendSwitchPending) return MediaState.loading;
+    if (_playbackStatusOwner == null) return state.mediaEvent.state;
+    return _playbackStatusOwner == _statusOwner(state)
+        ? _playbackStatus
+        : MediaState.idle;
+  }
+
+  (int, String?, String, bool) _statusOwner(PlayerState snapshot) => (
+        _videoSwitchGeneration,
+        snapshot.currentQueueId,
+        db.profileId,
+        snapshot.isAudio
+      );
+
+  void _updatePlaybackStatus(Change<PlayerState> change) {
+    final next = change.nextState;
+    final owner = _statusOwner(next);
+    final changedOwner = _playbackStatusOwner != owner;
+    if (changedOwner || !next.hasVideo || next.isClosing || _switchingProfile) {
+      _playbackStatus = MediaState.idle;
+      _playbackStatusOwner = owner;
+    }
+    final event = next.mediaEvent;
+    if (next.hasVideo &&
+        !next.isClosing &&
+        !_switchingProfile &&
+        (event != change.currentState.mediaEvent ||
+            changedOwner &&
+                (change.currentState.currentQueueId == null ||
+                    event.state == MediaState.loading))) {
+      if (event.type == null ||
+          event.state == MediaState.loading ||
+          event.state == MediaState.buffering ||
+          event.state == MediaState.error ||
+          event.state == MediaState.completed) {
+        _playbackStatus = event.state;
+      } else if (event.type == MediaEventType.progress &&
+          _playbackStatus != MediaState.error &&
+          _playbackStatus != MediaState.completed) {
+        _playbackStatus = MediaState.playing;
+      }
+    }
+  }
 
   /// The current user's play/pause intent also applies to a replacement source.
   bool get requestedPlaying => _requestedPlaying ?? state.isPlaying;
@@ -375,6 +429,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   @override
   void onChange(Change<PlayerState> change) {
+    _updatePlaybackStatus(change);
     super.onChange(change);
     final before = change.currentState;
     final after = change.nextState;
@@ -822,6 +877,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         event.state == MediaState.completed) {
       _clearPlaybackRecovery();
     }
+    if (event.state == MediaState.completed &&
+        (state.backendRecovery?.phase == BackendRecoveryPhase.trying ||
+            state.backendRecovery?.phase == BackendRecoveryPhase.ready)) {
+      // A short restored tail can end before two native samples prove recovery.
+      // End that attempt's notice without presenting unobserved success.
+      _clearBackendProgress();
+      emit(state.copyWith(backendRecovery: null));
+    }
     if (event.state == MediaState.error && state.backendRecovery != null) {
       _clearBackendProgress();
       emit(state.copyWith(
@@ -1130,6 +1193,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _progressGeneration++;
     _videoSwitchGeneration++;
     _requestedBackendVideoId = null;
+    await musicSound.resetSession();
+    musicSound.dispose();
     await _becomingNoisySubscription?.cancel();
     await _interruptionSubscription?.cancel();
     await _updateAutoPip(state, disable: true);
@@ -1168,6 +1233,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void hide() {
     if (isClosed || state.isClosing) return;
+    unawaited(musicSound.resetSession());
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();
     // Background playback must stop before the closing animation can run.
@@ -1219,6 +1285,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// Clear immediately: an animation callback must never clear the next queue.
   Future<void> prepareForProfileSwitch() async {
     if (isClosed) return;
+    final clearingSound = musicSound.resetSession();
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();
     pause();
@@ -1242,8 +1309,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     // the UI can dispose before its queued pause event reaches AudioService.
     final clearingSession = _mediaSessionHandler?.clearSession();
     emit(PlayerState.init(null));
-    await Future.wait(
-        [saved, stopping, if (clearingSession != null) clearingSession]);
+    await Future.wait([
+      saved,
+      stopping,
+      clearingSound,
+      if (clearingSession != null) clearingSession
+    ]);
     if (_sessionOwner == this) _sessionOwner = null;
     if (_hasAudioSession) await audioSession.setActive(false);
     await _updateAutoPip(state, disable: true);
@@ -2629,8 +2700,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void onOrientationChange() {
+    // Music has its own responsive artwork/queue layout. Video fullscreen
+    // would hide those controls when the phone turns or expands in landscape.
+    final musicAudio = state.isAudio &&
+        (state.currentlyPlaying?.musicMetadata ??
+                state.offlineCurrentlyPlaying?.musicMetadata) !=
+            null;
     // A PiP window resize is not a rotation of the phone.
-    if (!state.isPip &&
+    if (!musicAudio &&
+        !state.isPip &&
         getDeviceType() == DeviceType.phone &&
         (state.orientation == Orientation.landscape) &&
         !state.isMini &&

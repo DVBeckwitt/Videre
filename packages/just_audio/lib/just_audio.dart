@@ -120,6 +120,9 @@ class AudioPlayer {
   final Map<String, AudioSource> _audioSources = {};
   bool _disposed = false;
   _PluginLoadRequest? _pluginLoadRequest;
+  // Source requests invalidate optional effects in flight; ordinary playback
+  // events and successful load completion must not look like a new source.
+  int _sourceLoadRevision = 0;
   final AudioPipeline _audioPipeline;
 
   Future<Duration?>? _loadFuture;
@@ -709,6 +712,96 @@ class AudioPlayer {
     }
   }
 
+  /// Reads this active Android session's equalizer without changing playback.
+  /// The effect is allocated disabled on first use; unsupported hardware reports
+  /// an error to this call rather than preventing the decoder from loading.
+  Future<AndroidEqualizerParameters> getAndroidEqualizerParameters(
+      {int? expectedSessionId}) async {
+    final result = await _invokeAndroidEqualizer(
+        'androidEqualizerGetParameters', const {}, expectedSessionId);
+    final raw = result?['parameters'];
+    if (raw is! Map) {
+      throw StateError('Android equalizer parameters are unavailable.');
+    }
+    final parameters = AndroidEqualizerParametersMessage.fromMap(raw);
+    if (!parameters.minDecibels.isFinite ||
+        !parameters.maxDecibels.isFinite ||
+        parameters.minDecibels >= parameters.maxDecibels ||
+        parameters.bands.isEmpty ||
+        parameters.bands.map((band) => band.index).toSet().length !=
+            parameters.bands.length ||
+        parameters.bands.any((band) =>
+            band.index < 0 ||
+            !band.centerFrequency.isFinite ||
+            band.centerFrequency <= 0 ||
+            !band.gain.isFinite ||
+            band.gain < parameters.minDecibels ||
+            band.gain > parameters.maxDecibels)) {
+      throw StateError('Android equalizer parameters are invalid.');
+    }
+    return AndroidEqualizerParameters._fromMessage(this, parameters);
+  }
+
+  /// Enables this session's equalizer after native confirmation. Disabling an
+  /// effect which has never been allocated does not allocate hardware resources.
+  Future<void> setAndroidEqualizerEnabled(bool enabled,
+      {int? expectedSessionId}) async {
+    await _invokeAndroidEqualizer('audioEffectSetEnabled',
+        {'type': 'AndroidEqualizer', 'enabled': enabled}, expectedSessionId);
+  }
+
+  /// Sets an actual device band's gain in decibels. Use the indices and limits
+  /// returned by [getAndroidEqualizerParameters] for the same audio session.
+  Future<void> setAndroidEqualizerBandGain(int bandIndex, double gain,
+      {int? expectedSessionId}) async {
+    if (bandIndex < 0 || !gain.isFinite) {
+      throw ArgumentError('An equalizer band and finite gain are required.');
+    }
+    await _invokeAndroidEqualizer('androidEqualizerBandSetGain',
+        {'bandIndex': bandIndex, 'gain': gain}, expectedSessionId);
+  }
+
+  Future<Map<String, dynamic>?> _invokeAndroidEqualizer(String method,
+      Map<String, Object?> arguments, int? expectedSessionId) async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        (!_isAndroid() && !_isUnitTest())) {
+      throw UnsupportedError(
+          'Android equalizer is unavailable on this device.');
+    }
+    final native = _nativePlatform;
+    final id = _id;
+    final activation = _activationCount;
+    final sourceRevision = _sourceLoadRevision;
+    final sessionId = androidAudioSessionId;
+    bool current() =>
+        !_disposed &&
+        _active &&
+        native != null &&
+        id != null &&
+        sessionId != null &&
+        sessionId > 0 &&
+        (expectedSessionId == null || expectedSessionId == sessionId) &&
+        androidAudioSessionId == sessionId &&
+        _id == id &&
+        _activationCount == activation &&
+        identical(_nativePlatform, native) &&
+        _sourceLoadRevision == sourceRevision;
+    if (!current()) {
+      throw StateError('The Android audio session is not active.');
+    }
+    await native;
+    if (!current()) throw StateError('The Android audio session changed.');
+    final value = await MethodChannel('com.ryanheise.just_audio.methods.$id')
+        .invokeMapMethod<String, dynamic>(method, {
+      ...arguments,
+      'lazyAndroidEqualizer': true,
+      'expectedSessionId': sessionId,
+    });
+    if (!current()) throw StateError('The Android audio session changed.');
+    return value;
+  }
+
   Duration _getPositionFor(PlaybackEvent playbackEvent) {
     if (playing && processingState == ProcessingState.ready) {
       final result = playbackEvent.updatePosition +
@@ -922,6 +1015,7 @@ class AudioPlayer {
   }) async {
     _pluginLoadRequest?.interrupted = true;
     if (_disposed) return null;
+    _sourceLoadRevision++;
     final loadRequest = _pluginLoadRequest = _PluginLoadRequest(
       audioSources: audioSources,
       preload: preload,
@@ -1029,6 +1123,7 @@ class AudioPlayer {
     ConcatenatingAudioSource source, {
     _InitialSeekValues? initialSeekValues,
   }) async {
+    _sourceLoadRevision++;
     final pluginLoadRequest = _pluginLoadRequest;
     final activationNumber = _activationCount;
     void checkInterruption() {
@@ -1084,6 +1179,7 @@ class AudioPlayer {
     if (_playlist.children.length != 1 || audioSource is! UriAudioSource) {
       throw Exception('Playlist must contain 1 UriAudioSource');
     }
+    _sourceLoadRevision++;
     _setPlatformActive(true)?.catchError((dynamic e) async => null);
     final duration = await _load(
         await _platform,

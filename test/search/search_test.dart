@@ -14,6 +14,7 @@ import 'package:clipious/search/models/search_suggestion.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/search/states/search.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/material.dart';
@@ -45,7 +46,9 @@ class _SuggestionsService extends Service {
           int? page,
           SearchSortBy? sortBy,
           SearchDate date = SearchDate.any,
-          SearchDuration duration = SearchDuration.any}) async =>
+          SearchDuration duration = SearchDuration.any,
+          Server? serverOverride,
+          bool enrichResults = true}) async =>
       SearchResults();
 }
 

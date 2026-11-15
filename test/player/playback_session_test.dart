@@ -236,6 +236,95 @@ void main() {
       expect(guest.requestedCategories, [SponsorSegmentType.intro]);
     });
 
+    test('playback status survives presentation events until decoder recovery',
+        () async {
+      player.seedVideo(const Video(videoId: 'status'));
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      player.showMiniPlayer();
+      player.setEvent(const MediaEvent(
+          state: MediaState.ready,
+          type: MediaEventType.speedChanged,
+          value: 1.5));
+      expect(player.playbackStatus, MediaState.error);
+      player.setEvent(const MediaEvent(state: MediaState.loading));
+      player.showBigPlayer();
+      expect(player.playbackStatus, MediaState.loading);
+      player.setEvent(const MediaEvent(state: MediaState.ready));
+      expect(player.playbackStatus, MediaState.ready);
+    });
+
+    test('playback status cannot leak to replacement queue or profile',
+        () async {
+      const song = Video(videoId: 'status', queueEntryId: 'first');
+      player.seedVideo(song);
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      player.seedVideo(song.copyWith(queueEntryId: 'second'));
+      expect(player.playbackStatus, MediaState.idle);
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      await player.prepareForProfileSwitch();
+      expect(player.playbackStatus, MediaState.idle);
+      await player.reloadForProfile();
+      player.seedVideo(song);
+      expect(player.playbackStatus, MediaState.idle);
+    });
+
+    test('buffering pause waits for native ready without hiding completion',
+        () async {
+      player.seedVideo(const Video(videoId: 'status'));
+      player.setEvent(const MediaEvent(state: MediaState.buffering));
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      expect(player.playbackStatus, MediaState.buffering);
+      player.setEvent(const MediaEvent(state: MediaState.ready));
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      expect(player.playbackStatus, MediaState.ready);
+      await settings.setAutoplayQueue(false);
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      expect(player.playbackStatus, MediaState.completed);
+    });
+
+    test('replacement loading retains status even with a shared const event',
+        () {
+      const loading = MediaEvent(state: MediaState.loading);
+      player.seedVideo(const Video(videoId: 'status', queueEntryId: 'first'));
+      player.setEvent(loading);
+      player.seedState(player.state.copyWith(
+          currentlyPlaying:
+              const Video(videoId: 'status', queueEntryId: 'second'),
+          mediaEvent: loading));
+      expect(player.playbackStatus, MediaState.loading);
+    });
+
+    test('reloading the same queue occurrence replaces stale failure status',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const song = Video(
+          videoId: 'status',
+          musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+      await player.playVideo([song], audio: true);
+      final queueId = player.state.currentQueueId;
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      final reload = player.switchToVideo(player.state.currentlyPlaying!);
+      expect(player.playbackStatus, MediaState.loading);
+      await reload;
+      expect(player.state.currentQueueId, queueId);
+      expect(player.playbackStatus, isNot(MediaState.error));
+    });
+
+    test('stopping clears playback status before the close animation',
+        () async {
+      player.seedVideo(const Video(videoId: 'status'));
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      player.hide();
+      expect(player.playbackStatus, MediaState.idle);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(player.playbackStatus, MediaState.idle);
+    });
+
     test('automatic PiP follows visible video playback, including downloads',
         () async {
       const channel = MethodChannel('videre/pip');
@@ -339,6 +428,58 @@ void main() {
       await player.enterPip();
       expect(player.state, before);
     });
+
+    for (final (name, audio, music, offline, fullscreen) in [
+      ('online music', true, true, false, false),
+      ('offline music', true, true, true, false),
+      ('ordinary video', false, false, false, true),
+      ('music video', false, true, false, true),
+      ('ordinary audio', true, false, false, true),
+    ]) {
+      test('landscape rotation respects the $name presentation', () async {
+        final view =
+            TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
+        view.devicePixelRatio = 1;
+        view.physicalSize = const Size(390, 844);
+        addTearDown(view.resetDevicePixelRatio);
+        addTearDown(view.resetPhysicalSize);
+        await settings.saveSetting(
+            SettingsValue(fullScreenOnLandscapeSettingName, 'true'));
+        final metadata =
+            music ? const MusicMetadata(title: 'Song', artist: 'Artist') : null;
+        player.seedState(player.state.copyWith(
+          currentlyPlaying: offline
+              ? null
+              : Video(videoId: 'rotation', musicMetadata: metadata),
+          offlineCurrentlyPlaying: offline
+              ? DownloadedVideo(
+                  videoId: 'rotation',
+                  title: 'Song',
+                  lengthSeconds: 180,
+                  quality: 'audio',
+                  musicMetadata: metadata,
+                  audioOnly: true)
+              : null,
+          isAudio: audio,
+          isHidden: false,
+          isMini: false,
+          orientation: Orientation.portrait,
+        ));
+
+        view.physicalSize = const Size(844, 390);
+        player.didChangeMetrics();
+
+        expect(player.state.orientation, Orientation.landscape);
+        expect(
+            player.state.fullScreenState,
+            fullscreen
+                ? FullScreenState.fullScreen
+                : FullScreenState.notFullScreen);
+        expect(player.state.mediaCommand?.type,
+            fullscreen ? MediaCommandType.enterFullScreen : isNull);
+        expect(player.state.isMini, isFalse);
+      });
+    }
 
     test('resizing into PiP preserves the expanded portrait layout', () async {
       final view =

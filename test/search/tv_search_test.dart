@@ -12,6 +12,7 @@ import 'package:clipious/search/models/search_suggestion.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/search/views/tv/screens/search.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -37,7 +38,9 @@ class _SearchService extends Service {
       int? page,
       SearchSortBy? sortBy,
       SearchDate date = SearchDate.any,
-      SearchDuration duration = SearchDuration.any}) {
+      SearchDuration duration = SearchDuration.any,
+      Server? serverOverride,
+      bool enrichResults = true}) {
     final result = Completer<SearchResults>();
     requests.add((query: query, result: result));
     if (!deferred) result.complete(SearchResults());

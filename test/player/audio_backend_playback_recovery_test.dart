@@ -68,6 +68,7 @@ class _RecordingPlayer extends TestPlayerCubit {
   Object? refreshError;
   Completer<void>? refreshGate;
   bool interrupted = false;
+  int requestedSwitches = 0;
   final recoveryProgress = <Duration>[];
   final backendProgress = <Duration>[];
 
@@ -75,6 +76,10 @@ class _RecordingPlayer extends TestPlayerCubit {
 
   @override
   bool get playbackInterrupted => interrupted || super.playbackInterrupted;
+
+  @override
+  int get backendPlaybackGeneration =>
+      super.backendPlaybackGeneration + requestedSwitches;
 
   @override
   Future<Video?> refreshCurrentPlayback(Video video,
@@ -136,6 +141,7 @@ class _NativeAudio implements AudioPlayer {
   double nativeSpeed = 1;
   double nativePitch = 1;
   bool nativePlaying = false;
+  ProcessingState nativeProcessingState = ProcessingState.ready;
   Duration nativePosition = Duration.zero;
   int playCalls = 0;
   bool disposed = false;
@@ -148,7 +154,14 @@ class _NativeAudio implements AudioPlayer {
   final progressSamples = <NativePlaybackProgress?>[];
 
   @override
-  ProcessingState get processingState => ProcessingState.ready;
+  ProcessingState get processingState => nativeProcessingState;
+
+  // Recovery tests do not allocate an Android decoder or native audio session.
+  @override
+  int? get androidAudioSessionId => null;
+
+  @override
+  Stream<int?> get androidAudioSessionIdStream => const Stream<int?>.empty();
 
   @override
   Future<NativePlaybackProgress?> getNativePlaybackProgress() async {
@@ -191,6 +204,7 @@ class _NativeAudio implements AudioPlayer {
   @override
   Future<void> seek(Duration? position, {int? index}) async {
     nativePosition = position ?? Duration.zero;
+    nativeProcessingState = ProcessingState.ready;
     seeks.add(nativePosition);
   }
 
@@ -404,6 +418,23 @@ void main() {
     players.add(audio);
     return audio;
   }
+
+  test('a pending player switch supersedes ordinary audio while detaching EQ',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native);
+    final staleLoad = audio.playVideo(false);
+
+    // The new selection is waiting for metadata before notifying this decoder.
+    player.requestedSwitches++;
+    await staleLoad;
+
+    expect(native.sources, isEmpty);
+    expect(player.events, isEmpty);
+
+    await audio.playVideo(false);
+    expect(native.sources, hasLength(1));
+  });
 
   test('typed load failure retries with effective headers without saving them',
       () async {
@@ -798,6 +829,46 @@ void main() {
     expect(player.backendProgress,
         [const Duration(seconds: 10), const Duration(seconds: 12)]);
   });
+
+  for (final seekBeforePlay in [false, true]) {
+    test('completed source retains recovery after replay, seek=$seekBeforePlay',
+        () async {
+      final native = _NativeAudio();
+      final audio = create(native);
+      await audio.playVideo(false);
+      native.nativeProcessingState = ProcessingState.completed;
+      native.nativePosition = const Duration(seconds: 120);
+      audio.onStateStreamChange(
+          native_audio.PlayerState(true, ProcessingState.completed));
+
+      // just_audio can still report playing=true at EOF. Completion alone
+      // must prevent polling, even before the parent's pause reaches it.
+      await audio.checkForStalledPlayback();
+      expect(native.progressCalls, 0);
+      audio.pause();
+      if (seekBeforePlay) audio.seek(const Duration(seconds: 5));
+      audio.play();
+      expect(native.sources, hasLength(1));
+      expect(native.seeks.last,
+          seekBeforePlay ? const Duration(seconds: 5) : Duration.zero);
+
+      native.progressSamples.addAll([_progress(0, 5), _progress(2, 7)]);
+      await audio.checkForStalledPlayback();
+      await audio.checkForStalledPlayback();
+      expect(player.backendProgress,
+          [const Duration(seconds: 5), const Duration(seconds: 7)]);
+
+      // A subsequent classified transport failure must retain its recovery
+      // path; replaying the admitted source must not silently disable it.
+      player.refreshedVideo =
+          audio.state.video!.copyWith(playbackSourceId: Object());
+      audio.onPlaybackError(_retryable());
+      await _flush();
+      expect(player.refreshCalls, 1);
+      expect(native.sources, hasLength(2));
+      expect(audio.state.error, isNull);
+    });
+  }
 
   test('missing or failed native progress does not cause recovery', () async {
     final native = _NativeAudio();

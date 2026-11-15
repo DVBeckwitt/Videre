@@ -105,6 +105,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     _nativeProgressRequest = null;
     final current = audioPlayer;
     audioPlayer = null;
+    final clearingSound = current == null
+        ? Future<void>.value()
+        : player.musicSound.detach(current);
     EasyThrottle.cancel('audio-progress');
     EasyThrottle.cancel('audio-buffering');
     final subscriptions = List.of(_playerSubscriptions);
@@ -113,6 +116,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       return _disposal ?? Future<void>.value();
     }
     final disposal = () async {
+      await clearingSound;
       for (final subscription in subscriptions) {
         await subscription.cancel();
       }
@@ -264,6 +268,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       !player.playbackInterrupted &&
       player.shouldStartPlayback &&
       identical(audioPlayer, current) &&
+      current.processingState != ProcessingState.completed &&
       current.playing;
 
   void _startStallWatch() {
@@ -397,7 +402,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         }
         break;
       case ProcessingState.completed:
-        _sourceAdmitted = false;
+        // EOF ends progress observation, not admission of the installed source.
+        // Replay or a seek away from EOF must retain recovery for that source.
         _stopStallWatch();
         player.setEvent(const MediaEvent(state: MediaState.completed));
         break;
@@ -752,6 +758,19 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       _loadingGeneration = null;
       return;
     }
+    if ((state.video?.musicMetadata ?? state.offlineVideo?.musicMetadata) !=
+        null) {
+      player.musicSound.attach(current, profileId: db.profileId);
+    } else {
+      await player.musicSound.detach(current);
+      if (isClosed ||
+          generation != _playbackGeneration ||
+          !_ownsParentPlayback ||
+          !identical(audioPlayer, current)) {
+        if (_loadingGeneration == generation) _loadingGeneration = null;
+        return;
+      }
+    }
     final audioLength = Duration(
         seconds: offline
             ? state.offlineVideo!.lengthSeconds
@@ -863,6 +882,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     if (_loadingGeneration == _playbackGeneration ||
         !player.shouldStartPlayback) {
       return;
+    }
+    // Play at native EOF does not rewind just_audio. Use the decoder's state,
+    // not a near-end position or the parent's latest progress/pause event.
+    if (audioPlayer?.processingState == ProcessingState.completed) {
+      seek(Duration.zero);
     }
     audioPlayer?.play();
     _startStallWatch();

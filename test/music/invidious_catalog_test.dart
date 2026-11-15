@@ -11,6 +11,8 @@ import 'package:clipious/notifications/models/db/channel_notifications.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/services.dart';
@@ -37,6 +39,15 @@ Map<String, Object?> _song({int index = 0}) => {
           'height': 180,
         }
       ],
+    };
+
+String _discoveryId(int index) => index.toString().padLeft(11, 'v');
+
+Map<String, Object?> _discoveryVideo(int index, {String? genre = 'Music'}) => {
+      ..._song(),
+      'videoId': _discoveryId(index),
+      'title': 'Discovered song $index',
+      'genre': genre,
     };
 
 Map<String, Object?> _channel() => {
@@ -103,6 +114,7 @@ void main() {
       () => contract.searchArtists('artist'),
       () => contract.searchPlaylists('playlist'),
       contract.getTrendingSongs,
+      contract.getDiscoverySongs,
       () => contract.getSong(_songId),
       () => contract.getArtist(_channelId),
       () => contract.getPlaylist(_playlistId),
@@ -111,6 +123,369 @@ void main() {
     }
     expect(requests, isEmpty);
   });
+
+  test('music discovery never presents the ambiguous trending feed as songs',
+      () async {
+    // Current Invidious versions route type=Music to general livestreams.
+    // Even a nonempty, well-formed response cannot establish a music feed.
+    respond = (request) async => _json([
+          {..._song(), 'title': 'Cricket livestream', 'liveNow': true},
+        ], request);
+
+    await expectLater(
+        catalog.getTrendingSongs(), throwsA(isA<MusicCatalogUnsupported>()));
+    expect(requests, isEmpty);
+  });
+
+  test('discovery verifies full categories, never search labels or credits',
+      () async {
+    final details = [
+      _discoveryVideo(0),
+      {
+        ..._discoveryVideo(1, genre: 'Sports'),
+        'musicTracks': [
+          {'song': 'Background song', 'artist': 'Singer'}
+        ],
+      },
+      {
+        ..._discoveryVideo(2, genre: null),
+        'musicTracks': [
+          {'song': 'Credited song'}
+        ],
+      },
+      {..._discoveryVideo(3), 'liveNow': true},
+      {..._discoveryVideo(4), 'isUpcoming': true},
+      {..._discoveryVideo(5), 'videoId': _songId},
+      {..._discoveryVideo(6), 'title': <String>[]},
+      _discoveryVideo(7, genre: '  mUsIc  '),
+    ];
+    respond = (request) async {
+      if (request.url.path == '/api/v1/search') {
+        expect(request.url.queryParameters['q'], 'official music video');
+        expect(request.url.queryParameters['type'], 'video');
+        return _json(
+            [for (var index = 0; index < 8; index++) _discoveryVideo(index)],
+            request);
+      }
+      final id = request.url.pathSegments.last;
+      return _json(details[int.parse(id.substring(10))], request);
+    };
+
+    final songs = await catalog.getDiscoverySongs();
+    expect(
+        songs.map((song) => song.videoId), [_discoveryId(0), _discoveryId(7)]);
+    expect(songs.every((song) => song.playbackVideo == null), isTrue);
+    expect(requests, hasLength(9));
+    expect(requests.every((request) => request.url.host == 'invidious.example'),
+        isTrue);
+  });
+
+  test(
+      'discovery deduplicates and bounds candidates to eight and results to six',
+      () async {
+    respond = (request) async {
+      if (request.url.path == '/api/v1/search') {
+        return _json([
+          {..._song(), 'videoId': '../invalid'},
+          for (var index = 0; index < 12; index++) ...[
+            _discoveryVideo(index),
+            _discoveryVideo(index)
+          ],
+        ], request);
+      }
+      final id = request.url.pathSegments.last;
+      final index = int.parse(id.replaceAll('v', ''));
+      return _json(
+          _discoveryVideo(index, genre: index < 2 ? 'Sports' : 'Music'),
+          request);
+    };
+    final songs = await catalog.getDiscoverySongs();
+    expect(songs.map((song) => song.videoId),
+        [for (var index = 2; index < 8; index++) _discoveryId(index)]);
+    final loaded =
+        requests.skip(1).map((request) => request.url.pathSegments.last);
+    expect(loaded.toSet(), hasLength(8));
+    expect(requests, hasLength(9));
+  });
+
+  test('discovery stops inspecting after six verified songs', () async {
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json(
+            [for (var index = 0; index < 12; index++) _discoveryVideo(index)],
+            request)
+        : _json(
+            _discoveryVideo(
+                int.parse(request.url.pathSegments.last.replaceAll('v', ''))),
+            request);
+    expect(await catalog.getDiscoverySongs(), hasLength(6));
+    expect(requests, hasLength(7));
+  });
+
+  test('discovery never enriches summaries, details, or recommendations',
+      () async {
+    final previousService = service;
+    final enrichmentRequests = <Uri>[];
+    final enrichmentClient = MockClient((request) async {
+      enrichmentRequests.add(request.url);
+      return _json({
+        'titles': [
+          {'title': 'Unexpected enrichment'}
+        ],
+        'thumbnails': [],
+      }, request);
+    });
+    service = Service(httpClient: enrichmentClient);
+    addTearDown(() {
+      service = previousService;
+      enrichmentClient.close();
+    });
+    await db.saveSetting(SettingsValue(dearrowSettingName, 'true'));
+    await db.saveSetting(SettingsValue(dearrowThumbnailsSettingName, 'true'));
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0)], request)
+        : _json({
+            ..._discoveryVideo(0),
+            'recommendedVideos': [_discoveryVideo(1), _discoveryVideo(2)],
+          }, request);
+    final songs = await catalog.getDiscoverySongs();
+    expect(enrichmentRequests, isEmpty);
+    expect(songs.single.title, 'Discovered song 0');
+    expect(requests, hasLength(2));
+  });
+
+  test('empty discovery does not try another feed or catalog', () async {
+    expect(await catalog.getDiscoverySongs(), isEmpty);
+    expect(requests, hasLength(1));
+    expect(requests.single.url.path, '/api/v1/search');
+  });
+
+  test('discovery preserves user content filters before fetching details',
+      () async {
+    await db.saveFilter(
+        VideoFilter(value: 'Discovered song 0')..hideFromFeed = true);
+    respond = (request) async {
+      if (request.url.path == '/api/v1/search') {
+        return _json([_discoveryVideo(0), _discoveryVideo(1)], request);
+      }
+      expect(request.url.pathSegments.last, _discoveryId(1));
+      return _json(_discoveryVideo(1), request);
+    };
+    expect((await catalog.getDiscoverySongs()).single.videoId, _discoveryId(1));
+    expect(requests, hasLength(2));
+  });
+
+  test('discovery keeps verified partial results after a detail failure',
+      () async {
+    respond = (request) async {
+      if (request.url.path == '/api/v1/search') {
+        return _json([_discoveryVideo(0), _discoveryVideo(1)], request);
+      }
+      return request.url.path.endsWith(_discoveryId(0))
+          ? http.Response('Unavailable', 503, request: request)
+          : _json(_discoveryVideo(1), request);
+    };
+    expect((await catalog.getDiscoverySongs()).single.videoId, _discoveryId(1));
+    expect(requests, hasLength(3));
+  });
+
+  test(
+      'discovery stops after a rate limit without Retry-After on a serial route',
+      () async {
+    await NetworkProxy.instance.initialize(
+        saved: '{"enabled":true,"host":"127.0.0.1","port":19050}',
+        configureNative: false);
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0), _discoveryVideo(1)], request)
+        : http.Response('Rate limited', 429, request: request);
+
+    await expectLater(
+        catalog.getDiscoverySongs(), throwsA(isA<MusicCatalogException>()));
+    expect(requests.map((request) => request.url.path),
+        ['/api/v1/search', '/api/v1/videos/${_discoveryId(0)}']);
+  });
+
+  test(
+      'discovery retains verified tracks without starting another batch '
+      'after a server cooldown', () async {
+    respond = (request) async {
+      if (request.url.path == '/api/v1/search') {
+        return _json(
+            [for (var index = 0; index < 8; index++) _discoveryVideo(index)],
+            request);
+      }
+      final id = request.url.pathSegments.last;
+      final index = int.parse(id.substring(10));
+      return index == 2
+          ? http.Response('Unavailable', 503,
+              request: request, headers: {'retry-after': '60'})
+          : _json(_discoveryVideo(index), request);
+    };
+
+    final songs = await catalog.getDiscoverySongs();
+    expect(songs.map((song) => song.videoId),
+        [_discoveryId(0), _discoveryId(1), _discoveryId(3)]);
+    expect(
+        requests.skip(1).map((request) => request.url.pathSegments.last),
+        unorderedEquals([
+          for (var index = 0; index < 4; index++) _discoveryId(index),
+        ]));
+  });
+
+  test('discovery also applies filters to authoritative full titles', () async {
+    await db
+        .saveFilter(VideoFilter(value: 'Blocked title')..hideFromFeed = true);
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0)], request)
+        : _json({..._discoveryVideo(0), 'title': 'Blocked title'}, request);
+    expect(await catalog.getDiscoverySongs(), isEmpty);
+    expect(requests, hasLength(2));
+  });
+
+  test('discovery omits a recording that became private after search',
+      () async {
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0)], request)
+        : _json({..._discoveryVideo(0), 'title': '[Private video]'}, request);
+    expect(await catalog.getDiscoverySongs(), isEmpty);
+    expect(requests, hasLength(2));
+  });
+
+  test('discovery offers retry when every metadata lookup fails', () async {
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0), _discoveryVideo(1)], request)
+        : http.Response('Unavailable', 503, request: request);
+    await expectLater(
+        catalog.getDiscoverySongs(), throwsA(isA<MusicCatalogException>()));
+    expect(requests, hasLength(3));
+  });
+
+  test('discovery returns empty after successful nonmusic inspections',
+      () async {
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0), _discoveryVideo(1)], request)
+        : request.url.path.endsWith(_discoveryId(0))
+            ? _json(_discoveryVideo(0, genre: null), request)
+            : _json({
+                ..._discoveryVideo(1),
+                'premiereTimestamp':
+                    DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600,
+              }, request);
+    expect(await catalog.getDiscoverySongs(), isEmpty);
+    expect(requests, hasLength(3));
+  });
+
+  test('discovery does not call partial failures an empty music catalog',
+      () async {
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0), _discoveryVideo(1)], request)
+        : request.url.path.endsWith(_discoveryId(0))
+            ? _json(_discoveryVideo(0, genre: 'Sports'), request)
+            : http.Response('Unavailable', 503, request: request);
+    await expectLater(
+        catalog.getDiscoverySongs(), throwsA(isA<MusicCatalogException>()));
+    expect(requests, hasLength(3));
+  });
+
+  for (final route in ['https', 'socks', 'onion']) {
+    test('discovery bounds metadata concurrency on $route', () async {
+      if (route == 'socks') {
+        await NetworkProxy.instance.initialize(
+            saved: '{"enabled":true,"host":"127.0.0.1","port":19050}',
+            configureNative: false);
+      } else if (route == 'onion') {
+        const onion = Server(url: 'http://music-instance.onion');
+        await db.upsertServer(onion);
+        await db.useServer(onion);
+        // Mock transport is used; no real onion routing is attempted.
+      }
+      var active = 0;
+      var maximum = 0;
+      respond = (request) async {
+        if (request.url.path == '/api/v1/search') {
+          return _json(
+              [for (var index = 0; index < 8; index++) _discoveryVideo(index)],
+              request);
+        }
+        active++;
+        if (active > maximum) maximum = active;
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        active--;
+        return _json(
+            _discoveryVideo(
+                int.parse(request.url.pathSegments.last.replaceAll('v', ''))),
+            request);
+      };
+      expect(await catalog.getDiscoverySongs(), hasLength(6));
+      expect(maximum, route == 'https' ? 2 : 1);
+      expect(requests, hasLength(7));
+    });
+  }
+
+  for (final phase in ['search', 'details']) {
+    test(
+        'discovery stops further requests when its owner cancels during $phase',
+        () async {
+      var current = true;
+      respond = (request) async {
+        if (request.url.path == '/api/v1/search') {
+          if (phase == 'search') current = false;
+          return _json(
+              [for (var index = 0; index < 8; index++) _discoveryVideo(index)],
+              request);
+        }
+        current = false;
+        return _json(
+            _discoveryVideo(
+                int.parse(request.url.pathSegments.last.replaceAll('v', ''))),
+            request);
+      };
+      await expectLater(catalog.getDiscoverySongs(isCurrent: () => current),
+          throwsA(isA<MusicCatalogException>()));
+      expect(requests.length, lessThanOrEqualTo(phase == 'search' ? 1 : 3));
+    });
+  }
+
+  for (final change in ['server', 'profile', 'proxy']) {
+    test('discovery stops metadata batches after a $change change', () async {
+      var changed = false;
+      respond = (request) async {
+        if (request.url.path == '/api/v1/search') {
+          return _json(
+              [for (var index = 0; index < 8; index++) _discoveryVideo(index)],
+              request);
+        }
+        if (!changed) {
+          changed = true;
+          if (change == 'server') {
+            const other = Server(url: 'https://other.example');
+            await db.upsertServer(other);
+            await db.useServer(other);
+          } else if (change == 'proxy') {
+            await NetworkProxy.instance.initialize(
+                saved: '{"enabled":true,"host":"127.0.0.1","port":19050}',
+                configureNative: false);
+          } else {
+            // Replace the database identity while retaining the selected URL.
+            final previous = db;
+            db = await SembastSqfDb.createInMemory();
+            await db
+                .upsertServer(const Server(url: 'https://invidious.example'));
+            addTearDown(previous.close);
+          }
+        }
+        return _json(
+            _discoveryVideo(
+                int.parse(request.url.pathSegments.last.replaceAll('v', ''))),
+            request);
+      };
+      await expectLater(
+          catalog.getDiscoverySongs(), throwsA(isA<MusicCatalogException>()));
+      expect(requests.length, lessThanOrEqualTo(3));
+      expect(
+          requests.every((request) => request.url.host == 'invidious.example'),
+          isTrue);
+    });
+  }
 
   for (final origin in [
     'https://invidious.nerdvpn.de',
@@ -141,11 +516,8 @@ void main() {
                   _ => [_song()],
                 },
                 request);
-          case '/api/v1/trending':
-            expect(request.url.queryParameters['type'], 'Music');
-            return _json([_song()], request);
           case '/api/v1/videos/$_songId':
-            return _json(_song(), request);
+            return _json({..._song(), 'genre': 'Music'}, request);
           case '/api/v1/channels/$_channelId':
             return _json(_channel(), request);
           case '/api/v1/channels/$_channelId/videos':
@@ -171,14 +543,14 @@ void main() {
       expect(songs.single.artistLinks.single.id, _channelId);
       expect(await catalog.searchArtists('Test artist'), hasLength(1));
       expect(await catalog.searchPlaylists('Test playlist'), hasLength(1));
-      expect(await catalog.getTrendingSongs(), hasLength(1));
       expect((await catalog.getSong(_songId)).videoId, _songId);
+      expect((await catalog.getDiscoverySongs()).single.videoId, _songId);
       expect((await catalog.getArtist(_channelId)).songs, hasLength(1));
       final collection = await catalog.getPlaylist('VL$_playlistId');
       // Repeated recordings are distinct playlist occurrences.
       expect(collection.tracks.map((track) => track.videoId),
           [_songId, _songId, _songId]);
-      expect(requests, hasLength(9));
+      expect(requests, hasLength(10));
       expect(requests.every((request) => request.url.origin == origin), isTrue);
     });
   }

@@ -208,6 +208,45 @@ void main() {
     await tester.pump();
   }
 
+  testWidgets('a genre shortcut searches the selected Invidious catalog once',
+      (tester) async {
+    await show(tester, screen: const MusicScreen(initialQuery: 'jazz music'));
+    expect(catalog.searches, ['jazz music']);
+    expect(find.text('jazz music'), findsOneWidget);
+    catalog.responses.single.complete([first]);
+    await tester.pumpAndSettle();
+    expect(find.text('First song'), findsOneWidget);
+    await show(tester, screen: const MusicScreen(initialQuery: 'jazz music'));
+    expect(catalog.searches, ['jazz music']);
+    await tester.tap(find.text('First song'));
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.single.videoId, first.videoId);
+    expect(player.calls.single.audio, isTrue);
+  });
+
+  testWidgets('a replacement genre drops late results from its predecessor',
+      (tester) async {
+    await show(tester, screen: const MusicScreen(initialQuery: 'pop music'));
+    await show(tester,
+        screen: const MusicScreen(initialQuery: 'electronic music'));
+    expect(catalog.searches, ['pop music', 'electronic music']);
+    catalog.responses[1].complete([second]);
+    await tester.pumpAndSettle();
+    catalog.responses[0].complete([first]);
+    await tester.pumpAndSettle();
+    expect(find.text('Second song'), findsOneWidget);
+    expect(find.text('First song'), findsNothing);
+  });
+
+  testWidgets('blank search arguments do not make catalog requests',
+      (tester) async {
+    await show(tester, screen: const MusicScreen(initialQuery: '   '));
+    await tester.pumpAndSettle();
+    expect(catalog.searches, isEmpty);
+    expect(find.text('Search for a song, artist channel, or public playlist.'),
+        findsOneWidget);
+  });
+
   testWidgets('Invidious search exposes supported categories and plays songs',
       (tester) async {
     await show(tester);
