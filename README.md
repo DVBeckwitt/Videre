@@ -2,7 +2,7 @@
 
 [![Videre — GitHub star history, refreshed daily](./assets/star-history.svg)](./docs/star-history.md)
 
-**Videre brings [Invidious](https://invidious.io)’s privacy-first approach to Android phones, tablets, and TVs, keeping you in control of your server and connection.**
+**I wanted and aim to provide [Invidious](https://invidious.io)’s privacy-first approach implemented for Android phones, tablets, and TVs, keeping you in control of your server and connection.**
 
 Watch, listen, and download through a public Invidious instance or your own server. No Google account required; Invidious accounts are optional.
 
@@ -130,108 +130,6 @@ The account-free flow requires a hosted relay and a repository-scoped GitHub App
 
 Videre is an independently maintained [Clipious](https://github.com/lamarios/clipious) fork with transcript search, improved navigation, and local library features. Translations live in `lib/l10n/*.arb`. Keep pull requests focused; reuse existing code and remove obsolete alternatives.
 
-<details>
-<summary><strong>Build and develop</strong></summary>
-
-Install Git, JDK 21, Android SDK 36, and an Android device or emulator. Use the pinned Flutter submodule:
-
-```bash
-git clone --recurse-submodules https://github.com/DVBeckwitt/Videre.git
-cd Videre
-./submodules/flutter/bin/flutter pub get
-./submodules/flutter/bin/flutter run
-```
-
-For an existing clone, run `git submodule update --init`, then `./submodules/flutter/bin/flutter pub get`. On Windows, use `flutter.bat` and `dart.bat`.
-
-Build a debug APK:
-
-```bash
-./submodules/flutter/bin/flutter build apk --debug
-```
-
-APK output: `build/app/outputs/flutter-apk/`. Package restore regenerates untracked localization files in `lib/l10n/generated/`.
-
-Run CI's formatting, analysis, and offline tests:
-
-```bash
-./submodules/flutter/bin/dart tools/validate.dart
-```
-
-Add `format`, `analyze`, or `test` to run one stage. Windows: `./submodules/flutter/bin/dart.bat tools/validate.dart`.
-
-The helper uses the pinned SDK and repository root, checks formatting without rewriting files, and defines the offline test targets. After editing [the helper](./tools/validate.dart), run `./submodules/flutter/bin/dart tools/validate_test.dart`.
-
-[CI](./.github/workflows/build.yml) also runs Windows release-script safety tests and builds a profile APK on Linux; the offline helper covers neither.
-
-Run the full suite, including live Invidious tests:
-
-```bash
-nix-shell --run './submodules/flutter/bin/flutter test'
-```
-
-This starts local Invidious with login `test` / `test`.
-
-### Persistent NerdVPN test emulator
-
-On Windows, use the existing **Videre_NerdVPN_Test** AVD for native acceptance.
-Its persistent home is `%LOCALAPPDATA%\Videre\testing\avd-home`, outside the
-checkout and temporary build folders. The device reuses its saved NerdVPN
-account data, app settings, local library, and downloads between test sessions.
-Current authentication and API access still depend on the server; check them
-in the running app.
-
-```powershell
-pwsh -NoProfile -File .\tools\start_test_emulator.ps1
-# Optional update of a compatible APK, retaining the installed app's data:
-pwsh -NoProfile -File .\tools\start_test_emulator.ps1 -ApkPath .\build\app\outputs\flutter-apk\app-debug.apk
-```
-
-The default device is `emulator-5596`. The launcher reuses it when its AVD name
-matches, or cold-boots the registered AVD without loading or saving snapshots.
-The normal data disk remains persistent. It never creates, wipes, uninstalls,
-resets, or replaces a device occupying the requested port. An APK update uses
-only `adb install -r`; a signing mismatch fails without uninstalling the app.
-No APK is installed unless `-ApkPath` is supplied.
-
-SDK discovery uses `ANDROID_HOME`, then `%LOCALAPPDATA%\Android\Sdk`.
-`-SdkRoot`, `-AvdHome`, `-AvdName`, `-Port`, and `-BootTimeoutSeconds` override
-those defaults. Boot polling stops after 300 seconds by default and leaves a
-slow device running. If the AVD is absent, provision or restore the intended
-persistent test device separately: its `<AvdName>.ini` must be in `AvdHome`,
-contain an absolute `path=` to the existing AVD directory, and that directory
-must contain `config.ini`. The launcher reports missing setup instead of
-silently creating a fresh, signed-out device. Keep the AVD and account data
-local; never add credentials, device disks, or credential exports to Git.
-
-Use the installed app's existing NerdVPN account for runtime checks. Do not
-clear its data or remove its account as test cleanup. Offline validation and CI
-remain independent of this machine's AVD and sign-in. The launcher's safety
-tests use fake SDK/process runners and do not start an emulator:
-
-```powershell
-pwsh -NoProfile -File .\tools\start_test_emulator.Tests.ps1
-```
-
-Code map: `lib/` by feature; `lib/utils/` for Sembast/SQLite storage; `lib/service.dart` for Invidious API calls.
-
-</details>
-
-<details>
-<summary><strong>Signed releases on Windows</strong></summary>
-
-[The release helper](./tools/build_android_release.ps1) installs pinned, hash-verified tools in `%USERPROFILE%\.videre-build-tools` and builds signed artifacts. Keep your existing Gradle signing-properties file outside the repository and managed build directories, then run:
-
-```powershell
-$env:ANDROID_KEY_FILE = 'C:\secure\videre\key.properties'
-pwsh -NoProfile -File .\tools\build_android_release.ps1
-```
-
-`-ValidateOnly` checks paths without downloading tools or reading signing material. Run safety tests with `pwsh -NoProfile -File .\tools\build_android_release.Tests.ps1`. Other release builds also require `ANDROID_KEY_FILE` before `flutter build apk --release`.
-
-Test APK signing-output verification with `python -m unittest discover -s tools -p test_apk_signing.py -v`. The release workflow checks the existing signing certificate across both older and current Android SDK output formats.
-
-</details>
 
 ## Credits and license
 
