@@ -123,7 +123,7 @@ class Service {
   late final dashManifestResolver = DashManifestResolver(httpClient);
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
-  final _videoRequests = <String, Future<Response>>{};
+  final _getRequests = <String, Future<Response>>{};
   final _interactiveVideoRequests =
       <(String, Server, Object, int, bool), _InteractiveVideoRequest>{};
   final _browseCache = <String, ({DateTime expires, Response response})>{};
@@ -176,7 +176,7 @@ class Service {
 
   void clearSessionCaches() {
     _sessionRevision++;
-    _videoRequests.clear();
+    _getRequests.clear();
     _interactiveVideoRequests.clear();
     _browseCache.clear();
   }
@@ -229,27 +229,30 @@ class Service {
   Future<Response> _get(ServerRequest request,
       {bool cache = false, bool coalesce = false}) async {
     final key = request._cacheKey;
-    if (coalesce) {
-      // Share only the HTTP work. Each caller decodes and applies its settings.
-      return _videoRequests.putIfAbsent(
-          key,
-          () => _sendGet(request)
-                  .timeout(const Duration(seconds: 15))
-                  .whenComplete(() {
-                _videoRequests.remove(key);
-              }));
-    }
     if (cache) {
       _browseCache.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
       final cached = _browseCache[key];
       if (cached != null) return cached.response;
     }
+    if (coalesce || cache) {
+      // Share only the HTTP work. Each caller decodes and applies its settings.
+      return _getRequests.putIfAbsent(key, () {
+        late final Future<Response> pending;
+        pending = _sendGet(request)
+            .timeout(const Duration(seconds: 15))
+            .whenComplete(() {
+          if (identical(_getRequests[key], pending)) _getRequests.remove(key);
+        });
+        return pending;
+      });
+    }
     return _sendGet(request);
   }
 
-  void _cacheBrowse(
-      ServerRequest request, Response response, Iterable results) {
-    if (results.isEmpty ||
+  void _cacheBrowse(ServerRequest request, Response response, Iterable results,
+      int revision) {
+    if (revision != _sessionRevision ||
+        results.isEmpty ||
         response.statusCode != 200 ||
         (response.headers['content-type'] ?? '')
             .toLowerCase()
@@ -1442,6 +1445,7 @@ class Service {
   }
 
   Future<List<Video>> getTrending({String? type}) async {
+    final revision = _sessionRevision;
     String countryCode = db.getSettings(browsingCountry)?.value ?? 'US';
     // parse.queryParameters['region'] = countryCode;
     Map<String, String>? query = {'region': countryCode};
@@ -1455,17 +1459,18 @@ class Service {
 
     Iterable i = handleResponse(response);
     var list = List<Video>.from(i.map((e) => Video.fromJson(e)));
-    _cacheBrowse(req, response, list);
+    _cacheBrowse(req, response, list, revision);
     list = (await postProcessVideos(list));
     return list;
   }
 
   Future<List<Video>> getPopular() async {
+    final revision = _sessionRevision;
     var req = await buildRequest(urlGetPopular);
     final response = await _get(req, cache: true);
     Iterable i = handleResponse(response);
     var list = List<Video>.from(i.map((e) => Video.fromJson(e)));
-    _cacheBrowse(req, response, list);
+    _cacheBrowse(req, response, list, revision);
     list = (await postProcessVideos(list)).cast();
     return list;
   }
@@ -1478,6 +1483,7 @@ class Service {
       SearchDuration duration = SearchDuration.any,
       Server? serverOverride,
       bool enrichResults = true}) async {
+    final revision = _sessionRevision;
     String countryCode = db.getSettings(browsingCountry)?.value ?? 'US';
     final req =
         await buildRequest(urlSearch, serverOverride: serverOverride, query: {
@@ -1511,8 +1517,11 @@ class Service {
       rethrow;
     }
     log.info(results);
-    _cacheBrowse(req, response,
-        [...results.videos, ...results.playlists, ...results.channels]);
+    _cacheBrowse(
+        req,
+        response,
+        [...results.videos, ...results.playlists, ...results.channels],
+        revision);
 
     results.videos = enrichResults
         ? await postProcessVideos(results.videos)
@@ -1681,7 +1690,9 @@ class Service {
     try {
       final req = await buildRequest(urlGetSubscriptions,
           authenticated: true, serverOverride: server);
-      final response = await _get(req);
+      // Startup must remain usable when the instance stalls. Bound the response
+      // before handling it so a late rejection cannot clear saved credentials.
+      final response = await _get(req).timeout(const Duration(seconds: 5));
       final subscriptions = handleResponse(response);
       if (subscriptions is! Iterable) {
         throw InvidiousServiceError(

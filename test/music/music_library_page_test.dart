@@ -16,6 +16,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/services/playlist_load_session.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -187,6 +188,54 @@ void main() {
     expect(find.text('Saved song'), findsNothing);
     expect(library.entries.single.id, song.videoId);
   });
+
+  for (final kind in [MusicLibraryKind.song, MusicLibraryKind.playlist]) {
+    testWidgets('large $kind libraries allocate rows only near the viewport',
+        (tester) async {
+      const count = 1000;
+      await tester.runAsync(() => db.saveSetting(SettingsValue(
+          musicLibrarySettingName,
+          jsonEncode({
+            'version': 1,
+            'entries': [
+              for (var index = 0; index < count; index++)
+                MusicLibraryEntry(
+                        kind: kind,
+                        id: 'song${index.toString().padLeft(7, '0')}',
+                        title: 'Saved entry $index')
+                    .toJson(),
+            ],
+            'playlists': [],
+          }))));
+      await show(tester);
+      if (kind == MusicLibraryKind.song) {
+        await tester.tap(find.text('Songs'));
+        await tester.pumpAndSettle();
+      }
+      final list = tester.widget<ListView>(find.byType(ListView));
+      final delegate = list.childrenDelegate;
+      final eagerRows =
+          delegate is SliverChildListDelegate ? delegate.children.length : 0;
+      // Count allocated row widgets, including offscreen children retained by
+      // a list delegate. Mounted elements alone hide eager construction.
+      expect(eagerRows, lessThan(30),
+          reason: 'Opening a library must not allocate all $count rows');
+      expect(find.text('Saved entry 0'), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Saved entry 999'), 800,
+          scrollable: find.descendant(
+              of: find.byType(ListView), matching: find.byType(Scrollable)),
+          maxScrolls: 100);
+      await tester.pumpAndSettle();
+      expect(find.text('Saved entry 999'), findsOneWidget);
+      if (kind == MusicLibraryKind.song) {
+        await tester.tap(find.text('Saved entry 999'));
+        await tester.pump();
+        expect(player.online.single.videoId, 'song0000999');
+      }
+      expect(library.entries, hasLength(count));
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   for (final tv in [false, true]) {
     testWidgets(

@@ -87,6 +87,14 @@ flutter {
     source '../..'
 }
 
+// This dependency declares a test fixture as an asset; no application code uses it.
+// Keep profile packaging aligned with release for representative size measurements.
+tasks.withType(Copy).configureEach {
+    if (name in ['copyFlutterAssetsRelease', 'copyFlutterAssetsProfile']) {
+        exclude 'flutter_assets/packages/awesome_notifications/test/assets/images/test_image.png'
+    }
+}
+
 // Let users switch between universal and smaller APKs when updating.
 android.applicationVariants.all { variant ->
     variant.outputs.each { output ->

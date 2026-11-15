@@ -546,6 +546,245 @@ void main() {
     expect(manager.state.videos, isEmpty);
   });
 
+  for (final deleting in [false, true]) {
+    test(
+        'cancels the active mux and joins it before cleanup (delete: $deleting)',
+        () async {
+      const muxChannel = MethodChannel('flutter.arthenica.com/ffmpeg_kit');
+      const muxEvents = MethodChannel('flutter.arthenica.com/ffmpeg_kit_event');
+      final started = Completer<void>();
+      final cancelled = Completer<void>();
+      final finished = Completer<void>();
+      final origin = 'http://127.0.0.1:${mediaServer!.port}';
+      mediaServer!.listen((request) async {
+        request.response.add([1, 2, 3, 4]);
+        await request.response.close();
+      });
+      AdaptiveFormat track(bool audio) => AdaptiveFormat(
+          null,
+          '128000',
+          null,
+          '$origin/${audio ? 'audio' : 'video'}',
+          audio ? '251' : '243',
+          '${audio ? 'audio' : 'video'}/webm',
+          '4',
+          '1',
+          '',
+          'webm',
+          audio ? 'opus' : 'vp9',
+          audio ? null : '720p',
+          null);
+      service = _DownloadService((id) async =>
+          Video(videoId: id, adaptiveFormats: [track(true), track(false)]));
+      late List<String> arguments;
+      final cancelledSessions = <int>[];
+      messenger.setMockMethodCallHandler(muxEvents, (_) async => null);
+      messenger.setMockMethodCallHandler(muxChannel, (call) async {
+        switch (call.method) {
+          case 'ffmpegSession':
+            arguments = List<String>.from(call.arguments['arguments'] as List);
+            return {'sessionId': 42};
+          case 'ffmpegSessionExecute':
+            await File(arguments.last).writeAsBytes([1, 2]);
+            started.complete();
+            await finished.future;
+            return null;
+          case 'cancelSession':
+            cancelledSessions.add(call.arguments['sessionId'] as int);
+            if (!cancelled.isCompleted) cancelled.complete();
+            return null;
+          case 'cancel':
+            fail('A download must not cancel unrelated FFmpeg sessions');
+          case 'abstractSessionGetReturnCode':
+            return 255;
+          default:
+            return null;
+        }
+      });
+      Future<void>? stopping;
+      try {
+        await manager.setWifiOnly(false);
+        await started.future.timeout(const Duration(seconds: 5));
+        var stopped = false;
+        stopping = (deleting
+                ? manager.deleteVideo(video)
+                : manager.pauseForProfileSwitch())
+            .then((_) => stopped = true);
+        await cancelled.future.timeout(const Duration(seconds: 1));
+        expect(cancelledSessions, isNotEmpty);
+        expect(cancelledSessions, everyElement(42));
+        expect(stopped, isFalse);
+        expect(await File(arguments.last).exists(), isTrue);
+        expect(await File('${await video.stagingPath}.audio.part').exists(),
+            isTrue);
+        finished.complete();
+        await stopping.timeout(const Duration(seconds: 2));
+        if (deleting) {
+          expect(db.getDownloadByVideoId(video.videoId), isNull);
+          expect(await File(arguments.last).exists(), isFalse);
+        } else {
+          final saved = db.getDownloadByVideoId(video.videoId)!;
+          expect(saved.downloadComplete, isFalse);
+          expect(saved.downloadFailed, isFalse);
+          expect(manager.state.pausedVideoIds, contains(video.videoId));
+          expect(await File('${await video.stagingPath}.audio.part').exists(),
+              isTrue);
+        }
+      } finally {
+        if (!finished.isCompleted) finished.complete();
+        await stopping;
+        await waitFor((state) => state.downloadProgresses.isEmpty);
+        messenger.setMockMethodCallHandler(muxEvents, null);
+        messenger.setMockMethodCallHandler(muxChannel, null);
+      }
+    });
+  }
+
+  test('cancellation survives a mux starting after the first cancel request',
+      () async {
+    const muxChannel = MethodChannel('flutter.arthenica.com/ffmpeg_kit');
+    const muxEvents = MethodChannel('flutter.arthenica.com/ffmpeg_kit_event');
+    final queued = Completer<void>();
+    final start = Completer<void>();
+    final finished = Completer<void>();
+    final origin = 'http://127.0.0.1:${mediaServer!.port}';
+    mediaServer!.listen((request) async {
+      request.response.add([1, 2, 3, 4]);
+      await request.response.close();
+    });
+    AdaptiveFormat track(bool audio) => AdaptiveFormat(
+        null,
+        '128000',
+        null,
+        '$origin/${audio ? 'audio' : 'video'}',
+        audio ? '251' : '243',
+        '${audio ? 'audio' : 'video'}/webm',
+        '4',
+        '1',
+        '',
+        'webm',
+        audio ? 'opus' : 'vp9',
+        audio ? null : '720p',
+        null);
+    service = _DownloadService((id) async =>
+        Video(videoId: id, adaptiveFormats: [track(true), track(false)]));
+    var running = false;
+    var cancellations = 0;
+    var cancellationsAfterStart = 0;
+    messenger.setMockMethodCallHandler(muxEvents, (_) async => null);
+    messenger.setMockMethodCallHandler(muxChannel, (call) async {
+      switch (call.method) {
+        case 'ffmpegSession':
+          return {'sessionId': 44};
+        case 'ffmpegSessionExecute':
+          queued.complete();
+          await start.future;
+          // The native executor resets its cancellation flag on startup.
+          running = true;
+          await finished.future;
+          running = false;
+          return null;
+        case 'cancelSession':
+          expect(call.arguments['sessionId'], 44);
+          cancellations++;
+          if (running) {
+            cancellationsAfterStart++;
+            if (!finished.isCompleted) finished.complete();
+          } else if (!start.isCompleted) {
+            start.complete();
+          }
+          return null;
+        case 'cancel':
+          fail('A download must not cancel unrelated FFmpeg sessions');
+        case 'abstractSessionGetReturnCode':
+          return 255;
+        default:
+          return null;
+      }
+    });
+    Future<void>? stopping;
+    try {
+      await manager.setWifiOnly(false);
+      await queued.future.timeout(const Duration(seconds: 5));
+      stopping = manager.pauseForProfileSwitch();
+      await stopping.timeout(const Duration(seconds: 2));
+      expect(cancellationsAfterStart, greaterThan(0));
+      expect(db.getDownloadByVideoId(video.videoId)!.downloadFailed, isFalse);
+      expect(manager.state.pausedVideoIds, contains(video.videoId));
+      final completedCancellations = cancellations;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(cancellations, completedCancellations,
+          reason: 'A joined mux must not leave cancellation retries running');
+    } finally {
+      if (!start.isCompleted) start.complete();
+      if (!finished.isCompleted) finished.complete();
+      await stopping;
+      await waitFor((state) => state.downloadProgresses.isEmpty);
+      messenger.setMockMethodCallHandler(muxEvents, null);
+      messenger.setMockMethodCallHandler(muxChannel, null);
+    }
+  });
+
+  test('cancellation while creating a mux session prevents its execution',
+      () async {
+    const muxChannel = MethodChannel('flutter.arthenica.com/ffmpeg_kit');
+    const muxEvents = MethodChannel('flutter.arthenica.com/ffmpeg_kit_event');
+    final creating = Completer<void>();
+    final created = Completer<void>();
+    final origin = 'http://127.0.0.1:${mediaServer!.port}';
+    mediaServer!.listen((request) async {
+      request.response.add([1, 2, 3, 4]);
+      await request.response.close();
+    });
+    AdaptiveFormat track(bool audio) => AdaptiveFormat(
+        null,
+        '128000',
+        null,
+        '$origin/${audio ? 'audio' : 'video'}',
+        audio ? '251' : '243',
+        '${audio ? 'audio' : 'video'}/webm',
+        '4',
+        '1',
+        '',
+        'webm',
+        audio ? 'opus' : 'vp9',
+        audio ? null : '720p',
+        null);
+    service = _DownloadService((id) async =>
+        Video(videoId: id, adaptiveFormats: [track(true), track(false)]));
+    var executions = 0;
+    messenger.setMockMethodCallHandler(muxEvents, (_) async => null);
+    messenger.setMockMethodCallHandler(muxChannel, (call) async {
+      switch (call.method) {
+        case 'ffmpegSession':
+          creating.complete();
+          await created.future;
+          return {'sessionId': 43};
+        case 'ffmpegSessionExecute':
+          executions++;
+          return null;
+        case 'abstractSessionGetReturnCode':
+          return 255;
+        default:
+          return null;
+      }
+    });
+    try {
+      await manager.setWifiOnly(false);
+      await creating.future.timeout(const Duration(seconds: 5));
+      await manager.pauseDownload(video);
+      created.complete();
+      await waitFor((state) => state.downloadProgresses.isEmpty);
+      expect(executions, 0);
+      expect(db.getDownloadByVideoId(video.videoId)!.downloadFailed, isFalse);
+    } finally {
+      if (!created.isCompleted) created.complete();
+      await waitFor((state) => state.downloadProgresses.isEmpty);
+      messenger.setMockMethodCallHandler(muxEvents, null);
+      messenger.setMockMethodCallHandler(muxChannel, null);
+    }
+  });
+
   test('HD MP4 uses AAC and saves a matching external document across reloads',
       () async {
     const muxChannel = MethodChannel('flutter.arthenica.com/ffmpeg_kit');

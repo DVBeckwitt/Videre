@@ -98,6 +98,7 @@ const strictValidationTargets = [
   './test/channels/state/channel_state_test.dart',
   './test/notifications',
   './test/search/tv_search_test.dart',
+  './test/search/search_results_test.dart',
   './test/settings/state/settings_test.dart',
   './test/network',
   './test/app',

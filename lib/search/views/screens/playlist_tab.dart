@@ -25,6 +25,7 @@ class SearchPlaylistTab extends StatelessWidget {
 
       return FractionallySizedBox(
         child: PlaylistList(
+            key: ValueKey((query, sortBy, date, duration)),
             paginatedList: PageBasedPaginatedList<Playlist>(
               getItemsFunc: (page, maxResults) => service
                   .search(query,

@@ -176,6 +176,78 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('size estimates include the selected audio and container',
+      (tester) async {
+    AdaptiveFormat audio(
+            String container, String size, String language) =>
+        _format(
+            type: 'audio/$container',
+            encoding: container == 'mp4' ? 'aac' : 'opus',
+            size: size)
+          ..audioTrack = AudioTrack(
+              id: language,
+              displayName: language,
+              audioIsDefault: language == 'en');
+    service = _Metadata(() async => Video(videoId: 'video', adaptiveFormats: [
+          audio('mp4', '8860752', 'en'),
+          audio('mp4', '1000000', 'fr'),
+          audio('webm', '100000', 'en'),
+          audio('webm', '3000000', 'fr'),
+          _format(
+              type: 'video/mp4',
+              encoding: 'h264',
+              quality: '240p',
+              size: '1410703'),
+          _format(type: 'video/webm', quality: '240p', size: '2200000'),
+        ]));
+    await _showSheet(tester);
+
+    void container(DownloadContainer value) => tester
+        .widget<DropdownButton<int>>(find.byType(DropdownButton<int>))
+        .onChanged!(value.index);
+    void language(String value) => tester
+        .widgetList<DropdownButton<String>>(find.byType(DropdownButton<String>))
+        .firstWhere((menu) => menu.items!.any((item) => item.value == 'fr'))
+        .onChanged!(value);
+    String qualityLabel() => (tester
+            .widgetList<DropdownButton<String>>(
+                find.byType(DropdownButton<String>))
+            .firstWhere(
+                (menu) => menu.items!.any((item) => item.value == '240p'))
+            .items!
+            .single
+            .child as Text)
+        .data!;
+
+    container(DownloadContainer.mp4);
+    await tester.pumpAndSettle();
+    expect(qualityLabel(), '240p (~10.3 MB)');
+    language('fr');
+    await tester.pumpAndSettle();
+    expect(qualityLabel(), '240p (~2.41 MB)');
+    container(DownloadContainer.webm);
+    await tester.pumpAndSettle();
+    expect(qualityLabel(), '240p (~5.2 MB)');
+    language('en');
+    await tester.pumpAndSettle();
+    expect(qualityLabel(), '240p (~2.3 MB)');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unknown audio size does not show the video size as the total',
+      (tester) async {
+    service = _Metadata(() async => Video(videoId: 'video', adaptiveFormats: [
+          _format(size: 'unknown'),
+          _format(type: 'video/webm', quality: '720p', size: '2000000'),
+        ]));
+    await _showSheet(tester);
+
+    final menu = tester
+        .widget<DropdownButton<String>>(find.byType(DropdownButton<String>));
+    expect((menu.items!.single.child as Text).data, '720p');
+    expect(tester.takeException(), isNull);
+  });
+
   test('HD MP4 is offered alongside a low-resolution WebM track', () async {
     final webm = _format(type: 'video/webm', quality: '360p');
     final hd = _format(type: 'video/mp4', encoding: 'h264', quality: '1080p');

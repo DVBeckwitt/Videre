@@ -148,10 +148,10 @@ class DownloadModalSheet extends StatelessWidget {
                     ?.qualityLabel,
                 onChanged: cubit.setQuality,
                 items: state.availableQualities.map((format) {
-                  final size = double.tryParse(format.clen);
+                  final size = cubit.estimatedDownloadSize(format);
                   return DropdownMenuItem(
                       value: format.qualityLabel,
-                      child: Text(size == null || !size.isFinite || size < 0
+                      child: Text(size == null
                           ? format.qualityLabel!
                           : '${format.qualityLabel} (~${prettyBytes(size)})'));
                 }).toList()),

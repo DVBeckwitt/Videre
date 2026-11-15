@@ -15,6 +15,7 @@ import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/db/progress.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/services/watch_history.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1005,6 +1006,25 @@ void main() {
       expect(captured.headers['Authorization'], 'Bearer invidious-token');
     });
 
+    test('startup validation stops waiting and ignores a late rejection',
+        () async {
+      final response = Completer<http.Response>();
+      final client = MockClient((_) => response.future);
+      addTearDown(client.close);
+      var finished = false;
+      final pending = Service(httpClient: client)
+          .validateCurrentSessionSafely()
+          .then((_) => finished = true);
+      await Future<void>.delayed(const Duration(seconds: 6));
+      final finishedAtDeadline = finished;
+      response.complete(http.Response('{"error":"Invalid token"}', 403,
+          headers: {'content-type': 'application/json'}));
+      await pending;
+
+      expect(finishedAtDeadline, isTrue);
+      expect(db.getServer('https://inv.example')!.authToken, 'invidious-token');
+    });
+
     test('clears stored credentials after an Invidious JSON 403', () async {
       final client = MockClient((request) async => http.Response(
             '{"error":"Invalid token"}',
@@ -1096,6 +1116,75 @@ void main() {
       await service.getPopular();
       await service.getPopular();
       expect(calls, 1);
+    });
+
+    for (final endpoint in ['popular', 'trending', 'search']) {
+      testWidgets(
+          'concurrent $endpoint requests share work and decode separately',
+          (tester) async {
+        var calls = 0;
+        final response = Completer<http.Response>();
+        final client = MockClient((_) {
+          calls++;
+          return response.future;
+        });
+        addTearDown(client.close);
+        final api = Service(httpClient: client);
+        Future<List<Video>> load() async => switch (endpoint) {
+              'popular' => await api.getPopular(),
+              'trending' => await api.getTrending(),
+              _ => (await api.search('query')).videos,
+            };
+        final first = load();
+        final second = load();
+        await tester.pump();
+        response.complete(http.Response(
+            '[{"type":"video","videoId":"video-id"}]', 200,
+            headers: {'cache-control': 'no-store'}));
+        await tester.pump();
+        final lists = await Future.wait([first, second]);
+
+        expect(calls, 1);
+        expect(identical(lists.first.single, lists.last.single), isFalse);
+        lists.first.clear();
+        expect(lists.last, hasLength(1));
+        final fresh = load();
+        await tester.pump();
+        await fresh;
+        expect(calls, 2, reason: 'No-store responses must not be retained');
+      });
+    }
+
+    testWidgets(
+        'obsolete browsing cannot repopulate cache or remove newer work',
+        (tester) async {
+      var calls = 0;
+      final oldResponse = Completer<http.Response>();
+      final newResponse = Completer<http.Response>();
+      final client = MockClient(
+          (_) => ++calls == 1 ? oldResponse.future : newResponse.future);
+      addTearDown(client.close);
+      final api = Service(httpClient: client);
+      final old = api.getPopular();
+      await tester.pump();
+      api.clearSessionCaches();
+      final current = api.getPopular();
+      await tester.pump();
+      oldResponse.complete(http.Response('[{"videoId":"old"}]', 200));
+      await tester.pump();
+      await old;
+      final overlapping = api.getPopular();
+      await tester.pump();
+      newResponse.complete(http.Response('[{"videoId":"new"}]', 200));
+      await tester.pump();
+      final results = await Future.wait([current, overlapping]);
+
+      expect(calls, 2);
+      expect(results.map((items) => items.single.videoId), ['new', 'new']);
+      final cached = api.getPopular();
+      await tester.pump();
+      expect((await cached).single.videoId, 'new');
+      expect(calls, 2);
     });
 
     test('a GET retries a short explicit rate limit once', () async {

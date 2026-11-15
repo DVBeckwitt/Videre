@@ -5,7 +5,6 @@ import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
-import 'package:clipious/music/models/music_discovery.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -14,6 +13,8 @@ import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:http/http.dart' as http;
+
+import 'legacy_music_discovery.dart';
 
 part 'legacy_music_catalog_parser.dart';
 part 'legacy_music_discovery_parser.dart';

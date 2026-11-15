@@ -5,7 +5,8 @@ import 'dart:io';
 import 'package:bloc/bloc.dart';
 import 'package:dio/dio.dart';
 import 'package:downloadsfolder/downloadsfolder.dart';
-import 'package:ffmpeg_kit_flutter_new_full/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit_config.dart';
+import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_session.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
@@ -512,7 +513,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (video.audioOnly) {
             await File(audioPath).copy(output);
           } else {
-            final session = await FFmpegKit.executeWithArguments([
+            final session = await FFmpegSession.create([
               '-y',
               '-i',
               videoPath,
@@ -542,6 +543,40 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               'copy',
               output
             ]);
+            if (token.isCancelled) throw token.cancelError!;
+            if (session.getSessionId() == null) {
+              throw StateError('Could not create the download merge session');
+            }
+            var muxFinished = false;
+            Future<void>? cancelling;
+            Timer? cancelRetry;
+            void cancelMux() {
+              if (muxFinished || cancelling != null) return;
+              cancelling = session.cancel().catchError((Object error) {
+                log.fine('Could not cancel the download merge', error);
+              }).whenComplete(() => cancelling = null);
+            }
+
+            final execution = FFmpegKitConfig.ffmpegExecute(session);
+            unawaited(token.whenCancel.then((_) {
+              if (!muxFinished) {
+                cancelMux();
+                // Native startup resets an earlier cancellation flag. Retry
+                // while this session is still running or queued for execution.
+                cancelRetry = Timer.periodic(
+                    const Duration(milliseconds: 100), (_) => cancelMux());
+              }
+            }));
+            try {
+              // Cancellation requests native termination; join it before a
+              // delete/profile switch can remove files still being written.
+              await execution;
+            } finally {
+              muxFinished = true;
+              cancelRetry?.cancel();
+              await cancelling;
+            }
+            if (token.isCancelled) throw token.cancelError!;
             if (!((await session.getReturnCode())?.isValueSuccess() ?? false)) {
               throw StateError(
                   'Could not merge the downloaded audio and video');

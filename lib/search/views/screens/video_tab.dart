@@ -24,7 +24,7 @@ class SearchVideoTab extends StatelessWidget {
           context.select((SearchCubit s) => s.state.filters.duration);
 
       return VideoList(
-        key: UniqueKey(),
+        key: ValueKey((query, sortBy, date, duration)),
         paginatedVideoList: PageBasedPaginatedList<Video>(
           getItemsFunc: (page, maxResults) => service
               .search(query,

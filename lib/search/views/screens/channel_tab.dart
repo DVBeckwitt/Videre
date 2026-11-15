@@ -28,6 +28,7 @@ class SearchChannelTab extends StatelessWidget {
           context.select((SearchCubit s) => s.state.filters.duration);
 
       return PaginatedListView<Channel>(
+          key: ValueKey((query, sortBy, date, duration)),
           paginatedList: PageBasedPaginatedList<Channel>(
             getItemsFunc: (page, maxResults) => service
                 .search(query,

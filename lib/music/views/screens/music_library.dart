@@ -225,10 +225,24 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     };
     final entries =
         library.entries.where((entry) => entry.kind == kind).toList();
+    final playlistOffset =
+        _filter == _LibraryFilter.playlists ? playlists.length : 0;
+    // Lazy delegates need the new index to preserve row state and remote focus.
+    final indices = <Key, int>{
+      for (var index = 0; index < playlistOffset; index++)
+        ValueKey('music-local-${playlists[index].playlistId}'): index,
+      for (var index = 0; index < entries.length; index++)
+        ValueKey(
+                'music-saved-${entries[index].kind.name}-${entries[index].id}'):
+            playlistOffset + index,
+    };
     if (_filter != _LibraryFilter.playlists) {
       return entries.isEmpty
           ? _empty()
-          : ListView(children: entries.map(_bookmark).toList());
+          : ListView.builder(
+              itemCount: entries.length,
+              findChildIndexCallback: (key) => indices[key],
+              itemBuilder: (_, index) => _bookmark(entries[index]));
     }
     return Column(children: [
       Align(
@@ -242,9 +256,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Expanded(
         child: playlists.isEmpty && entries.isEmpty
             ? _empty()
-            : ListView(children: [
-                for (final playlist in playlists)
-                  ListTile(
+            : ListView.builder(
+                itemCount: playlists.length + entries.length,
+                findChildIndexCallback: (key) => indices[key],
+                itemBuilder: (_, index) {
+                  if (index >= playlists.length) {
+                    return _bookmark(entries[index - playlists.length]);
+                  }
+                  final playlist = playlists[index];
+                  return ListTile(
                       key: ValueKey('music-local-${playlist.playlistId}'),
                       leading: const Icon(Icons.queue_music),
                       title: Text(playlist.playlistId == localWatchLaterId
@@ -253,9 +273,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       subtitle: Text(locals.onDevice),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () =>
-                          setState(() => _playlistId = playlist.playlistId)),
-                ...entries.map(_bookmark),
-              ]),
+                          setState(() => _playlistId = playlist.playlistId));
+                }),
       ),
     ]);
   }

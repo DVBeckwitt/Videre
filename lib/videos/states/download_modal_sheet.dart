@@ -131,6 +131,24 @@ class DownloadModalSheetCubit extends Cubit<DownloadModalSheetState> {
     }
   }
 
+  double? estimatedDownloadSize(AdaptiveFormat video) {
+    final audio = DownloadFormats(_metadata?.adaptiveFormats,
+            audioTrackId: state.audioTrackId)
+        .audioFor(DownloadContainer.forVideo(video));
+    final videoSize = double.tryParse(video.clen);
+    final audioSize = double.tryParse(audio?.clen ?? '');
+    if (videoSize == null ||
+        audioSize == null ||
+        !videoSize.isFinite ||
+        !audioSize.isFinite ||
+        videoSize <= 0 ||
+        audioSize <= 0) {
+      return null;
+    }
+    final total = videoSize + audioSize;
+    return total.isFinite ? total : null;
+  }
+
   void _refreshFormats() {
     final formats = DownloadFormats(_metadata?.adaptiveFormats,
         audioTrackId: state.audioTrackId);

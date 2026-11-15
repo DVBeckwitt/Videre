@@ -339,7 +339,7 @@
   "@useDash": {
     "description": "Label on video options if a user wants to switch to dash urls instead of the regular quality selection"
   },
-  "useDashDescription": "DASH enables adaptive streaming. Leave it enabled unless you experience playback problems.",
+  "useDashDescription": "Enables adaptive streaming and higher video qualities when available.",
   "@useDashDescription": {
     "description": "Description for dash in the settings screen"
   },
