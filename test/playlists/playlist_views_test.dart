@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -110,6 +111,9 @@ class _Downloads extends Cubit<DownloadManagerState>
   Future<int> addDownloads(Iterable<String> videoIds,
       {String quality = '720p',
       bool audioOnly = false,
+      DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       Map<String, Video> videosById = const {}}) async {
     queued.add(videoIds.toList());
     return videoIds.length;
@@ -188,6 +192,50 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     addTearDown(() async => tester.pumpWidget(const SizedBox.shrink()));
   }
+
+  testWidgets('playlist total duration includes more than 24 hours',
+      (tester) async {
+    await pump(tester, const PlaylistPlaybackActions(),
+        data: _playlist.copyWith(videos: [
+          _first.copyWith(lengthSeconds: 86400),
+          _second.copyWith(lengthSeconds: 3600),
+        ]),
+        loadSession: _SnapshotLoader(complete: true));
+    expect(find.text('Total duration 25:00:00'), findsOneWidget);
+    expect(find.text('2 videos'), findsOneWidget);
+    expect(find.text('Update date unavailable'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('partial playlist duration is labeled as known duration',
+      (tester) async {
+    await pump(tester, const PlaylistPlaybackActions(),
+        data: _playlist.copyWith(videoCount: 3),
+        loadSession: _SnapshotLoader(complete: false));
+    expect(find.text('Known duration 40:00'), findsOneWidget);
+    expect(find.textContaining('Total duration'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('empty playlist screen retains information and server copy',
+      (tester) async {
+    await pump(
+        tester,
+        const PlaylistViewScreen(
+            playlist: Playlist(
+                title: 'Empty playlist',
+                playlistId: 'local:empty',
+                author: '',
+                videoCount: 0),
+            canDeleteVideos: true));
+    await tester.pumpAndSettle();
+    expect(find.text('No videos'), findsOneWidget);
+    expect(find.text('Total duration 00:00'), findsOneWidget);
+    expect(find.text('Update date unavailable'), findsOneWidget);
+    expect(find.text('No video in playlist'), findsOneWidget);
+    expect(find.byKey(const ValueKey('playlist-save-server')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('loaded entries remain playable during metadata paging',
       (tester) async {
@@ -382,8 +430,13 @@ void main() {
       return const SizedBox.shrink();
     }), loadSession: _SnapshotLoader(complete: true));
 
-    await const PlaylistViewScreen(playlist: _playlist, canDeleteVideos: false)
-        .downloadPlaylist(context);
+    final downloading =
+        const PlaylistViewScreen(playlist: _playlist, canDeleteVideos: false)
+            .downloadPlaylist(context);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Download'));
+    await tester.pumpAndSettle();
+    await downloading;
     await tester.pump();
     expect(downloads.queued, [
       ['repeated']

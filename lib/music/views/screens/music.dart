@@ -23,6 +23,8 @@ import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/playlist_loading_notice.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/views/components/playlist_information.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -573,6 +575,18 @@ class _MusicScreenState extends State<MusicScreen> {
           const SizedBox(height: 12),
           Text(collection.title, style: Theme.of(context).textTheme.titleLarge),
           _artistByline(collection.artists, collection.artistLinks),
+          PlaylistInformation(
+              playlist: Playlist(
+                  title: collection.title,
+                  playlistId: collection.id,
+                  author: collection.artists.join(', '),
+                  videoCount: collection.videoCount ?? collection.tracks.length,
+                  updated: collection.updated,
+                  videos: collection.tracks
+                      .map((track) => track.toVideo())
+                      .toList()),
+              reference: reference,
+              enabled: !_starting),
           const SizedBox(height: 12),
           FilledButton.icon(
               key: const ValueKey('music-play-all'),

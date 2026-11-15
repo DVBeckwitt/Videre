@@ -60,6 +60,8 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       String? storageUri,
       @Default(false) bool audioOnly,
       DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       required int lengthSeconds,
       required String quality}) = _DownloadedVideo;
 
@@ -119,6 +121,10 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   Future<String> get thumbnailPath => _privatePath('jpg');
+
+  /// Retained captions let the Flutter player show subtitles while offline.
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  Future<String> get subtitlePath => _privatePath('vtt');
 
   Future<Directory> _getDownloadFolder() async {
     Directory dir = await getApplicationDocumentsDirectory();

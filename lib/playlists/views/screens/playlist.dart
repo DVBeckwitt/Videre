@@ -1,6 +1,7 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/videos/views/components/download_modal_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -19,6 +20,7 @@ import '../../models/playlist.dart';
 import '../../models/playlist_reference.dart';
 import '../../states/playlist.dart';
 import '../components/playlist_bookmark_button.dart';
+import '../components/playlist_information.dart';
 
 @RoutePage()
 class PlaylistViewScreen extends StatelessWidget {
@@ -78,14 +80,17 @@ class PlaylistViewScreen extends StatelessWidget {
     }
     final locals = AppLocalizations.of(context)!;
     try {
+      final options = await DownloadModalSheet.showPlaylistOptions(context);
+      if (options == null || !context.mounted || !cubit.canPlayEntries) return;
       final videos = {
         for (final video in state.playlist.videos)
           if (!video.filterHide) video.videoId: video,
       };
       final count = await context.read<DownloadManagerCubit>().addDownloads(
           videos.keys,
-          quality: '720p',
-          audioOnly: false,
+          quality: options.quality,
+          audioOnly: options.audioOnly,
+          container: options.container,
           videosById: videos);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -190,9 +195,13 @@ class PlaylistViewScreen extends StatelessWidget {
                                 removeVideoFromPlaylist:
                                     removeVideoFromPlayList,
                               ))
-                          : Container(
-                              alignment: Alignment.center,
-                              child: Text(locals.noVideoInPlayList)))));
+                          : ListView(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: innerHorizontalPadding),
+                              children: [
+                                  const PlaylistInformation(),
+                                  Center(child: Text(locals.noVideoInPlayList)),
+                                ]))));
         },
       ),
     );

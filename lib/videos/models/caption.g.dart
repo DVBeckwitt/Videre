@@ -8,7 +8,7 @@ part of 'caption.dart';
 
 Caption _$CaptionFromJson(Map<String, dynamic> json) => Caption(
       json['label'] as String,
-      json['languageCode'] as String?,
+      _captionLanguage(json, 'languageCode') as String?,
       json['url'] as String,
     );
 

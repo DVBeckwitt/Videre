@@ -32,6 +32,8 @@ mixin _$DownloadedVideo {
   String? get storageUri;
   bool get audioOnly;
   DownloadContainer? get container;
+  String? get audioTrackId;
+  String? get captionLabel;
   int get lengthSeconds;
   String get quality;
 
@@ -80,6 +82,10 @@ mixin _$DownloadedVideo {
                 other.audioOnly == audioOnly) &&
             (identical(other.container, container) ||
                 other.container == container) &&
+            (identical(other.audioTrackId, audioTrackId) ||
+                other.audioTrackId == audioTrackId) &&
+            (identical(other.captionLabel, captionLabel) ||
+                other.captionLabel == captionLabel) &&
             (identical(other.lengthSeconds, lengthSeconds) ||
                 other.lengthSeconds == lengthSeconds) &&
             (identical(other.quality, quality) || other.quality == quality));
@@ -87,30 +93,33 @@ mixin _$DownloadedVideo {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      videoId,
-      title,
-      profileId,
-      accountId,
-      author,
-      authorUrl,
-      musicMetadata,
-      const DeepCollectionEquality().hash(sponsorSegments),
-      downloadComplete,
-      downloadFailed,
-      authenticationRequired,
-      storageFailed,
-      folderUri,
-      storageUri,
-      audioOnly,
-      container,
-      lengthSeconds,
-      quality);
+  int get hashCode => Object.hashAll([
+        runtimeType,
+        videoId,
+        title,
+        profileId,
+        accountId,
+        author,
+        authorUrl,
+        musicMetadata,
+        const DeepCollectionEquality().hash(sponsorSegments),
+        downloadComplete,
+        downloadFailed,
+        authenticationRequired,
+        storageFailed,
+        folderUri,
+        storageUri,
+        audioOnly,
+        container,
+        audioTrackId,
+        captionLabel,
+        lengthSeconds,
+        quality
+      ]);
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -137,6 +146,8 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       String? storageUri,
       bool audioOnly,
       DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       int lengthSeconds,
       String quality});
 }
@@ -170,6 +181,8 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? storageUri = freezed,
     Object? audioOnly = null,
     Object? container = freezed,
+    Object? audioTrackId = freezed,
+    Object? captionLabel = freezed,
     Object? lengthSeconds = null,
     Object? quality = null,
   }) {
@@ -238,6 +251,14 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.container
           : container // ignore: cast_nullable_to_non_nullable
               as DownloadContainer?,
+      audioTrackId: freezed == audioTrackId
+          ? _self.audioTrackId
+          : audioTrackId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      captionLabel: freezed == captionLabel
+          ? _self.captionLabel
+          : captionLabel // ignore: cast_nullable_to_non_nullable
+              as String?,
       lengthSeconds: null == lengthSeconds
           ? _self.lengthSeconds
           : lengthSeconds // ignore: cast_nullable_to_non_nullable
@@ -358,6 +379,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? storageUri,
             bool audioOnly,
             DownloadContainer? container,
+            String? audioTrackId,
+            String? captionLabel,
             int lengthSeconds,
             String quality)?
         $default, {
@@ -383,6 +406,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageUri,
             _that.audioOnly,
             _that.container,
+            _that.audioTrackId,
+            _that.captionLabel,
             _that.lengthSeconds,
             _that.quality);
       case _:
@@ -422,6 +447,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? storageUri,
             bool audioOnly,
             DownloadContainer? container,
+            String? audioTrackId,
+            String? captionLabel,
             int lengthSeconds,
             String quality)
         $default,
@@ -446,6 +473,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageUri,
             _that.audioOnly,
             _that.container,
+            _that.audioTrackId,
+            _that.captionLabel,
             _that.lengthSeconds,
             _that.quality);
     }
@@ -482,6 +511,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             String? storageUri,
             bool audioOnly,
             DownloadContainer? container,
+            String? audioTrackId,
+            String? captionLabel,
             int lengthSeconds,
             String quality)?
         $default,
@@ -506,6 +537,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageUri,
             _that.audioOnly,
             _that.container,
+            _that.audioTrackId,
+            _that.captionLabel,
             _that.lengthSeconds,
             _that.quality);
       case _:
@@ -535,6 +568,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.storageUri,
       this.audioOnly = false,
       this.container,
+      this.audioTrackId,
+      this.captionLabel,
       required this.lengthSeconds,
       required this.quality})
       : _sponsorSegments = sponsorSegments,
@@ -590,6 +625,10 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   final DownloadContainer? container;
   @override
+  final String? audioTrackId;
+  @override
+  final String? captionLabel;
+  @override
   final int lengthSeconds;
   @override
   final String quality;
@@ -643,6 +682,10 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.audioOnly == audioOnly) &&
             (identical(other.container, container) ||
                 other.container == container) &&
+            (identical(other.audioTrackId, audioTrackId) ||
+                other.audioTrackId == audioTrackId) &&
+            (identical(other.captionLabel, captionLabel) ||
+                other.captionLabel == captionLabel) &&
             (identical(other.lengthSeconds, lengthSeconds) ||
                 other.lengthSeconds == lengthSeconds) &&
             (identical(other.quality, quality) || other.quality == quality));
@@ -650,30 +693,33 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   @override
-  int get hashCode => Object.hash(
-      runtimeType,
-      videoId,
-      title,
-      profileId,
-      accountId,
-      author,
-      authorUrl,
-      musicMetadata,
-      const DeepCollectionEquality().hash(_sponsorSegments),
-      downloadComplete,
-      downloadFailed,
-      authenticationRequired,
-      storageFailed,
-      folderUri,
-      storageUri,
-      audioOnly,
-      container,
-      lengthSeconds,
-      quality);
+  int get hashCode => Object.hashAll([
+        runtimeType,
+        videoId,
+        title,
+        profileId,
+        accountId,
+        author,
+        authorUrl,
+        musicMetadata,
+        const DeepCollectionEquality().hash(_sponsorSegments),
+        downloadComplete,
+        downloadFailed,
+        authenticationRequired,
+        storageFailed,
+        folderUri,
+        storageUri,
+        audioOnly,
+        container,
+        audioTrackId,
+        captionLabel,
+        lengthSeconds,
+        quality
+      ]);
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -702,6 +748,8 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       String? storageUri,
       bool audioOnly,
       DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       int lengthSeconds,
       String quality});
 }
@@ -735,6 +783,8 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? storageUri = freezed,
     Object? audioOnly = null,
     Object? container = freezed,
+    Object? audioTrackId = freezed,
+    Object? captionLabel = freezed,
     Object? lengthSeconds = null,
     Object? quality = null,
   }) {
@@ -803,6 +853,14 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.container
           : container // ignore: cast_nullable_to_non_nullable
               as DownloadContainer?,
+      audioTrackId: freezed == audioTrackId
+          ? _self.audioTrackId
+          : audioTrackId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      captionLabel: freezed == captionLabel
+          ? _self.captionLabel
+          : captionLabel // ignore: cast_nullable_to_non_nullable
+              as String?,
       lengthSeconds: null == lengthSeconds
           ? _self.lengthSeconds
           : lengthSeconds // ignore: cast_nullable_to_non_nullable

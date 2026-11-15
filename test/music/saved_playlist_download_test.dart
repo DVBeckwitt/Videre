@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
@@ -26,9 +27,19 @@ class _PausedBatchDownloads extends DownloadManagerCubit {
 
   @override
   Future<bool> addDownload(String videoId,
-      {String quality = '720p', bool audioOnly = false, Video? video}) async {
+      {String quality = '720p',
+      bool audioOnly = false,
+      Video? video,
+      DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel}) async {
     final added = await super.addDownload(videoId,
-        quality: quality, audioOnly: audioOnly, video: video);
+        quality: quality,
+        audioOnly: audioOnly,
+        video: video,
+        container: container,
+        audioTrackId: audioTrackId,
+        captionLabel: captionLabel);
     if (added && !firstAdded.isCompleted) {
       firstAdded.complete();
       await release.future;
@@ -94,7 +105,13 @@ void main() {
     const screen =
         PlaylistViewScreen(playlist: playlist, canDeleteVideos: true);
 
-    await tester.runAsync(() => screen.downloadPlaylist(actionContext));
+    await tester.runAsync(() async {
+      final downloading = screen.downloadPlaylist(actionContext);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Download'));
+      await tester.pumpAndSettle();
+      await downloading;
+    });
 
     final queuedSong = db.getDownloadByVideoId(song.videoId)!;
     expect(queuedSong.musicMetadata?.toJson(), song.musicMetadata!.toJson());

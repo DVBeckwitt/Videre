@@ -32,16 +32,35 @@ class DownloadFormats {
   final List<AdaptiveFormat> _formats;
   final _audio = <DownloadContainer, AdaptiveFormat>{};
 
-  DownloadFormats(List<AdaptiveFormat>? formats)
+  DownloadFormats(List<AdaptiveFormat>? formats, {String? audioTrackId})
       : _formats = formats ?? const [] {
+    final tracks = audioTracks;
+    final selected = audioTrackId ??
+        (_formats.any((format) =>
+                DownloadContainer.forAudio(format) != null &&
+                format.audioTrack == null)
+            ? null
+            : tracks.where((track) => track.audioIsDefault).firstOrNull?.id ??
+                tracks.firstOrNull?.id);
     for (final format in _formats) {
       final container = DownloadContainer.forAudio(format);
-      if (container == null) continue;
+      if (container == null || format.audioTrack?.id != selected) continue;
       final current = _audio[container];
       if (current == null || _bitrate(format) > _bitrate(current)) {
         _audio[container] = format;
       }
     }
+  }
+
+  List<AudioTrack> get audioTracks {
+    final tracks = <String, AudioTrack>{};
+    for (final format in _formats) {
+      final track = format.audioTrack;
+      if (DownloadContainer.forAudio(format) != null && track != null) {
+        tracks.putIfAbsent(track.id, () => track);
+      }
+    }
+    return tracks.values.toList();
   }
 
   DownloadContainer? get audioContainer =>

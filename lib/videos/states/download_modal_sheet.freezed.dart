@@ -17,7 +17,14 @@ mixin _$DownloadModalSheetState {
   bool get audioOnly;
   bool get loading;
   bool get failed;
+  bool get audioTrackDiscoveryFailed;
   List<AdaptiveFormat> get availableQualities;
+  List<DownloadContainer> get availableContainers;
+  List<AudioTrack> get audioTracks;
+  List<Caption> get captions;
+  DownloadContainer? get container;
+  String? get audioTrackId;
+  String? get captionLabel;
   String get quality;
 
   /// Create a copy of DownloadModalSheetState
@@ -37,18 +44,44 @@ mixin _$DownloadModalSheetState {
                 other.audioOnly == audioOnly) &&
             (identical(other.loading, loading) || other.loading == loading) &&
             (identical(other.failed, failed) || other.failed == failed) &&
+            (identical(other.audioTrackDiscoveryFailed,
+                    audioTrackDiscoveryFailed) ||
+                other.audioTrackDiscoveryFailed == audioTrackDiscoveryFailed) &&
             const DeepCollectionEquality()
                 .equals(other.availableQualities, availableQualities) &&
+            const DeepCollectionEquality()
+                .equals(other.availableContainers, availableContainers) &&
+            const DeepCollectionEquality()
+                .equals(other.audioTracks, audioTracks) &&
+            const DeepCollectionEquality().equals(other.captions, captions) &&
+            (identical(other.container, container) ||
+                other.container == container) &&
+            (identical(other.audioTrackId, audioTrackId) ||
+                other.audioTrackId == audioTrackId) &&
+            (identical(other.captionLabel, captionLabel) ||
+                other.captionLabel == captionLabel) &&
             (identical(other.quality, quality) || other.quality == quality));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, audioOnly, loading, failed,
-      const DeepCollectionEquality().hash(availableQualities), quality);
+  int get hashCode => Object.hash(
+      runtimeType,
+      audioOnly,
+      loading,
+      failed,
+      audioTrackDiscoveryFailed,
+      const DeepCollectionEquality().hash(availableQualities),
+      const DeepCollectionEquality().hash(availableContainers),
+      const DeepCollectionEquality().hash(audioTracks),
+      const DeepCollectionEquality().hash(captions),
+      container,
+      audioTrackId,
+      captionLabel,
+      quality);
 
   @override
   String toString() {
-    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, availableQualities: $availableQualities, quality: $quality)';
+    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, audioTrackDiscoveryFailed: $audioTrackDiscoveryFailed, availableQualities: $availableQualities, availableContainers: $availableContainers, audioTracks: $audioTracks, captions: $captions, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, quality: $quality)';
   }
 }
 
@@ -62,7 +95,14 @@ abstract mixin class $DownloadModalSheetStateCopyWith<$Res> {
       {bool audioOnly,
       bool loading,
       bool failed,
+      bool audioTrackDiscoveryFailed,
       List<AdaptiveFormat> availableQualities,
+      List<DownloadContainer> availableContainers,
+      List<AudioTrack> audioTracks,
+      List<Caption> captions,
+      DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       String quality});
 }
 
@@ -82,7 +122,14 @@ class _$DownloadModalSheetStateCopyWithImpl<$Res>
     Object? audioOnly = null,
     Object? loading = null,
     Object? failed = null,
+    Object? audioTrackDiscoveryFailed = null,
     Object? availableQualities = null,
+    Object? availableContainers = null,
+    Object? audioTracks = null,
+    Object? captions = null,
+    Object? container = freezed,
+    Object? audioTrackId = freezed,
+    Object? captionLabel = freezed,
     Object? quality = null,
   }) {
     return _then(_self.copyWith(
@@ -98,10 +145,38 @@ class _$DownloadModalSheetStateCopyWithImpl<$Res>
           ? _self.failed
           : failed // ignore: cast_nullable_to_non_nullable
               as bool,
+      audioTrackDiscoveryFailed: null == audioTrackDiscoveryFailed
+          ? _self.audioTrackDiscoveryFailed
+          : audioTrackDiscoveryFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
       availableQualities: null == availableQualities
           ? _self.availableQualities
           : availableQualities // ignore: cast_nullable_to_non_nullable
               as List<AdaptiveFormat>,
+      availableContainers: null == availableContainers
+          ? _self.availableContainers
+          : availableContainers // ignore: cast_nullable_to_non_nullable
+              as List<DownloadContainer>,
+      audioTracks: null == audioTracks
+          ? _self.audioTracks
+          : audioTracks // ignore: cast_nullable_to_non_nullable
+              as List<AudioTrack>,
+      captions: null == captions
+          ? _self.captions
+          : captions // ignore: cast_nullable_to_non_nullable
+              as List<Caption>,
+      container: freezed == container
+          ? _self.container
+          : container // ignore: cast_nullable_to_non_nullable
+              as DownloadContainer?,
+      audioTrackId: freezed == audioTrackId
+          ? _self.audioTrackId
+          : audioTrackId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      captionLabel: freezed == captionLabel
+          ? _self.captionLabel
+          : captionLabel // ignore: cast_nullable_to_non_nullable
+              as String?,
       quality: null == quality
           ? _self.quality
           : quality // ignore: cast_nullable_to_non_nullable
@@ -201,16 +276,38 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
 
   @optionalTypeArgs
   TResult maybeWhen<TResult extends Object?>(
-    TResult Function(bool audioOnly, bool loading, bool failed,
-            List<AdaptiveFormat> availableQualities, String quality)?
+    TResult Function(
+            bool audioOnly,
+            bool loading,
+            bool failed,
+            bool audioTrackDiscoveryFailed,
+            List<AdaptiveFormat> availableQualities,
+            List<DownloadContainer> availableContainers,
+            List<AudioTrack> audioTracks,
+            List<Caption> captions,
+            DownloadContainer? container,
+            String? audioTrackId,
+            String? captionLabel,
+            String quality)?
         $default, {
     required TResult orElse(),
   }) {
     final _that = this;
     switch (_that) {
       case _DownloadModalSheetState() when $default != null:
-        return $default(_that.audioOnly, _that.loading, _that.failed,
-            _that.availableQualities, _that.quality);
+        return $default(
+            _that.audioOnly,
+            _that.loading,
+            _that.failed,
+            _that.audioTrackDiscoveryFailed,
+            _that.availableQualities,
+            _that.availableContainers,
+            _that.audioTracks,
+            _that.captions,
+            _that.container,
+            _that.audioTrackId,
+            _that.captionLabel,
+            _that.quality);
       case _:
         return orElse();
     }
@@ -231,15 +328,37 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
 
   @optionalTypeArgs
   TResult when<TResult extends Object?>(
-    TResult Function(bool audioOnly, bool loading, bool failed,
-            List<AdaptiveFormat> availableQualities, String quality)
+    TResult Function(
+            bool audioOnly,
+            bool loading,
+            bool failed,
+            bool audioTrackDiscoveryFailed,
+            List<AdaptiveFormat> availableQualities,
+            List<DownloadContainer> availableContainers,
+            List<AudioTrack> audioTracks,
+            List<Caption> captions,
+            DownloadContainer? container,
+            String? audioTrackId,
+            String? captionLabel,
+            String quality)
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _DownloadModalSheetState():
-        return $default(_that.audioOnly, _that.loading, _that.failed,
-            _that.availableQualities, _that.quality);
+        return $default(
+            _that.audioOnly,
+            _that.loading,
+            _that.failed,
+            _that.audioTrackDiscoveryFailed,
+            _that.availableQualities,
+            _that.availableContainers,
+            _that.audioTracks,
+            _that.captions,
+            _that.container,
+            _that.audioTrackId,
+            _that.captionLabel,
+            _that.quality);
     }
   }
 
@@ -257,15 +376,37 @@ extension DownloadModalSheetStatePatterns on DownloadModalSheetState {
 
   @optionalTypeArgs
   TResult? whenOrNull<TResult extends Object?>(
-    TResult? Function(bool audioOnly, bool loading, bool failed,
-            List<AdaptiveFormat> availableQualities, String quality)?
+    TResult? Function(
+            bool audioOnly,
+            bool loading,
+            bool failed,
+            bool audioTrackDiscoveryFailed,
+            List<AdaptiveFormat> availableQualities,
+            List<DownloadContainer> availableContainers,
+            List<AudioTrack> audioTracks,
+            List<Caption> captions,
+            DownloadContainer? container,
+            String? audioTrackId,
+            String? captionLabel,
+            String quality)?
         $default,
   ) {
     final _that = this;
     switch (_that) {
       case _DownloadModalSheetState() when $default != null:
-        return $default(_that.audioOnly, _that.loading, _that.failed,
-            _that.availableQualities, _that.quality);
+        return $default(
+            _that.audioOnly,
+            _that.loading,
+            _that.failed,
+            _that.audioTrackDiscoveryFailed,
+            _that.availableQualities,
+            _that.availableContainers,
+            _that.audioTracks,
+            _that.captions,
+            _that.container,
+            _that.audioTrackId,
+            _that.captionLabel,
+            _that.quality);
       case _:
         return null;
     }
@@ -279,9 +420,19 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
       {this.audioOnly = false,
       this.loading = false,
       this.failed = false,
+      this.audioTrackDiscoveryFailed = false,
       final List<AdaptiveFormat> availableQualities = const [],
+      final List<DownloadContainer> availableContainers = const [],
+      final List<AudioTrack> audioTracks = const [],
+      final List<Caption> captions = const [],
+      this.container,
+      this.audioTrackId,
+      this.captionLabel,
       this.quality = '720p'})
-      : _availableQualities = availableQualities;
+      : _availableQualities = availableQualities,
+        _availableContainers = availableContainers,
+        _audioTracks = audioTracks,
+        _captions = captions;
 
   @override
   @JsonKey()
@@ -292,6 +443,9 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
   @override
   @JsonKey()
   final bool failed;
+  @override
+  @JsonKey()
+  final bool audioTrackDiscoveryFailed;
   final List<AdaptiveFormat> _availableQualities;
   @override
   @JsonKey()
@@ -302,6 +456,40 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
     return EqualUnmodifiableListView(_availableQualities);
   }
 
+  final List<DownloadContainer> _availableContainers;
+  @override
+  @JsonKey()
+  List<DownloadContainer> get availableContainers {
+    if (_availableContainers is EqualUnmodifiableListView)
+      return _availableContainers;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_availableContainers);
+  }
+
+  final List<AudioTrack> _audioTracks;
+  @override
+  @JsonKey()
+  List<AudioTrack> get audioTracks {
+    if (_audioTracks is EqualUnmodifiableListView) return _audioTracks;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_audioTracks);
+  }
+
+  final List<Caption> _captions;
+  @override
+  @JsonKey()
+  List<Caption> get captions {
+    if (_captions is EqualUnmodifiableListView) return _captions;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_captions);
+  }
+
+  @override
+  final DownloadContainer? container;
+  @override
+  final String? audioTrackId;
+  @override
+  final String? captionLabel;
   @override
   @JsonKey()
   final String quality;
@@ -324,18 +512,44 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
                 other.audioOnly == audioOnly) &&
             (identical(other.loading, loading) || other.loading == loading) &&
             (identical(other.failed, failed) || other.failed == failed) &&
+            (identical(other.audioTrackDiscoveryFailed,
+                    audioTrackDiscoveryFailed) ||
+                other.audioTrackDiscoveryFailed == audioTrackDiscoveryFailed) &&
             const DeepCollectionEquality()
                 .equals(other._availableQualities, _availableQualities) &&
+            const DeepCollectionEquality()
+                .equals(other._availableContainers, _availableContainers) &&
+            const DeepCollectionEquality()
+                .equals(other._audioTracks, _audioTracks) &&
+            const DeepCollectionEquality().equals(other._captions, _captions) &&
+            (identical(other.container, container) ||
+                other.container == container) &&
+            (identical(other.audioTrackId, audioTrackId) ||
+                other.audioTrackId == audioTrackId) &&
+            (identical(other.captionLabel, captionLabel) ||
+                other.captionLabel == captionLabel) &&
             (identical(other.quality, quality) || other.quality == quality));
   }
 
   @override
-  int get hashCode => Object.hash(runtimeType, audioOnly, loading, failed,
-      const DeepCollectionEquality().hash(_availableQualities), quality);
+  int get hashCode => Object.hash(
+      runtimeType,
+      audioOnly,
+      loading,
+      failed,
+      audioTrackDiscoveryFailed,
+      const DeepCollectionEquality().hash(_availableQualities),
+      const DeepCollectionEquality().hash(_availableContainers),
+      const DeepCollectionEquality().hash(_audioTracks),
+      const DeepCollectionEquality().hash(_captions),
+      container,
+      audioTrackId,
+      captionLabel,
+      quality);
 
   @override
   String toString() {
-    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, availableQualities: $availableQualities, quality: $quality)';
+    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, audioTrackDiscoveryFailed: $audioTrackDiscoveryFailed, availableQualities: $availableQualities, availableContainers: $availableContainers, audioTracks: $audioTracks, captions: $captions, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, quality: $quality)';
   }
 }
 
@@ -351,7 +565,14 @@ abstract mixin class _$DownloadModalSheetStateCopyWith<$Res>
       {bool audioOnly,
       bool loading,
       bool failed,
+      bool audioTrackDiscoveryFailed,
       List<AdaptiveFormat> availableQualities,
+      List<DownloadContainer> availableContainers,
+      List<AudioTrack> audioTracks,
+      List<Caption> captions,
+      DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       String quality});
 }
 
@@ -371,7 +592,14 @@ class __$DownloadModalSheetStateCopyWithImpl<$Res>
     Object? audioOnly = null,
     Object? loading = null,
     Object? failed = null,
+    Object? audioTrackDiscoveryFailed = null,
     Object? availableQualities = null,
+    Object? availableContainers = null,
+    Object? audioTracks = null,
+    Object? captions = null,
+    Object? container = freezed,
+    Object? audioTrackId = freezed,
+    Object? captionLabel = freezed,
     Object? quality = null,
   }) {
     return _then(_DownloadModalSheetState(
@@ -387,10 +615,38 @@ class __$DownloadModalSheetStateCopyWithImpl<$Res>
           ? _self.failed
           : failed // ignore: cast_nullable_to_non_nullable
               as bool,
+      audioTrackDiscoveryFailed: null == audioTrackDiscoveryFailed
+          ? _self.audioTrackDiscoveryFailed
+          : audioTrackDiscoveryFailed // ignore: cast_nullable_to_non_nullable
+              as bool,
       availableQualities: null == availableQualities
           ? _self._availableQualities
           : availableQualities // ignore: cast_nullable_to_non_nullable
               as List<AdaptiveFormat>,
+      availableContainers: null == availableContainers
+          ? _self._availableContainers
+          : availableContainers // ignore: cast_nullable_to_non_nullable
+              as List<DownloadContainer>,
+      audioTracks: null == audioTracks
+          ? _self._audioTracks
+          : audioTracks // ignore: cast_nullable_to_non_nullable
+              as List<AudioTrack>,
+      captions: null == captions
+          ? _self._captions
+          : captions // ignore: cast_nullable_to_non_nullable
+              as List<Caption>,
+      container: freezed == container
+          ? _self.container
+          : container // ignore: cast_nullable_to_non_nullable
+              as DownloadContainer?,
+      audioTrackId: freezed == audioTrackId
+          ? _self.audioTrackId
+          : audioTrackId // ignore: cast_nullable_to_non_nullable
+              as String?,
+      captionLabel: freezed == captionLabel
+          ? _self.captionLabel
+          : captionLabel // ignore: cast_nullable_to_non_nullable
+              as String?,
       quality: null == quality
           ? _self.quality
           : quality // ignore: cast_nullable_to_non_nullable

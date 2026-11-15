@@ -21,6 +21,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
@@ -52,10 +53,17 @@ class _DirectHttpOverrides extends HttpOverrides {}
 class _DownloadService extends Service {
   final Future<Video> Function(String) fetch;
   final void Function(Server?)? onServer;
+  final Future<String> Function(String, Caption, Server)? captions;
   final Future<List<SponsorSegment>> Function(String, List<SponsorSegmentType>)?
       sponsors;
 
-  _DownloadService(this.fetch, {this.onServer, this.sponsors});
+  _DownloadService(this.fetch,
+      {this.onServer, this.sponsors, this.captions, super.httpClient});
+
+  @override
+  Future<String> getPlaybackCaptions(String videoId, Caption caption,
+          {required Server server}) =>
+      captions!(videoId, caption, server);
 
   @override
   Future<Video> getVideo(String videoId,
@@ -280,6 +288,218 @@ void main() {
     expect(manager.state.folderUri, isNull);
     expect(db.getSettings(downloadFolderSetting), isNull);
     expect(db.getDownloadByVideoId('12345678901')!.folderUri, folder);
+  });
+
+  test('audio-only MP4 saves selected language as M4A across a restart',
+      () async {
+    final paths = <String>[];
+    mediaServer!.listen((request) async {
+      paths.add(request.uri.path);
+      request.response.add([1, 2, 3, 4]);
+      await request.response.close();
+    });
+    final origin = 'http://127.0.0.1:${mediaServer!.port}';
+    AdaptiveFormat audio(String language, String type, String encoding) =>
+        AdaptiveFormat(null, '128000', null, '$origin/$language', '140', type,
+            '4', '1', '', null, encoding, null, null,
+            audioTrack: AudioTrack(
+                id: language,
+                displayName: language,
+                audioIsDefault: language == 'en'));
+    service =
+        _DownloadService((id) async => Video(videoId: id, adaptiveFormats: [
+              audio('en', 'audio/webm', 'opus'),
+              audio('en', 'audio/mp4', 'aac'),
+              audio('es', 'audio/mp4', 'aac')
+            ]));
+    await manager.deleteVideo(video);
+    await manager.addDownloads([video.videoId],
+        audioOnly: true, container: DownloadContainer.mp4, audioTrackId: 'es');
+    await manager.close();
+    await openManager();
+    expect(manager.state.videos.single.audioTrackId, 'es');
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    final completed = db.getDownloadByVideoId(video.videoId)!;
+    expect(paths, ['/es']);
+    expect(completed.extension, 'm4a');
+    expect(completed.mimeType, 'audio/mp4');
+    expect(
+        await File(await completed.effectivePath).readAsBytes(), [1, 2, 3, 4]);
+  });
+
+  test('default audio discovered only in DASH remains downloadable', () async {
+    final paths = <String>[];
+    mediaServer!.listen((request) async {
+      paths.add(request.uri.path);
+      request.response.add([1, 2, 3, 4]);
+      await request.response.close();
+    });
+    final origin = 'http://127.0.0.1:${mediaServer!.port}';
+    var discoveries = 0;
+    service = _DownloadService(
+        (id) async => Video(videoId: id, dashUrl: '$origin/manifest'),
+        httpClient: MockClient((request) async {
+      discoveries++;
+      return http.Response('''
+<MPD type="static"><Period>
+  <AdaptationSet mimeType="audio/mp4" lang="en" label="English">
+    <Role value="main"/>
+    <Representation id="140" codecs="mp4a.40.2" bandwidth="128000">
+      <BaseURL>$origin/audio?clen=4</BaseURL>
+      <SegmentBase indexRange="2-3"><Initialization range="0-1"/></SegmentBase>
+    </Representation>
+  </AdaptationSet>
+</Period></MPD>
+''', 200, request: request);
+    }));
+    await manager.deleteVideo(video);
+    await manager.addDownload(video.videoId, audioOnly: true);
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete ||
+        state.videos.single.downloadFailed);
+    final completed = db.getDownloadByVideoId(video.videoId)!;
+    expect(completed.downloadComplete, isTrue);
+    expect(discoveries, 1);
+    expect(paths, ['/audio']);
+    expect(completed.extension, 'm4a');
+    expect(
+        await File(await completed.effectivePath).readAsBytes(), [1, 2, 3, 4]);
+  });
+
+  for (final container in DownloadContainer.values) {
+    test('selected subtitles are embedded in $container and staging is removed',
+        () async {
+      const muxChannel = MethodChannel('flutter.arthenica.com/ffmpeg_kit');
+      const muxEvents = MethodChannel('flutter.arthenica.com/ffmpeg_kit_event');
+      const vtt = 'WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHola\n';
+      final origin = 'http://127.0.0.1:${mediaServer!.port}';
+      mediaServer!.listen((request) async {
+        request.response.add([1, 2, 3, 4]);
+        await request.response.close();
+      });
+      final isMp4 = container == DownloadContainer.mp4;
+      AdaptiveFormat track(bool audio) => AdaptiveFormat(
+          null,
+          '128000',
+          null,
+          '$origin/${audio ? 'audio' : 'video'}',
+          audio ? '140' : '137',
+          '${audio ? 'audio' : 'video'}/${container.name}',
+          '4',
+          '1',
+          '',
+          null,
+          audio ? (isMp4 ? 'aac' : 'opus') : (isMp4 ? 'h264' : 'vp9'),
+          audio ? null : '720p',
+          null);
+      service = _DownloadService(
+          (id) async => Video(
+              videoId: id,
+              adaptiveFormats: [track(true), track(false)],
+              captions: [Caption('Spanish', 'es', '/captions')]),
+          captions: (id, caption, server) async {
+        expect(id, video.videoId);
+        expect(caption.label, 'Spanish');
+        expect(server.url, origin);
+        return vtt;
+      });
+      late List<String> arguments;
+      String? subtitlePath;
+      messenger.setMockMethodCallHandler(muxEvents, (_) async => null);
+      messenger.setMockMethodCallHandler(muxChannel, (call) async {
+        switch (call.method) {
+          case 'ffmpegSession':
+            arguments = List<String>.from(call.arguments['arguments'] as List);
+            subtitlePath =
+                arguments.firstWhere((arg) => arg.endsWith('.caption.vtt'));
+            expect(await File(subtitlePath!).readAsString(), vtt);
+            return {'sessionId': 1};
+          case 'ffmpegSessionExecute':
+            await File(arguments.last).writeAsBytes([1, 2, 3, 4]);
+            return null;
+          case 'abstractSessionGetReturnCode':
+            return 0;
+          default:
+            return null;
+        }
+      });
+      addTearDown(() {
+        messenger.setMockMethodCallHandler(muxEvents, null);
+        messenger.setMockMethodCallHandler(muxChannel, null);
+      });
+      await manager.deleteVideo(video);
+      await manager.addDownload(video.videoId,
+          container: container, captionLabel: 'Spanish');
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.single.downloadComplete &&
+          state.downloadProgresses.isEmpty);
+      expect(
+          arguments,
+          containsAllInOrder([
+            '-map',
+            '0:v:0',
+            '-map',
+            '1:a:0',
+            '-map',
+            '2:s:0',
+            '-c:s',
+            isMp4 ? 'mov_text' : 'webvtt'
+          ]));
+      expect(await File(subtitlePath!).exists(), isFalse);
+      final saved = manager.state.videos.single;
+      final offlineSubtitles = File(await saved.subtitlePath);
+      expect(await offlineSubtitles.readAsString(), vtt);
+      await manager.deleteVideo(saved);
+      expect(await offlineSubtitles.exists(), isFalse);
+    });
+  }
+
+  test('missing selected language fails without downloading a default track',
+      () async {
+    var requests = 0;
+    service =
+        _DownloadService((id) => audioVideo(id, onRequest: (_) => requests++));
+    await manager.deleteVideo(video);
+    await manager.addDownload(video.videoId,
+        audioOnly: true, audioTrackId: 'es');
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadFailed);
+    expect(requests, 0);
+    expect(manager.state.videos.single.downloadComplete, isFalse);
+  });
+
+  test('missing selected subtitle fails without discarding the requested track',
+      () async {
+    var requests = 0;
+    service = _DownloadService((id) async {
+      final source = await audioVideo(id, onRequest: (_) => requests++);
+      return source.copyWith(adaptiveFormats: [
+        ...source.adaptiveFormats!,
+        AdaptiveFormat(
+            null,
+            '128000',
+            null,
+            'http://127.0.0.1:${mediaServer!.port}/video',
+            '247',
+            'video/webm',
+            '8',
+            '1',
+            '',
+            null,
+            'vp9',
+            '720p',
+            null)
+      ]);
+    });
+    await manager.deleteVideo(video);
+    await manager.addDownload(video.videoId, captionLabel: 'Spanish');
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadFailed);
+    expect(requests, 0);
+    expect(manager.state.videos.single.captionLabel, 'Spanish');
   });
 
   test('completed external media keeps its URI and frees private staging files',

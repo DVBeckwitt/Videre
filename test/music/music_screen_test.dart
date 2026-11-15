@@ -359,9 +359,22 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Public playlist'));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Second song'), 150,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView).last,
+                matching: find.byType(Scrollable))
+            .first);
     final firstPosition = tester.getTopLeft(find.text('First song'));
     final secondPosition = tester.getTopLeft(find.text('Second song'));
     expect(firstPosition.dy, lessThan(secondPosition.dy));
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('music-play-all')), -150,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView).last,
+                matching: find.byType(Scrollable))
+            .first);
     await tester.tap(find.byKey(const ValueKey('music-play-all')));
     await tester.pumpAndSettle();
     expect(player.calls, hasLength(1));
@@ -490,6 +503,13 @@ void main() {
         id: 'PLplaylist', title: 'Playlist', tracks: [first, first]);
     await show(tester, screen: const MusicScreen(playlistId: 'PLplaylist'));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('music-song-1-firstsong01')), 150,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView).last,
+                matching: find.byType(Scrollable))
+            .first);
     expect(find.text('First song'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
@@ -574,6 +594,12 @@ void main() {
     unawaited(navigator.push<void>(MaterialPageRoute(
         builder: (_) => const MusicScreen(playlistId: 'PLpublic'))));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('First song'), 150,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView).last,
+                matching: find.byType(Scrollable))
+            .first);
     await tester.tap(find.widgetWithText(TextButton, 'Artist').first);
     await tester.pumpAndSettle();
     expect(find.text('Artist description'), findsOneWidget);
@@ -662,7 +688,12 @@ void main() {
       (tester) async {
     await show(tester, screen: const MusicScreen(playlistId: 'PLpublic'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Second song'));
+    await tester.scrollUntilVisible(find.text('Second song'), 150,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView).last,
+                matching: find.byType(Scrollable))
+            .first);
     await tester.tap(find.text('Second song'));
     await tester.pumpAndSettle();
     expect(player.calls.single.videos.map((video) => video.videoId),

@@ -299,6 +299,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           artists: mix.author.isEmpty ? [] : [mix.author],
           thumbnails: mix.videos.firstOrNull?.videoThumbnails ?? [],
           tracks: mix.videos.map(_track).toList(),
+          videoCount: mix.videoCount,
+          updated: mix.updated,
         );
       }
       final first = await api.getPublicPlaylists(playlistId,
@@ -346,6 +348,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             artists: first.author.isEmpty ? [] : [first.author],
             thumbnails: first.videos.firstOrNull?.videoThumbnails ?? [],
             tracks: tracks,
+            videoCount: first.videoCount,
+            updated: first.updated,
           );
         }
         if (pageNumber == 50) break;
