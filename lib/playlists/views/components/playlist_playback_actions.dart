@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../states/playlist.dart';
+import 'playlist_information.dart';
 
 /// The same actions serve touch layouts and the TV playlist header.
 class PlaylistPlaybackActions extends StatelessWidget {
@@ -47,6 +48,7 @@ class PlaylistPlaybackActions extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
+            const PlaylistInformation(),
             if (missingWithoutReplacement || target?.missing == true)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),

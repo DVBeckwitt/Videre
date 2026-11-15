@@ -18,11 +18,11 @@ responses, redirects and headers. The policy-specific OkHttp selector offers one
 SOCKS route for each Internet destination. OkHttp passes unresolved destination
 names to Java's SOCKS socket, and a DNS guard prevents accidental local origin
 lookups. TLS uses OkHttp's platform trust manager and hostname verification.
-Caller-supplied session and authentication headers stay with their original
-origin and are stripped before cross-origin redirects for both media and API
-requests. Media factories also carry the original source origin and configured
-header names so independent DASH/HLS child requests cannot inherit instance
-credentials. Media3-generated headers such as byte ranges remain available.
+HTTP media factories pin requests, redirects and independent DASH/HLS children
+to the original source origin. A different scheme, host or port is refused before
+routing. Caller-supplied session and authentication headers stay with that origin;
+generic API calls that permit cross-origin redirects strip those headers before
+forwarding. Media3-generated headers such as byte ranges remain available.
 
 Only literal loopback addresses and `localhost` bypass SOCKS so that just_audio's
 internal header-forwarding proxy can work. Its upstream requests still need the
@@ -51,16 +51,17 @@ acceptance; Orbot playback must also be checked on an Android device/emulator.
 
 Device decoding acceptance uses a separate library instrumentation APK, preserving
 the installed Videre application's data. With an authorized Android device, from
-`android/` run `./gradlew :videre_proxy:connectedDebugAndroidTest`. Five default
+`android/` run `./gradlew :videre_proxy:connectedDebugAndroidTest`. The default
 tests verify real H.264/AAC decoding, video frames, audio buffers, pause/seek,
 byte-range reopening, unresolved origin hostnames through a local SOCKS fixture,
 and refusal without direct origin DNS after the proxy is stopped. They also
 exercise simultaneous held video/audio response bodies during a policy change:
 old reads and sockets must close, and the same retained data sources must reopen
 through the new proxy. DASH and HLS fixtures verify actual decoding and a seek to
-4.5 seconds; their independently requested child resources use a different origin
-and must not receive instance credentials. The video tests are muted and consume
-decoded frames through an EGL surface. They do not change
+4.5 seconds with same-origin children and scoped instance credentials. Separate
+foreign-child fixtures require an origin-policy refusal before a SOCKS handshake
+or HTTP request, with no decoded frames or audio. The video tests are muted and
+consume decoded frames through an EGL surface. They do not change
 system volume or use the device's Internet connection.
 
 The optional real-Orbot test is skipped unless `orbotMediaUrl` is provided. Start

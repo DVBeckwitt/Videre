@@ -1068,7 +1068,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       }
 
       if (offline) {
-        final videoPath = await newState.offlineVideo!.effectivePath;
+        final downloaded = newState.offlineVideo!;
+        final videoPath = await downloaded.effectivePath;
         if (!_isCurrentAttempt(generation, 0)) return;
 
         _playbackSources = [
@@ -1079,6 +1080,18 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             videoPath,
             videoFormat: BetterPlayerVideoFormat.other,
             liveStream: false,
+            subtitles: [
+              if (downloaded.captionLabel != null)
+                BetterPlayerSubtitlesSource(
+                  type: BetterPlayerSubtitlesSourceType.memory,
+                  name: downloaded.captionLabel,
+                  contentLoader: () async =>
+                      File(await downloaded.subtitlePath).readAsString(),
+                  selectedByDefault: settings.state.rememberSubtitles &&
+                      settings.state.lastSubtitles == downloaded.captionLabel,
+                ),
+            ],
+            useAsmsSubtitles: false,
           )
         ];
       } else {
@@ -1383,12 +1396,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   List<String> getSubtitles() {
-    return state.video != null
-        ? videoController?.betterPlayerSubtitlesSourceList
-                .map(_subtitleToString)
-                .toList() ??
-            []
-        : [];
+    return videoController?.betterPlayerSubtitlesSourceList
+            .map(_subtitleToString)
+            .toList() ??
+        [];
   }
 
   bool get hasSubtitleTracks =>

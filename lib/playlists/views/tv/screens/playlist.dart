@@ -73,8 +73,9 @@ class TvPlaylistScreen extends PlaylistViewScreen {
               final videos = state.playlist.videos
                   .where((video) => !video.filterHide)
                   .toList();
+              final height = MediaQuery.sizeOf(context).height;
               final imageHeight =
-                  (MediaQuery.sizeOf(context).height * .3).clamp(0.0, 240.0);
+                  height < 600 ? 0.0 : (height * .3).clamp(0.0, 240.0);
               return scopeArtwork(
                   cubit.reference,
                   Stack(children: [
@@ -120,100 +121,139 @@ class TvPlaylistScreen extends PlaylistViewScreen {
                                   .withValues(alpha: overlayBackgroundOpacity),
                             ),
                             padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(children: [
-                                  Expanded(
-                                    child: Text(
-                                      playlist.playlistId == localWatchLaterId
-                                          ? locals.watchLater
-                                          : state.playlist.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: textTheme.headlineMedium,
-                                    ),
-                                  ),
-                                  if (!canDeleteVideos &&
-                                      cubit.reference != null)
-                                    PlaylistBookmarkButton(
-                                        playlist: state.playlist,
-                                        reference: cubit.reference!),
-                                  if ((canDeleteVideos ||
-                                          bookmarkOwner != null) &&
-                                      playlist.playlistId != localWatchLaterId)
-                                    IconButton(
-                                      tooltip: locals.delete,
-                                      onPressed: () => deletePlayList(context),
-                                      icon: const Icon(Icons.delete),
-                                    ),
-                                ]),
-                                Text(locals.nVideos(state.playlist.videoCount)),
-                                Focus(
-                                  onFocusChange: (focused) {
-                                    if (focused) cubit.setShowImage(true);
-                                  },
-                                  child: PlaylistPlaybackActions(
-                                    autofocus: true,
-                                    onPlayFromBeginning: (audio) => _play(
-                                        context,
-                                        fromBeginning: true,
-                                        audio: audio),
-                                    onResume: (acceptMissing) => _play(context,
-                                        resume: true,
-                                        acceptMissing: acceptMissing),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Expanded(
-                                  child: videos.isEmpty
-                                      ? Center(
-                                          child: Text(locals.noVideoInPlayList))
-                                      : GridView.builder(
-                                          controller: cubit.scrollController,
-                                          gridDelegate:
-                                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                                  crossAxisCount: 3,
-                                                  childAspectRatio: 16 / 15),
-                                          itemCount: videos.length,
-                                          itemBuilder: (context, index) {
-                                            final video = videos[index];
-                                            return Column(
-                                              key: ValueKey(video.queueEntryId),
+                            child: LayoutBuilder(
+                                builder: (context, constraints) => Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        ConstrainedBox(
+                                          constraints: BoxConstraints(
+                                              maxHeight:
+                                                  constraints.maxHeight * .65),
+                                          child: SingleChildScrollView(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
                                               children: [
-                                                Expanded(
-                                                  child: TvVideoItem(
-                                                    video: video,
-                                                    autoFocus: false,
-                                                    onFocusChange: (focused) {
-                                                      if (focused) {
-                                                        cubit.setShowImage(
-                                                            false);
-                                                      }
-                                                    },
-                                                    onSelect: (_, selected) =>
+                                                Row(children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      playlist.playlistId ==
+                                                              localWatchLaterId
+                                                          ? locals.watchLater
+                                                          : state
+                                                              .playlist.title,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: textTheme
+                                                          .headlineMedium,
+                                                    ),
+                                                  ),
+                                                  if (!canDeleteVideos &&
+                                                      cubit.reference != null)
+                                                    PlaylistBookmarkButton(
+                                                        playlist:
+                                                            state.playlist,
+                                                        reference:
+                                                            cubit.reference!),
+                                                  if ((canDeleteVideos ||
+                                                          bookmarkOwner !=
+                                                              null) &&
+                                                      playlist.playlistId !=
+                                                          localWatchLaterId)
+                                                    IconButton(
+                                                      tooltip: locals.delete,
+                                                      onPressed: () =>
+                                                          deletePlayList(
+                                                              context),
+                                                      icon: const Icon(
+                                                          Icons.delete),
+                                                    ),
+                                                ]),
+                                                Focus(
+                                                  onFocusChange: (focused) {
+                                                    if (focused)
+                                                      cubit.setShowImage(true);
+                                                  },
+                                                  child:
+                                                      PlaylistPlaybackActions(
+                                                    autofocus: true,
+                                                    onPlayFromBeginning:
+                                                        (audio) => _play(
+                                                            context,
+                                                            fromBeginning: true,
+                                                            audio: audio),
+                                                    onResume: (acceptMissing) =>
                                                         _play(context,
-                                                            video: selected),
+                                                            resume: true,
+                                                            acceptMissing:
+                                                                acceptMissing),
                                                   ),
                                                 ),
-                                                TextButton.icon(
-                                                  onPressed: () =>
-                                                      AutoRouter.of(context)
-                                                          .push(TvVideoRoute(
-                                                              videoId: video
-                                                                  .videoId)),
-                                                  icon: const Icon(
-                                                      Icons.info_outline),
-                                                  label: Text(locals
-                                                      .playlistViewDetails),
-                                                ),
                                               ],
-                                            );
-                                          },
+                                            ),
+                                          ),
                                         ),
-                                ),
-                              ],
-                            ),
+                                        const SizedBox(height: 12),
+                                        Expanded(
+                                          child: videos.isEmpty
+                                              ? Center(
+                                                  child: Text(
+                                                      locals.noVideoInPlayList))
+                                              : GridView.builder(
+                                                  controller:
+                                                      cubit.scrollController,
+                                                  gridDelegate:
+                                                      const SliverGridDelegateWithFixedCrossAxisCount(
+                                                          crossAxisCount: 3,
+                                                          childAspectRatio:
+                                                              16 / 15),
+                                                  itemCount: videos.length,
+                                                  itemBuilder:
+                                                      (context, index) {
+                                                    final video = videos[index];
+                                                    return Column(
+                                                      key: ValueKey(
+                                                          video.queueEntryId),
+                                                      children: [
+                                                        Expanded(
+                                                          child: TvVideoItem(
+                                                            video: video,
+                                                            autoFocus: false,
+                                                            onFocusChange:
+                                                                (focused) {
+                                                              if (focused) {
+                                                                cubit
+                                                                    .setShowImage(
+                                                                        false);
+                                                              }
+                                                            },
+                                                            onSelect: (_,
+                                                                    selected) =>
+                                                                _play(context,
+                                                                    video:
+                                                                        selected),
+                                                          ),
+                                                        ),
+                                                        TextButton.icon(
+                                                          onPressed: () => AutoRouter
+                                                                  .of(context)
+                                                              .push(TvVideoRoute(
+                                                                  videoId: video
+                                                                      .videoId)),
+                                                          icon: const Icon(Icons
+                                                              .info_outline),
+                                                          label: Text(locals
+                                                              .playlistViewDetails),
+                                                        ),
+                                                      ],
+                                                    );
+                                                  },
+                                                ),
+                                        ),
+                                      ],
+                                    )),
                           ),
                         ),
                       ),

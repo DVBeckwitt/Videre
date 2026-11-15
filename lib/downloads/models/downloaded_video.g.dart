@@ -30,6 +30,8 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
       audioOnly: json['audioOnly'] as bool? ?? false,
       container:
           $enumDecodeNullable(_$DownloadContainerEnumMap, json['container']),
+      audioTrackId: json['audioTrackId'] as String?,
+      captionLabel: json['captionLabel'] as String?,
       lengthSeconds: (json['lengthSeconds'] as num).toInt(),
       quality: json['quality'] as String,
     );
@@ -55,6 +57,8 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
       'storageUri': instance.storageUri,
       'audioOnly': instance.audioOnly,
       'container': _$DownloadContainerEnumMap[instance.container],
+      'audioTrackId': instance.audioTrackId,
+      'captionLabel': instance.captionLabel,
       'lengthSeconds': instance.lengthSeconds,
       'quality': instance.quality,
     };

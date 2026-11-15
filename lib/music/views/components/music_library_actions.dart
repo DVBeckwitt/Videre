@@ -10,6 +10,8 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/videos/views/components/download_modal_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -93,14 +95,15 @@ class MusicLibrarySession {
     _requireCurrent();
   }
 
-  Future<int> download(DownloadManagerCubit manager, List<Video> videos) async {
+  Future<int> download(DownloadManagerCubit manager, List<Video> videos,
+      {DownloadContainer? container}) async {
     _requireCurrent();
     if (isTv) return 0;
     var added = 0;
     for (final video in _unique(videos)) {
       _requireCurrent();
       if (await manager.addDownload(video.videoId,
-          audioOnly: true, video: video)) {
+          audioOnly: true, container: container, video: video)) {
         added++;
       }
     }
@@ -177,8 +180,12 @@ class MusicLibraryActions extends StatefulWidget {
     if (!session.isCurrent) return 0;
     final locals = AppLocalizations.of(context)!;
     try {
-      final count =
-          await session.download(context.read<DownloadManagerCubit>(), videos);
+      final options = await DownloadModalSheet.showPlaylistOptions(context,
+          audioOnly: true, audioOnlyLocked: true);
+      if (options == null || !context.mounted || !session.isCurrent) return 0;
+      final count = await session.download(
+          context.read<DownloadManagerCubit>(), videos,
+          container: options.container);
       if (context.mounted && session.isCurrent) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content:

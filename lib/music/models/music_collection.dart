@@ -9,6 +9,8 @@ class MusicCollection {
   final List<MusicArtist> artistLinks;
   final List<ImageObject> thumbnails;
   final List<MusicTrack> tracks;
+  final int? videoCount;
+  final int? updated;
 
   const MusicCollection({
     required this.id,
@@ -17,5 +19,7 @@ class MusicCollection {
     this.artistLinks = const [],
     this.thumbnails = const [],
     this.tracks = const [],
+    this.videoCount,
+    this.updated,
   });
 }

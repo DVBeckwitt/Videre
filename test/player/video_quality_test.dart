@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -238,6 +239,60 @@ void main() {
       expect(sources, [uri]);
     } finally {
       await video.close();
+    }
+  });
+
+  test('offline captions load from the saved file without network access',
+      () async {
+    final directory =
+        await Directory.systemTemp.createTemp('videre-offline-captions-');
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(
+        pathProvider, (_) async => directory.path);
+    final requests = <http.Request>[];
+    service.httpClient.close();
+    service = Service(httpClient: MockClient((request) async {
+      requests.add(request);
+      throw StateError('Offline playback must not request subtitles');
+    }));
+    const downloaded = DownloadedVideo(
+        videoId: 'offline-captions',
+        title: 'Offline captions',
+        lengthSeconds: 60,
+        quality: '480p',
+        downloadComplete: true,
+        captionLabel: 'French',
+        storageUri: 'content://documents/video.mp4');
+    final video = _VideoPlayer(
+        VideoPlayerState(
+            offlineVideo: downloaded,
+            colors: ColorScheme.fromSeed(seedColor: Colors.blue),
+            overFlowTextColor: Colors.white,
+            key: GlobalKey()),
+        player,
+        settings);
+    try {
+      final subtitles = File(await downloaded.subtitlePath);
+      await subtitles.writeAsString(
+          'WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nBonjour\n\n');
+      await video.playVideo(true);
+      expect(video.getSubtitles(), contains('French'));
+      final source = video.videoController!.betterPlayerSubtitlesSourceList
+          .firstWhere((source) => source.name == 'French');
+      await video.videoController!.setupSubtitleSource(source);
+      expect(video.videoController!.subtitlesLines.single.texts, ['Bonjour']);
+      expect(video.state.subtitleFailed, isFalse);
+      expect(requests, isEmpty);
+
+      await subtitles.delete();
+      await video.videoController!.setupSubtitleSource(source);
+      expect(video.state.subtitleFailed, isTrue);
+      expect(sources, ['content://documents/video.mp4']);
+      expect(requests, isEmpty);
+    } finally {
+      await video.close();
+      messenger.setMockMethodCallHandler(pathProvider, null);
+      await directory.delete(recursive: true);
     }
   });
 

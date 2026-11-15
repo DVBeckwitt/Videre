@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:clipious/player/dash_manifest_resolver.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -387,6 +388,61 @@ void main() {
       expect(bodies, reusable ? [body] : isEmpty);
     }
   });
+
+  for (final signed in [false, true]) {
+    test('oversized ${signed ? 'signed' : 'cold'} bodies cancel their stream',
+        () async {
+      var cancelled = false;
+      final body =
+          StreamController<List<int>>(onCancel: () => cancelled = true);
+      body.add(Uint8List(4 * 1024 * 1024));
+      body.add([0]);
+      // Do not close: the read must stop at its bound, not at EOF or timeout.
+      final bodies = <String>[];
+      final resolver = DashManifestResolver(
+          MockClient.streaming((request, _) async =>
+              http.StreamedResponse(body.stream, 200, request: request)),
+          timeout: const Duration(seconds: 5));
+      try {
+        expect(
+            await resolver
+                .resolve(signed ? recovered : original, videoId, server,
+                    requireManifest: signed, onManifest: bodies.add)
+                .timeout(const Duration(seconds: 1)),
+            isNull);
+        expect(cancelled, isTrue);
+        expect(bodies, isEmpty);
+      } finally {
+        unawaited(body.close());
+      }
+    });
+  }
+
+  for (final status in [200, 403, 429]) {
+    test('cold timeout cancels body and preserves status $status', () async {
+      var cancelled = false;
+      final body =
+          StreamController<List<int>>(onCancel: () => cancelled = true);
+      final resolver = DashManifestResolver(
+          MockClient.streaming((request, _) async =>
+              http.StreamedResponse(body.stream, status, request: request)),
+          timeout: const Duration(milliseconds: 20));
+      try {
+        final resolving = resolver.resolve(original, videoId, server);
+        if (status == 200) {
+          expect(await resolving, isNull);
+        } else {
+          await expectLater(
+              resolving,
+              throwsA(isA<InvidiousServiceError>()
+                  .having((error) => error.statusCode, 'status', status)));
+        }
+        expect(cancelled, isTrue);
+      } finally {
+        unawaited(body.close());
+      }
+    });
+  }
 
   test('UTF-8 manifest text is reused exactly without a response charset',
       () async {

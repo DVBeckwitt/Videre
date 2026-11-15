@@ -2038,19 +2038,27 @@ class Service {
     if (name.isEmpty) throw ArgumentError('Enter a playlist name');
     if (type == 'local') {
       final id = 'local:${const Uuid().v4()}';
-      await _updateLocalPlaylists((playlists) => playlists.add(
-          Playlist(title: name, playlistId: id, author: '', videoCount: 0)));
+      await _updateLocalPlaylists((playlists) => playlists.add(Playlist(
+          title: name,
+          playlistId: id,
+          author: '',
+          videoCount: 0,
+          updated: DateTime.now().millisecondsSinceEpoch ~/ 1000)));
       return id;
     }
+    return createServerPlaylist(
+        name, type, await db.getCurrentlySelectedServer());
+  }
+
+  Future<String> createServerPlaylist(
+      String name, String privacy, Server server) async {
     var req = await buildRequest(urlPostUserPlaylists,
-        authenticated: true, forceJson: true);
+        authenticated: true, forceJson: true, serverOverride: server);
 
     Map<String, String> body = {
       'title': name,
-      'privacy': type,
+      'privacy': privacy,
     };
-
-    log.info(jsonEncode(body));
 
     final response = await _instanceHttpClient.post(req.uri,
         headers: req.headers, body: jsonEncode(body));
@@ -2091,13 +2099,24 @@ class Service {
             musicMetadata: savedVideo.musicMetadata,
           )
         ];
-        playlists[index] =
-            playlist.copyWith(videos: videos, videoCount: videos.length);
+        playlists[index] = playlist.copyWith(
+            videos: videos,
+            videoCount: videos.length,
+            updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
       }, database: owner);
       return;
     }
+    await addVideoToServerPlaylist(
+        playListId, videoId, await owner.getCurrentlySelectedServer());
+  }
+
+  Future<void> addVideoToServerPlaylist(
+      String playListId, String videoId, Server server) async {
     var req = await buildRequest(urlPostUserPlaylistVideo,
-        pathParams: {":id": playListId}, authenticated: true, forceJson: true);
+        pathParams: {":id": playListId},
+        authenticated: true,
+        forceJson: true,
+        serverOverride: server);
 
     Map<String, String> body = {
       'videoId': videoId,
@@ -2140,8 +2159,10 @@ class Service {
         if (index < 0) return;
         final videos =
             playlists[index].videos.where((v) => v.videoId != indexId).toList();
-        playlists[index] = playlists[index]
-            .copyWith(videos: videos, videoCount: videos.length);
+        playlists[index] = playlists[index].copyWith(
+            videos: videos,
+            videoCount: videos.length,
+            updated: DateTime.now().millisecondsSinceEpoch ~/ 1000);
       }, database: owner);
       return;
     }
@@ -2409,6 +2430,17 @@ class Service {
       return playlist.copyWith(
           videos: await VideoFilter.filterVideos(playlist.videos));
     }
+    var playlist = await getServerPlaylist(playlistId,
+        page: page, serverOverride: serverOverride);
+    var oldLength = playlist.videos.length;
+    final videos = await postProcessVideos(playlist.videos);
+    return playlist.copyWith(
+        videos: videos, removedByFilter: oldLength - videos.length);
+  }
+
+  /// Read exact server entries when reconciling a partially completed copy.
+  Future<Playlist> getServerPlaylist(String playlistId,
+      {int? page, Server? serverOverride}) async {
     final req = await buildRequest(urlGetUserPlaylist,
         pathParams: {':id': playlistId},
         query: {'page': page?.toString()},
@@ -2416,14 +2448,8 @@ class Service {
         serverOverride: serverOverride);
 
     final response = await _get(req);
-    var playlist = Playlist.fromJson(handleResponse(response))
+    return Playlist.fromJson(handleResponse(response))
         .copyWith(type: invidiousPlaylist);
-    var oldLength = playlist.videos.length;
-    final videos = await postProcessVideos(playlist.videos);
-    playlist = playlist.copyWith(
-        videos: videos, removedByFilter: oldLength - videos.length);
-
-    return playlist;
   }
 
   Future<Dislike> getDislikes(String videoId) async {

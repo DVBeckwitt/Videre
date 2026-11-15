@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -55,7 +56,12 @@ class _Downloads implements DownloadManagerCubit {
 
   @override
   Future<bool> addDownload(String videoId,
-      {String quality = '720p', bool audioOnly = false, Video? video}) async {
+      {String quality = '720p',
+      bool audioOnly = false,
+      Video? video,
+      DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel}) async {
     calls.add((id: videoId, audioOnly: audioOnly, video: video));
     return true;
   }
@@ -289,6 +295,10 @@ void main() {
         if (action == 'Save to playlist') {
           expect(find.text('Watch Later'), findsOneWidget);
           await tester.tap(find.text('Watch Later'));
+        }
+        if (action == 'Download audio') {
+          await tester.tap(find.text('Download'));
+          await tester.pumpAndSettle();
         }
         await Future.doWhile(() async {
           await Future<void>.delayed(const Duration(milliseconds: 1));

@@ -12,6 +12,7 @@ import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/playlists/views/components/playlist_information.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
@@ -143,61 +144,66 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final songs =
         playlist.videos.where((video) => video.musicMetadata != null).toList();
     final reference = PlaylistReference.forPlaylist(playlist, db);
-    return Column(children: [
-      ListTile(
-        leading: IconButton(
-            tooltip: MaterialLocalizations.of(context).backButtonTooltip,
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => setState(() => _playlistId = null)),
-        title: Text(playlist.playlistId == localWatchLaterId
-            ? locals.watchLater
-            : playlist.title),
-        subtitle: Text(locals.onDevice),
-      ),
-      if (songs.isNotEmpty)
+    return CustomScrollView(slivers: [
+      SliverToBoxAdapter(
+          child: Column(children: [
+        ListTile(
+          leading: IconButton(
+              tooltip: MaterialLocalizations.of(context).backButtonTooltip,
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => setState(() => _playlistId = null)),
+          title: Text(playlist.playlistId == localWatchLaterId
+              ? locals.watchLater
+              : playlist.title),
+          subtitle: Text(locals.onDevice),
+        ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Wrap(spacing: 8, runSpacing: 8, children: [
-            FilledButton.icon(
-                onPressed: () => _play(songs, reference: reference),
-                icon: const Icon(Icons.play_arrow),
-                label: Text(locals.musicPlayAll)),
-            MusicPlaylistResume(
-                reference: reference,
-                videos: songs,
-                onPlay: (index, position) => _play(songs,
-                    reference: reference,
-                    startIndex: index,
-                    startAt: position)),
-            MusicLibraryActions(videos: songs, compact: false),
-          ]),
+          child: PlaylistInformation(playlist: playlist, reference: reference),
         ),
-      Expanded(
-        child: songs.isEmpty
-            ? _empty()
-            : ListView.builder(
-                itemCount: songs.length,
-                itemBuilder: (_, index) {
-                  final song = songs[index];
-                  final music = song.musicMetadata!;
-                  return ListTile(
-                      leading: SizedBox.square(
-                        dimension: 52,
-                        child: Stack(fit: StackFit.expand, children: [
-                          _artwork(music.thumbnails.isNotEmpty
-                              ? music.thumbnails
-                              : song.videoThumbnails),
-                          VideoWatchProgress(videoId: song.videoId),
-                        ]),
-                      ),
-                      title: Text(music.title),
-                      subtitle: Text(music.artist),
-                      trailing: MusicLibraryActions(
-                          videos: [song], localPlaylistId: playlist.playlistId),
-                      onTap: () => _play(songs,
-                          reference: reference, startIndex: index));
-                }),
-      ),
+        if (songs.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(spacing: 8, runSpacing: 8, children: [
+              FilledButton.icon(
+                  onPressed: () => _play(songs, reference: reference),
+                  icon: const Icon(Icons.play_arrow),
+                  label: Text(locals.musicPlayAll)),
+              MusicPlaylistResume(
+                  reference: reference,
+                  videos: songs,
+                  onPlay: (index, position) => _play(songs,
+                      reference: reference,
+                      startIndex: index,
+                      startAt: position)),
+              MusicLibraryActions(videos: songs, compact: false),
+            ]),
+          ),
+      ])),
+      songs.isEmpty
+          ? SliverFillRemaining(hasScrollBody: false, child: _empty())
+          : SliverList.builder(
+              itemCount: songs.length,
+              itemBuilder: (_, index) {
+                final song = songs[index];
+                final music = song.musicMetadata!;
+                return ListTile(
+                    leading: SizedBox.square(
+                      dimension: 52,
+                      child: Stack(fit: StackFit.expand, children: [
+                        _artwork(music.thumbnails.isNotEmpty
+                            ? music.thumbnails
+                            : song.videoThumbnails),
+                        VideoWatchProgress(videoId: song.videoId),
+                      ]),
+                    ),
+                    title: Text(music.title),
+                    subtitle: Text(music.artist),
+                    trailing: MusicLibraryActions(
+                        videos: [song], localPlaylistId: playlist.playlistId),
+                    onTap: () =>
+                        _play(songs, reference: reference, startIndex: index));
+              }),
     ]);
   }
 

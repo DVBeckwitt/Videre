@@ -16,6 +16,9 @@ import 'models/backend_playback.dart';
 /// failure. Signed URLs are kept only for this playback attempt.
 class DashManifestResolver {
   static const maxInlineManifestBytes = 1024 * 1024;
+  // Recovery pages can exceed the inline-manifest limit. Bound all response
+  // bodies while reading, including errors and signed download discovery.
+  static const _maxResponseBytes = 4 * 1024 * 1024;
   static const _warmFetchBudget = Duration(milliseconds: 1250);
   static const _onionFetchBudget = Duration(seconds: 45);
   final http.Client client;
@@ -148,7 +151,6 @@ class DashManifestResolver {
     StreamIterator<List<int>>? activeBody;
 
     Future<http.Response> read(http.StreamedResponse response) async {
-      if (budget == null) return http.Response.fromStream(response);
       if (expired) {
         unawaited(_cancelRead(() => response.stream
             .listen(null, onError: (Object _, StackTrace __) {})
@@ -156,7 +158,7 @@ class DashManifestResolver {
         throw TimeoutException('DASH request timed out.', limit);
       }
       final failure = _httpFailure(response);
-      // Keep the refusal if only its headers arrive before the warm deadline.
+      // Keep the refusal if only its headers arrive before the deadline.
       // A complete body can still carry a more specific gateway error code.
       final headerRefusal =
           failure != null && _isRefusal(failure) ? failure : null;
@@ -166,6 +168,9 @@ class DashManifestResolver {
       final bytes = BytesBuilder(copy: false);
       try {
         while (await body.moveNext()) {
+          if (body.current.length > _maxResponseBytes - bytes.length) {
+            throw const FormatException('DASH response exceeds 4 MiB.');
+          }
           bytes.add(body.current);
         }
         return http.Response.bytes(bytes.takeBytes(), response.statusCode,
@@ -217,8 +222,10 @@ class DashManifestResolver {
   /// [onManifest] receives a bounded static UTF-8 response for this attempt.
   /// The returned URL is the body’s base, including any validated same-origin
   /// redirect. Neither the body nor its signature is cached.
+  /// [requireManifest] fetches even already-signed URLs for download discovery.
   Future<String?> resolve(String url, String videoId, Server server,
       {bool throwRetryable = false,
+      bool requireManifest = false,
       void Function()? onMissingCheck,
       void Function(String content)? onManifest}) async {
     bool? provideManifest(http.Response response, Uri requested) {
@@ -261,7 +268,8 @@ class DashManifestResolver {
     final instance = Uri.parse(server.url);
     final manifest = Uri.parse(url);
     if (!_sameOrigin(manifest, instance)) return null;
-    if (manifest.queryParameters['check']?.isNotEmpty ?? false) {
+    if (!requireManifest &&
+        (manifest.queryParameters['check']?.isNotEmpty ?? false)) {
       return url;
     }
 
@@ -272,7 +280,8 @@ class DashManifestResolver {
     final cached = _routes[route];
     final warmUnsigned = cached?.needsCheck == false;
     var probingWarmUnsigned = warmUnsigned;
-    if (probingWarmUnsigned &&
+    if (!requireManifest &&
+        probingWarmUnsigned &&
         (onManifest == null || cached?.nativeManifestPath == manifest.path)) {
       return url;
     }

@@ -23,6 +23,7 @@ AdaptiveFormat _$AdaptiveFormatFromJson(Map<String, dynamic> json) =>
       json['resolution'] as String?,
       size: _parseSize(json['size']),
       fps: _parseFps(json['fps']),
+      audioTrack: AudioTrack.fromJson(json['audioTrack']),
     );
 
 Map<String, dynamic> _$AdaptiveFormatToJson(AdaptiveFormat instance) =>
@@ -42,4 +43,5 @@ Map<String, dynamic> _$AdaptiveFormatToJson(AdaptiveFormat instance) =>
       'resolution': instance.resolution,
       'size': instance.size,
       'fps': instance.fps,
+      'audioTrack': instance.audioTrack?.toJson(),
     };

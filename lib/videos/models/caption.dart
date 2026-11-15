@@ -2,9 +2,13 @@ import 'package:json_annotation/json_annotation.dart';
 
 part 'caption.g.dart';
 
+Object? _captionLanguage(Map json, String key) =>
+    json[key] ?? json['language_code'];
+
 @JsonSerializable()
 class Caption {
   String label;
+  @JsonKey(readValue: _captionLanguage)
   String? languageCode;
   String url;
 

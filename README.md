@@ -104,7 +104,9 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 
 **Backups.** In Settings, use **Export backup** to save your local library, filters, and preferences. Use **Restore or import subscriptions** for Videre backups or NewPipe subscriptions JSON. Preview, then merge or replace local data. Logins and downloads are excluded. Reopen Videre after restoring.
 
-**Downloads.** Phones and tablets only. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos; playlists download at 720p. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.
+**Downloads.** Phones and tablets only. Choose a quality and MP4 or WebM for videos, or M4A or audio WebM for audio-only downloads. Playlist downloads use the selected quality, choosing a supported lower quality when needed. Single-video downloads also offer available audio languages and embedded subtitles. Options depend on the tracks provided by your server. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.
+
+**Playlist details.** Playlist screens show video count, combined duration, and the last update date when available. Partial duration is labeled while entries are loading or have unknown lengths. When signed into an Invidious account, use **Save a copy on server** to create a private copy after every entry has loaded. A failed copy can resume from the videos already saved on the server.
 
 **Watch Later.** Open a video's menu, choose **Add to playlist**, then **Watch Later**. On phones, open the Playlists button in the top bar to find it again. Watch Later is stored on your device and needs no account.
 

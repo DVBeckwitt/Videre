@@ -29,6 +29,7 @@ import '../../videos/models/adaptive_format.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
+import '../../videos/services/download_audio_tracks.dart';
 import 'resumable_download.dart';
 import '../services/download_storage.dart';
 
@@ -240,7 +241,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   Future<bool> addDownload(String videoId,
-          {String quality = '720p', bool audioOnly = false, Video? video}) =>
+          {String quality = '720p',
+          bool audioOnly = false,
+          DownloadContainer? container,
+          String? audioTrackId,
+          String? captionLabel,
+          Video? video}) =>
       _mutate(() async {
         await _ready;
         if (!_current ||
@@ -266,6 +272,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               lengthSeconds: video?.lengthSeconds ?? 0,
               quality: quality,
               folderUri: state.folderUri,
+              container: container,
+              audioTrackId: audioTrackId,
+              captionLabel: audioOnly ? null : captionLabel,
               audioOnly: audioOnly));
         } finally {
           _enqueuing.remove(videoId);
@@ -278,13 +287,21 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<int> addDownloads(Iterable<String> videoIds,
       {String quality = '720p',
       bool audioOnly = false,
+      DownloadContainer? container,
+      String? audioTrackId,
+      String? captionLabel,
       Map<String, Video> videosById = const {}}) async {
     var added = 0;
     final generation = _generation;
     for (final id in videoIds.toSet()) {
       if (generation != _generation || _switchingProfile) break;
       if (await addDownload(id,
-          quality: quality, audioOnly: audioOnly, video: videosById[id])) {
+          quality: quality,
+          audioOnly: audioOnly,
+          container: container,
+          audioTrackId: audioTrackId,
+          captionLabel: captionLabel,
+          video: videosById[id])) {
         added++;
       }
     }
@@ -373,7 +390,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             throw StateError('The download account is no longer available');
           }
           if (token.isCancelled) throw token.cancelError!;
-          final vid = await Future.any([
+          var vid = await Future.any([
             service
                 .getVideo(video.videoId, serverOverride: server)
                 .timeout(const Duration(seconds: 30)),
@@ -382,6 +399,19 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             token.whenCancel.then((error) => throw error),
           ]);
           if (token.isCancelled) throw token.cancelError!;
+          // The sheet can discover a usable default only in DASH. Repeat that
+          // discovery even when the user left the audio choice on Automatic.
+          final needsDefaultAudio = video.audioTrackId == null &&
+              DownloadFormats(vid.adaptiveFormats).audioContainer == null;
+          if ((video.audioTrackId?.startsWith('dash:') ?? false) ||
+              needsDefaultAudio) {
+            vid = await Future.any([
+              loadDownloadAudioTracks(vid, server, client: service.httpClient)
+                  .timeout(const Duration(seconds: 30)),
+              token.whenCancel.then((error) => throw error),
+            ]);
+            if (token.isCancelled) throw token.cancelError!;
+          }
           // Admit routes before ranking tracks, so an unsupported high-bitrate
           // URL cannot hide a usable track from the selected instance.
           final mediaUrls = <AdaptiveFormat, String>{};
@@ -392,7 +422,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 validatedMediaUrl(proxyMediaUrl(parsed, server), server);
             if (url != null) mediaUrls[format] = url;
           }
-          final formats = DownloadFormats(mediaUrls.keys.toList());
+          final formats = DownloadFormats(mediaUrls.keys.toList(),
+              audioTrackId: video.audioTrackId);
           // A saved document already has a container. Old jobs saved WebM.
           final savedContainer = video.container ??
               (video.storageUri == null ? null : DownloadContainer.webm);
@@ -407,6 +438,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (audio == null || (!video.audioOnly && selectedVideo == null)) {
             throw StateError(
                 'This video has no compatible tracks for the download');
+          }
+          final caption = vid.captions
+              .where((caption) => caption.label == video.captionLabel)
+              .firstOrNull;
+          if (video.captionLabel != null && caption == null) {
+            throw StateError('The selected subtitle track is unavailable');
           }
           final music = (video.musicMetadata ?? vid.musicMetadata)
               ?.withoutVideoThumbnailFallbacks(vid.videoThumbnails);
@@ -426,13 +463,15 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final staging = await video.stagingPath;
           final audioPath = '$staging.audio.part';
           final videoPath = '$staging.video.part';
-          final steps = video.audioOnly ? 2 : 3;
+          final captionPath = '$staging.caption.vtt';
+          final steps = (video.audioOnly ? 2 : 3) + (caption == null ? 0 : 1);
           Future<void> transfer(AdaptiveFormat format, String path, int step) {
             final url = mediaUrls[format]!;
             final size = int.tryParse(format.clen);
             return downloadResumable(dio, url, path,
                 cancelToken: token,
-                identity: '${format.itag}:${format.clen}:${format.lmt}',
+                identity: '${format.itag}:${format.clen}:${format.lmt}'
+                    '${format.audioTrack == null ? '' : ':${format.audioTrack!.id}'}',
                 expectedSize: size != null && size > 0 ? size : null,
                 headers: server.headersForUrl(url),
                 onProgress: (count, total) =>
@@ -457,6 +496,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
           await transfer(audio, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
+          if (caption != null) {
+            final subtitles = await Future.any([
+              service
+                  .getPlaybackCaptions(video.videoId, caption, server: server)
+                  .timeout(const Duration(seconds: 30)),
+              token.whenCancel.then((error) => throw error),
+            ]);
+            if (token.isCancelled) throw token.cancelError!;
+            await File(captionPath).writeAsString(subtitles);
+            update(1, 1, steps - 2, steps);
+          }
           if (token.isCancelled) throw token.cancelError!;
           final output = '$staging.mux.${video.extension}';
           if (video.audioOnly) {
@@ -468,6 +518,24 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               videoPath,
               '-i',
               audioPath,
+              if (caption != null) ...[
+                '-i',
+                captionPath,
+                '-map',
+                '0:v:0',
+                '-map',
+                '1:a:0',
+                '-map',
+                '2:s:0',
+                '-c:s',
+                container == DownloadContainer.mp4 ? 'mov_text' : 'webvtt',
+                '-metadata:s:s:0',
+                'title=${caption.label}',
+                if (caption.languageCode != null) ...[
+                  '-metadata:s:s:0',
+                  'language=${caption.languageCode}',
+                ],
+              ],
               '-c:v',
               'copy',
               '-c:a',
@@ -482,6 +550,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           await artwork;
           video = video.copyWith(sponsorSegments: await sponsorSegments);
           if (token.isCancelled) throw token.cancelError!;
+          if (caption != null) {
+            await File(captionPath).copy(await video.subtitlePath);
+            if (token.isCancelled) throw token.cancelError!;
+          }
           if (video.folderUri == null) {
             await File(output).rename(mediaPath);
           } else {
@@ -689,6 +761,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       '.audio.part.identity',
       '.video.part',
       '.video.part.identity',
+      '.caption.vtt',
       '.mux.webm',
       '.mux.mp4',
       '.mux.m4a',
@@ -727,6 +800,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           for (final path in [
             if (video.storageUri == null) await video.effectivePath,
             await video.downloadPath,
+            await video.subtitlePath,
             await video.thumbnailPath
           ]) {
             final file = File(path);

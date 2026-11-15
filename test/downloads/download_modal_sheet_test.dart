@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
@@ -193,6 +195,101 @@ void main() {
     expect(cubit.state.availableQualities, [webm, hd]);
     expect(cubit.state.quality, '1080p');
     expect(cubit.state.audioOnly, isFalse);
+  });
+
+  test('M4A audio selection can return to available WebM video', () async {
+    service = _Metadata(() async => Video(videoId: 'video', adaptiveFormats: [
+          _format(),
+          _format(type: 'audio/mp4', encoding: 'aac'),
+          _format(type: 'video/webm', quality: '720p'),
+        ]));
+    final cubit = DownloadModalSheetCubit(
+        const DownloadModalSheetState(), const Video(videoId: 'video'));
+    addTearDown(cubit.close);
+    await _loaded(cubit);
+    cubit.setAudioOnly(true);
+    cubit.setContainer(DownloadContainer.mp4);
+    expect(cubit.state.container, DownloadContainer.mp4);
+    expect(cubit.canSelectVideo, isTrue);
+    cubit.setAudioOnly(false);
+    expect(cubit.state.audioOnly, isFalse);
+    expect(cubit.state.container, isNull);
+    expect(cubit.state.availableQualities.single.qualityLabel, '720p');
+  });
+
+  test('audio-only language automatically clears video and subtitle choice',
+      () async {
+    final english = _format()
+      ..audioTrack = const AudioTrack(
+          id: 'en', displayName: 'English', audioIsDefault: true);
+    final french = _format(type: 'audio/mp4', encoding: 'aac')
+      ..audioTrack = const AudioTrack(id: 'fr', displayName: 'French');
+    service = _Metadata(() async => Video(videoId: 'video', adaptiveFormats: [
+          english,
+          french,
+          _format(type: 'video/webm', quality: '720p'),
+        ], captions: [
+          Caption('English', 'en', '/api/v1/captions/video')
+        ]));
+    final cubit = DownloadModalSheetCubit(
+        const DownloadModalSheetState(), const Video(videoId: 'video'));
+    addTearDown(cubit.close);
+    await _loaded(cubit);
+    cubit.setCaption('English');
+    expect(cubit.state.captionLabel, 'English');
+    cubit.setAudioTrack('fr');
+    expect(cubit.state.audioOnly, isTrue);
+    expect(cubit.state.failed, isFalse);
+    expect(cubit.state.captionLabel, isNull);
+    expect(cubit.state.availableContainers, [DownloadContainer.mp4]);
+    expect(cubit.canSelectVideo, isFalse);
+    cubit.setAudioTrack('en');
+    cubit.setAudioOnly(false);
+    expect(cubit.state.availableQualities.single.qualityLabel, '720p');
+    expect(cubit.state.audioOnly, isFalse);
+  });
+
+  testWidgets(
+      'download choices scroll on a small screen with long track labels',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 480);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final audio = _format()
+      ..audioTrack = const AudioTrack(
+          id: 'en',
+          displayName: 'English descriptive audio with an extended label');
+    service = _Metadata(() async => Video(videoId: 'video', adaptiveFormats: [
+          audio,
+          _format(type: 'video/webm', quality: '720p'),
+        ], captions: [
+          Caption('English subtitles with an extended label', 'en', '/captions')
+        ]));
+    await _showSheet(tester);
+    expect(tester.takeException(), isNull);
+    await tester.ensureVisible(find.byIcon(Icons.download));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'playlist options are discarded after the selected account changes',
+      (tester) async {
+    late BuildContext context;
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(body: Builder(builder: (value) {
+        context = value;
+        return const SizedBox.shrink();
+      })),
+    ));
+    final choosing = DownloadModalSheet.showPlaylistOptions(context);
+    await tester.pumpAndSettle();
+    await tester.runAsync(() => db.useServer(account.copyWith(id: 'changed')));
+    await tester.tap(find.text('Download'));
+    await tester.pumpAndSettle();
+    expect(await tester.runAsync(() => choosing), isNull);
   });
 
   for (final switchPerson in [false, true]) {

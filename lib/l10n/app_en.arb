@@ -1384,7 +1384,7 @@
   "onDevice": "On this device",
   "onServer": "On your server",
   "remoteReceive": "Receive from phone",
-  "downloadPlaylist": "Download playlist (720p)",
+  "downloadPlaylist": "Download playlist",
   "downloadsWifiOnly": "Download on Wi-Fi only",
   "downloadsWaitingForWifi": "Waiting for Wi-Fi",
   "downloadPaused": "Paused",
@@ -1771,4 +1771,59 @@
   "playlistLoadFailed": "Could not load the rest of this playlist. Loaded videos are still available.",
   "playlistViewDetails": "View details",
   "playlistPlayAudio": "Play audio from beginning"
+,
+  "downloadFileFormat": "File format",
+  "downloadAutomatic": "Automatic",
+  "downloadWebmAudio": "WebM audio (Opus)",
+  "downloadAudioTrack": "Audio language",
+  "downloadDefaultAudio": "Default audio",
+  "downloadNoSubtitles": "No subtitles",
+  "downloadEmbeddedSubtitles": "Subtitles are included in the video file.",
+  "downloadPlaylistQualityHelp": "Each video uses the selected quality or the closest lower quality available. If all available qualities are higher, the lowest is used. Downloads fail if the selected file format is unavailable.",
+  "playlistTotalDuration": "Total duration {duration}",
+  "playlistKnownDuration": "Known duration {duration}",
+  "playlistUpdated": "Updated {date}",
+  "playlistUpdatedUnknown": "Update date unavailable",
+  "playlistCopyToServer": "Save a copy on server",
+  "playlistCopyServerHelp": "Create a private playlist in your selected server account.",
+  "playlistCopySaved": "Saved on server",
+  "playlistCopyFailed": "Could not finish saving the playlist. Retry to continue the same copy.",
+  "playlistCopyCreateUnconfirmed": "The server did not confirm playlist creation. Check your server library before creating another copy.",
+  "playlistCopySignIn": "Sign in to an Invidious account to save playlists on your server.",
+  "playlistCopyProgress": "Saving {saved} of {total} videos…",
+  "playlistDurationUnknown": "Duration unavailable",
+  "@playlistTotalDuration": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "@playlistKnownDuration": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "@playlistUpdated": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "@playlistCopyProgress": {
+    "placeholders": {
+      "saved": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  }
+
+,
+  "downloadAudioLanguagesUnavailable": "Additional audio languages could not be loaded."
 }

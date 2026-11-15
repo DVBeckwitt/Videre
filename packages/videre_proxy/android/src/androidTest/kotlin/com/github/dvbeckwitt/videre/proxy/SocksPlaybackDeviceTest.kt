@@ -245,10 +245,16 @@ class SocksPlaybackDeviceTest {
     }
 
     @Test(timeout = 45000)
-    fun dashPlaybackSeekAndExternalChildHeadersUseSocks() = adaptivePlayback("dash", "manifest.mpd")
+    fun dashPlaybackSeekAndSameOriginChildrenUseSocks() = adaptivePlayback("dash", "manifest.mpd")
 
     @Test(timeout = 45000)
-    fun hlsPlaybackSeekAndExternalChildHeadersUseSocks() = adaptivePlayback("hls", "manifest.m3u8")
+    fun hlsPlaybackSeekAndSameOriginChildrenUseSocks() = adaptivePlayback("hls", "manifest.m3u8")
+
+    @Test(timeout = 30000)
+    fun dashForeignChildrenFailBeforeSocksConnection() = blockedAdaptiveChild("dash", "manifest.mpd")
+
+    @Test(timeout = 30000)
+    fun hlsForeignChildrenFailBeforeSocksConnection() = blockedAdaptiveChild("hls", "manifest.m3u8")
 
     private fun adaptivePlayback(format: String, manifest: String) {
         val resources = adaptiveAssets(format)
@@ -275,31 +281,58 @@ class SocksPlaybackDeviceTest {
             assertTrue("The manifest did not receive its own scoped headers", root.isNotEmpty() && root.all {
                 it.headers["x-instance-key"] == "fixture"
             })
-            val children = proxy.requests.filter { it.destination.first == "videre-segments.invalid" }
-            assertTrue("No external adaptive segments reached SOCKS", children.isNotEmpty())
-            assertTrue("Instance credentials leaked to an external child", children.all {
-                listOf("authorization", "cookie", "x-instance-key").none(it.headers::containsKey)
+            val children = proxy.requests.filter { it.path != "/$format/$manifest" }
+            assertTrue("No same-origin adaptive segments reached SOCKS", children.isNotEmpty())
+            assertTrue("Same-origin children lost their instance credentials", children.all {
+                it.headers["authorization"] == "Bearer fixture" &&
+                    it.headers["cookie"] == "sid=fixture" && it.headers["x-instance-key"] == "fixture"
             })
             assertTrue("A segment hostname was not forwarded through SOCKS", proxy.destinations.all {
-                it.first in setOf("videre-playback.invalid", "videre-segments.invalid") && it.second == 8123
+                it == ("videre-playback.invalid" to 8123)
             })
             proxy.failure.get()?.let { throw AssertionError("Adaptive SOCKS fixture failed", it) }
         }
     }
 
-    private fun adaptiveAssets(format: String): Map<String, FixtureResource> {
+    private fun blockedAdaptiveChild(format: String, manifest: String) {
+        // The fixture can serve foreign children if the guard regresses. Observe
+        // SOCKS destinations as well as HTTP requests to catch a connection leak.
+        FixtureSocks(adaptiveAssets(format, foreignChildren = true)).use { proxy ->
+            ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", proxy.port).toMap())
+            val source = "http://videre-playback.invalid:8123/$format/$manifest"
+            PlayerProbe(source, mapOf("X-Instance-Key" to "fixture")).use { probe ->
+                val error = probe.awaitFailure("$format foreign child refusal")
+                assertTrue("Foreign child failed for an unrelated reason",
+                    generateSequence<Throwable>(error) { it.cause }.any { it is SelectedOriginBlocked })
+                assertEquals("A foreign child must not render video", 0, probe.videoFrames.get())
+                assertEquals("A foreign child must not render audio", 0, probe.audioBuffers())
+            }
+            assertTrue("The admitted manifest was not fetched", proxy.requests.any {
+                it.path == "/$format/$manifest"
+            })
+            assertTrue("A foreign child reached the SOCKS handshake", proxy.destinations.all {
+                it == ("videre-playback.invalid" to 8123)
+            })
+            assertTrue("A foreign child sent an HTTP request", proxy.requests.all {
+                it.path == "/$format/$manifest"
+            })
+            proxy.failure.get()?.let { throw AssertionError("Adaptive SOCKS fixture failed", it) }
+        }
+    }
+
+    private fun adaptiveAssets(format: String, foreignChildren: Boolean = false): Map<String, FixtureResource> {
         val assets = instrumentation.context.assets
         return checkNotNull(assets.list(format)).associate { name ->
             var bytes = assets.open("$format/$name").use { it.readBytes() }
-            // Make children independent, cross-origin requests. A redirect-only
-            // credential guard cannot pass these tests.
-            if (name.endsWith(".mpd")) {
+            // The refusal cases use independent cross-origin requests. A
+            // redirect-only guard cannot pass these tests.
+            if (foreignChildren && name.endsWith(".mpd")) {
                 val external = "http://videre-segments.invalid:8123/$format/"
                 bytes = bytes.toString(Charsets.UTF_8)
                     .replace("initialization=\"", "initialization=\"$external")
                     .replace("media=\"", "media=\"$external")
                     .toByteArray(Charsets.UTF_8)
-            } else if (name.endsWith(".m3u8")) {
+            } else if (foreignChildren && name.endsWith(".m3u8")) {
                 bytes = bytes.toString(Charsets.UTF_8).lineSequence().joinToString("\n") { line ->
                     if (line.isNotBlank() && !line.startsWith("#")) {
                         "http://videre-segments.invalid:8123/$format/$line"
@@ -474,6 +507,15 @@ class SocksPlaybackDeviceTest {
             }
             throw AssertionError("Timed out waiting for $label; frames=${videoFrames.get()}, " +
                 "audioBuffers=${audioBuffers()}, position=${position()}")
+        }
+
+        fun awaitFailure(label: String, timeoutMs: Long = 15000): PlaybackException {
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs
+            while (SystemClock.elapsedRealtime() < deadline) {
+                error.get()?.let { return it }
+                SystemClock.sleep(50)
+            }
+            throw AssertionError("Timed out waiting for $label")
         }
 
         override fun close() {
