@@ -172,18 +172,21 @@ def logo_geometry():
     return geometry
 
 
-def axis_ceiling(total):
-    desired_step = max(total, 1) / 4
-    magnitude = 10 ** math.floor(math.log10(desired_step))
-    step = next(n * magnitude for n in (1, 2, 4, 5, 10) if n * magnitude >= desired_step)
-    return max(1, math.ceil(step)) * 4
+def axis_scale(total):
+    """Choose integer ticks and place the top tick just above the data."""
+    desired_step = max(1, (total + 4) // 5)
+    magnitude = 10 ** (len(str(desired_step)) - 1)
+    step = next(multiplier * magnitude for multiplier in (1, 2, 5, 10)
+                if multiplier * magnitude >= desired_step)
+    return step, max(4, (total // step + 1) * step)
 
 
 def render_svg(snapshot):
     points = cumulative_series(snapshot)
     start, end, total = points[0][0], points[-1][0], points[-1][1]
-    ceiling = axis_ceiling(total)
-    left, right, top, bottom = 150, 1440, 230, 625
+    step, ceiling = axis_scale(total)
+    left = max(30, 12 + 7 * len(f"{ceiling:,}"))
+    right, top, bottom = 410, 33, 124
     x = lambda stamp: left + (stamp - start) / (end - start) * (right - left)
     y = lambda count: bottom - count / ceiling * (bottom - top)
     line = f"M {left} {bottom}"
@@ -193,33 +196,25 @@ def render_svg(snapshot):
     logo = "".join(f'<path d="{data}" fill="{fill}"/>' for data, fill in logo_geometry())
     repository = escape(snapshot["repository"])
     fetched = snapshot["fetched_at"]
+    total_label = f'{total:,} {"star" if total == 1 else "stars"}'
     parts = [
-        '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800" viewBox="0 0 1600 800" role="img" aria-labelledby="title description">',
-        f'<title id="title">Videre star history — {total:,} stars</title>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="150" viewBox="0 0 420 150" role="img" aria-labelledby="title description">',
+        f'<title id="title">Videre star history — {total_label}</title>',
         f'<desc id="description">Cumulative daily star counts for {repository}, from GitHub aggregate star history, fetched {fetched} UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>',
-        '<defs>',
-        '<linearGradient id="panel" x2="1" y2="1"><stop stop-color="#20274f"/><stop offset="1" stop-color="#171c3a"/></linearGradient>',
-        '<linearGradient id="violet"><stop stop-color="#5a00a8"/><stop offset="1" stop-color="#9c1ef5"/></linearGradient>',
-        '<linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#9c1ef5" stop-opacity=".30"/><stop offset="1" stop-color="#9c1ef5" stop-opacity=".01"/></linearGradient>',
-        '<filter id="glow" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="4"/></filter>',
-        '</defs>',
-        '<rect x="3" y="3" width="1594" height="794" rx="38" fill="#1c2245"/>',
-        '<rect x="4" y="4" width="1592" height="792" rx="37" fill="url(#panel)" stroke="#9c1ef5" stroke-opacity=".65" stroke-width="2"/>',
+        '<style>',
+        '.heading { fill: #242037; } .tick { fill: #5d586f; }',
+        '@media (prefers-color-scheme: dark) { .heading { fill: #f4f1ff; } .tick { fill: #a9a4bc; } }',
+        '</style>',
         '<g font-family="Segoe UI, Helvetica, Arial, sans-serif">',
-        f'<g transform="translate(34 -4) scale(.4)">{logo}</g>',
-        '<text x="225" y="145" fill="#9c1ef5" font-size="90" font-weight="600" letter-spacing="-2">Videre</text>',
-        '<path d="M 1092 68 L 1097 85 L 1114 90 L 1097 95 L 1092 112 L 1087 95 L 1070 90 L 1087 85 Z" fill="#cda4ff" opacity=".8"/>',
-        '<text x="1450" y="104" fill="#eee9ff" font-size="31" font-weight="600" letter-spacing="6" text-anchor="end">STAR HISTORY</text>',
-        f'<text x="1450" y="146" fill="#aaaac7" font-size="22" text-anchor="end">{repository}</text>',
-        f'<g transform="translate(100 60) scale(1.45)" opacity=".13">{logo}</g>',
+        f'<g transform="translate({left - 7} -1) scale(.065)">{logo}</g>',
+        f'<text x="{left + 25}" y="20" class="heading" font-size="15" font-weight="600">Star history</text>',
+        f'<text x="{right}" y="20" class="heading" font-size="15" font-weight="600" text-anchor="end">{total_label}</text>',
     ]
-    for index in range(5):
-        count = ceiling * index // 4
+    for count in range(0, ceiling + 1, step):
         height = y(count)
-        tick_size = min(23, 170 / len(f"{count:,}"))
         parts += [
-            f'<line x1="{left}" y1="{height:.2f}" x2="{right}" y2="{height:.2f}" stroke="#a7a8d0" stroke-opacity=".14"/>',
-            f'<text x="{left - 24}" y="{height + 7:.2f}" fill="#bfc0d8" font-size="{tick_size:.2f}" text-anchor="end">{count:,}</text>',
+            f'<line x1="{left}" y1="{height:.2f}" x2="{right}" y2="{height:.2f}" stroke="#827a9c" stroke-opacity=".22"/>',
+            f'<text x="{left - 6}" y="{height + 4:.2f}" class="tick" font-size="11" text-anchor="end">{count:,}</text>',
         ]
     span = end - start
     if span > 60 * DAY:
@@ -232,30 +227,25 @@ def render_svg(snapshot):
                             for month in months[::stride]] + [end]
     else:
         stamps = [start + span * index / 3 for index in range(4)]
+    date_ticks = [start]
+    for stamp in stamps[1:-1]:
+        if x(stamp) - x(date_ticks[-1]) >= 64 and right - x(stamp) >= 64:
+            date_ticks.append(stamp)
+    date_ticks.append(end)
     previous_label = None
-    for index, stamp in enumerate(stamps):
+    for index, stamp in enumerate(date_ticks):
         tick_date = datetime.fromtimestamp(stamp, timezone.utc)
         month_label = MONTHS[tick_date.month - 1]
         label = f"{month_label} {tick_date.year}" if span > 180 * DAY else f"{month_label} {tick_date.day:02}"
         if label == previous_label:
             continue
         previous_label = label
-        anchor = "start" if index == 0 else "end" if index == len(stamps) - 1 else "middle"
-        parts += [
-            f'<line x1="{x(stamp):.2f}" y1="{top}" x2="{x(stamp):.2f}" y2="{bottom}" stroke="#a7a8d0" stroke-opacity=".06"/>',
-            f'<text x="{x(stamp):.2f}" y="674" fill="#bfc0d8" font-size="23" text-anchor="{anchor}">{label}</text>',
-        ]
-    label_y = max(top + 28, y(total) - 27)
-    label_size = min(34, 400 / max(len(f"{total:,} stars"), 1))
+        anchor = "start" if index == 0 else "end" if index == len(date_ticks) - 1 else "middle"
+        parts.append(f'<text x="{x(stamp):.2f}" y="142" class="tick" font-size="11" text-anchor="{anchor}">{label}</text>')
     parts += [
-        f'<path d="{area}" fill="url(#area)"/>',
-        f'<path d="{line}" fill="none" stroke="#9c1ef5" stroke-width="9" opacity=".35" filter="url(#glow)"/>',
-        f'<path d="{line}" fill="none" stroke="#b347ff" stroke-width="4" stroke-linejoin="round"/>',
-        f'<circle cx="{right}" cy="{y(total):.2f}" r="11" fill="#9c1ef5" opacity=".3"/>',
-        f'<circle cx="{right}" cy="{y(total):.2f}" r="5" fill="#ead4ff"/>',
-        f'<text x="{right}" y="{label_y:.2f}" fill="#eee5ff" font-size="{label_size:.2f}" font-weight="600" text-anchor="end">{total:,} {"star" if total == 1 else "stars"}</text>',
-        '<text x="100" y="746" fill="#a3a5c4" font-size="21">GitHub star history · cumulative daily counts</text>',
-        f'<text x="1500" y="746" fill="#a3a5c4" font-size="21" text-anchor="end">Updated {fetched} UTC</text>',
+        f'<path d="{area}" fill="#7c3aed" fill-opacity=".14"/>',
+        f'<path d="{line}" fill="none" stroke="#9b64f4" stroke-width="2" stroke-linejoin="round"/>',
+        f'<circle cx="{right}" cy="{y(total):.2f}" r="3" fill="#9b64f4"/>',
         '</g>',
         '</svg>',
     ]

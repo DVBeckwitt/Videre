@@ -1,145 +1,92 @@
 # Videre
 
-[![Videre — GitHub star history, refreshed daily](./assets/star-history.svg)](./docs/star-history.md)
+[<img src="./assets/star-history.svg" align="right" width="420" hspace="12" alt="Videre GitHub star history, refreshed daily">](./docs/star-history.md) **I wanted Invidious’s privacy-first approach on Android phones, tablets, and TVs. With Videre, I aim to keep you in control of your server, your connection, and your library.**
 
-**I wanted and aim to provide [Invidious](https://invidious.io)’s privacy-first approach implemented for Android phones, tablets, and TVs, keeping you in control of your server and connection.**
+Watch, listen, and download through a public Invidious instance or your own server, which retrieves YouTube content for you. No Google account is required, and Invidious accounts are optional. [About Invidious](https://invidious.io)
 
-Watch, listen, and download through a public Invidious instance or your own server. No Google account required; Invidious accounts are optional.
-
-Videre connects to your chosen Invidious instance, which retrieves YouTube content on your behalf.
-
-Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Videre, ask questions, and share ideas.
+Come talk about Videre, ask questions, and share ideas in our [Matrix chat](https://matrix.to/#/#Videre:matrix.org).
 
 **[Download the latest APK](https://github.com/DVBeckwitt/Videre/releases/latest)** · Android 7.0+ · [Report a bug](https://github.com/DVBeckwitt/Videre/issues)
 
 [![Build](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml/badge.svg)](https://github.com/DVBeckwitt/Videre/actions/workflows/build.yml)
 [![License: AGPL v3+](https://shields.io/badge/License-AGPL%20v3%2B-blue.svg)](./LICENSE)
 
-<p>
-  <a href="./screenshots/videre-invidious.png"><img src="./screenshots/videre-invidious.png" alt="An Invidious client: connect to a public instance or your own server" width="24%"></a>
-  <a href="./screenshots/videre-sponsorblock.png"><img src="./screenshots/videre-sponsorblock.png" alt="SponsorBlock playback controls" width="24%"></a>
-  <a href="./screenshots/videre-dislikes.png"><img src="./screenshots/videre-dislikes.png" alt="Estimated dislike counts" width="24%"></a>
-  <a href="./screenshots/videre-private-library.png"><img src="./screenshots/videre-private-library.png" alt="Local playlists" width="24%"></a>
-</p>
+| YouTube video playback | YouTube Music through Invidious | RSS feeds |
+|:---:|:---:|:---:|
+| [<img src="./screenshots/videre-video.png" alt="Videre video player showing Spring with playback controls visible" width="260">](./screenshots/videre-video.png) | [<img src="./screenshots/videre-music.png" alt="Music Home with saved songs and genre searches" width="260">](./screenshots/videre-music.png) | [<img src="./screenshots/videre-podcasts.png" alt="Add a publisher’s RSS podcast feed" width="260">](./screenshots/videre-podcasts.png) |
+
+Captured from Videre 1.22.46 on Android. The player shows *Spring* © Blender Foundation, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). [Film credits](https://studio.blender.org/projects/spring/pages/about/) · [Screenshot details](./docs/store-artwork.md#readme-figures)
 
 ## Features
 
-![Videre features: SponsorBlock, Dislike Counts, Local Library, Background Playback, Watch Offline, Saved Playback, Export/Import Profiles, and TV Streaming.](./assets/features.png)
+![Sponsor Block, Local Library, Background Playback, Offline Downloads, TV Remote, YouTube Music, and RSS Feeds.](./assets/features.png)
 
-- **SponsorBlock.** Skip community-marked sponsor segments by default.
-- **Dislike Counts.** Estimates from Return YouTube Dislike, enabled by default.
-- **Local Library.** Save subscriptions, Watch Later, playlists, and history on your device without an account.
-- **People and Accounts.** Add, rename, and delete local profiles, each with its own library and saved accounts. Profiles remain accessible from Welcome before adding a server. Deletion keeps downloaded media files and protects the last profile. See [profile management](./docs/profiles-and-authentication.md#manage-profiles).
-- **Watched Status.** Mark videos watched or unwatched on phone and TV; signed-in accounts retry pending changes to server history.
-- **Protected Servers.** HTML form-based gateways use an isolated, protected browser session for each account. Page JavaScript is disabled except during temporary, direct HTTPS NerdVPN sign-in.
-- **NerdVPN API access.** Browser sign-in retrieves your API key when eligible, keeps it encrypted on Android, and shows the instance's waiting or disabled-access status.
-- **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
-- **Music.** Use the top Videos/Music switch on phones, tablets, and TVs. Home prioritizes saved songs and artist/genre search suggestions through your selected Invidious instance. Optional discovery loads only on request, checks the instance’s Music category and limits requests, including serial loading over Tor/SOCKS; it replaces the unreliable music trending feed. Search finds songs, channels, and public playlists. Library keeps saved songs and channels, public bookmarks, and local playlists you can create, edit, play, and resume, with audio downloads on phones and tablets. The Muzza-inspired artwork player includes a compact music bar, queue controls, saved-session resume, and a Sound panel with speed, pitch and optional session-only Android equalization. Choose Videos and Music, Videos only, or Music only under **Settings → Browsing → Home experience** or in the home customizer. Music does not contact YouTube Music directly. YouTube Music's exclusive catalog pages are removed; legacy album bookmarks remain stored and backed up but hidden from Library. See [Music browsing, playback, and local library](./docs/music.md).
-- **Watch Offline.** Video, audio, and playlist downloads on phones and tablets, with pause, resume, retry, and Wi-Fi-only mode.
-- **Saved Playback.** Remember playback positions when reopening videos on phone or TV.
-- **Export/Import Profiles.** Back up and restore your local library and preferences as JSON, or import NewPipe subscriptions.
-- **TV Streaming.** Pair Videre on your phone and TV over Wi-Fi. Send the current video and position, then control play/pause from your phone.
-
-Also included: searchable transcripts with seek and copy, subtitles, video filters, and DeArrow.
+- **Sponsor Block.** Skip community-marked sponsor segments automatically.
+- **Local Library.** Keep subscriptions, Watch Later, playlists, and history on your device, with separate profiles for each person. [Library and profiles](./docs/profiles-and-authentication.md)
+- **Background Playback.** Keep listening with background audio, picture-in-picture, and a sleep timer.
+- **Offline Downloads.** Save videos, audio, and playlists on phones and tablets, with quality choices, pause, resume, retry, and Wi-Fi-only transfers.
+- **TV Remote.** Send the current video and position to Videre on your TV over trusted Wi-Fi, then control play/pause from your phone.
+- **YouTube Music.** Find music from YouTube through your chosen Invidious instance, save songs, build playlists, and use the dedicated audio player. Import songs from a local Google Takeout file. [Music guide](./docs/music.md)
+- **RSS Feeds.** Add publisher podcast feeds, listen in the background, save episodes offline, and pick up where you left off. [Podcast guide](./docs/podcasts.md)
 
 ## Start watching
 
-1. **Install.** Download `app-release.apk` from [GitHub Releases](https://github.com/DVBeckwitt/Videre/releases/latest) and allow installation if Android asks. One APK supports phones, tablets, and TVs.
-2. **Add a server.** On the Add server screen, choose **Public instances** or enter your own server address. Select **Test and add server**.
-3. **Watch.** Find videos, follow channels, or save to Watch Later. No account required.
+1. Download `app-release.apk` from GitHub Releases and allow installation if Android asks. One APK supports phones, tablets, and TVs.
+2. Choose **Public instances** or enter your server address, then select **Test and add server**.
+3. Find videos, follow channels, and save to Watch Later.
 
-Add more addresses in **Settings → Manage servers → Add server**. Switch with **Use this server**; saved addresses and per-server logins are retained. Accounts stay with their original instance.
+Add or switch instances in **Settings → Manage servers**. Saved logins stay with their original instance. Open **Profiles** from Home or Settings to manage people. Profiles organize a shared device without a PIN.
 
-Open **Profiles** from the home screen or Settings to add, rename, or switch people. Your existing library becomes **Default**. Each person has separate history, resume positions, Watch Later, playlists, subscriptions, and downloads. Profiles organize a shared device; they do not require a PIN. Portable JSON backups export the current person's library without saved account credentials.
+For playback problems, **Connection help** checks the video API and offers retry, instance switching, or a link to the instance’s video page. Availability depends on your server.
 
-For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
+Videre suggests F5 and NerdVPN. These are dated checks, and availability can change.
 
-For `invidious.nerdvpn.de`, ordinary account sign-in offers **Sign in with browser** when Videre's network proxy is off. This opens Android's default browser and returns securely to Videre after authorization. The browser uses its own cookies and network settings; Videre never disables its proxy automatically. **Sign in in app** instead enables JavaScript for a temporary session restricted to NerdVPN's HTTPS origin. Proxy and onion sign-in remain script-disabled. Manual API-key setup enables browsing and playback without signing into server history or subscriptions. Your existing NerdVPN account stays saved if API access is not yet available, and settings show its eligibility date. Existing accounts can sign in again to grant API-key access or enter a key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**. For ordinary HTTP instances, use the cookie sign-in form.
+| Instance | Last recorded check |
+|---|---|
+| [F5](https://invidious.f5.si) | October 9, 2026 — search, video data, and a media sample passed. Full Android playback remains unverified. |
+| [NerdVPN](https://invidious.nerdvpn.de) | November 10, 2026 — Android emulator checks covered video and Music playback, captions, background controls, and downloaded audio. An API key is required. [Coverage and limits](./docs/verification/nerdvpn-default-privacy.md) |
 
-The official NerdVPN onion address also supports API-key setup. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, copy the preferences address into Tor Browser, then enter the key in Videre. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
+Nadeko is excluded from suggestions while its operator disables third-party API access. Existing saved entries remain available. [Verification](./docs/verification/issue-38-nadeko.md)
 
-Onion playback offers the compatible qualities provided by the instance. With adaptive playback, the quality picker sets a maximum and can play at a lower quality as bandwidth changes. Tor bandwidth and latency can cause buffering at higher bitrates, and lowering the maximum can help. Videre keeps requests on the selected onion address, including when a stream cannot load there.
+To run your own instance, follow the [Invidious installation guide](https://docs.invidious.io/installation/).
 
-For playback problems, **Connection help** checks the video API and lets you switch instances or copy the instance's video address. Transient video-detail failures receive one automatic same-route retry with visible feedback. Server cooldowns and access/privacy refusals are respected; manual Retry remains available after recovery is exhausted.
+## Your connection and privacy
 
-This README describes the current source. Check release notes for your APK's features.
+Your instance operator affects privacy and reliability. YouTube video, audio, downloads, and artwork use the selected Invidious proxy. Music browsing uses that instance too. If it cannot proxy a stream, playback fails. Shared links use your selected instance.
 
-## Public instances
+SponsorBlock, Return YouTube Dislike, and DeArrow contact their own services. Podcast feeds and audio come from publishers through your configured proxy. Local and server libraries remain separate. [Privacy policy](./docs/privacy.html)
 
-Videre suggests F5 and NerdVPN from the [official Invidious directory](https://docs.invidious.io/instances/). The table shows the last check date for each supported suggestion:
+For Orbot, open **Settings → Network proxy → Use Orbot preset** and start Orbot’s SOCKS listener. The editable preset is `127.0.0.1:9050`. Applying a connection change stops playback and pauses downloads. An enabled proxy must be available for internet requests to work. [SOCKS5 setup](./docs/socks-proxy.md)
 
-| Public host | Browser | Videre | Last checked |
-|---|---|---|---|
-| [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
-| [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Android playback verified; API key required† | 10 November 2026 |
-
-Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
-
-Nadeko is excluded from the server chooser while its operator disables third-party API access; its media proxy still returns `403 Endpoint disabled` ([verification](./docs/verification/issue-38-nadeko.md)). Existing saved entries and custom addresses are retained. A successful video API test does not establish that the instance can stream media.
-
-\* Source checks cover search, video data, and a media sample. Full Android playback is unverified; availability may change.
-
-† NerdVPN saved login after cold boot, authenticated API access, video and Music playback, captions, background controls, and downloaded audio playback passed on the Android test emulator. Availability depends on the instance; a transient video-metadata error recovered on Retry. See the [acceptance record](./docs/verification/nerdvpn-default-privacy.md) for coverage and limits.
-
-For self-hosting, see the [Invidious project](https://github.com/iv-org/invidious) and [installation guide](https://docs.invidious.io/installation/).
+Protected HTTPS servers support gateway sign-in with Android WebView isolated-profile support. NerdVPN offers external browser sign-in when Videre’s proxy is off, plus in-app sign-in and manual API keys. Settings shows API eligibility. The external browser uses its own network settings. Onion access requires SOCKS/Orbot setup and a key for that exact server address. [Sign-in and API-key guide](./docs/profiles-and-authentication.md)
 
 ## Useful tips
 
-**Player controls.** On phones, pull down from the top of the description or comments to minimize the player. Press Home for picture-in-picture where supported and enabled in Android settings. Closing that window keeps audio playing; use the notification to pause or stop.
+- **Player.** Pull down from the description or comments to minimize. Press Home for picture-in-picture where supported. Closing that window keeps audio playing, which you can stop from the notification.
+- **Quality and queue.** Set remembered quality and **Autoplay next in queue** in **Settings → Video player**. Adaptive quality sets a maximum and may drop with bandwidth.
+- **Downloads.** Choose **Settings → Download folder** for new files. Reopen Videre to recover interrupted transfers. Deleting a download deletes its saved file. Reconnect removable storage before retrying.
+- **Navigation.** Use the home pencil button or **Settings → Browsing → Customize app sections** to reorder tabs and icons, hide sections, and choose a startup tab.
+- **Watch Later and playlists.** Choose **Add to playlist → Watch Later** from a video’s menu. Signed-in users can use **Save a copy on server** after a playlist fully loads.
+- **TV history.** **On this device** includes local progress. **On your server** shows the selected account’s history, which excludes playback positions.
+- **TV remote.** Select **Receive from phone** on TV, then enter its IP, port, and six-digit code under **Send to TV / remote control** on your phone. Pairing uses unencrypted local HTTP.
+- **Backups.** Use **Export backup** or **Restore or import subscriptions** in Settings. Review the preview before merging or replacing, then reopen Videre. Credentials, downloaded files, and podcast subscriptions and progress are excluded.
 
-**Seek previews.** Drag the phone's seek bar to see a thumbnail and target time before releasing to seek. On TV, seeking with Left/Right or the rewind/forward buttons briefly shows the target frame. Thumbnails require storyboard images from the video's Invidious server; otherwise the preview shows the time. Live streams and offline videos have no thumbnail previews.
+## Updates and contributing
 
-**Video quality.** Videre remembers the quality you select for later videos, including after reopening the app. If that resolution is unavailable, it prefers the closest lower resolution, or the lowest available if all are higher. Turn this off with **Remember video quality** in **Settings → Video player** (also available in TV settings). Downloads keep their own quality selection.
+Update through GitHub Releases or add this repository to Obtainium. APK updates require the same signing key. This README describes current source, so check release notes for your APK’s features. [Release notes](https://github.com/DVBeckwitt/Videre/releases)
 
-**Download folder.** Choose a folder with **Settings → Download folder** or the folder button in **Downloads**. New downloads use that folder; existing files stay where they are. Videre temporarily assembles media in app storage, then saves the finished file in your chosen folder for offline playback and access from other apps. App storage remains the default. Folder permissions are device-specific and excluded from backups. If removable storage is disconnected or access is revoked, reconnect it or choose the same folder again before retrying. Deleting a download also deletes its saved file; files in a chosen folder otherwise survive uninstalling Videre.
+Videre and Clipious install separately. Set up Videre before removing Clipious, since Android does not transfer their data and Videre cannot directly import Clipious app storage.
 
-**SOCKS5 / Orbot.** Open **Settings → Network proxy**, select **Use Orbot preset**, and start Orbot with its SOCKS listener enabled. The editable preset is `127.0.0.1:9050`; Orbot VPN mode is not required. Save proxy settings before adding your first server; once a server is selected, use **Test connection**. Applying a change stops playback and pauses unfinished downloads; resume them afterward. Saving unchanged settings does not interrupt them. Internet requests fail when the enabled proxy is unavailable. Protected-server sign-in follows the configured proxy and requires WebView proxy-override support. External links, including onion preferences, are copy-only; open a copied onion address yourself in Tor Browser to obtain an API key. Phone/TV remote control stays on the LAN. Native and full-app Orbot playback have been checked on a Pixel 8 Pro; public-instance video availability remains separate. See [coverage and verification limits](./docs/socks-proxy.md).
+Thanks to weidenwiesel at NerdVPN for bouncing ideas around with me and for running a public Invidious instance that Videre users can connect to over HTTPS with an API key. [NerdVPN](https://nerdvpn.de/) · [weidenwiesel on GitHub](https://github.com/Sommerwiesel)
 
-**Subscriptions.** Enable **Settings → Browsing → Hide watched subscription videos** to hide watched videos from subscription feeds, including home sections and TV. This uses the current person's watched status. Manual choices take priority; local playback counts as watched at 90% completion, and imported server history counts when no local playback state exists. Partly played videos stay visible unless manually marked watched. Turn the setting off to show everything again. When a page is entirely hidden, use **Load more** to reach older videos.
+Send bugs and ideas through **Settings → Bugs and suggestions** in supported builds, or through GitHub Issues. The in-app form works without a GitHub account. Screenshots and diagnostics are optional and off by default. Review the public report before sending. [GitHub Issues](https://github.com/DVBeckwitt/Videre/issues)
 
-**Phone navigation.** Open the home pencil button → **Navigation**, or **Settings → Browsing → Customize app sections**. Hold and drag items to reorder them or move them between **Bottom tabs**, **Top icons**, and **Hidden**. Tap an item for move options or to choose a startup tab. Changes save automatically and are included in library backups. Keep 2–5 bottom items, including at least one main screen tab; Settings stays available. **Restore default navigation** returns to Home, Subscriptions, History, Search below and Downloads, Queue, Playlists above. Tablet and TV layouts have their own settings.
-
-**TV history.** Open **History** in the TV sidebar. **On this device** shows locally watched videos, including saved playback progress. When signed in, **On your server** shows history from the selected Invidious account; use the same instance and account to find videos watched on another device. Server history does not include playback positions. Use **Refresh** to check for new entries. History can be hidden in the TV layout settings without changing your phone layout.
-
-**Queue autoplay.** Use **Autoplay next in queue** in the queue screen, **Settings → Video player**, or TV settings. It is on by default. Turn it off to stop when each video ends, including in repeat mode; your queue stays available and Next or selecting a queued video still works. The setting also applies to background audio and downloads, survives restarts and backups, and is separate from autoplay when first opening a video.
-
-**Backups.** In Settings, use **Export backup** to save your local library, filters, and preferences. Use **Restore or import subscriptions** for Videre backups or NewPipe subscriptions JSON. Preview, then merge or replace local data. Logins and downloads are excluded. Reopen Videre after restoring.
-
-**Google Takeout music import.** In Music → Library, use the import button, or choose **Settings → Import Google Takeout**. Select a Takeout ZIP or song/playlist CSV saved on your device, review the collection, then choose **Import songs**. Songs are merged into the current profile's local Music library. Importing reads only the local file: no Google login, network lookup, artwork fetch, or server upload. See [supported formats and limits](./docs/music.md#google-takeout-import).
-
-**Podcasts.** In **Music → Library → Podcasts**, add a publisher's RSS feed link. Subscriptions and listening positions stay in the current local profile. Episodes resume where you stopped, including after restarting Videre. Play with background audio, or download episodes to private app storage for offline listening. Feed and audio requests use the publisher and your configured proxy; Google/YouTube destinations and account headers are blocked. See [podcast controls, privacy, and limits](./docs/podcasts.md).
-
-**Downloads.** Phones and tablets only. Choose a quality and MP4 or WebM for videos, or M4A or audio WebM for audio-only downloads. Playlist downloads use the selected quality, choosing a supported lower quality when needed. Single-video downloads also offer available audio languages and embedded subtitles. Options depend on the tracks provided by your server. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.
-
-**Playlist details.** Playlist screens show video count, combined duration, and the last update date when available. Partial duration is labeled while entries are loading or have unknown lengths. When signed into an Invidious account, use **Save a copy on server** to create a private copy after every entry has loaded. A failed copy can resume from the videos already saved on the server.
-
-**Watch Later.** Open a video's menu, choose **Add to playlist**, then **Watch Later**. On phones, open the Playlists button in the top bar to find it again. Watch Later is stored on your device and needs no account.
-
-**Phone remote.** Open Videre on both devices on the same trusted Wi-Fi. On TV, select **Receive from phone**. On your phone, open **Send to TV / remote control**, enter the TV's IP, port, and six-digit code, then **Send current video**. Position and play/pause state transfer; control play/pause from your phone. Uses unencrypted local HTTP; no Chromecast or automatic discovery.
-
-## Updates, migration, and privacy
-
-**Updates.** Add `https://github.com/DVBeckwitt/Videre` to Obtainium as a GitHub source. APK updates require the same signing key. Videre is not on F-Droid, IzzyOnDroid, Accrescent, or Google Play; Clipious is a separate app.
-
-**Moving from Clipious.** Videre (`com.github.dvbeckwitt.videre`) and Clipious (`com.github.lamarios.clipious`) install separately. Set up Videre before removing Clipious: Android does not transfer their data, and Videre cannot import Clipious app storage directly.
-
-**Privacy.** Local and server libraries are separate. The instance operator affects privacy and reliability. YouTube avatars, banners, video thumbnails, and saved Music covers use the selected Invidious instance's image proxy, including notification and download artwork. Unsupported Google artwork is skipped; image failures do not retry the original Google URL. Music browsing and search use the selected Invidious server without contacting YouTube Music directly. Third-party artwork such as DeArrow still uses its own service. Video, audio, and downloads always use the selected Invidious media proxy. Direct YouTube/Google playback is unavailable, including through old preferences or a server redirect; if the instance cannot proxy a stream, playback fails without a direct fallback. SponsorBlock and Return YouTube Dislike contact their services directly; both default to on and can be disabled in Settings. See the [privacy policy](./docs/privacy.html).
-
-**Sharing.** Videre shares links on your selected Invidious instance. Supported links in descriptions and comments open within Videre and use the selected Invidious address when copied.
-
-## Contributing
-
-Report bugs and suggestions through **Settings → Bugs and suggestions** in builds connected to the feedback service, or through [GitHub Issues](https://github.com/DVBeckwitt/Videre/issues). The in-app form supports bugs and suggestions without a GitHub account. Diagnostics and screenshots are optional and off by default. Review the public report before sending; drafts stay in app storage until you send them. Failed or unconfirmed submissions keep the same report for retry, and confirmed issue links are saved under **My reports**.
-
-The account-free flow requires a hosted relay and a repository-scoped GitHub App. Deployment, privacy boundaries, local testing, and build configuration are documented in [services/feedback/README.md](services/feedback/README.md). An APK without a configured relay can save drafts but cannot submit them. No GitHub credentials belong in the APK.
-
-Videre is an independently maintained [Clipious](https://github.com/lamarios/clipious) fork with transcript search, improved navigation, and local library features. Translations live in `lib/l10n/*.arb`. Keep pull requests focused; reuse existing code and remove obsolete alternatives.
-
+In-app submission requires a configured feedback relay. Builds without one can save drafts. Translations live in `lib/l10n/*.arb`. Keep pull requests focused, reuse existing code, and remove obsolete alternatives. [Feedback service setup](./services/feedback/README.md)
 
 ## Credits and license
 
-The name Videre ("to watch") is a nod to Invidious' Latin roots.
+Videre is an independently maintained Clipious fork. The name means “to watch,” a nod to Invidious’s Latin roots. [Clipious](https://github.com/lamarios/clipious)
 
-Original Clipious code: Copyright (C) 2023 Paul Fauchon and contributors. Videre modifications: Copyright (C) 2026 DVBeckwitt and Videre contributors.
+Original Clipious code © 2023 Paul Fauchon and contributors. Videre modifications © 2026 DVBeckwitt and Videre contributors.
 
-Licensed under the [GNU Affero General Public License v3.0 or later](./LICENSE), without warranty. Videre is not affiliated with Google, YouTube, Invidious, or the original Clipious maintainers. Users are responsible for the laws and terms that apply to their use of the app and their selected instance.
+Licensed under the GNU Affero General Public License v3.0 or later, without warranty. Videre is unaffiliated with Google, YouTube, Invidious, or the original Clipious maintainers. Users are responsible for applicable laws and terms. [License](./LICENSE)

@@ -7,8 +7,9 @@ counts. [View the full chart](../assets/star-history.svg) or inspect its
 The [Star history workflow](../.github/workflows/star-history.yml) refreshes the
 chart daily at 11:37 UTC, and can also be run manually from
 [GitHub Actions](https://github.com/DVBeckwitt/Videre/actions/workflows/star-history.yml).
-Scheduled runs can be delayed by GitHub. The chart displays its last refresh date;
-if a fetch or validation fails, the previous committed chart remains available.
+Scheduled runs can be delayed by GitHub. The source snapshot and SVG description
+record the last refresh date. If a fetch or validation fails, the previous
+committed chart remains available.
 
 ## Data and interpretation
 
@@ -46,6 +47,6 @@ The workflow uses GitHub's built-in token. Pull requests run validation with rea
 access; only the update job on this repository's `master` branch can commit the
 two generated assets. Its bot commits do not trigger another Actions run.
 
-Edit `tools/star_history.py` for chart design changes. The play symbol comes from
+Edit `tools/star_history.py` for chart design changes. The logo comes from
 `assets/icon.svg`. Regenerate the SVG afterward; CI checks that the committed SVG
 matches its data and renderer on Linux and Windows.

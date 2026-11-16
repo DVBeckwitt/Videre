@@ -108,7 +108,8 @@ class StarHistoryTests(unittest.TestCase):
             svg = history.render_svg(value)
             self.assertEqual(svg, history.render_svg(deepcopy(value)))
             root = ET.fromstring(svg)
-            self.assertIn(f"{count:,} stars", root.find("{http://www.w3.org/2000/svg}title").text)
+            unit = "star" if count == 1 else "stars"
+            self.assertIn(f"{count:,} {unit}", root.find("{http://www.w3.org/2000/svg}title").text)
             self.assertNotIn("NaN", svg)
             self.assertNotIn("Infinity", svg)
             for element in root.iter():
@@ -116,7 +117,9 @@ class StarHistoryTests(unittest.TestCase):
                 self.assertFalse(any(key.startswith("on") or key.endswith("href") for key in element.attrib))
             paths = [element.attrib["d"] for element in root.iter("{http://www.w3.org/2000/svg}path")]
             self.assertTrue(any(" H " in path and " V " in path for path in paths))
-            self.assertGreaterEqual(history.axis_ceiling(count), max(count, 1))
+            step, ceiling = history.axis_scale(count)
+            self.assertGreater(ceiling, count)
+            self.assertEqual(ceiling % step, 0)
         self.assertEqual(history.cumulative_series(snapshot([]))[-1][1], 0)
         ET.fromstring(history.render_svg(snapshot([])))
 
@@ -129,7 +132,14 @@ class StarHistoryTests(unittest.TestCase):
         actual = [(path.attrib["d"], path.get("fill"))
                   for path in chart.iter("{http://www.w3.org/2000/svg}path")]
         for path in expected:
-            self.assertEqual(actual.count(path), 2)
+            self.assertEqual(actual.count(path), 1)
+
+    def test_axis_fits_current_count_and_handles_tick_boundaries(self):
+        self.assertEqual(history.axis_scale(42), (10, 50))
+        for count, expected in ((0, (1, 4)), (49, (10, 50)), (50, (10, 60)),
+                                (51, (20, 60)), (100, (20, 120))):
+            with self.subTest(count=count):
+                self.assertEqual(history.axis_scale(count), expected)
 
     def test_logo_rejects_missing_paths_and_unsafe_geometry_or_fill(self):
         for attributes in (None, {"d": "M0 0<script>", "fill": "#ffffff"},
