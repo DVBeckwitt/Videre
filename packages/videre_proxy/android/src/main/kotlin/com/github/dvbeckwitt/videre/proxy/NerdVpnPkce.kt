@@ -33,7 +33,14 @@ class NerdVpnPkce private constructor(val verifier: String, val callbackUrl: Str
     }.getOrNull()
 
     companion object {
+        const val EXTERNAL_CALLBACK_SCHEME = "com.github.dvbeckwitt.videre.auth"
         private val random = SecureRandom()
+
+        fun forExternalBrowser(server: HttpUrl, nonce: String): NerdVpnPkce? {
+            if (!server.isHttps || server.host != "invidious.nerdvpn.de" || server.port != 443) return null
+            val attempt = forServer(server, nonce) ?: return null
+            return NerdVpnPkce(attempt.verifier, "$EXTERNAL_CALLBACK_SCHEME://callback/$nonce")
+        }
 
         fun forServer(server: HttpUrl, nonce: String): NerdVpnPkce? {
             if (!isNerdVpnOrigin(server) || server.encodedPath != "/" ||

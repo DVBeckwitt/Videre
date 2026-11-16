@@ -630,6 +630,36 @@ class Service {
     return video;
   }
 
+  Video _decodeVideoMetadata(Response response) {
+    InvidiousServiceError invalidMetadata() => InvidiousServiceError(
+          'The server returned incomplete or invalid video details. '
+          'Try again later or choose another server.',
+          statusCode: response.statusCode,
+        );
+
+    final Object? json;
+    try {
+      json = handleResponse(response);
+    } on InvidiousServiceError catch (error) {
+      if (response.statusCode < 200 ||
+          response.statusCode >= 300 ||
+          error.responseWasHtml) {
+        rethrow;
+      }
+      throw invalidMetadata();
+    }
+    // Empty responses are valid for mutations, but a video load requires an
+    // object. Keep its actual HTTP status so invalid data cannot grant a retry.
+    if (json is! Map<String, dynamic>) throw invalidMetadata();
+    try {
+      return Video.fromJson(json);
+    } on TypeError {
+      throw invalidMetadata();
+    } on FormatException {
+      throw invalidMetadata();
+    }
+  }
+
   Future<Video> _loadVideoMetadata(String videoId, Server server,
       {BackendPlayback? backendRequest,
       void Function(BackendPlayback request)? onBackendRequest,
@@ -671,7 +701,7 @@ class Service {
     }
     if (!isNerdVpnUrl(request.uri.toString())) {
       final response = await _get(request, coalesce: true);
-      return Video.fromJson(handleResponse(response));
+      return _decodeVideoMetadata(response);
     }
     final owner = originalDb.forProfile(server.profileId);
     // Unsaved connection tests are allowed, but deleting or changing a saved
@@ -701,7 +731,7 @@ class Service {
     Future<Video> load() async {
       final response = await _get(request, coalesce: true);
       try {
-        return Video.fromJson(handleResponse(response));
+        return _decodeVideoMetadata(response);
       } on InvidiousServiceError catch (error) {
         // NerdVPN uses 500 for this transient companion startup response.
         // Do not turn arbitrary 500s, gateway failures or other instances into
@@ -739,7 +769,7 @@ class Service {
         if (!await unchanged()) {
           throw StateError('The playback connection changed.');
         }
-        return Video.fromJson(handleResponse(retried));
+        return _decodeVideoMetadata(retried);
       }
     }
 
@@ -811,7 +841,7 @@ class Service {
         response = await _instanceHttpClient.get(request.uri,
             headers: request.headers);
         await checkCurrent();
-        return Video.fromJson(handleResponse(response));
+        return _decodeVideoMetadata(response);
       } catch (error) {
         final delay =
             allowRetry ? _videoRetryDelay(error, response, request) : null;
@@ -825,7 +855,7 @@ class Service {
         final retried = await _instanceHttpClient.get(request.uri,
             headers: request.headers);
         await checkCurrent();
-        return Video.fromJson(handleResponse(retried));
+        return _decodeVideoMetadata(retried);
       }
     }
 
@@ -1257,7 +1287,9 @@ class Service {
     }
   }
 
-  Future<String?> _browserToken(Server original) async {
+  Future<String?> _browserToken(Server original,
+      {bool Function()? isCurrent}) async {
+    if (isCurrent?.call() == false) return null;
     final origin = Uri.tryParse(original.url);
     if (origin == null ||
         !const {'http', 'https'}.contains(origin.scheme) ||
@@ -1269,6 +1301,9 @@ class Service {
     final access = NerdVpnAccess.supports(original)
         ? await NerdVpnAccess.instance.status(original)
         : null;
+    // A logout or newer sign-in can finish while native access is being read.
+    // Reject it before a browser launch, not only when its token comes back.
+    if (isCurrent?.call() == false) return null;
     if (access?.retryAt?.isAfter(_now().toUtc()) == true) {
       throw const NerdVpnAccessRequired('unavailable');
     }
@@ -1318,19 +1353,26 @@ class Service {
       return (await logInProtected(original))?.authToken;
     }
     final generation = _beginAuthentication(original);
+    bool isCurrent() {
+      final saved = owner.getAccount(original.accountId);
+      return _authenticationAttempts[_accountKey(original)] == generation &&
+          saved != null &&
+          saved.url == original.url &&
+          saved.authToken == original.authToken &&
+          saved.sidCookie == original.sidCookie;
+    }
+
     final intent = NerdVpnAccess.supports(original)
         ? await NerdVpnAccess.instance.beginAuth(original)
         : null;
-    final token = await _browserToken(original);
+    final token = await _browserToken(original, isCurrent: isCurrent);
 
     if (token == null) return null;
 
     Server? server = owner.getAccount(original.accountId);
 
     if (server != null) {
-      if (_authenticationAttempts[_accountKey(original)] != generation ||
-          server.authToken != original.authToken ||
-          server.sidCookie != original.sidCookie) {
+      if (!isCurrent()) {
         throw InvidiousServiceError('This sign-in was superseded');
       }
       if (token.isEmpty) {

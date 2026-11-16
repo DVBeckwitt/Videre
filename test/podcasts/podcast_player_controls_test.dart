@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/mini_player_aware.dart';
@@ -8,6 +10,16 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'fake_podcast_player.dart';
+
+class _SlowStopPodcastPlayer extends FakePodcastPlayer {
+  final stopped = Completer<void>();
+
+  @override
+  Future<void> stop() async {
+    await super.stop();
+    await stopped.future;
+  }
+}
 
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
   @override
@@ -117,6 +129,44 @@ void main() {
     expect(podcasts.speed, 1.5);
     expect(tester.takeException(), isNull);
   });
+
+  for (final useBack in [true, false]) {
+    testWidgets(
+        'finishing Stop after ${useBack ? 'Back' : 'Close'} preserves the library route',
+        (tester) async {
+      final slow = _SlowStopPodcastPlayer();
+      podcasts = slow;
+      podcasts.start();
+      await show(tester,
+          child: Builder(
+              builder: (context) => TextButton(
+                  onPressed: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute(
+                          builder: (_) => Scaffold(
+                              body: const Text('Library page'),
+                              bottomNavigationBar:
+                                  PodcastPlaybackBar(controller: podcasts)))),
+                  child: const Text('Open library'))));
+      await tester.tap(find.text('Open library'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('podcast-player-expand')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Stop podcast').last);
+      await tester.pump();
+      if (useBack) {
+        await tester.binding.handlePopRoute();
+      } else {
+        await tester.tap(find.byType(CloseButton));
+      }
+      // The sheet remains mounted during its exit animation. Delayed native
+      // disposal must not dismiss the page beneath it when Stop completes.
+      slow.stopped.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Library page'), findsOneWidget);
+      expect(find.text('Open library'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('TV-sized sheet is scrollable and keyboard controls work',
       (tester) async {

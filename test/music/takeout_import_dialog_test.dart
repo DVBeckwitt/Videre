@@ -182,6 +182,103 @@ void main() {
     expect(find.byType(AlertDialog), findsNothing);
   });
 
+  testWidgets('a covered import keeps the completed file preview',
+      (tester) async {
+    final picked = Completer<List<Map<String, String>>?>();
+    choose = () => picked.future;
+    await open(tester);
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    unawaited(navigator.push(MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Shared link')))));
+    await tester.pumpAndSettle();
+    picked.complete([file]);
+    for (var attempt = 0; attempt < 200; attempt++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+      if (find
+          .text('Reading local file…', skipOffstage: false)
+          .evaluate()
+          .isEmpty) {
+        break;
+      }
+    }
+    expect(find.text('Shared link'), findsOneWidget);
+    navigator.pop();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Reading local file…'), findsNothing);
+    expect(find.text('2 songs ready. Existing songs will be kept.'),
+        findsOneWidget);
+    expect(library.entries, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('picker cancellation closes only its covered import dialog',
+      (tester) async {
+    final picked = Completer<List<Map<String, String>>?>();
+    choose = () => picked.future;
+    await open(tester);
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    unawaited(navigator.push(MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Shared link')))));
+    await tester.pumpAndSettle();
+    picked.complete(null);
+    await tester.pump();
+    expect(find.text('Shared link'), findsOneWidget);
+    navigator.pop();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Open import'), findsOneWidget);
+    expect(library.entries, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a covered import finishes saving and can be closed',
+      (tester) async {
+    await open(tester);
+    await finishReading(tester);
+    final release = Completer<void>();
+    addTearDown(() {
+      if (!release.isCompleted) release.complete();
+    });
+    final entered = Completer<void>();
+    late Future<void> transaction;
+    await tester.runAsync(() async {
+      transaction = (db as SembastSqfDb).db.transaction((_) async {
+        entered.complete();
+        await release.future;
+      });
+      await entered.future;
+    });
+    await tester.runAsync(() async => tester.tap(find.text('Import songs')));
+    await tester.pump();
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    unawaited(navigator.push(MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Shared link')))));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      release.complete();
+      await transaction;
+    });
+    for (var attempt = 0; attempt < 200; attempt++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+      if (library.entries.length == 2) break;
+    }
+    navigator.pop();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(
+        find.text('2 songs added. 0 already in your library.'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(library.entries, hasLength(2));
+    expect(tester.takeException(), isNull);
+  });
+
   for (final useBack in [false, true]) {
     testWidgets(
         'late picker cancellation preserves the library after ${useBack ? 'Back' : 'Cancel'}',

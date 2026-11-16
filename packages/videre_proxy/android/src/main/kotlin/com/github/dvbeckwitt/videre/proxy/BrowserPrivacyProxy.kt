@@ -24,7 +24,7 @@ class BrowserPrivacyProxy internal constructor(
 ) : Closeable {
     constructor() : this({ Socket(it) })
 
-    private data class Route(val socks: InetSocketAddress?)
+    private data class Route(val socks: InetSocketAddress?, val allowedOrigin: HttpUrl?)
     private class Connection(val browser: Socket, val route: Route) {
         var outbound: Socket? = null
     }
@@ -40,11 +40,14 @@ class BrowserPrivacyProxy internal constructor(
     private val acceptor = Thread(::accept, "videre-browser-accept").apply { isDaemon = true; start() }
 
     /** Replace the previous route and close its sockets before admitting new work. */
-    fun allow(socksHost: String?, socksPort: Int?) {
+    fun allow(socksHost: String?, socksPort: Int?, allowedOrigin: HttpUrl? = null) {
         synchronized(lock) {
             revokeLocked()
             check(!closed && acceptor.isAlive) { "Browser privacy route is unavailable." }
             require((socksHost == null) == (socksPort == null))
+            require(allowedOrigin == null || (allowedOrigin.username.isEmpty() &&
+                allowedOrigin.password.isEmpty() && allowedOrigin.encodedPath == "/" &&
+                allowedOrigin.query == null && allowedOrigin.fragment == null))
             val socks = if (socksHost == null) null else {
                 require(!socksHost.isBlank() && socksHost.none { it.code !in 33..126 || it in "/\\@?#%" } &&
                     socksPort != null && socksPort in 1..65535)
@@ -52,7 +55,7 @@ class BrowserPrivacyProxy internal constructor(
                 require(!blockedBrowserHost(canonical))
                 InetSocketAddress.createUnresolved(canonical, socksPort)
             }
-            route = Route(socks)
+            route = Route(socks, allowedOrigin)
         }
     }
 
@@ -114,7 +117,12 @@ class BrowserPrivacyProxy internal constructor(
             val request = BrowserRequest.read(input)
             val host = request.target.host
             val socks = connection.route.socks
-            val allowed = !blockedBrowserHost(host) && (!host.trimEnd('.').endsWith(".onion") || socks != null)
+            val origin = connection.route.allowedOrigin
+            // This also covers redirect destinations and HTTPS/WebSocket tunnels;
+            // WebView navigation callbacks do not observe every network request.
+            val allowed = !blockedBrowserHost(host) && (!host.trimEnd('.').endsWith(".onion") || socks != null) &&
+                (origin == null || (request.target.scheme == origin.scheme &&
+                    host == origin.host && request.target.port == origin.port))
             observeTarget(request.target, allowed)
             if (!allowed) {
                 reply(output, "403 Forbidden")

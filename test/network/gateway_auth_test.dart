@@ -435,6 +435,34 @@ void main() {
     expect(firstContext, isNot(secondContext));
   });
 
+  for (final failure in {
+    'GATEWAY_EXTERNAL_BROWSER_UNAVAILABLE':
+        'Could not open your default browser. Install or enable a browser, then try again.',
+    'GATEWAY_LOGIN_TIMEOUT': 'Sign-in timed out. Try again.',
+  }.entries) {
+    test(
+        'sign-in reports actionable ${failure.key} without revoking an account',
+        () async {
+      final calls = <String>[];
+      messenger.setMockMethodCallHandler(sessions, (call) async {
+        fail('A failed sign-in must not revoke the saved session.');
+      });
+      messenger.setMockMethodCallHandler(browser, (call) async {
+        calls.add(call.method);
+        if (call.method == 'signIn') {
+          throw PlatformException(code: failure.key);
+        }
+        return null;
+      });
+
+      await expectLater(
+          GatewayAuth.signIn(server(failure.key), persistSession: false),
+          throwsA(isA<GatewaySignInFailed>()
+              .having((error) => error.message, 'message', failure.value)));
+      expect(calls, ['close', 'signIn']);
+    });
+  }
+
   test('protected sign-in observes the persisted Retry-After before opening',
       () async {
     const account = Server(

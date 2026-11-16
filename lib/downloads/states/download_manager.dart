@@ -20,6 +20,7 @@ import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/connectivity.dart';
+import 'package:clipious/podcasts/services/podcast_downloads.dart';
 
 import '../../player/states/player.dart';
 import '../../player/media_source.dart';
@@ -196,10 +197,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<void> setWifiOnly(bool value) => _mutate(() async {
         await _ready;
         if (!_current || _switchingProfile) return;
+        final database = db;
+        final profileId = _library.profileId;
         await _library
             .saveSetting(SettingsValue(_wifiSetting, value.toString()));
         emit(state.copyWith(wifiOnly: value));
         _networkChanged(_wifiConnected);
+        await PodcastDownloads.notifyWifiOnlyChanged(database, profileId);
       });
 
   Future<void> chooseFolder() async {

@@ -50,3 +50,29 @@ These tests do not establish browser playback or future server availability.
 Task-local diagnostic receipts
 are under the ignored `build/issue38-nadeko/` and `build/issue-38/` directories;
 they are not APK assets or committed signed-URL records.
+
+## Follow-up — 16 November UTC
+
+Retested with the pinned Dart client and the current Videre 1.22.46 user agent.
+Fresh metadata for `dQw4w9WgXcQ?local=true` returned HTTP 200 with 26 adaptive
+tracks and one progressive stream. Both advertised media URLs returned
+`403 Endpoint disabled`; the advertised local DASH URL returned HTTP 500.
+Only Nadeko's origin was contacted, no redirects were followed, and media reads
+were capped at 4 KiB. The new receipt is retained separately under ignored
+`build/issue38-nadeko/nov16-probe.json`.
+
+The operator's [third-party client statement](https://nadeko.net/announcements/invidious-and-the-bot-problem/)
+explicitly says API access is disabled and restoration is not planned. The
+current browser challenge repeats that API restriction. JavaScript compatibility
+alone therefore does not restore supported third-party playback.
+
+The deployed build reports source commit
+`23977bab422fb418bf2402c20cbc7693f5a73ebd`. Its
+[API serializer](https://git.nadeko.net/Fijxu/invidious/src/commit/23977bab422fb418bf2402c20cbc7693f5a73ebd/src/invidious/jsonify/api_v1/video_json.cr)
+advertises the frontend media routes tested above, without a companion address
+or authorization value. The
+[website player](https://git.nadeko.net/Fijxu/invidious/src/commit/23977bab422fb418bf2402c20cbc7693f5a73ebd/src/invidious/views/components/player.ecr)
+uses companion URLs with a server-issued `check` value instead. No supported
+replacement app API was found. The exact deployment component emitting the
+plain-text refusal was not established. Nadeko playback remains externally
+blocked; this release must not describe it as fixed.

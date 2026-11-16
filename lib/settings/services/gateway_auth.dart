@@ -115,6 +115,13 @@ class GatewayAuth {
         throw const GatewaySignInFailed(
             'Could not start protected browser routing. Try again.');
       }
+      if (error.code == 'GATEWAY_EXTERNAL_BROWSER_UNAVAILABLE') {
+        throw const GatewaySignInFailed(
+            'Could not open your default browser. Install or enable a browser, then try again.');
+      }
+      if (error.code == 'GATEWAY_LOGIN_TIMEOUT') {
+        throw const GatewaySignInFailed('Sign-in timed out. Try again.');
+      }
       if (error.code == 'GATEWAY_ONION_PROXY_REQUIRED') {
         throw const GatewaySignInFailed(
             'Enable SOCKS5/Orbot in Network proxy to use this onion server.');

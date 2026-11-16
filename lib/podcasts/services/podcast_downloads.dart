@@ -76,7 +76,14 @@ class PodcastDownloads extends ChangeNotifier {
   static const maximumDownloadBytes = 1024 * 1024 * 1024;
   static const _maximumEntries = 1000;
   static const _maximumMetadataBytes = 5 * 1024 * 1024;
+  static const _wifiMessage = 'Connect to Wi-Fi to download this episode.';
   static final _owners = Expando<Map<String, PodcastDownloads>>();
+
+  /// Recheck an existing transfer when the shared download preference changes.
+  static Future<void> notifyWifiOnlyChanged(
+      IDbClient database, String profileId) async {
+    await _owners[database]?[profileId]?._wifiOnlyChanged();
+  }
 
   factory PodcastDownloads.forProfile(IDbClient database, String profileId,
           {Dio? client,
@@ -124,6 +131,27 @@ class PodcastDownloads extends ChangeNotifier {
     if (_wifiConnected != null) return _wifiConnected();
     if (!Platform.isAndroid) return false;
     return isWifiConnected();
+  }
+
+  Future<void> _wifiOnlyChanged() async {
+    final token = _token;
+    final episodeId = _activeId;
+    if (_closed ||
+        token == null ||
+        token.isCancelled ||
+        episodeId == null ||
+        !_wifiOnly) {
+      return;
+    }
+    final connected = await _onWifi();
+    if (!_closed &&
+        identical(_token, token) &&
+        !token.isCancelled &&
+        !connected &&
+        _wifiOnly) {
+      _errors[episodeId] = _wifiMessage;
+      token.cancel();
+    }
   }
 
   List<PodcastDownload> get entries {
@@ -245,12 +273,11 @@ class PodcastDownloads extends ChangeNotifier {
     try {
       if (await localPath(episode.id) != null) return;
       if (token.isCancelled) return;
-      const wifiMessage = 'Connect to Wi-Fi to download this episode.';
       final network = _networkChanges ??
           (Platform.isAndroid ? wifiConnectivityChanges : null);
       void networkChanged(bool connected) {
         if (!connected && _wifiOnly && !token.isCancelled) {
-          _errors[episode.id] = wifiMessage;
+          _errors[episode.id] = _wifiMessage;
           token.cancel();
         }
       }
@@ -258,7 +285,7 @@ class PodcastDownloads extends ChangeNotifier {
       connectivity = network?.listen(networkChanged,
           onError: (Object _) => networkChanged(false));
       if (_wifiOnly && !await _onWifi()) {
-        _errors[episode.id] = wifiMessage;
+        _errors[episode.id] = _wifiMessage;
         token.cancel();
       }
       if (token.isCancelled) return;

@@ -31,7 +31,7 @@ Join our [Matrix chat](https://matrix.to/#/#Videre:matrix.org) to talk about Vid
 - **Local Library.** Save subscriptions, Watch Later, playlists, and history on your device without an account.
 - **People and Accounts.** Add, rename, and delete local profiles, each with its own library and saved accounts. Profiles remain accessible from Welcome before adding a server. Deletion keeps downloaded media files and protects the last profile. See [profile management](./docs/profiles-and-authentication.md#manage-profiles).
 - **Watched Status.** Mark videos watched or unwatched on phone and TV; signed-in accounts retry pending changes to server history.
-- **Protected Servers.** HTML form-based gateways use an isolated, protected browser session for each account. Page JavaScript is disabled; gateways that require it are unsupported.
+- **Protected Servers.** HTML form-based gateways use an isolated, protected browser session for each account. Page JavaScript is disabled except during temporary, direct HTTPS NerdVPN sign-in.
 - **NerdVPN API access.** Browser sign-in retrieves your API key when eligible, keeps it encrypted on Android, and shows the instance's waiting or disabled-access status.
 - **Background Playback.** Background and audio-only listening, picture-in-picture, live streams, and a sleep timer.
 - **Music.** Use the top Videos/Music switch on phones, tablets, and TVs. Home prioritizes saved songs and artist/genre search suggestions through your selected Invidious instance. Optional discovery loads only on request, checks the instance’s Music category and limits requests, including serial loading over Tor/SOCKS; it replaces the unreliable music trending feed. Search finds songs, channels, and public playlists. Library keeps saved songs and channels, public bookmarks, and local playlists you can create, edit, play, and resume, with audio downloads on phones and tablets. The Muzza-inspired artwork player includes a compact music bar, queue controls, saved-session resume, and a Sound panel with speed, pitch and optional session-only Android equalization. Choose Videos and Music, Videos only, or Music only under **Settings → Browsing → Home experience** or in the home customizer. Music does not contact YouTube Music directly. YouTube Music's exclusive catalog pages are removed; legacy album bookmarks remain stored and backed up but hidden from Library. See [Music browsing, playback, and local library](./docs/music.md).
@@ -54,7 +54,7 @@ Open **Profiles** from the home screen or Settings to add, rename, or switch peo
 
 For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
 
-For `invidious.nerdvpn.de`, adding the instance offers sign-in in Videre's protected Android WebView or a manual API-key option. Browser sign-in needs WebView's isolated-profile and proxy support. If a JavaScript challenge blocks sign-in, copy the preferences address, open it yourself in a browser, enable API access, and paste the key into Videre. A manual key enables browsing and playback without signing into server history or subscriptions. Your existing NerdVPN account stays saved if API access is not yet available, and settings show its eligibility date. Existing accounts can sign in again to grant API-key access or enter a key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**. For ordinary HTTP instances, use the cookie sign-in form.
+For `invidious.nerdvpn.de`, ordinary account sign-in offers **Sign in with browser** when Videre's network proxy is off. This opens Android's default browser and returns securely to Videre after authorization. The browser uses its own cookies and network settings; Videre never disables its proxy automatically. **Sign in in app** instead enables JavaScript for a temporary session restricted to NerdVPN's HTTPS origin. Proxy and onion sign-in remain script-disabled. Manual API-key setup enables browsing and playback without signing into server history or subscriptions. Your existing NerdVPN account stays saved if API access is not yet available, and settings show its eligibility date. Existing accounts can sign in again to grant API-key access or enter a key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**. For ordinary HTTP instances, use the cookie sign-in form.
 
 The official NerdVPN onion address also supports API-key setup. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, copy the preferences address into Tor Browser, then enter the key in Videre. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
 
@@ -66,17 +66,16 @@ This README describes the current source. Check release notes for your APK's fea
 
 ## Public instances
 
-Videre suggests F5 and NerdVPN from the [official Invidious directory](https://docs.invidious.io/instances/). The table also records Nadeko's current playback limitation, with the last check date shown for each host:
+Videre suggests F5 and NerdVPN from the [official Invidious directory](https://docs.invidious.io/instances/). The table shows the last check date for each supported suggestion:
 
 | Public host | Browser | Videre | Last checked |
 |---|---|---|---|
 | [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
-| [inv.nadeko.net](https://inv.nadeko.net) | Not verified | Media proxy refused playback; [verification](./docs/verification/issue-38-nadeko.md) | 15 November 2026 |
 | [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Android playback verified; API key required† | 10 November 2026 |
 
 Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
 
-Nadeko is no longer a curated suggestion because its media proxy returned `403 Endpoint disabled`. Existing saved entries and custom addresses are retained. A successful video API test does not establish that the instance can stream media.
+Nadeko is excluded from the server chooser while its operator disables third-party API access; its media proxy still returns `403 Endpoint disabled` ([verification](./docs/verification/issue-38-nadeko.md)). Existing saved entries and custom addresses are retained. A successful video API test does not establish that the instance can stream media.
 
 \* Source checks cover search, video data, and a media sample. Full Android playback is unverified; availability may change.
 

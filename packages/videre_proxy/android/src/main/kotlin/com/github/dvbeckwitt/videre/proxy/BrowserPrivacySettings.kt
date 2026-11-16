@@ -6,7 +6,8 @@ import androidx.webkit.WebViewFeature
 import androidx.webkit.WebViewMediaIntegrityApiStatusConfig
 
 /** Page scripts can create WebRTC UDP sockets outside Chromium's HTTP proxy.
- * Keep page JavaScript disabled; do not temporarily enable it for extraction. */
+ * Default to scriptless browsing. GatewayAuthBrowser has a narrow direct-only
+ * NerdVPN sign-in exception; never enable scripts for proxied browsing or extraction. */
 object BrowserPrivacySettings {
     fun apply(web: WebView) {
         web.settings.blockNetworkLoads = true

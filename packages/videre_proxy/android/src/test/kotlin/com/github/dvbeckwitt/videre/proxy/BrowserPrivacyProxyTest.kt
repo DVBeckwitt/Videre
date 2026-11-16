@@ -4,13 +4,16 @@ import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.EOFException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketAddress
 import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -19,6 +22,118 @@ import org.junit.Test
 
 class BrowserPrivacyProxyTest {
     private val localhost = InetAddress.getByName("127.0.0.1")
+
+    @Test fun `origin restricted routes reject other targets and invalid scopes before socket allocation`() {
+        val origin = "https://invidious.nerdvpn.de/".toHttpUrl()
+        val allocations = AtomicInteger()
+        BrowserPrivacyProxy(createSocket = {
+            allocations.incrementAndGet()
+            error("Unexpected outbound connection")
+        }).use { proxy ->
+            for ((socks, port) in listOf(null to null, "127.0.0.1" to 9050)) {
+                proxy.allow(socks, port, allowedOrigin = origin)
+                val authorities = listOf("other.example:443", "sub.invidious.nerdvpn.de:443",
+                    "invidious.nerdvpn.de.attacker.example:443", "invidious.nerdvpn.de.:443",
+                    "invidious.nerdvpn.de:8443", "127.0.0.1:443")
+                val requests = authorities.map { "CONNECT $it HTTP/1.1\r\nHost: $it\r\n\r\n" } + listOf(
+                    "GET http://invidious.nerdvpn.de/login HTTP/1.1\r\nHost: invidious.nerdvpn.de\r\n\r\n",
+                    "GET http://invidious.nerdvpn.de:443/login HTTP/1.1\r\nHost: invidious.nerdvpn.de:443\r\n\r\n")
+                for (request in requests) {
+                    connect(proxy).use { browser ->
+                        browser.write(request)
+                        assertTrue(headers(browser.getInputStream()).startsWith("HTTP/1.1 403 "))
+                    }
+                }
+            }
+            for (scope in listOf("https://user@invidious.nerdvpn.de/",
+                "https://user:password@invidious.nerdvpn.de/", "https://invidious.nerdvpn.de/login",
+                "https://invidious.nerdvpn.de/?query=yes", "https://invidious.nerdvpn.de/#fragment")) {
+                proxy.allow(null, null, allowedOrigin = origin)
+                assertThrows(IllegalArgumentException::class.java) {
+                    proxy.allow(null, null, allowedOrigin = scope.toHttpUrl())
+                }
+                connect(proxy).use { browser -> assertEquals(-1, browser.getInputStream().read()) }
+            }
+            assertEquals(0, allocations.get())
+        }
+    }
+
+    @Test fun `origin restricted CONNECT admits the selected canonical origin`() {
+        val origin = "https://invidious.nerdvpn.de/".toHttpUrl()
+        ServerSocket(0, 1, localhost).use { fixture ->
+            fixture.soTimeout = 3_000
+            val outbound = RecordingSocket(InetSocketAddress(localhost, fixture.localPort))
+            BrowserPrivacyProxy(createSocket = { policy ->
+                assertEquals(Proxy.Type.SOCKS, policy.type())
+                outbound
+            }).use { proxy ->
+                // An unresolved SOCKS destination and a redirected fixture socket
+                // prevent even a DNS lookup of the public hostname in this test.
+                proxy.allow("127.0.0.1", 9050, allowedOrigin = origin)
+                connect(proxy).use { browser ->
+                    browser.write("CONNECT invidious.nerdvpn.de:443 HTTP/1.1\r\nHost: invidious.nerdvpn.de:443\r\n\r\n")
+                    assertTrue(headers(browser.getInputStream()).startsWith("HTTP/1.1 200 "))
+                    assertEquals("invidious.nerdvpn.de", outbound.target?.hostString)
+                    assertEquals(443, outbound.target?.port)
+                    assertTrue(outbound.target?.isUnresolved == true)
+                    fixture.accept().use { upstream ->
+                        upstream.soTimeout = 3_000
+                        browser.write("a")
+                        assertEquals('a'.code, upstream.getInputStream().read())
+                        upstream.write("b")
+                        assertEquals('b'.code, browser.getInputStream().read())
+                    }
+                }
+            }
+        }
+    }
+
+    @Test fun `replacing a scoped route closes its tunnel and replaces the origin filter`() {
+        val first = "https://invidious.nerdvpn.de/".toHttpUrl()
+        val next = "https://other.example/".toHttpUrl()
+        ServerSocket(0, 2, localhost).use { fixture ->
+            fixture.soTimeout = 3_000
+            val allocations = AtomicInteger()
+            BrowserPrivacyProxy(createSocket = { policy ->
+                assertEquals(Proxy.Type.SOCKS, policy.type())
+                allocations.incrementAndGet()
+                RecordingSocket(InetSocketAddress(localhost, fixture.localPort))
+            }).use { proxy ->
+                proxy.allow("127.0.0.1", 9050, allowedOrigin = first)
+                connect(proxy).use { originalBrowser ->
+                    originalBrowser.write("CONNECT invidious.nerdvpn.de:443 HTTP/1.1\r\nHost: invidious.nerdvpn.de:443\r\n\r\n")
+                    assertTrue(headers(originalBrowser.getInputStream()).startsWith("HTTP/1.1 200 "))
+                    fixture.accept().use { originalUpstream ->
+                        originalUpstream.soTimeout = 3_000
+                        proxy.allow("127.0.0.1", 9050, allowedOrigin = next)
+                        assertEquals(-1, originalBrowser.getInputStream().read())
+                        assertEquals(-1, originalUpstream.getInputStream().read())
+                    }
+                }
+                connect(proxy).use { browser ->
+                    browser.write("CONNECT invidious.nerdvpn.de:443 HTTP/1.1\r\nHost: invidious.nerdvpn.de:443\r\n\r\n")
+                    assertTrue(headers(browser.getInputStream()).startsWith("HTTP/1.1 403 "))
+                }
+                assertEquals(1, allocations.get())
+                connect(proxy).use { browser ->
+                    browser.write("CONNECT other.example:443 HTTP/1.1\r\nHost: other.example:443\r\n\r\n")
+                    assertTrue(headers(browser.getInputStream()).startsWith("HTTP/1.1 200 "))
+                    fixture.accept().use { upstream ->
+                        upstream.soTimeout = 3_000
+                        proxy.allow("127.0.0.1", 9050)
+                        assertEquals(-1, browser.getInputStream().read())
+                        assertEquals(-1, upstream.getInputStream().read())
+                    }
+                }
+                connect(proxy).use { browser ->
+                    browser.write("CONNECT invidious.nerdvpn.de:443 HTTP/1.1\r\nHost: invidious.nerdvpn.de:443\r\n\r\n")
+                    assertTrue(headers(browser.getInputStream()).startsWith("HTTP/1.1 200 "))
+                    fixture.accept().close()
+                }
+                assertEquals(3, allocations.get())
+            }
+        }
+    }
 
     @Test fun `direct and SOCKS routes reject YouTube before allocating an outbound socket`() {
         val allocations = AtomicInteger()
@@ -169,6 +284,15 @@ class BrowserPrivacyProxyTest {
 
     private fun connect(proxy: BrowserPrivacyProxy): Socket = Socket(localhost, URI(proxy.url).port).apply {
         soTimeout = 3_000
+    }
+
+    private class RecordingSocket(private val fixture: InetSocketAddress) : Socket() {
+        @Volatile var target: InetSocketAddress? = null
+
+        override fun connect(endpoint: SocketAddress, timeout: Int) {
+            target = endpoint as InetSocketAddress
+            super.connect(fixture, timeout)
+        }
     }
 
     private fun Socket.write(value: String) {

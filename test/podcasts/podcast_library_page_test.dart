@@ -219,6 +219,48 @@ void main() {
     expect(library.feeds, isEmpty);
   });
 
+  for (final succeeds in [true, false]) {
+    testWidgets(
+        'covered add dialog handles ${succeeds ? 'success' : 'failure'} without losing navigation',
+        (tester) async {
+      final pending = Completer<PodcastFeed>();
+      feeds.result = () => pending.future;
+      await show(tester);
+      await addDialog(tester);
+      await tester.tap(find.text('Add'));
+      await tester.pump();
+      final navigator = Navigator.of(tester.element(find.byType(AlertDialog)));
+      unawaited(navigator.push<void>(MaterialPageRoute(
+          builder: (_) => const Scaffold(body: Text('Linked page')))));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        if (succeeds) {
+          pending.complete(_feed);
+        } else {
+          pending.completeError(StateError('offline'));
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Linked page'), findsOneWidget);
+      navigator.pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      if (succeeds) {
+        expect(library.feeds, hasLength(1));
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.text('Local episode'), findsOneWidget);
+      } else {
+        expect(library.feeds, isEmpty);
+        expect(find.textContaining('Could not add this feed'), findsOneWidget);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('invalid Google feed is blocked before a publisher fetch',
       (tester) async {
     await show(tester);

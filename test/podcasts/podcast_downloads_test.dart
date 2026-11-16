@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/podcasts/models/podcast.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
+import 'package:clipious/player/states/player.dart';
 import 'package:clipious/podcasts/services/podcast_downloads.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -13,6 +15,8 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 String _id(String text) => sha256.convert(utf8.encode(text)).toString();
+
+class _Player extends Fake implements PlayerCubit {}
 
 void main() {
   late SembastSqfDb database;
@@ -24,6 +28,7 @@ void main() {
   late PodcastFeed feed;
   late StreamController<bool> connectivity;
   var wifiConnected = true;
+  Future<bool> Function()? wifiQuery;
   final audio = List<int>.generate(64, (index) => index);
   final heldResponses = <Completer<void>>[];
   final services = <PodcastDownloads>[];
@@ -33,7 +38,8 @@ void main() {
     final result = PodcastDownloads.forProfile(
         database, profile ?? database.profileId,
         documentsDirectory: () async => directory,
-        wifiConnected: () async => wifiConnected,
+        wifiConnected: () async =>
+            wifiQuery == null ? wifiConnected : await wifiQuery!(),
         networkChanges: connectivity.stream);
     services.add(result);
     return result;
@@ -42,6 +48,7 @@ void main() {
   setUp(() async {
     requests = 0;
     wifiConnected = true;
+    wifiQuery = null;
     connectivity = StreamController<bool>.broadcast();
     database = await SembastSqfDb.createInMemory();
     globals.db = database;
@@ -189,6 +196,95 @@ void main() {
     expect(downloads.activeId, isNull);
     expect(downloads.entries, isEmpty);
     expect(downloads.errors[episode.id], contains('Wi-Fi'));
+  });
+
+  for (final connected in [false, true]) {
+    test(
+        connected
+            ? 'enabling Wi-Fi-only preserves an active Wi-Fi podcast download'
+            : 'enabling Wi-Fi-only cancels an active cellular podcast download',
+        () async {
+      wifiConnected = connected;
+      final manager =
+          DownloadManagerCubit(const DownloadManagerState(), _Player());
+      final started = Completer<void>();
+      final release = Completer<void>();
+      heldResponses.add(release);
+      respond = (request) async {
+        request.response.headers.contentType = ContentType('audio', 'mpeg');
+        request.response.contentLength = audio.length;
+        request.response.add(audio.take(8).toList());
+        await request.response.flush();
+        started.complete();
+        await release.future;
+        request.response.add(audio.skip(8).toList());
+        await request.response.close();
+      };
+      final downloading = downloads.download(feed, episode);
+      try {
+        await started.future;
+        await manager.setWifiOnly(true);
+        release.complete();
+        await downloading;
+        if (connected) {
+          expect(downloads.entries, hasLength(1));
+          expect(downloads.errors, isEmpty);
+        } else {
+          expect(downloads.entries, isEmpty);
+          expect(downloads.errors[episode.id], contains('Wi-Fi'));
+        }
+      } finally {
+        await manager.close();
+      }
+    });
+  }
+
+  test('a delayed Wi-Fi policy query cannot cancel a replacement transfer',
+      () async {
+    final manager =
+        DownloadManagerCubit(const DownloadManagerState(), _Player());
+    final firstStarted = Completer<void>();
+    final secondStarted = Completer<void>();
+    final firstRelease = Completer<void>();
+    final secondRelease = Completer<void>();
+    heldResponses.addAll([firstRelease, secondRelease]);
+    respond = (request) async {
+      final first = requests == 1;
+      request.response.headers.contentType = ContentType('audio', 'mpeg');
+      request.response.contentLength = audio.length;
+      request.response.add(audio.take(8).toList());
+      await request.response.flush();
+      (first ? firstStarted : secondStarted).complete();
+      await (first ? firstRelease : secondRelease).future;
+      request.response.add(audio.skip(8).toList());
+      await request.response.close();
+    };
+    final firstDownload = downloads.download(feed, episode);
+    final queryStarted = Completer<void>();
+    final queryResult = Completer<bool>();
+    try {
+      await firstStarted.future;
+      wifiQuery = () {
+        queryStarted.complete();
+        return queryResult.future;
+      };
+      final settingChanged = manager.setWifiOnly(true);
+      await queryStarted.future;
+      downloads.cancel(episode.id);
+      await firstDownload;
+      wifiQuery = null;
+      final replacement = downloads.download(feed, episode);
+      await secondStarted.future;
+      queryResult.complete(false);
+      await settingChanged;
+      secondRelease.complete();
+      await replacement;
+      expect(downloads.entries, hasLength(1));
+      expect(downloads.errors, isEmpty);
+    } finally {
+      if (!queryResult.isCompleted) queryResult.complete(false);
+      await manager.close();
+    }
   });
 
   test('cancel stops a transfer and leaves no complete or partial download',

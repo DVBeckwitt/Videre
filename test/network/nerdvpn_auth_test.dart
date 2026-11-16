@@ -293,6 +293,45 @@ void main() {
     expect(authorizations, isEmpty);
   });
 
+  for (final heldMethod in ['beginAuth', 'status']) {
+    test('logout during $heldMethod cannot open a late sign-in browser',
+        () async {
+      final started = Completer<void>();
+      final released = Completer<void>();
+      var held = false;
+      messenger.setMockMethodCallHandler(_access, (call) async {
+        final arguments = Map<String, dynamic>.from(call.arguments as Map);
+        final context = arguments['context'] as String;
+        Object result = accessStatus;
+        if (call.method == 'beginAuth' || call.method == 'clear') {
+          final intent = nativeIntents.update(context, (value) => value + 1,
+              ifAbsent: () => 1);
+          result = call.method == 'beginAuth'
+              ? {'intent': intent}
+              : {'state': 'missing'};
+        }
+        if (call.method == heldMethod && !held) {
+          held = true;
+          started.complete();
+          await released.future;
+        }
+        if (call.method == 'authorize') authorizations.add(arguments);
+        return result;
+      });
+
+      final pending = api.logIn(_account.accountId);
+      final cancelled = expectLater(pending, completion(isNull));
+      await started.future;
+      await api.logOutProtected(database.getAccount(_account.accountId)!);
+      released.complete();
+      await cancelled;
+
+      expect(browserRequests, isEmpty);
+      expect(authorizations, isEmpty);
+      expect(database.getAccount(_account.accountId)!.authToken, isNull);
+    });
+  }
+
   test('a newer native PKCE sign-in supersedes an older result', () async {
     final opened = Completer<void>();
     final firstResult = Completer<String>();

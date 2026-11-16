@@ -10,6 +10,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -44,6 +45,24 @@ class MainActivity : AudioServiceActivity() {
 
     private class FileRequest(val result: MethodChannel.Result, val bytes: ByteArray?, val takeout: Boolean = false)
     private class FileTooLarge : IOException()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // No in-memory attempt survives a cold start. Remove owned callbacks
+        // before Flutter plugins inspect the initial intent for shared links.
+        if (NerdVpnBrowserAttempt.ownsCallback(intent?.dataString)) {
+            setIntent(Intent(Intent.ACTION_MAIN).setComponent(componentName))
+        }
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        val callback = intent.dataString
+        if (NerdVpnBrowserAttempt.ownsCallback(callback)) {
+            gatewayBrowser?.acceptExternalCallback(checkNotNull(callback))
+            return
+        }
+        super.onNewIntent(intent)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

@@ -334,15 +334,25 @@ class _AddPodcastDialogState extends State<_AddPodcastDialog> {
   bool _cancelled = false;
   String? _error;
 
-  bool get _current =>
-      mounted &&
-      !_cancelled &&
-      widget.isCurrent() &&
-      ModalRoute.of(context)?.isCurrent == true;
+  bool get _active =>
+      mounted && !_cancelled && ModalRoute.of(context)?.isActive == true;
+
+  bool get _current => _active && widget.isCurrent();
+
+  void _close([PodcastFeed? feed]) {
+    if (!_active) return;
+    final route = ModalRoute.of<PodcastFeed>(context)!;
+    final navigator = Navigator.of(context);
+    _cancelled = true;
+    if (route.isCurrent) {
+      navigator.pop(feed);
+    } else {
+      navigator.removeRoute(route, feed);
+    }
+  }
 
   void _cancel() {
-    _cancelled = true;
-    Navigator.pop(context);
+    _close();
   }
 
   @override
@@ -361,9 +371,9 @@ class _AddPodcastDialogState extends State<_AddPodcastDialog> {
     try {
       final feed = await widget.library
           .subscribe(_url.text.trim(), isCurrent: () => _current);
-      if (mounted && _current) Navigator.pop(context, feed);
+      if (_current) _close(feed);
     } catch (_) {
-      if (mounted && !_cancelled && ModalRoute.of(context)?.isCurrent == true) {
+      if (_active) {
         setState(() {
           _loading = false;
           _error = widget.isCurrent()

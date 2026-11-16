@@ -106,6 +106,79 @@ void main() {
     await database.close();
   });
 
+  for (final interactive in [false, true]) {
+    for (final (description, body) in [
+      ('empty', ''),
+      ('null', 'null'),
+      ('array', '[]'),
+      ('missing video ID', '{}'),
+      ('invalid field', jsonEncode({'videoId': _videoId, 'title': []})),
+    ]) {
+      test('invalid metadata: NerdVPN $description, interactive=$interactive',
+          () async {
+        final selected = (await selectFallbacks())
+            .copyWith(url: 'https://invidious.nerdvpn.de');
+        await database.upsertServer(selected);
+        await database.useServer(selected);
+        final savedAccount = await database.getCurrentlySelectedServer();
+        respond = (request) async => http.Response(body, 200,
+            request: request, headers: {'content-type': 'application/json'});
+
+        await expectLater(
+            interactive ? load() : api.getVideo(_videoId),
+            throwsA(isA<InvidiousServiceError>()
+                .having((error) => error.statusCode, 'status', 200)
+                .having((error) => error.message, 'recovery guidance',
+                    contains('Try again later or choose another server'))
+                .having(isBackendRetryable, 'backend retry', isFalse)));
+
+        expect(requests, hasLength(1));
+        expect(delays, isEmpty);
+        expect(retries, 0);
+        expect(await database.getCurrentlySelectedServer(), savedAccount);
+      });
+    }
+  }
+
+  test('invalid metadata: another instance also rejects an empty response',
+      () async {
+    respond = (request) async => http.Response('', 200,
+        request: request, headers: {'content-type': 'application/json'});
+    await expectLater(
+        api.getVideo(_videoId),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'status', 200)));
+    expect(requests, hasLength(1));
+    expect(delays, isEmpty);
+  });
+
+  for (final interactive in [false, true]) {
+    test(
+        'invalid metadata: empty retry result stays bounded, interactive=$interactive',
+        () async {
+      final selected = (await selectFallbacks())
+          .copyWith(url: 'https://invidious.nerdvpn.de');
+      await database.upsertServer(selected);
+      await database.useServer(selected);
+      respond = (request) async => requests.length == 1
+          ? _response(request, 500,
+              error: 'This backend is still starting and not yet available. '
+                  'Please wait for a short time or use another backend.')
+          : http.Response('', 200,
+              request: request, headers: {'content-type': 'application/json'});
+
+      await expectLater(
+          interactive ? load() : api.getVideo(_videoId),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.statusCode, 'status', 200)));
+      expect(requests, hasLength(2));
+      expect(requests.last.url, requests.first.url);
+      expect(requests.last.headers, requests.first.headers);
+      expect(delays, [const Duration(seconds: 1)]);
+      expect(retries, interactive ? 1 : 0);
+    });
+  }
+
   for (final status in [500, 502, 503, 504, 408]) {
     test('interactive HTTP $status retries the exact metadata route once',
         () async {

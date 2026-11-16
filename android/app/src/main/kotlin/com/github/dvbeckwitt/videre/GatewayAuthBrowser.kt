@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -35,9 +36,6 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request as HttpRequest
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONObject
 
@@ -46,7 +44,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
     private data class Policy(val enabled: Boolean, val host: String, val port: Int)
     private class Request(val result: MethodChannel.Result, val context: GatewayContext,
         val policy: Policy, val loginUrl: String,
-        val nonce: String, val pkce: NerdVpnPkce?, val persistSession: Boolean,
+        val nonce: String, val pkce: NerdVpnPkce?, val persistSession: Boolean, val javaScriptOrigin: HttpUrl?,
         val title: String, val help: String, val cancel: String) {
         var revision: Long? = null
         var profileName: String? = null
@@ -61,19 +59,27 @@ class GatewayAuthBrowser(private val activity: Activity) {
     private val handler = Handler(Looper.getMainLooper())
     private val executor = Executor { handler.post(it) }
     private val preferences = activity.applicationContext.getSharedPreferences("videre_network_proxy", Context.MODE_PRIVATE)
+    private val externalBrowser = NerdVpnBrowserAuth(activity, preferences)
     private var current: Request? = null
     private var dialog: Dialog? = null
     private var approval: AlertDialog? = null
     private var browser: WebView? = null
     private var closed = false
     private val proxyChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == "configuration") handler.post { finish(error = "GATEWAY_PROXY_CHANGED") }
+        val request = current
+        if (key == "configuration" && request != null) handler.post {
+            if (current === request) finish(error = "GATEWAY_PROXY_CHANGED")
+        }
     }
     private val timeout = Runnable { finish(error = "GATEWAY_LOGIN_TIMEOUT") }
     private val proxyInstallTimeout = Runnable { finish(error = "GATEWAY_PROXY_UNAVAILABLE") }
 
     fun handle(call: MethodCall, result: MethodChannel.Result) {
         if (call.method == "close") {
+            if (externalBrowser.close(call.argument<String>("context"))) {
+                result.success(null)
+                return
+            }
             val request = current
             val target = call.argument<String>("context")
             val revision = call.argument<Number>("revision")?.toLong()
@@ -85,7 +91,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
             return
         }
         if (call.method != "signIn") { result.notImplemented(); return }
-        if (closed || activity.isFinishing || activity.isDestroyed || current != null) {
+        if (closed || activity.isFinishing || activity.isDestroyed || current != null || externalBrowser.active) {
             result.error("GATEWAY_BROWSER_BUSY", null, null); return
         }
         val context = runCatching { GatewayContext.parse(call.argument<String>("context") ?: "") }.getOrNull()
@@ -99,6 +105,23 @@ class GatewayAuthBrowser(private val activity: Activity) {
         if (requiresProxy && !policy.enabled) {
             result.error("GATEWAY_ONION_PROXY_REQUIRED", null, null); return
         }
+        val external = NerdVpnBrowserAttempt.create(context, server,
+            call.argument<Boolean>("persistSession") ?: true, policy.enabled, SystemClock.elapsedRealtime())
+        if (external != null) {
+            externalBrowser.start(external, result, call.argument<String>("cancel") ?: "Cancel",
+                policyIsCurrent = { readPolicy() == policy },
+                protectedBrowser = { startProtected(call, result, context, server, policy) })
+            return
+        }
+        startProtected(call, result, context, server, policy)
+    }
+
+    private fun startProtected(call: MethodCall, result: MethodChannel.Result,
+        context: GatewayContext, server: HttpUrl, policy: Policy) {
+        if (closed || activity.isFinishing || activity.isDestroyed || current != null || externalBrowser.active) {
+            result.error("GATEWAY_BROWSER_BUSY", null, null); return
+        }
+        if (readPolicy() != policy) { result.error("GATEWAY_PROXY_CHANGED", null, null); return }
         if (!GatewaySessions.supported()) {
             result.error("GATEWAY_UNSUPPORTED", null, null); return
         }
@@ -110,11 +133,12 @@ class GatewayAuthBrowser(private val activity: Activity) {
         }
         val nonce = UUID.randomUUID().toString()
         val pkce = NerdVpnPkce.forServer(server, nonce)
+        val persistSession = call.argument<Boolean>("persistSession") ?: true
         val login = pkce?.authorizationUrl(server) ?: server.newBuilder().encodedPath(server.encodedPath.trimEnd('/') + "/authorize_token")
             .addQueryParameter("scopes", ":feed,:subscriptions*,:playlists*,:history*")
             .addQueryParameter("callback_url", "videre-gateway://callback/$nonce").build().toString()
         val request = Request(result, context, policy, login, nonce, pkce,
-            call.argument<Boolean>("persistSession") ?: true,
+            persistSession, nerdVpnJavaScriptOrigin(context, server, persistSession, policy.enabled),
             call.argument<String>("title") ?: "Sign in to protected server",
             call.argument<String>("help") ?: "Sign in to your gateway, then authorize Invidious.",
             call.argument<String>("cancel") ?: "Cancel")
@@ -175,7 +199,8 @@ class GatewayAuthBrowser(private val activity: Activity) {
                 setPadding(pad, pad, pad, pad / 2)
             }
             val hint = TextView(activity).apply {
-                text = request.help
+                text = if (request.javaScriptOrigin == null) request.help else
+                    "JavaScript is enabled for NerdVPN sign-in. This temporary session uses your direct connection."
                 setTextColor(Color.DKGRAY)
                 setPadding(pad, 0, pad, pad / 2)
             }
@@ -200,7 +225,11 @@ class GatewayAuthBrowser(private val activity: Activity) {
             }
             web.webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, target: WebResourceRequest): Boolean {
-                    if (!target.isForMainFrame) return target.url.scheme !in setOf("http", "https")
+                    if (!target.isForMainFrame) {
+                        if (target.url.scheme !in setOf("http", "https")) return true
+                        return request.javaScriptOrigin != null &&
+                            target.url.toString().toHttpUrlOrNull()?.let(request.context::allows) != true
+                    }
                     return navigate(request, view, target.url)
                 }
                 @Deprecated("Required for older WebView implementations")
@@ -219,7 +248,10 @@ class GatewayAuthBrowser(private val activity: Activity) {
             surface.show()
             surface.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             WebViewBrowserLease.allow(this, request.policy.host.takeIf { request.policy.enabled },
-                request.policy.port.takeIf { request.policy.enabled })
+                request.policy.port.takeIf { request.policy.enabled }, request.javaScriptOrigin)
+            // Install the immutable origin restriction before any page script or
+            // network load can start. Other sign-in and discovery browsers stay scriptless.
+            web.settings.javaScriptEnabled = request.javaScriptOrigin != null
             web.settings.blockNetworkLoads = false
             web.loadUrl(request.loginUrl)
         } catch (_: Exception) { finish(error = "GATEWAY_BROWSER_UNAVAILABLE") }
@@ -244,6 +276,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
         }
         val target = uri.toString().toHttpUrlOrNull()
         if (target == null || !request.context.canNavigateDuringSignIn(target, request.policy.enabled)) return true
+        if (request.javaScriptOrigin != null && !request.context.allows(target)) return true
         val origin = target.newBuilder().encodedPath("/").query(null).fragment(null).build().toString()
         if (origin in request.allowed) return false
         if (approval != null) return true
@@ -270,16 +303,12 @@ class GatewayAuthBrowser(private val activity: Activity) {
             val manager = ProfileStore.getInstance().getOrCreateProfile(profileName).cookieManager
             val url = request.context.origin.newBuilder().encodedPath("/api/v1/token").build()
             val cookie = manager.getCookie(url.toString())
-            val json = JSONObject().put("code", code).put("code_verifier", pkce.verifier)
-                .put("callback_url", pkce.callbackUrl)
-            val outgoing = HttpRequest.Builder().url(url)
-                .post(json.toString().toRequestBody("application/json".toMediaType()))
-                .header("Accept", "application/json")
-                .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
+            val outgoing = NerdVpnTokenExchange.request(request.context.origin, pkce, code, cookie)
             val call = ProxyDataSource.newTokenExchangeCall(outgoing)
             request.exchange = call
             web.stopLoading()
             web.settings.blockNetworkLoads = true
+            web.settings.javaScriptEnabled = false
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, error: IOException) {
                     handler.post {
@@ -288,44 +317,17 @@ class GatewayAuthBrowser(private val activity: Activity) {
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    var token: String? = null
-                    var error = "GATEWAY_TOKEN_EXCHANGE_FAILED"
-                    var errorDetails: Map<String, Any>? = null
-                    var cookies: List<String> = emptyList()
-                    response.use {
-                        if (it.code == 429 || it.code == 503) {
-                            error = "GATEWAY_TOKEN_UNAVAILABLE"
-                            errorDetails = mapOf("statusCode" to it.code, "retryAfter" to (it.header("Retry-After") ?: ""))
-                        }
-                        try {
-                            val bytes = it.peekBody(65537).bytes()
-                            val json = if (bytes.size <= 65536) JSONObject(String(bytes, Charsets.UTF_8)) else null
-                            if (it.code == 200) {
-                                token = (json?.opt("token") as? String)?.takeIf { value ->
-                                    value.isNotBlank() && value.length <= 65536
-                                }
-                                cookies = it.headers("Set-Cookie")
-                                if (cookies.size > 100 || cookies.any { value -> value.length > 16384 }) token = null
-                            } else if (it.code == 400 && json?.optString("error") == "invalid_grant") {
-                                error = "GATEWAY_TOKEN_EXPIRED"
-                            }
-                        } catch (_: Exception) {
-                            // Server response bodies can contain credentials.
-                        }
-                    }
-                    val exchanged = token
-                    val returnedCookies = cookies
-                    val failure = error
-                    val failureDetails = errorDetails
+                    val exchanged = NerdVpnTokenExchange.read(response)
                     handler.post {
                         if (current !== request || request.finishing) return@post
                         if (readPolicy() != request.policy) { finish(error = "GATEWAY_PROXY_CHANGED"); return@post }
-                        if (exchanged == null) { finish(error = failure, details = failureDetails); return@post }
+                        val token = exchanged.token
+                        if (token == null) { finish(error = exchanged.error, details = exchanged.details); return@post }
                         try {
                             val pendingName = checkNotNull(request.profileName)
                             val pendingCookies = ProfileStore.getInstance().getOrCreateProfile(pendingName).cookieManager
-                            returnedCookies.forEach { value -> pendingCookies.setCookie(url.toString(), value) }
-                            acceptToken(request, exchanged)
+                            exchanged.cookies.forEach { value -> pendingCookies.setCookie(url.toString(), value) }
+                            acceptToken(request, token)
                         } catch (_: Exception) { finish(error = "GATEWAY_TOKEN_EXCHANGE_FAILED") }
                     }
                 }
@@ -333,7 +335,9 @@ class GatewayAuthBrowser(private val activity: Activity) {
         } catch (_: Exception) { finish(error = "GATEWAY_TOKEN_EXCHANGE_FAILED") }
     }
 
-    fun close() { closed = true; finish() }
+    fun acceptExternalCallback(value: String) { externalBrowser.acceptCallback(value) }
+
+    fun close() { closed = true; externalBrowser.close(); finish() }
 
     private fun acceptToken(request: Request, token: String) {
         val accepted = !request.persistSession || request.revision?.let {
@@ -364,6 +368,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
         var browserDestroyed = true
         browser?.let {
             runCatching { it.settings.blockNetworkLoads = true }
+            runCatching { it.settings.javaScriptEnabled = false }
             runCatching { it.stopLoading() }
             runCatching { (it.parent as? ViewGroup)?.removeView(it) }
             browserDestroyed = runCatching { it.destroy() }.isSuccess

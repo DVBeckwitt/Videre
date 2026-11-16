@@ -147,14 +147,38 @@ address support managed API keys. Clearnet browser sign-in uses PKCE and the
 Existing clearnet accounts can sign in again to grant this scope, or enter a
 manual key in account settings.
 
-The HTTPS add-server screen also offers manual API-key setup. If a browser
-challenge requires JavaScript, copy the preferences address and open it yourself
-in a browser, sign in, enable API access, and paste the key into Videre. Videre
-does not launch that browser or change its proxy configuration. Manual setup
+For ordinary HTTPS NerdVPN accounts with Videre's network proxy off, sign-in
+offers **Sign in with browser**. This opens Android's default browser, or its
+browser chooser when no default is set, so NerdVPN's JavaScript check can run.
+The browser uses its own cookies, network settings, and destination policy;
+Videre does not apply its SOCKS proxy to that browser. The choice is explicit
+and never disables the app's proxy. Protected gateway accounts, onion addresses,
+and accounts using Videre's proxy retain the protected-browser flow.
+
+The same choice also offers **Sign in in app**. This temporary session enables
+JavaScript only for direct sign-in at the canonical HTTPS NerdVPN origin. Its
+browser connection rejects other origins, and file access, popups, mixed content,
+and service-worker networking remain disabled. Proxy/onion sessions and persistent
+gateway sessions do not receive this exception: page scripts can make WebRTC
+connections outside an HTTP proxy.
+
+After authorization, Android returns to Videre. A pending, single-use PKCE
+attempt binds the callback to the requested account and origin. Videre exchanges
+the code directly with that origin without following redirects. External-browser
+exchange imports no browser cookies; in-app exchange uses only its temporary
+same-origin cookies, which are cleared afterward. Cancelled, expired, duplicate,
+or unrelated callbacks cannot
+replace the saved login. If Android closes the app during sign-in, start again;
+the app does not restore a verifier from an incoming link.
+
+The HTTPS add-server screen also offers manual API-key setup. Copy the
+preferences address and open it yourself in a browser, sign in, enable API
+access, and paste the key into Videre. This preferences action remains copy-only.
+Manual setup
 validates the key with the instance before saving the new entry; failure or
 cancellation removes only its provisional credentials. A key provides API and
-playback access, without signing into server history or subscriptions. Page
-scripts remain disabled in Videre's protected browser.
+playback access, without signing into server history or subscriptions. Other
+protected-browser sessions keep page scripts disabled.
 
 The supported onion host is
 `nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion`,
@@ -170,7 +194,7 @@ when the app's SOCKS setting is off. HTTPS certificate checks remain mandatory.
 Other HTTP hosts, ports, and onion aliases do not gain managed API-key access.
 
 The onion preferences button shows a copyable public address and guidance.
-Videre does not launch another browser or application. On a TV, the address can
+It does not launch another browser or application. On a TV, the address can
 be opened in Tor Browser on another device. API keys are obscured during entry.
 Adding an onion server
 checks authenticated statistics and video metadata through Videre's configured

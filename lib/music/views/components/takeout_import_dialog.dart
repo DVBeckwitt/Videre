@@ -36,12 +36,21 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
   String? _error;
   int? _added;
 
-  bool get _current =>
-      mounted && !_cancelled && ModalRoute.of(context)?.isCurrent == true;
+  // A shared link can cover this dialog while file work is still running.
+  // Keep its result while the route exists, even when it is not on top.
+  bool get _active =>
+      mounted && !_cancelled && ModalRoute.of(context)?.isActive == true;
 
   void _close(bool result) {
+    if (!_active) return;
+    final route = ModalRoute.of<bool>(context)!;
+    final navigator = Navigator.of(context);
     _cancelled = true;
-    Navigator.pop(context, result);
+    if (route.isCurrent) {
+      navigator.pop(result);
+    } else {
+      navigator.removeRoute(route, result);
+    }
   }
 
   @override
@@ -54,7 +63,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
     try {
       final result = await const MethodChannel('videre/files')
           .invokeListMethod<dynamic>('openTakeout');
-      if (!_current) return;
+      if (!_active) return;
       if (result == null) {
         _close(false);
         return;
@@ -66,7 +75,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
           .toList();
       // CSV decoding and validation are local, and run away from the UI isolate.
       final collections = await compute(TakeoutImport.parse, files);
-      if (!mounted || !_current) return;
+      if (!mounted || !_active) return;
       if (!widget.session.isCurrent) {
         throw StateError(AppLocalizations.of(context)!.takeoutProfileChanged);
       }
@@ -81,7 +90,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
         _reading = false;
       });
     } catch (error) {
-      if (_current) {
+      if (_active) {
         setState(() {
           _reading = false;
           _error = _message(error);
@@ -98,7 +107,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
       };
 
   Future<void> _import() async {
-    if (!_current || _saving || _added != null) return;
+    if (!_active || _saving || _added != null) return;
     if (!widget.session.isCurrent) {
       setState(
           () => _error = AppLocalizations.of(context)!.takeoutProfileChanged);
@@ -108,7 +117,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
     try {
       final added = await widget.session.library
           .importSongs(_collections![_selected].songs);
-      if (!_current) return;
+      if (!_active) return;
       if (!widget.session.isCurrent) {
         _close(false);
         return;
@@ -118,7 +127,7 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
         _added = added;
       });
     } catch (error) {
-      if (_current) {
+      if (_active) {
         setState(() {
           _saving = false;
           _error = _message(error);

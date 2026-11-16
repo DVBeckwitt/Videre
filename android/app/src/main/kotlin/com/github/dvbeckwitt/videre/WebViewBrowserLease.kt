@@ -6,6 +6,7 @@ import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebViewFeature
 import com.github.dvbeckwitt.videre.proxy.BrowserPrivacyProxy
 import java.util.concurrent.Executor
+import okhttp3.HttpUrl
 
 /** UI-thread lease: proxy overrides affect every WebView in this process. */
 internal object WebViewBrowserLease {
@@ -34,9 +35,9 @@ internal object WebViewBrowserLease {
         ProxyController.getInstance().setProxyOverride(config, executor) { applied() }
     }
 
-    fun allow(value: Any, socksHost: String?, socksPort: Int?) {
+    fun allow(value: Any, socksHost: String?, socksPort: Int?, allowedOrigin: HttpUrl? = null) {
         check(owner === value)
-        checkNotNull(proxy).allow(socksHost, socksPort)
+        checkNotNull(proxy).allow(socksHost, socksPort, allowedOrigin)
     }
 
     fun deny(value: Any) {

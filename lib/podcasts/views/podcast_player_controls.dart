@@ -318,8 +318,12 @@ class _PodcastPlayerSheetState extends State<_PodcastPlayerSheet> {
                           IconButton(
                               tooltip: locals.podcastStop,
                               onPressed: () async {
+                                final route = ModalRoute.of(context);
                                 await player.stop();
-                                if (context.mounted) Navigator.pop(context);
+                                if (context.mounted &&
+                                    route?.isCurrent == true) {
+                                  Navigator.pop(context);
+                                }
                               },
                               icon: const Icon(Icons.stop)),
                         ],

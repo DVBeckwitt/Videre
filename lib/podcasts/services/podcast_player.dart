@@ -117,6 +117,9 @@ class PodcastPlayer extends ChangeNotifier {
     _processing = audio.ProcessingState.loading;
     _publish(metadata: true);
     try {
+      // Capture the fixed profile immediately so an explicit seek followed by
+      // Stop can save even while takeover or native disposal is still pending.
+      final progressStore = _progressStore = _progressForProfile?.call(owner);
       await Future.wait([stopping, saving]);
       if (!_current(generation)) return;
       // Stop the existing decoder before allocating another one. This also
@@ -125,10 +128,8 @@ class PodcastPlayer extends ChangeNotifier {
       if (!_current(generation)) return;
       // The previous controller's Stop must finish before reading this episode:
       // TV route players and the home player can take over the same local item.
-      final progressStore = _progressForProfile?.call(owner);
       final saved = await progressStore?.read(episode.id);
       if (!_current(generation)) return;
-      _progressStore = progressStore;
       startAt ??= saved?.completed == true
           ? Duration.zero
           : saved?.position ?? Duration.zero;
@@ -225,13 +226,19 @@ class PodcastPlayer extends ChangeNotifier {
         await current.seek(Duration.zero);
         if (!ownsAudio()) return;
       }
-      await current.setSpeed(_speed);
-      if (!ownsAudio()) return;
-      while (_pendingSeek != null) {
-        final target = _boundedPosition(_pendingSeek!, current.duration);
-        _pendingSeek = null;
-        await current.seek(target);
+      while (true) {
+        final requestedSpeed = _speed;
+        await current.setSpeed(requestedSpeed);
         if (!ownsAudio()) return;
+        while (_pendingSeek != null) {
+          final target = _boundedPosition(_pendingSeek!, current.duration);
+          _pendingSeek = null;
+          await current.seek(target);
+          if (!ownsAudio()) return;
+        }
+        // Controls remain available during setup. A speed change can arrive
+        // while either native operation is pending and must reach the decoder.
+        if (_speed == requestedSpeed) break;
       }
       _sourceReady = true;
       _hasCheckpointPosition = true;
@@ -297,11 +304,22 @@ class PodcastPlayer extends ChangeNotifier {
     }
     _wantsToPlay = true;
     if (!_sourceReady || _interrupted) return;
+    final generation = _generation;
+    final current = _audio;
     if (_processing == audio.ProcessingState.completed) {
       await seek(Duration.zero);
     }
-    final current = _audio;
-    if (current != null) unawaited(_play(current, _generation));
+    // Replay seeks can outlive a later Pause, interruption, or replacement.
+    if (current == null ||
+        !_current(generation) ||
+        !identical(current, _audio) ||
+        !_wantsToPlay ||
+        !_sourceReady ||
+        _interrupted ||
+        _error != null) {
+      return;
+    }
+    unawaited(_play(current, generation));
   }
 
   Future<void> pause() async {

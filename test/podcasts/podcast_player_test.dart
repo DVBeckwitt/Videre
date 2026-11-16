@@ -83,6 +83,7 @@ class _NativePlayer extends AudioPlayerPlatform {
   int pauses = 0;
   bool disposed = false;
   Completer<void>? delayNextSeek;
+  Completer<void>? delayNextSpeed;
 
   _NativePlayer(super.id, this.holdLoad, this.duration, this.completedLoad);
 
@@ -144,6 +145,9 @@ class _NativePlayer extends AudioPlayerPlatform {
   @override
   Future<SetSpeedResponse> setSpeed(SetSpeedRequest request) async {
     speeds.add(request.speed);
+    final delay = delayNextSpeed;
+    delayNextSpeed = null;
+    await delay?.future;
     return SetSpeedResponse();
   }
 
@@ -362,6 +366,28 @@ void main() {
     expect(player.playing, isFalse);
   });
 
+  test('a speed change during native setup reaches the loaded decoder',
+      () async {
+    final loadHold = platform.holdLoad = Completer<void>();
+    final starting = start();
+    while (platform.players.isEmpty) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    final native = platform.players.single;
+    await native.loaded.future;
+    final speedHold = native.delayNextSpeed = Completer<void>();
+    final previousSpeedCalls = native.speeds.length;
+    loadHold.complete();
+    while (native.speeds.length == previousSpeedCalls) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await player.setSpeed(1.5);
+    speedHold.complete();
+    await starting;
+    expect(player.speed, 1.5);
+    expect(native.speeds.last, 1.5);
+  });
+
   test('stop invalidates pending takeover before a decoder can start',
       () async {
     await player.close();
@@ -433,6 +459,58 @@ void main() {
     expect(native.seeks.last, Duration.zero);
     await player.seek(const Duration(hours: 1));
     expect(native.seeks.last, const Duration(seconds: 60));
+  });
+
+  test('pause while replay seek is pending prevents deferred playback',
+      () async {
+    await start();
+    await _flush();
+    final native = platform.players.single;
+    native.report(
+        ProcessingStateMessage.completed, const Duration(seconds: 60));
+    await _flush();
+    final hold = native.delayNextSeek = Completer<void>();
+    final replaying = player.resume();
+    while (native.seeks.isEmpty) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await player.pause();
+    hold.complete();
+    await replaying;
+    await _flush();
+    expect(native.plays, 1);
+    expect(player.playing, isFalse);
+    expect(handler.playbackState.value.playing, isFalse);
+  });
+
+  test('an old replay seek cannot restart a paused replacement episode',
+      () async {
+    await start();
+    await _flush();
+    final native = platform.players.single;
+    native.report(
+        ProcessingStateMessage.completed, const Duration(seconds: 60));
+    await _flush();
+    final hold = native.delayNextSeek = Completer<void>();
+    final replaying = player.resume();
+    while (native.seeks.isEmpty) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await start(
+        episode: const PodcastEpisode(
+            id: 'replacement',
+            title: 'Replacement episode',
+            mediaUrl: 'https://publisher.example/replacement.mp3',
+            mimeType: 'audio/mpeg'));
+    await _flush();
+    final replacement = platform.players.last;
+    await player.pause();
+    hold.complete();
+    await replaying;
+    await _flush();
+    expect(replacement.plays, 1);
+    expect(player.episode?.id, 'replacement');
+    expect(player.playing, isFalse);
   });
 
   test(
@@ -687,6 +765,26 @@ void main() {
       expect(
           (await store.read(_episode.id))!.position.inSeconds, rewind ? 0 : 35);
     }
+  });
+
+  test('an explicit rewind before takeover finishes survives Stop', () async {
+    final store = PodcastProgressStore.forProfile(progressDatabase, profile);
+    await store.save(
+        _episode.id,
+        const PodcastProgress(
+            position: Duration(seconds: 35),
+            duration: Duration(seconds: 60),
+            completed: false));
+    await player.close();
+    final hold = Completer<void>();
+    player = newPlayer(beforeStart: () => hold.future);
+    final starting = start();
+    await _flush();
+    await player.seek(Duration.zero);
+    await player.stop();
+    hold.complete();
+    await starting;
+    expect((await store.read(_episode.id))!.position, Duration.zero);
   });
 
   test(

@@ -16,11 +16,16 @@ verification is retained. A proxy failure does not enable a direct fallback.
 Internal loopback traffic (including just_audio's header-forwarding proxy) stays
 local; its upstream request uses SOCKS. Phone/TV remote control only accepts
 literal LAN addresses and refuses redirects, and remains local. External links,
-including onion preferences, are copy-only. Videre does not launch another app
-whose redirects and networking it cannot protect. Open a copied onion address
+including onion preferences, are copy-only. The explicit **Sign in with browser**
+option for ordinary HTTPS NerdVPN accounts is the exception: it is available
+only with Videre's proxy off and opens Android's default browser using that
+browser's own network settings and destination policy. Videre never disables
+its proxy to offer this option. Open a copied onion address
 yourself in Tor Browser to obtain an API key. The embedded sign-in and backend
 pages use protected routing with page JavaScript and service-worker networking
-disabled. JavaScript-dependent gateways are unsupported.
+disabled. The sole JavaScript exception is temporary, direct HTTPS NerdVPN
+sign-in while the app proxy is off; that session restricts browser connections
+to NerdVPN's origin. JavaScript-dependent gateways remain unsupported with SOCKS.
 Proxy endpoints are device-specific and are excluded from exported backups.
 
 Videre requires this SOCKS setting for HTTP and HTTPS onion requests, including
