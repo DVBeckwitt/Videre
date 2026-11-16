@@ -1,12 +1,17 @@
 Generator: built-in image_gen tool
 
-Use case: infographic-diagram.
-Asset type: polished feature overview graphic for the existing Videre Android app GitHub README.
-Primary request: a landscape graphic listing EXACTLY eight feature names with simple supporting icons, with NO descriptions.
-Style: precise, restrained, modern flat graphic design with generous spacing and consistent typography. Background solid deep navy #1e2546, icons bright violet #a416f4 with subtle lavender accents, text soft white. Match Videre's existing navy and purple brand palette.
-Composition: landscape 1536 by 864 proportions; an evenly spaced four-column, two-row grid, read left to right. Each cell has one large simple unified line icon above its feature label. Comfortable outside margins. Barely visible thin separators may organize the grid. Large readable semibold sans-serif labels. Labels can wrap to two centered lines where necessary. Consistent scale and baseline.
-Text (verbatim), in this exact grid order:
-Top row: "SponsorBlock" | "Dislike Counts" | "Local Library" | "Background Playback"
-Bottom row: "Watch Offline" | "Saved Playback" | "Export/Import Profiles" | "TV Streaming"
-Icons: skip-forward inside shield for SponsorBlock; thumbs-down with tiny count bars for Dislike Counts; stacked library folders for Local Library; headphones with a small play symbol for Background Playback; downward arrow into a tray for Watch Offline; circular resume arrow around a play symbol for Saved Playback; opposing import/export arrows around a profile silhouette for Export/Import Profiles; a television and phone linked by a subtle connecting line for TV Streaming. Icons have consistent clean line weight and optical size.
-Constraints: ONLY the eight exact labels are permitted text. Do not add a title, brand name, tagline, descriptions, numbers, extra features, badges, watermark, fake UI, photos, device screenshots, textures, neon bloom, 3D effects, or decorative illustrations. Prioritize accurate spelling and legibility at GitHub README width. This is a brand new graphic, not an edit.
+Edit the attached seven-feature Videre graphic into a more COMPACT final README banner. The user explicitly wants less whitespace and the established Videre/Clipious color scheme.
+Keep exactly the same seven features, same reading order, and simple recognizable line icons. Preserve the balanced layout of four items on top and three centered below. Reduce the unused top and bottom margins drastically and bring the two rows closer together. This must be a wide, tightly composed banner approximately 1536 x 640, 2.4:1 aspect ratio. Outer padding approximately 32px, with about 40px of clear space between the two content rows. Each icon should be about 110px tall, with 18px before its label. Fill the canvas deliberately without crowding. The prior image's large empty upper and lower bands must be removed through the new composition.
+Use the EXACT colors verified in Videre's actual brand assets:
+flat solid navy background #171D36;
+primary icon strokes vivid violet #7C3AED;
+small lavender icon details #B69CFF;
+optional intermediate purple #9B64F4;
+text soft white #F4F1FF.
+Use the primary violet prominently, not all-pastel monochrome. Clean flat design, consistent medium outline stroke, no gridlines, cards, borders, separators, gradients, textures, shadows, glow, or decorative flourishes.
+Labels should be highly readable semibold sans-serif, same size, closely grouped beneath the icons. Two-line labels only for Background Playback and Offline Downloads.
+Only these exact seven labels:
+Top row: "Sponsor Block" | "Local Library" | "Background Playback" | "Offline Downloads"
+Bottom row centered: "TV Remote" | "YouTube Music" | "RSS Feeds"
+Icons: skip-forward within shield; folder; headphones; download arrow and tray; TV and small handheld remote; musical note in circle; standard RSS dot and two arcs.
+No title, subtitle, footer, extra labels, feature additions, logo badges, or watermark. Entire graphic uncropped, with even compact margins and consistent alignment.

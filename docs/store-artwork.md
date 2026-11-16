@@ -16,6 +16,36 @@ are PNG renders of those vectors, copied to
 `fastlane/metadata/android/en-US/images/`. No generated raster illustration or
 mock UI is used in these assets.
 
+## README figures
+
+The README gallery was refreshed on 16 November 2026 using installed
+**Videre 1.22.46+60918** on Android 16 / API 36, in the persistent
+`Videre_NerdVPN_Test` emulator. All three PNGs are unedited **540 × 1080** native
+Android captures in the app's dark theme. The emulator's original light theme
+was restored afterward.
+
+| File under `screenshots/` | Displayed screen |
+| --- | --- |
+| `videre-video.png` | Video player showing a frame from *Spring* with playback controls visible |
+| `videre-music.png` | Music Home, with an empty saved-song library and genre searches |
+| `videre-podcasts.png` | Add podcast form, with the keyboard dismissed and its example feed placeholder |
+
+The video screenshot shows playback through a saved Invidious instance.
+The displayed film frame comes from [Spring](https://www.youtube.com/watch?v=WhWc3b3KhnY)
+© Blender Foundation | cloud.blender.org/spring,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+See the [Blender Studio license notice](https://studio.blender.org/projects/spring/pages/about/).
+
+`assets/features.png` is a generated seven-feature illustration with a navy
+background, violet and lavender icons, and two compact rows. It was updated with the
+built-in image-generation tool using the earlier graphic as a reference.
+The palette follows the existing brand assets, using navy #171D36, violet
+#7C3AED, lavender #B69CFF, and soft white #F4F1FF. The exact prompt is
+retained in `assets/features.prompt.txt`.
+Its only labels are Sponsor Block, Local Library, Background Playback,
+Offline Downloads, TV Remote, YouTube Music, and RSS Feeds.
+The README explains that music uses the selected Invidious instance.
+
 ## Android screenshots
 
 The store screenshots show the real Videre Android application in an Android
