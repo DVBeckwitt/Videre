@@ -101,6 +101,12 @@ object ProxyDataSource {
             if (outgoing != null) setDefaultRequestProperties(outgoing)
         }
     }
+
+    /** Publisher audio has no instance credentials and retains all proxy/TLS
+     * protections. The source DTO selects it, never a caller-supplied header. */
+    @JvmStatic
+    fun podcastFactory(userAgent: String?, sourceUri: String?): HttpDataSource.Factory =
+        OkHttpDataSource.Factory(calls.forPodcastSource(sourceUri)).apply { setUserAgent(userAgent) }
 }
 
 class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {

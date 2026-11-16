@@ -12,6 +12,7 @@ import 'package:clipious/home/views/components/content_mode_selector.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
+import 'package:clipious/podcasts/views/podcast_player_controls.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
@@ -128,6 +129,10 @@ class _TvHomeContentState extends State<_TvHomeContent> {
         child: BlocProvider(
           create: (BuildContext context) => TvHomeCubit(false),
           child: Scaffold(
+            bottomNavigationBar: const PodcastPlaybackBar(
+                padding: EdgeInsets.symmetric(
+                    horizontal: TvOverscan.horizontal,
+                    vertical: TvOverscan.vertical)),
             body: BlocBuilder<TvHomeCubit, bool>(builder: (context, homeState) {
               var homeCubit = context.read<TvHomeCubit>();
               final (mode, showModeSelector) =

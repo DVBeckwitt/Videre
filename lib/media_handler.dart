@@ -34,46 +34,92 @@ class MediaHandler extends BaseAudioHandler
   Future<void> play() async {
     // All 'play' requests from all origins route to here. Implement this
     // callback to start playing audio appropriate to your app. e.g. music
-    controller.play();
+    final podcast = controller.activePodcast;
+    if (podcast != null) {
+      await podcast.resume();
+    } else {
+      controller.play();
+    }
   }
 
   @override
   Future<void> pause() async {
-    controller.pause();
+    final podcast = controller.activePodcast;
+    if (podcast != null) {
+      await podcast.pause();
+    } else {
+      controller.pause();
+    }
   }
 
   @override
   Future<void> stop() async {
-    controller.hide();
+    final podcast = controller.activePodcast;
+    if (podcast != null) {
+      await podcast.stop();
+    } else {
+      controller.hide();
+    }
   }
 
   @override
   Future<void> seek(Duration position) async {
-    controller.seek(position);
+    final podcast = controller.activePodcast;
+    if (podcast != null) {
+      await podcast.seek(position);
+    } else {
+      controller.seek(position);
+    }
   }
 
   @override
   Future<void> skipToNext() async {
-    controller.playNext();
+    if (controller.activePodcast != null) {
+      await fastForward();
+    } else {
+      controller.playNext();
+    }
   }
 
   @override
   Future<void> skipToPrevious() async {
-    controller.playPrevious();
+    if (controller.activePodcast != null) {
+      await rewind();
+    } else {
+      controller.playPrevious();
+    }
   }
 
   @override
   Future<void> fastForward() async {
-    controller.fastForward();
+    final podcast = controller.activePodcast;
+    if (podcast != null) {
+      await podcast.seek(podcast.position + const Duration(seconds: 30));
+    } else {
+      controller.fastForward();
+    }
   }
 
   @override
   Future<void> rewind() async {
-    controller.rewind();
+    final podcast = controller.activePodcast;
+    if (podcast != null) {
+      await podcast.seek(podcast.position - const Duration(seconds: 15));
+    } else {
+      controller.rewind();
+    }
   }
 
   @override
   Future<void> skipToQueueItem(int index) async {
-    await controller.skipToVideo(index);
+    if (controller.activePodcast == null) {
+      await controller.skipToVideo(index);
+    }
+  }
+
+  @override
+  Future<void> setSpeed(double speed) async {
+    final podcast = controller.activePodcast;
+    if (podcast != null) await podcast.setSpeed(speed);
   }
 }

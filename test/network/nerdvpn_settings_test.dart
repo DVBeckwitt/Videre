@@ -611,6 +611,17 @@ void main() {
       expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
       expect(find.text(locals.instanceAddressDescription), findsNothing);
       expect(find.text(locals.accountName), findsNothing);
+      expect(find.text(locals.nerdVpnKeyFallback), findsOneWidget);
+
+      cubit.apiKeyController.text = _manualKey;
+      await tester.pumpAndSettle();
+      expect(find.text(locals.testAndAddServer), findsOneWidget);
+      expect(find.text(locals.nerdVpnSignInAndAdd), findsNothing);
+      expect(find.text(locals.protectedServer), findsNothing);
+      expect(find.text(locals.alsoTestServerConfig), findsNothing);
+      cubit.apiKeyController.clear();
+      await tester.pumpAndSettle();
+      expect(find.text(locals.nerdVpnSignInAndAdd), findsOneWidget);
 
       await enterUrl(_onionOrigin);
       expect(cubit.state.valid, isTrue);

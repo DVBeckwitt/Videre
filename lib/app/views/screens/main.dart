@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/app/views/components/player_placeholder.dart';
 import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/player.dart';
+import 'package:clipious/podcasts/views/podcast_player_controls.dart';
 
 import '../../../player/states/player.dart';
 import '../../../player/views/components/mini_player_aware.dart';
@@ -29,36 +30,49 @@ class MainScreen extends StatelessWidget {
           ? getFractionOfAvailableSpace(context, tabletMiniPlayerFraction)
           : const Size(0, 0);
       var colors = Theme.of(context).colorScheme;
-      return Container(
-        color: colors.surface,
-        child: Stack(
-          children: [
-            const Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: MiniPlayerAware(
-                child: AutoRouter(),
-              ),
-            ),
-            Positioned(
-                left: playerHorizontalPosition.width,
+      final podcasts = context.read<PlayerCubit>().podcasts;
+      return ListenableBuilder(
+        listenable: podcasts,
+        builder: (context, _) => Container(
+          color: colors.surface,
+          child: Stack(
+            children: [
+              const Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
                 bottom: 0,
-                right: playerHorizontalPosition.width,
-                child: SafeArea(child: const PlayerPlaceHolder())),
-            Player(constraints.maxHeight),
-            if (!globalLoading)
-              const Positioned.fill(child: PlayerRetryIndicator()),
-            if (globalLoading)
-              Positioned(
-                  child: Container(
-                      color: colors.surface.withValues(alpha: 0.5),
-                      child: const Center(
-                        child: MotionLoadingIndicator(
-                            child: CircularProgressIndicator()),
-                      )))
-          ],
+                child: MiniPlayerAware(
+                  child: AutoRouter(),
+                ),
+              ),
+              if (!podcasts.active)
+                Positioned(
+                    left: playerHorizontalPosition.width,
+                    bottom: 0,
+                    right: playerHorizontalPosition.width,
+                    child: SafeArea(child: const PlayerPlaceHolder())),
+              if (!podcasts.active) Player(constraints.maxHeight),
+              if (podcasts.active && !globalLoading)
+                Positioned(
+                    left: playerHorizontalPosition.width,
+                    right: playerHorizontalPosition.width,
+                    bottom: MediaQuery.viewInsetsOf(context).bottom,
+                    child: SafeArea(
+                        top: false,
+                        child: PodcastPlaybackBar(controller: podcasts))),
+              if (!globalLoading && !podcasts.active)
+                const Positioned.fill(child: PlayerRetryIndicator()),
+              if (globalLoading)
+                Positioned(
+                    child: Container(
+                        color: colors.surface.withValues(alpha: 0.5),
+                        child: const Center(
+                          child: MotionLoadingIndicator(
+                              child: CircularProgressIndicator()),
+                        )))
+            ],
+          ),
         ),
       );
     });

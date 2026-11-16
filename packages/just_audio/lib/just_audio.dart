@@ -3072,6 +3072,28 @@ class ProgressiveAudioSource extends UriAudioSource {
       );
 }
 
+/// A publisher-hosted podcast file. Android permits publisher/CDN redirects
+/// while blocking Google and YouTube destinations. This explicit source type
+/// cannot be selected by request headers and never accepts account headers.
+class PodcastAudioSource extends ProgressiveAudioSource {
+  PodcastAudioSource(super.uri, {super.tag, super.duration});
+
+  @override
+  AudioSourceMessage _toMessage() => _PodcastAudioSourceMessage(
+        id: _id,
+        uri: _effectiveUri.toString(),
+        tag: tag,
+      );
+}
+
+class _PodcastAudioSourceMessage extends ProgressiveAudioSourceMessage {
+  _PodcastAudioSourceMessage(
+      {required super.id, required super.uri, super.tag});
+
+  @override
+  Map<dynamic, dynamic> toMap() => super.toMap()..['podcast'] = true;
+}
+
 /// An [AudioSource] representing a DASH stream. The following URI schemes are
 /// supported:
 ///

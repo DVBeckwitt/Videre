@@ -81,6 +81,8 @@ void main() {
         AddServerCubit.normalizeUrl(' INV.example/// '), 'https://inv.example');
     expect(AddServerCubit.normalizeUrl('http://localhost:3000/invidious/'),
         'http://localhost:3000/invidious');
+    expect(AddServerCubit.normalizeUrl('https://inv.nadeko.net/'),
+        'https://inv.nadeko.net');
     expect(
         AddServerCubit.normalizeUrl('http://[::1]:3000/'), 'http://[::1]:3000');
     for (final address in [
@@ -148,14 +150,14 @@ void main() {
       expect(await AddServerCubit.getPublicInstances(client: client), isEmpty);
     });
 
-    test('suggests recommended hosts regardless of API reporting', () async {
+    test('suggests only curated hosts regardless of API reporting', () async {
       final requests = <Uri>[];
       final client = MockClient((request) async {
         requests.add(request.url);
         return http.Response(
             jsonEncode([
               entry('https://invidious.f5.si'),
-              entry('https://inv.nadeko.net'),
+              entry('https://inv.nadeko.net', api: true),
               entry('https://invidious.nerdvpn.de', api: false),
               entry('https://yt.chocolatemoo53.com', api: true),
               entry('https://invidious.tiekoetter.com', api: true),
@@ -169,7 +171,6 @@ void main() {
           instances,
           unorderedEquals([
             (url: 'https://invidious.f5.si', api: false),
-            (url: 'https://inv.nadeko.net', api: false),
             (url: 'https://invidious.nerdvpn.de', api: false),
           ]));
       expect(requests, [Uri.parse(AddServerCubit.directoryUrl)]);

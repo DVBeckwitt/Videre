@@ -1,4 +1,5 @@
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -166,6 +167,12 @@ class SettingsScreen extends StatelessWidget {
                   ),
                 ]),
                 SettingsSection(tiles: [
+                  SettingsTile(
+                    leading: const Icon(Icons.file_upload_outlined),
+                    title: Text(locals.takeoutImport),
+                    description: Text(locals.takeoutImportDescription),
+                    onPressed: (context) => showTakeoutImport(context),
+                  ),
                   SettingsTile(
                     leading: const Icon(Icons.save_alt),
                     title: Text(locals.exportBackup),

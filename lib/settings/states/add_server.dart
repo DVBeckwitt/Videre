@@ -28,7 +28,6 @@ class AddServerCubit extends Cubit<AddServerState> {
   // Being listed in the directory does not mean a host accepts app requests.
   static const _recommendedInstances = {
     'https://invidious.f5.si',
-    'https://inv.nadeko.net',
     'https://invidious.nerdvpn.de',
   };
 
@@ -78,12 +77,13 @@ class AddServerCubit extends Cubit<AddServerState> {
     final headers = Map<String, String>.from(state.headers);
     final onionManualSetup = usesNerdVpnOnion;
     final enteredApiKey = apiKeyController.text.trim();
-    final protectedServer = state.protectedServer && !onionManualSetup;
+    final manualSetup = usesManualNerdVpnKey;
+    final protectedServer = state.protectedServer && !manualSetup;
     // NerdVPN collects the username on its own sign-in page. Ignore any local
     // label left in the hidden field after switching from another instance.
     final accountName = usesNerdVpn ? '' : nameController.text.trim();
     final advancedTest =
-        state.advancedTest || state.publicInstance != null || onionManualSetup;
+        state.advancedTest || state.publicInstance != null || manualSetup;
     Server? protectedSession;
     var credentialsStored = false;
     emit(state.copyWith(loading: true));
@@ -122,16 +122,13 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
         final headerKey =
             manualKeys.isEmpty ? null : manualKeys.single.value.trim();
-        if (onionManualSetup &&
-            enteredApiKey.isNotEmpty &&
+        if (enteredApiKey.isNotEmpty &&
             headerKey != null &&
             headerKey != enteredApiKey) {
           throw const NerdVpnApiKeyException(
               'The API key field and custom header contain different keys. Remove the custom API key header and try again.');
         }
-        manualKey = onionManualSetup && enteredApiKey.isNotEmpty
-            ? enteredApiKey
-            : headerKey;
+        manualKey = enteredApiKey.isNotEmpty ? enteredApiKey : headerKey;
         if (onionManualSetup && (manualKey == null || manualKey.isEmpty)) {
           throw const NerdVpnApiKeyException(
               'Open NerdVPN in Tor Browser, enable API access in your preferences, then paste the API key here.');
@@ -182,8 +179,8 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
 
-      // Browser sign-in can retain an account awaiting approval. Manual onion
-      // setup only succeeds after its key and authenticated API both work.
+      // Browser sign-in can retain an account awaiting approval. Manual setup
+      // only succeeds after its key and authenticated API both work.
       if (nerdVpn) {
         final access = await NerdVpnAccess.instance.status(server);
         if (isClosed) {
@@ -192,7 +189,7 @@ class AddServerCubit extends Cubit<AddServerState> {
           return null;
         }
         if (!access.ready) {
-          if (onionManualSetup) throw NerdVpnAccessRequired(access.state);
+          if (manualSetup) throw NerdVpnAccessRequired(access.state);
           return server;
         }
       }
@@ -250,7 +247,7 @@ class AddServerCubit extends Cubit<AddServerState> {
       return server;
     } catch (error) {
       if (!isClosed &&
-          !onionManualSetup &&
+          !manualSetup &&
           credentialsStored &&
           protectedSession != null &&
           NerdVpnAccess.supports(protectedSession) &&
@@ -298,6 +295,12 @@ class AddServerCubit extends Cubit<AddServerState> {
 
   bool get usesNerdVpnOnion =>
       usesNerdVpn && isNerdVpnOnionUrl(normalizeUrl(urlController.text) ?? '');
+
+  bool get usesManualNerdVpnKey =>
+      usesNerdVpn &&
+      (usesNerdVpnOnion ||
+          apiKeyController.text.trim().isNotEmpty ||
+          state.headers.keys.any(NerdVpnAccess.isKeyHeader));
 
   void selectPublicInstance(String url) {
     if (isClosed || state.loading) return;

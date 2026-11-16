@@ -10,7 +10,7 @@ import '../../../router.dart';
 import '../../../utils/motion.dart';
 import '../../../utils/views/components/external_link.dart';
 import '../../models/db/server.dart';
-import 'nerdvpn_onion_setup.dart';
+import 'nerdvpn_api_key_setup.dart';
 
 class NerdVpnAccessSettings extends StatefulWidget {
   final Server account;
@@ -73,7 +73,7 @@ class _NerdVpnAccessSettingsState extends State<NerdVpnAccessSettings> {
   Future<void> _preferences() async {
     final account = widget.account;
     if (isNerdVpnOnionUrl(account.url)) {
-      await openNerdVpnTorPreferences(context, account.url,
+      await openNerdVpnPreferences(context, account.url,
           isCurrent: () => mounted && widget.account == account);
       return;
     }

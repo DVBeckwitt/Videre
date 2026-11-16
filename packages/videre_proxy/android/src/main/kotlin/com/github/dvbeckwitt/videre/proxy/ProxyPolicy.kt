@@ -150,10 +150,12 @@ internal class PolicyCallFactory : Call.Factory {
             .readTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
             .addInterceptor(YoutubeRequestGuard())
+            .addInterceptor(PodcastRequestGuard())
             .addInterceptor(SelectedOriginRequestGuard())
             .addInterceptor(ReadHeaderEofRecovery())
             .addInterceptor(NerdVpnRecoveryInterceptor())
             .addNetworkInterceptor(YoutubeRedirectGuard())
+            .addNetworkInterceptor(PodcastRedirectGuard())
             .addNetworkInterceptor(SelectedOriginRedirectGuard())
             .addNetworkInterceptor { chain ->
                 var outgoing = chain.request()
@@ -227,6 +229,18 @@ internal class PolicyCallFactory : Call.Factory {
                     .tag(SourceHeaderScope::class.java, scope)
                     .tag(SelectedOriginScope::class.java, scope.origin?.let(::SelectedOriginScope))
                     .build(), gateway),
+            )
+        }
+    }
+
+    fun forPodcastSource(sourceUri: String?): Call.Factory {
+        val origin = sourceUri?.toHttpUrlOrNull() ?: throw PodcastConnectionBlocked()
+        requirePodcastUrl(origin)
+        val scope = SourceHeaderScope(origin, emptySet())
+        return object : Call.Factory {
+            override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
+                preparePodcastRequest(request).newBuilder()
+                    .tag(SourceHeaderScope::class.java, scope).build(),
             )
         }
     }

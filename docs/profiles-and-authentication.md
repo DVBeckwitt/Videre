@@ -147,6 +147,15 @@ address support managed API keys. Clearnet browser sign-in uses PKCE and the
 Existing clearnet accounts can sign in again to grant this scope, or enter a
 manual key in account settings.
 
+The HTTPS add-server screen also offers manual API-key setup. If a browser
+challenge requires JavaScript, copy the preferences address and open it yourself
+in a browser, sign in, enable API access, and paste the key into Videre. Videre
+does not launch that browser or change its proxy configuration. Manual setup
+validates the key with the instance before saving the new entry; failure or
+cancellation removes only its provisional credentials. A key provides API and
+playback access, without signing into server history or subscriptions. Page
+scripts remain disabled in Videre's protected browser.
+
 The supported onion host is
 `nerdvpneaggggfdiurknszkbmhvjndks5z5k3g5yp4nhphflh3n3boad.onion`,
 on HTTP port 80 or HTTPS port 443. Enable Orbot or another Tor-capable SOCKS5

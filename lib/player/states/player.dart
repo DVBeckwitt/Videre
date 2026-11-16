@@ -15,6 +15,8 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/podcasts/services/podcast_player.dart';
+import 'package:clipious/podcasts/services/podcast_progress_store.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
@@ -78,6 +80,9 @@ class _PlaybackRefreshRequest {
 
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static PlayerCubit? _sessionOwner;
+  static final _runtimePlayers = <PlayerCubit>{};
+  static PodcastPlayer? _podcastOwner;
+  static Future<MediaHandler>? _sharedMediaInitialization;
   String? _pitchVideoId;
   String? _speedVideoId;
   static Future<void> _sessionWrite = Future.value();
@@ -112,6 +117,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   int? _watchRevision;
   bool _switchingProfile = false;
   MediaHandler? _mediaSessionHandler;
+  PodcastPlayer? _podcasts;
+  PodcastPlayer get podcasts => _podcasts ??= PodcastPlayer(
+      beforeStart: _prepareForPodcastPlayback,
+      profileId: () => db.profileId,
+      canPlay: () =>
+          !isClosed &&
+          !_isDisposing &&
+          !_switchingProfile &&
+          !NetworkProxy.instance.isChanging &&
+          !settings.appCubit.state.globalLoading &&
+          !settings.appCubit.state.sessionRecoveryRequired &&
+          db.profileId == _profileDatabase.profileId,
+      mediaHandler: () => _mediaSessionHandler,
+      progressForProfile: (profileId) =>
+          PodcastProgressStore.forProfile(db, profileId));
+  PodcastPlayer? get activePodcast => _podcastOwner?.active == true
+      ? _podcastOwner
+      : _podcasts?.active == true
+          ? _podcasts
+          : null;
   final _beforeProfileSwitch = <AsyncCallback>{};
   Future<void> _watchBinding = Future.value();
   late final AudioSession _audioSession;
@@ -215,6 +240,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void attachMediaHandler(MediaHandler handler) {
     _mediaSessionHandler = handler;
+    _podcasts?.publishMediaSession();
   }
 
   void addBeforeProfileSwitch(AsyncCallback callback) =>
@@ -249,6 +275,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _initialPlaylistIndex = startIndex,
         _initialPlaylistAudio = playlistAudio {
     _profileDatabase = db.forProfile(db.profileId);
+    _runtimePlayers.add(this);
     // Metadata can be pending before any decoder mounts and registers its own
     // native teardown. The parent must invalidate that pending work as well.
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
@@ -264,6 +291,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> _proxyChanging() async {
     if (isClosed) return;
+    final podcast = activePodcast;
+    if (podcast != null) await podcast.stop();
     if (state.isHidden && !state.hasVideo) {
       // A restored queue is dormant, not active playback. Invalidate pending
       // intents without clearing it or starting a closing animation.
@@ -865,8 +894,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void setEvent(MediaEvent event) {
-    if (isClosed || _isDisposing || _switchingProfile || state.isClosing)
-      return;
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        state.isClosing ||
+        activePodcast != null) return;
     // The previous decoder can still emit while replacement metadata loads.
     if (_backendSwitchPending &&
         event.type != MediaEventType.backendRetry &&
@@ -929,6 +961,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (!_switchingProfile) unawaited(service.syncHistory());
     } else {
       unawaited(_saveSession(state));
+      final podcast = activePodcast;
+      if (podcast != null) unawaited(podcast.saveProgress());
     }
   }
 
@@ -959,6 +993,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void mapMediaEventToMediaHandler(MediaEvent event) {
+    if (activePodcast != null) return;
     if (!isTv && event.type != MediaEventType.progress) {
       log.fine("Event state: ${event.state}, ${event.type}");
       // A buffered-position update does not mean the decoder finished buffering.
@@ -1012,6 +1047,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             (element) => playbackQueueId(element) == state.currentQueueId);
   }
 
+  Future<MediaHandler> _initializeMediaHandler() async {
+    final handler = await (_sharedMediaInitialization ??= AudioService.init(
+      builder: () => MediaHandler(this),
+      config: const AudioServiceConfig(
+        androidNotificationChannelId:
+            'com.github.dvbeckwitt.videre.channel.audio',
+        androidNotificationChannelName: 'Video playback',
+        androidNotificationOngoing: true,
+      ),
+    ));
+    if (!isClosed && !_isDisposing) attachMediaHandler(handler);
+    return handler;
+  }
+
   Future<void> onReady() async {
     var startupGeneration = _videoSwitchGeneration;
     bool startupActive() =>
@@ -1047,15 +1096,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         pause();
       });
 
-      final handler = await AudioService.init(
-        builder: () => MediaHandler(this),
-        config: const AudioServiceConfig(
-          androidNotificationChannelId:
-              'com.github.dvbeckwitt.videre.channel.audio',
-          androidNotificationChannelName: 'Video playback',
-          androidNotificationOngoing: true,
-        ),
-      );
+      final handler = await _initializeMediaHandler();
       if (_isDisposing || isClosed) return;
       mediaHandler = handler;
       BackButtonInterceptor.add(handleBackButton,
@@ -1184,6 +1225,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    _runtimePlayers.remove(this);
+    if (identical(_podcastOwner, _podcasts)) _podcastOwner = null;
+    if (_podcasts != null) await _podcasts!.close();
     for (final timer in _timers.values) {
       timer.cancel();
     }
@@ -1281,10 +1325,51 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   double get getBottom => state.isHidden ? -targetHeight : 0;
 
+  Future<void> _prepareForPodcastPlayback() async {
+    if (isClosed || _isDisposing || _switchingProfile) return;
+    final previous = _podcastOwner;
+    _podcastOwner = _podcasts;
+    if (previous != null && !identical(previous, _podcasts)) {
+      await previous.stop();
+    }
+    if (!identical(_podcastOwner, _podcasts) || _podcasts?.active != true) {
+      return;
+    }
+    // TV routes have their own PlayerCubit. Retire pending setup and decoders
+    // across those routes before allowing one publisher source to take over.
+    await Future.wait([
+      for (final player in List.of(_runtimePlayers))
+        if (!player.isClosed && !player._isDisposing)
+          player._stopForPodcastPlayback(),
+    ]);
+    if (isTv &&
+        _mediaSessionHandler == null &&
+        identical(_podcastOwner, _podcasts) &&
+        _podcasts?.active == true) {
+      final handler = await _initializeMediaHandler();
+      if (!isClosed && !_isDisposing) mediaHandler = handler;
+    }
+  }
+
+  Future<void> _stopForPodcastPlayback() async {
+    if (state.hasVideo || _backendSwitchPending || !state.isHidden) {
+      hide();
+    } else {
+      _progressGeneration++;
+      _videoSwitchGeneration++;
+    }
+    // Teardown hooks stop the native decoder now, not after the player overlay's
+    // closing animation. The saved music/video queue remains restorable.
+    await Future.wait(
+        List.of(_beforeProfileSwitch).map((callback) => callback()));
+    await _updateAutoPip(state, disable: true);
+  }
+
   /// Save under the old person before the application selects the new one.
   /// Clear immediately: an animation callback must never clear the next queue.
   Future<void> prepareForProfileSwitch() async {
     if (isClosed) return;
+    final stoppingPodcast = activePodcast?.stop();
     final clearingSound = musicSound.resetSession();
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();
@@ -1313,6 +1398,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       saved,
       stopping,
       clearingSound,
+      if (stoppingPodcast != null) stoppingPodcast,
       if (clearingSession != null) clearingSession
     ]);
     if (_sessionOwner == this) _sessionOwner = null;
@@ -1705,6 +1791,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final generation = ++_videoSwitchGeneration;
     _clearPlaybackRecovery(resetBudget: true);
     bool active() => !isClosed && generation == _videoSwitchGeneration;
+    final podcast = activePodcast;
+    if (podcast != null) await podcast.stop();
+    if (!active()) return;
     _clearMetadataRetry();
     _progressGeneration++;
     _requestedBackendVideoId = video is Video ? video.videoId : null;

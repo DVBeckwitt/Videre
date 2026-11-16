@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/settings/views/components/nerdvpn_onion_setup.dart';
+import 'package:clipious/settings/views/components/nerdvpn_api_key_setup.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/views/tv/components/tv_text_field.dart';
@@ -50,12 +50,13 @@ void main() {
   Future<void> showSetup(WidgetTester tester,
       {bool television = false,
       bool loading = false,
-      bool pushed = false}) async {
+      bool pushed = false,
+      String serverUrl = _onionOrigin}) async {
     final navigator = GlobalKey<NavigatorState>();
     final setup = Scaffold(
       body: SingleChildScrollView(
-        child: NerdVpnOnionSetup(
-          serverUrl: _onionOrigin,
+        child: NerdVpnApiKeySetup(
+          serverUrl: serverUrl,
           apiKeyController: controller,
           loading: loading,
           television: television,
@@ -92,7 +93,7 @@ void main() {
   testWidgets('key validation feedback explains the key instead of the address',
       (tester) async {
     await showSetup(tester);
-    final context = tester.element(find.byType(NerdVpnOnionSetup));
+    final context = tester.element(find.byType(NerdVpnApiKeySetup));
     const error =
         NerdVpnApiKeyException('Enter an API key from NerdVPN preferences.');
     AddServerScreen.handleError(context, error);
@@ -133,6 +134,30 @@ void main() {
   });
 
   for (final television in [false, true]) {
+    testWidgets(
+        '${television ? 'TV' : 'phone'} clearnet fallback copies preferences only on request',
+        (tester) async {
+      const origin = 'https://invidious.nerdvpn.de';
+      await showSetup(tester, television: television, serverUrl: origin);
+      await tester.tap(find.text('Sign-in not loading? Use an API key'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('JavaScript check'), findsOneWidget);
+      expect(find.textContaining('does not sign in to sync'), findsOneWidget);
+      expect(calls, isEmpty);
+      expect(clipboardText, isNull);
+
+      await tester.ensureVisible(find.text('NerdVPN preferences address'));
+      await tester.tap(find.text('NerdVPN preferences address'));
+      await tester.pumpAndSettle();
+      expect(find.text('$origin/preferences#api-access'), findsOneWidget);
+      expect(clipboardText, isNull);
+      await tester.tap(find.text('Copy to clipboard'));
+      await tester.pumpAndSettle();
+      expect(clipboardText, '$origin/preferences#api-access');
+      expect(calls, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
         '${television ? 'TV' : 'phone'} onion guidance preserves address and copies only on request',
         (tester) async {
@@ -222,7 +247,7 @@ void main() {
         clipboard = Completer<void>();
         await showSetup(tester, pushed: true);
         final setupRoute =
-            ModalRoute.of(tester.element(find.byType(NerdVpnOnionSetup)))!;
+            ModalRoute.of(tester.element(find.byType(NerdVpnApiKeySetup)))!;
         await tester.tap(find.text('Tor preferences address'));
         await tester.pumpAndSettle();
         final dialogContext = tester.element(find.byType(AlertDialog));
@@ -245,7 +270,7 @@ void main() {
         expect(calls, isEmpty);
         expect(setupRoute.isCurrent, isTrue);
         await tester.pumpAndSettle();
-        expect(find.byType(NerdVpnOnionSetup), findsOneWidget);
+        expect(find.byType(NerdVpnApiKeySetup), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
     }

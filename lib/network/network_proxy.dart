@@ -73,7 +73,9 @@ class NetworkProxy {
   }
 
   void configureClient(HttpClient client,
-      {SecurityContext? context, bool requireValidCertificate = false}) {
+      {SecurityContext? context,
+      bool requireValidCertificate = false,
+      void Function(Uri)? validateDestination}) {
     if (_changing || _blocked != null) {
       client.findProxy = (_) => 'DIRECT';
       client.connectionFactory = (_, __, ___) => Future.error(
@@ -82,6 +84,7 @@ class NetworkProxy {
     }
     configureSocksHttpClient(client, _config,
         context: context,
+        validateDestination: validateDestination,
         badCertificateCallback:
             requireValidCertificate ? null : _allowCertificate);
   }

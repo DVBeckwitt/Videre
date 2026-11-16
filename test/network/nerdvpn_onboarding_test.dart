@@ -163,6 +163,72 @@ void main() {
     expect(api.signedOut, isEmpty);
   });
 
+  test('clearnet API key bypasses browser and forces authenticated video probe',
+      () async {
+    await cubit.close();
+    cubit = AddServerCubit(const AddServerState());
+    cubit.urlController.text = _origin;
+    cubit.setProtectedServer(true);
+    cubit.apiKeyController.text = _manualKey;
+
+    final account = await cubit.validateServer();
+
+    expect(account, isNotNull);
+    expect(account!.authToken, isNull);
+    expect(account.gatewayEnabled, isFalse);
+    expect(account.customHeaders, isEmpty);
+    expect(api.events, ['stats', 'video']);
+    expect(api.videoServer!.accountId, account.accountId);
+    expect(calls.where((call) => call.method == 'setKey'), hasLength(1));
+    expect(api.signedOut, isEmpty);
+  });
+
+  for (final state in ['waiting', 'denied']) {
+    test('clearnet manual $state access rolls back only the new draft key',
+        () async {
+      final existing = Server(
+          id: 'existing', url: _origin, authToken: 'saved-account-token');
+      await database.upsertServer(existing);
+      cubit.apiKeyController.text = _manualKey;
+      accessState = state;
+
+      await expectLater(
+          cubit.validateServer(), throwsA(isA<NerdVpnAccessRequired>()));
+
+      expect(api.events, isEmpty);
+      expect(api.signedOut, hasLength(1));
+      expect(api.signedOut.single.accountId, isNot(existing.accountId));
+      expect(database.getAccount(existing.accountId)!.authToken,
+          'saved-account-token');
+    });
+  }
+
+  test('clearnet manual API denial cannot save an unverified account',
+      () async {
+    cubit.apiKeyController.text = _manualKey;
+    api.videoError = const NerdVpnAccessRequired('denied');
+
+    await expectLater(
+        cubit.validateServer(), throwsA(isA<NerdVpnAccessRequired>()));
+
+    expect(api.events, ['stats', 'video']);
+    expect(api.signedOut, hasLength(1));
+    expect(api.signedOut.single.authToken, isNull);
+  });
+
+  test('clearnet conflicting field and header keys fail before native storage',
+      () async {
+    cubit.apiKeyController.text = _manualKey;
+    await cubit.addHeader(
+        'X-Invidious-Token', 'nvpn_abcdefghijklmnopqrstuvwxyz012345');
+
+    await expectLater(
+        cubit.validateServer(), throwsA(isA<NerdVpnApiKeyException>()));
+
+    expect(calls, isEmpty);
+    expect(api.events, isEmpty);
+  });
+
   test('NerdVPN ignores an account label hidden after changing the address',
       () async {
     cubit.nameController.text = 'x' * 81;
@@ -434,15 +500,19 @@ void main() {
     expect(cubit.state.loading, isFalse);
   });
 
-  test('cancelled protected sign-in cleans up a newly entered manual key',
+  test(
+      'manual header skips a protected browser that could not complete sign-in',
       () async {
     await cubit.addHeader('X-Invidious-Token', _manualKey);
     cubit.setProtectedServer(true);
     api.cancelled = true;
-    expect(await cubit.validateServer(), isNull);
-    expect(api.signedOut, hasLength(1));
-    expect(api.signedOut.single.customHeaders, isEmpty);
-    expect(api.events, ['protected-sign-in']);
+    final account = await cubit.validateServer();
+    expect(account, isNotNull);
+    expect(account!.authToken, isNull);
+    expect(account.gatewayEnabled, isFalse);
+    expect(account.customHeaders, isEmpty);
+    expect(api.signedOut, isEmpty);
+    expect(api.events, ['stats', 'video']);
   });
 
   test(

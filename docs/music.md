@@ -125,6 +125,38 @@ it offline.
 The existing download folder, Wi-Fi preference, retry, and profile ownership
 rules apply. TV does not offer downloads.
 
+## Google Takeout import
+
+Use the import button in **Music → Library**, or **Settings → Import Google
+Takeout**, to choose a ZIP or UTF-8 CSV saved in this device's Downloads/storage.
+The picker accepts on-device Android document providers; save files from cloud
+storage to the device first. Videre never signs into Google, opens exported URLs,
+fetches song details/artwork, or uploads the imported collection.
+
+The preview lists recognized song collections. Choose the wanted collection and
+select **Import songs** to merge it into **Library → Songs** in the current
+profile. Existing songs and their metadata are kept; new songs retain file order.
+Canceling changes nothing. Reimporting does not add duplicates. Invalid IDs and
+duplicate rows are counted in the preview, and an empty collection cannot be
+imported. Capacity errors leave the existing library unchanged.
+
+Supported exports include `music-library-songs.csv`, playlist video CSVs, and
+older playlist CSVs with a metadata header. A general Music library export can
+include saved songs you have not liked; a Liked videos export can include
+non-music videos. These are labeled separately from Liked Music. When a ZIP
+contains both song metadata and playlist IDs, missing labels are filled only
+from matching IDs in that same local export. Remaining missing titles use the
+song ID, without any lookup. This imports saved-song references, not audio files
+or automatic synchronization with Google; playback still uses the selected
+Invidious instance.
+
+ZIPs are limited to 64 MiB, individual CSVs to 10 MiB, and archive CSV data to
+16 MiB total. Only relevant CSVs are read from a full Takeout archive; media
+files are not extracted. For larger exports, extract the wanted CSV yourself
+and select it. The existing Music library limit remains 10,000 entries and
+5 MiB of metadata, including previously saved entries. Export formats or data
+that Google does not include cannot be reconstructed by this local importer.
+
 ## Ads and SponsorBlock
 
 Music plays the media streams supplied by Invidious, using Videre's native

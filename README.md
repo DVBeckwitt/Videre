@@ -54,9 +54,9 @@ Open **Profiles** from the home screen or Settings to add, rename, or switch peo
 
 For an HTTPS instance behind Authentik, select **Sign in to protected server**, complete the gateway login, then authorize the Invidious account. This requires an Android System WebView with isolated-profile support. See [profiles, watched sync, and protected-server behavior](./docs/profiles-and-authentication.md) for migration details and limitations.
 
-For `invidious.nerdvpn.de`, adding the instance opens sign-in in Videre's protected Android WebView. Browser sign-in needs WebView's isolated-profile and proxy support. For ordinary HTTP instances, use the cookie sign-in form. Your NerdVPN account stays saved if API access is not yet available, and settings show the eligibility date returned by the instance. Existing accounts can sign in again to grant API-key access or enter a manual key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**.
+For `invidious.nerdvpn.de`, adding the instance offers sign-in in Videre's protected Android WebView or a manual API-key option. Browser sign-in needs WebView's isolated-profile and proxy support. If a JavaScript challenge blocks sign-in, copy the preferences address, open it yourself in a browser, enable API access, and paste the key into Videre. A manual key enables browsing and playback without signing into server history or subscriptions. Your existing NerdVPN account stays saved if API access is not yet available, and settings show its eligibility date. Existing accounts can sign in again to grant API-key access or enter a key in account settings. If API access is disabled, enable it in NerdVPN preferences and select **Check again**. For ordinary HTTP instances, use the cookie sign-in form.
 
-The official NerdVPN onion address also supports this API-key flow. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, then add the onion instance. Sign-in opens inside Videre through that proxy. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
+The official NerdVPN onion address also supports API-key setup. Enable Orbot/SOCKS5 in **Settings → Network proxy** first, copy the preferences address into Tor Browser, then enter the key in Videre. Keys stay separate for each account and exact server origin; a clearnet login is not copied to the onion account. See [NerdVPN API access](./docs/profiles-and-authentication.md#nerdvpn-api-access) for the supported address and server-side requirements.
 
 Onion playback offers the compatible qualities provided by the instance. With adaptive playback, the quality picker sets a maximum and can play at a lower quality as bandwidth changes. Tor bandwidth and latency can cause buffering at higher bitrates, and lowering the maximum can help. Videre keeps requests on the selected onion address, including when a stream cannot load there.
 
@@ -66,15 +66,17 @@ This README describes the current source. Check release notes for your APK's fea
 
 ## Public instances
 
-Suggested hosts from the [official Invidious directory](https://docs.invidious.io/instances/), with the last check date shown for each host:
+Videre suggests F5 and NerdVPN from the [official Invidious directory](https://docs.invidious.io/instances/). The table also records Nadeko's current playback limitation, with the last check date shown for each host:
 
 | Public host | Browser | Videre | Last checked |
 |---|---|---|---|
 | [invidious.f5.si](https://invidious.f5.si) | ✅ Working | ✅ Working* | 9 October 2026 |
-| [inv.nadeko.net](https://inv.nadeko.net) | ✅ Working | ✅ Working* | 9 October 2026 |
+| [inv.nadeko.net](https://inv.nadeko.net) | Not verified | Media proxy refused playback; [verification](./docs/verification/issue-38-nadeko.md) | 15 November 2026 |
 | [invidious.nerdvpn.de](https://invidious.nerdvpn.de) | ✅ Working | Android playback verified; API key required† | 10 November 2026 |
 
 Choose a host in **Settings → Manage servers → Add server → Public instances**, or enter your own address. Videre tests it before saving.
+
+Nadeko is no longer a curated suggestion because its media proxy returned `403 Endpoint disabled`. Existing saved entries and custom addresses are retained. A successful video API test does not establish that the instance can stream media.
 
 \* Source checks cover search, video data, and a media sample. Full Android playback is unverified; availability may change.
 
@@ -103,6 +105,10 @@ For self-hosting, see the [Invidious project](https://github.com/iv-org/invidiou
 **Queue autoplay.** Use **Autoplay next in queue** in the queue screen, **Settings → Video player**, or TV settings. It is on by default. Turn it off to stop when each video ends, including in repeat mode; your queue stays available and Next or selecting a queued video still works. The setting also applies to background audio and downloads, survives restarts and backups, and is separate from autoplay when first opening a video.
 
 **Backups.** In Settings, use **Export backup** to save your local library, filters, and preferences. Use **Restore or import subscriptions** for Videre backups or NewPipe subscriptions JSON. Preview, then merge or replace local data. Logins and downloads are excluded. Reopen Videre after restoring.
+
+**Google Takeout music import.** In Music → Library, use the import button, or choose **Settings → Import Google Takeout**. Select a Takeout ZIP or song/playlist CSV saved on your device, review the collection, then choose **Import songs**. Songs are merged into the current profile's local Music library. Importing reads only the local file: no Google login, network lookup, artwork fetch, or server upload. See [supported formats and limits](./docs/music.md#google-takeout-import).
+
+**Podcasts.** In **Music → Library → Podcasts**, add a publisher's RSS feed link. Subscriptions and listening positions stay in the current local profile. Episodes resume where you stopped, including after restarting Videre. Play with background audio, or download episodes to private app storage for offline listening. Feed and audio requests use the publisher and your configured proxy; Google/YouTube destinations and account headers are blocked. See [podcast controls, privacy, and limits](./docs/podcasts.md).
 
 **Downloads.** Phones and tablets only. Choose a quality and MP4 or WebM for videos, or M4A or audio WebM for audio-only downloads. Playlist downloads use the selected quality, choosing a supported lower quality when needed. Single-video downloads also offer available audio languages and embedded subtitles. Options depend on the tracks provided by your server. Use the Wi-Fi button for Wi-Fi-only transfers. Pause, resume, or retry individual videos. Downloads restart if the server cannot resume. Transfers may stop while Videre is closed; reopen it to recover interrupted jobs.
 

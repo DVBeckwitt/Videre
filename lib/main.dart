@@ -22,6 +22,7 @@ import 'package:clipious/http_overrides.dart';
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/notifications/notifications.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/podcasts/services/podcast_downloads.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -142,6 +143,7 @@ class MyApp extends StatelessWidget {
       await AwesomeNotifications().dismissAllNotifications();
     };
     app.beforeAccountSwitch = () async {
+      await PodcastDownloads.forProfile(db, db.profileId).cancelAll();
       await downloads.pauseForProfileSwitch();
       await player.prepareForProfileSwitch();
       await AwesomeNotifications().dismissAllNotifications();

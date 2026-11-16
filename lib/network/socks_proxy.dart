@@ -78,8 +78,10 @@ void configureSocksHttpClient(
       badCertificateCallback,
   Duration timeout = const Duration(seconds: 15),
   Map<String, String>? environment,
+  void Function(Uri)? validateDestination,
 }) {
   void checkDestination(Uri uri) {
+    validateDestination?.call(uri);
     if (isOfficialYoutubeUrl(uri)) {
       throw const SocketException(
           'Direct YouTube connections are disabled. Use the Invidious proxy.');

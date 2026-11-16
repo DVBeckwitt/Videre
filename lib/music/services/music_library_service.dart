@@ -92,6 +92,48 @@ class MusicLibraryService {
     });
   }
 
+  /// Merge a local song list without replacing bookmarks or fetching metadata.
+  Future<int> importSongs(Iterable<MusicLibraryEntry> songs) async {
+    final incoming = <String, MusicLibraryEntry>{};
+    final videoId = RegExp(r'^[A-Za-z0-9_-]{11}$');
+    for (final song in songs) {
+      if (song.kind != MusicLibraryKind.song ||
+          videoId.stringMatch(song.id) != song.id) {
+        throw ArgumentError('Invalid imported song');
+      }
+      // A local import stores text and public IDs only. Discard artwork even
+      // when supplied by a caller so rendering the import cannot fetch it.
+      final clean = MusicLibraryEntry.tryParse({
+        'kind': MusicLibraryKind.song.name,
+        'id': song.id,
+        'title': song.title,
+        'subtitle': song.subtitle,
+        'album': song.album,
+        'durationSeconds': song.durationSeconds,
+      });
+      if (clean == null) throw ArgumentError('Invalid imported song');
+      incoming.putIfAbsent(clean.id, () => clean);
+      if (incoming.length > musicLibraryMaximumEntries) {
+        throw StateError('The music library is full');
+      }
+    }
+    if (incoming.isEmpty) return 0;
+    var imported = 0;
+    await _write((entries, _) {
+      final existing = entries
+          .where((entry) => entry.kind == MusicLibraryKind.song)
+          .map((entry) => entry.id)
+          .toSet();
+      for (final song in incoming.values) {
+        if (existing.add(song.id)) {
+          entries.add(song);
+          imported++;
+        }
+      }
+    });
+    return imported;
+  }
+
   Future<void> remove(MusicLibraryKind kind, String id) =>
       _write((entries, _) =>
           entries.removeWhere((entry) => entry.kind == kind && entry.id == id));

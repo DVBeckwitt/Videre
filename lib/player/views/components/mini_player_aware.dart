@@ -2,6 +2,7 @@ import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/podcasts/views/podcast_player_controls.dart';
 
 class MiniPlayerAware extends StatelessWidget {
   final Widget child;
@@ -22,12 +23,20 @@ class MiniPlayerAware extends StatelessWidget {
           bool isMini =
               context.select((PlayerCubit cubit) => cubit.state.isMini);
 
-          return AnimatedContainer(
-            padding: EdgeInsets.only(
-                bottom: !isHidden && isMini && !isClosing ? targetHeight : 0),
-            duration: AppMotion.duration(context),
-            curve: Curves.easeInOutQuad,
-            child: child,
+          final podcasts = context.read<PlayerCubit>().podcasts;
+          return ListenableBuilder(
+            listenable: podcasts,
+            builder: (context, _) => AnimatedContainer(
+              padding: EdgeInsets.only(
+                  bottom: podcasts.active
+                      ? podcastBarHeight
+                      : !isHidden && isMini && !isClosing
+                          ? targetHeight
+                          : 0),
+              duration: AppMotion.duration(context),
+              curve: Curves.easeInOutQuad,
+              child: child,
+            ),
           );
         },
       ),

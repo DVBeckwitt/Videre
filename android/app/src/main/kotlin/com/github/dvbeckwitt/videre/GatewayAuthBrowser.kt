@@ -361,22 +361,34 @@ class GatewayAuthBrowser(private val activity: Activity) {
         dialog?.setOnCancelListener(null)
         dialog?.dismiss()
         dialog = null
+        var browserDestroyed = true
         browser?.let {
             runCatching { it.settings.blockNetworkLoads = true }
             runCatching { it.stopLoading() }
             runCatching { (it.parent as? ViewGroup)?.removeView(it) }
-            runCatching { it.destroy() }
+            browserDestroyed = runCatching { it.destroy() }.isSuccess
         }
         browser = null
         if (!request.persistSession) request.profileName?.let { name ->
-            // Destroy the WebView first: deleting an attached profile is unsafe.
-            // No token is delivered if Chromium cannot discard its private data.
-            try {
-                ProfileStore.getInstance().deleteProfile(name)
-            } catch (_: Exception) {
-                request.token = null
-                request.error = "GATEWAY_BROWSER_UNAVAILABLE"
+            // Keep the route denied and the lease held until the temporary
+            // browser data is cleared. A late callback cannot finish a new login.
+            fun finishClearing(cleared: Boolean) {
+                if (current !== request) return
+                if (!cleared || !browserDestroyed) {
+                    request.token = null
+                    request.error = "GATEWAY_BROWSER_UNAVAILABLE"
+                }
+                complete(request)
             }
+            val cleanupTimeout = Runnable { finishClearing(false) }
+            handler.postDelayed(cleanupTimeout, 10_000L)
+            GatewaySessions.clearTemporaryBrowserProfile(name) { cleared ->
+                handler.post {
+                    handler.removeCallbacks(cleanupTimeout)
+                    finishClearing(cleared)
+                }
+            }
+            return
         }
         if (token == null) request.revision?.let { revision ->
             runCatching { GatewaySessions.cancelSignIn(request.context, revision) }

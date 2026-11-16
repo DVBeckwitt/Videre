@@ -60,6 +60,50 @@ void main() {
     expect(await File(path).readAsBytes(), content);
   });
 
+  test('optional byte limit rejects an oversized declared response', () async {
+    respond = (request) async {
+      request.response.contentLength = content.length;
+      request.response.add(content);
+      await request.response.close();
+    };
+    await expectLater(
+        downloadResumable(dio, url, path,
+            identity: 'bounded', cancelToken: CancelToken(), maximumBytes: 4),
+        throwsFormatException);
+    expect(await File(path).exists(), isFalse);
+  });
+
+  test('optional byte limit rejects oversized chunked content and clears bytes',
+      () async {
+    respond = (request) async {
+      request.response.add(content.take(4).toList());
+      await request.response.flush();
+      request.response.add(content.skip(4).toList());
+      await request.response.close();
+    };
+    await expectLater(
+        downloadResumable(dio, url, path,
+            identity: 'bounded', cancelToken: CancelToken(), maximumBytes: 8),
+        throwsFormatException);
+    expect(await File(path).length(), 0);
+  });
+
+  test('optional content-type check rejects an error page before writing it',
+      () async {
+    respond = (request) async {
+      request.response.headers.contentType = ContentType.html;
+      request.response.add(content);
+      await request.response.close();
+    };
+    await expectLater(
+        downloadResumable(dio, url, path,
+            identity: 'media',
+            cancelToken: CancelToken(),
+            acceptsContentType: (type) => type?.startsWith('audio/') == true),
+        throwsFormatException);
+    expect(await File(path).exists(), isFalse);
+  });
+
   test('resumes a partial from the exact byte offset', () async {
     await partial(4);
     respond = (request) async {

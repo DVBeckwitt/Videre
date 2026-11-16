@@ -648,7 +648,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         String id = (String)map.get("id");
         switch ((String)map.get("type")) {
         case "progressive":
-            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri")), buildExtractorsFactory(mapGet(map, "options")))
+            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri"), Boolean.TRUE.equals(map.get("podcast"))), buildExtractorsFactory(mapGet(map, "options")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setTag(id)
@@ -742,6 +742,16 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     private DataSource.Factory buildDataSourceFactory(Map<?, ?> headers, String sourceUri) {
+        return buildDataSourceFactory(headers, sourceUri, false);
+    }
+
+    private DataSource.Factory buildDataSourceFactory(Map<?, ?> headers, String sourceUri, boolean podcast) {
+        if (podcast) {
+            // Podcast mode is a source DTO property, never an HTTP header or
+            // a mutable player flag. Instance credentials cannot opt into it.
+            return ProxyDataSource.withLocalSources(context,
+                    ProxyDataSource.podcastFactory(Util.getUserAgent(context, "Videre-Podcasts"), sourceUri));
+        }
         final Map<String, String> stringHeaders = castToStringMap(headers);
         String userAgent = null;
         if (stringHeaders != null) {

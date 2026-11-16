@@ -5,6 +5,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -16,6 +17,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../podcasts/fake_podcast_player.dart';
+
+class _Player extends Cubit<PlayerState> implements PlayerCubit {
+  _Player() : super(PlayerState.init(null));
+
+  @override
+  final podcasts = FakePodcastPlayer();
+
+  @override
+  Future<void> close() async {
+    podcasts.dispose();
+    await super.close();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 class _App extends Cubit<AppState> implements AppCubit {
   _App() : super(AppState(0, null, HomeLayout()));
@@ -53,6 +72,7 @@ void main() {
   late bool originalIsTv;
   late _App appCubit;
   late _Settings settings;
+  late _Player player;
 
   setUp(() async {
     originalService = service;
@@ -62,10 +82,12 @@ void main() {
     db = await SembastSqfDb.createInMemory();
     appCubit = _App();
     settings = _Settings();
+    player = _Player();
   });
 
   tearDown(() async {
     await settings.close();
+    await player.close();
     await appCubit.close();
     await db.close();
     service = originalService;
@@ -91,6 +113,7 @@ void main() {
       providers: [
         BlocProvider<AppCubit>.value(value: appCubit),
         BlocProvider<SettingsCubit>.value(value: settings),
+        BlocProvider<PlayerCubit>.value(value: player),
       ],
       child: router != null
           ? MaterialApp.router(

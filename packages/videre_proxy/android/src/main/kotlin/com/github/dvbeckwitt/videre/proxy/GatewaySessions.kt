@@ -167,20 +167,40 @@ object GatewaySessions : GatewayCookieAccess {
         }
     }
 
+    /** Loaded profiles cannot be deleted until a later WebView process. Clear
+     * their data instead, and report completion before returning a login token. */
+    fun clearTemporaryBrowserProfile(name: String, completed: (Boolean) -> Unit) = onMain {
+        clearProfile(name, completed)
+        Unit
+    }
+
     /** A fresh profile per login prevents asynchronous clear/relogin races. */
-    private fun clearProfile(name: String): CountDownLatch {
+    private fun clearProfile(name: String, completed: ((Boolean) -> Unit)? = null): CountDownLatch {
         val cleared = CountDownLatch(1)
-        val profiles = ProfileStore.getInstance()
-        // Some Chromium versions return a non-null but unusable profile for an
-        // unknown name. An unused pending profile may not survive a restart.
-        if (name !in profiles.allProfileNames) cleared.countDown()
-        else {
-            val profile = protectedProfile(name)
-            profile.webStorage.deleteAllData()
-            profile.cookieManager.removeAllCookies {
-                profile.cookieManager.flush()
-                cleared.countDown()
+        var finished = false
+        fun finish(success: Boolean) {
+            if (finished) return
+            finished = true
+            // Existing blocking sign-out callers require a successful clear;
+            // failure retains their bounded timeout instead of reporting success.
+            if (success) cleared.countDown()
+            completed?.invoke(success)
+        }
+        try {
+            val profiles = ProfileStore.getInstance()
+            // Some Chromium versions return an unusable profile for an unknown
+            // name. An unused pending profile may not survive a restart.
+            if (name !in profiles.allProfileNames) finish(true)
+            else {
+                val profile = protectedProfile(name)
+                profile.webStorage.deleteAllData()
+                profile.cookieManager.removeAllCookies {
+                    finish(runCatching { profile.cookieManager.flush() }.isSuccess)
+                }
             }
+        } catch (error: Exception) {
+            if (completed == null) throw error
+            finish(false)
         }
         return cleared
     }

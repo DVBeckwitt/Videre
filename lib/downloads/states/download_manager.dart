@@ -19,6 +19,7 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/network/connectivity.dart';
 
 import '../../player/states/player.dart';
 import '../../player/media_source.dart';
@@ -145,19 +146,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<void> onReady() async {
     _loadLibrary();
     if (Platform.isAndroid) {
-      _networkSubscription = const EventChannel('videre/network_changes')
-          .receiveBroadcastStream()
-          .listen((value) => _networkChanged(value == true),
-              onError: (Object error) => _networkChanged(false));
-      try {
-        _wifiConnected = await const MethodChannel('videre/network')
-                .invokeMethod<bool>('isWifiConnected') ??
-            false;
-      } on PlatformException {
-        _wifiConnected = false;
-      } on MissingPluginException {
-        _wifiConnected = false;
-      }
+      _networkSubscription = wifiConnectivityChanges.listen(_networkChanged,
+          onError: (Object error) => _networkChanged(false));
+      _wifiConnected = await isWifiConnected();
     }
     _networkChanged(_wifiConnected);
   }

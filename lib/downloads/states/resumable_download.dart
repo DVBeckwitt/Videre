@@ -7,8 +7,15 @@ Future<void> downloadResumable(Dio dio, String url, String path,
     {required CancelToken cancelToken,
     required String identity,
     int? expectedSize,
+    int? maximumBytes,
+    bool Function(String? contentType)? acceptsContentType,
     Map<String, dynamic>? headers,
     void Function(int received, int total)? onProgress}) async {
+  if (maximumBytes != null &&
+      (maximumBytes <= 0 ||
+          (expectedSize != null && expectedSize > maximumBytes))) {
+    throw const FormatException('The download exceeds the allowed size');
+  }
   final file = File(path);
   final marker = File('$path.identity');
   if (!await marker.exists() || await marker.readAsString() != identity) {
@@ -16,6 +23,10 @@ Future<void> downloadResumable(Dio dio, String url, String path,
     await marker.writeAsString(identity, flush: true);
   }
   var offset = await file.exists() ? await file.length() : 0;
+  if (maximumBytes != null && offset > maximumBytes) {
+    await file.writeAsBytes([]);
+    offset = 0;
+  }
   if (expectedSize != null && expectedSize > 0) {
     if (offset == expectedSize) {
       onProgress?.call(offset, expectedSize);
@@ -45,6 +56,14 @@ Future<void> downloadResumable(Dio dio, String url, String path,
               if (offset > 0) HttpHeaders.rangeHeader: 'bytes=$offset-',
             }));
     final body = response.data!;
+    if (response.statusCode != 416 &&
+        acceptsContentType != null &&
+        !acceptsContentType(
+            response.headers.value(HttpHeaders.contentTypeHeader))) {
+      await body.stream.listen(null).cancel();
+      throw const FormatException(
+          'The download response is not supported media');
+    }
     final range = response.headers.value(HttpHeaders.contentRangeHeader) ?? '';
     if (response.statusCode == 416) {
       await body.stream.listen(null).cancel();
@@ -92,6 +111,11 @@ Future<void> downloadResumable(Dio dio, String url, String path,
           -1;
     }
 
+    if (maximumBytes != null && total > maximumBytes) {
+      await body.stream.listen(null).cancel();
+      throw const FormatException('The download exceeds the allowed size');
+    }
+
     final output =
         await file.open(mode: offset > 0 ? FileMode.append : FileMode.write);
     var count = offset;
@@ -99,6 +123,10 @@ Future<void> downloadResumable(Dio dio, String url, String path,
       await for (final chunk
           in body.stream.timeout(const Duration(seconds: 30))) {
         if (cancelToken.isCancelled) throw cancelToken.cancelError!;
+        if (maximumBytes != null && count + chunk.length > maximumBytes) {
+          await output.truncate(0);
+          throw const FormatException('The download exceeds the allowed size');
+        }
         if ((responseEnd != null && count + chunk.length > responseEnd) ||
             (total > 0 && count + chunk.length > total)) {
           // Do not let a malformed response become a reusable "complete" file.

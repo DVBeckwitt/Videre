@@ -9,6 +9,7 @@ const offlineTestTargets = [
   'test/downloads',
   'test/player',
   'test/music',
+  'test/podcasts',
   'test/network',
   'test/feedback',
   'test/utils',
@@ -48,6 +49,7 @@ const offlineTestTargets = [
 // Keep formatting and strict analysis coverage aligned.
 const strictValidationTargets = [
   './test/music',
+  './test/podcasts',
   './test/widget_test.dart',
   './test/service_test.dart',
   './test/service_local_library_test.dart',

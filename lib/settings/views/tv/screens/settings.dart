@@ -1,4 +1,5 @@
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/settings/views/components/home_experience_setting.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
@@ -453,6 +454,11 @@ class TVSettingsScreen extends StatelessWidget {
                   title: locals.exportBackup,
                   description: locals.backupDescription,
                   onSelected: (context) => cubit.backupLibrary(context),
+                ),
+                SettingsTile(
+                  title: locals.takeoutImport,
+                  description: locals.takeoutImportDescription,
+                  onSelected: (context) => showTakeoutImport(context),
                 ),
                 SettingsTile(
                   title: locals.importBackup,

@@ -9,13 +9,12 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
-import 'package:clipious/settings/views/components/nerdvpn_onion_setup.dart';
+import 'package:clipious/settings/views/components/nerdvpn_api_key_setup.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 
-import '../../../../network/nerdvpn_access.dart';
 import '../../../../utils/views/tv/components/tv_text_field.dart';
 
 @RoutePage()
@@ -121,24 +120,30 @@ class TvAddServerScreen extends StatelessWidget {
                                 ],
                               ),
                       ),
-                      ValueListenableBuilder(
-                        valueListenable: cubit.urlController,
-                        builder: (context, _, __) => cubit.usesNerdVpnOnion
-                            ? NerdVpnOnionSetup(
-                                serverUrl: AddServerCubit.normalizeUrl(
-                                    cubit.urlController.text)!,
-                                apiKeyController: cubit.apiKeyController,
-                                loading: state.loading,
-                                television: true,
-                              )
-                            : SwitchListTile(
-                                title: Text(locals.protectedServer),
-                                subtitle: Text(locals.protectedServerHelp),
-                                value: state.protectedServer,
-                                onChanged: state.loading
-                                    ? null
-                                    : cubit.setProtectedServer,
-                              ),
+                      ListenableBuilder(
+                        listenable: Listenable.merge([
+                          cubit.urlController,
+                          cubit.apiKeyController,
+                        ]),
+                        builder: (context, _) => Column(children: [
+                          if (cubit.usesNerdVpn)
+                            NerdVpnApiKeySetup(
+                              serverUrl: AddServerCubit.normalizeUrl(
+                                  cubit.urlController.text)!,
+                              apiKeyController: cubit.apiKeyController,
+                              loading: state.loading,
+                              television: true,
+                            ),
+                          if (!cubit.usesManualNerdVpnKey)
+                            SwitchListTile(
+                              title: Text(locals.protectedServer),
+                              subtitle: Text(locals.protectedServerHelp),
+                              value: state.protectedServer,
+                              onChanged: state.loading
+                                  ? null
+                                  : cubit.setProtectedServer,
+                            ),
+                        ]),
                       ),
                       ListTile(
                         leading: AnimatedRotation(
@@ -227,20 +232,23 @@ class TvAddServerScreen extends StatelessWidget {
                                       child: CircularProgressIndicator(
                                     strokeWidth: 1,
                                   )))
-                              : ValueListenableBuilder(
-                                  valueListenable: cubit.urlController,
-                                  builder: (context, _, __) => Text(cubit
-                                              .usesNerdVpn &&
-                                          !cubit.usesNerdVpnOnion &&
-                                          (state.protectedServer ||
-                                              !state.headers.keys.any(
-                                                  NerdVpnAccess.isKeyHeader))
-                                      ? locals.nerdVpnSignInAndAdd
-                                      : locals.testAndAddServer),
+                              : ListenableBuilder(
+                                  listenable: Listenable.merge([
+                                    cubit.urlController,
+                                    cubit.apiKeyController,
+                                  ]),
+                                  builder: (context, _) => Text(
+                                      cubit.usesNerdVpn &&
+                                              !cubit.usesManualNerdVpnKey
+                                          ? locals.nerdVpnSignInAndAdd
+                                          : locals.testAndAddServer),
                                 )),
-                      ValueListenableBuilder(
-                        valueListenable: cubit.urlController,
-                        builder: (context, _, __) => cubit.usesNerdVpnOnion
+                      ListenableBuilder(
+                        listenable: Listenable.merge([
+                          cubit.urlController,
+                          cubit.apiKeyController,
+                        ]),
+                        builder: (context, _) => cubit.usesManualNerdVpnKey
                             ? const SizedBox.shrink()
                             : CheckboxListTile(
                                 title: Text(

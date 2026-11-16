@@ -6,30 +6,31 @@ import '../../../network/nerdvpn_access.dart';
 import '../../../utils/views/components/external_link.dart';
 import '../../../utils/views/tv/components/tv_text_field.dart';
 
-Future<void> openNerdVpnTorPreferences(BuildContext context, String serverUrl,
+Future<void> openNerdVpnPreferences(BuildContext context, String serverUrl,
     {bool Function()? isCurrent}) async {
   if (!NerdVpnAccess.supportsUrl(serverUrl) ||
-      !isNerdVpnOnionUrl(serverUrl) ||
       !context.mounted ||
       isCurrent?.call() == false) {
     return;
   }
   final locals = AppLocalizations.of(context)!;
+  final onion = isNerdVpnOnionUrl(serverUrl);
   final url = Uri.parse(serverUrl)
       .replace(path: '/preferences', fragment: 'api-access');
   await openExternalLink(context, url,
-      title: locals.nerdVpnTorAddress,
-      help: locals.nerdVpnTorBrowserHandoff,
+      title:
+          onion ? locals.nerdVpnTorAddress : locals.nerdVpnPreferencesAddress,
+      help: onion ? locals.nerdVpnTorBrowserHandoff : null,
       isCurrent: isCurrent);
 }
 
-class NerdVpnOnionSetup extends StatefulWidget {
+class NerdVpnApiKeySetup extends StatefulWidget {
   final String serverUrl;
   final TextEditingController apiKeyController;
   final bool loading;
   final bool television;
 
-  const NerdVpnOnionSetup({
+  const NerdVpnApiKeySetup({
     super.key,
     required this.serverUrl,
     required this.apiKeyController,
@@ -38,10 +39,10 @@ class NerdVpnOnionSetup extends StatefulWidget {
   });
 
   @override
-  State<NerdVpnOnionSetup> createState() => _NerdVpnOnionSetupState();
+  State<NerdVpnApiKeySetup> createState() => _NerdVpnApiKeySetupState();
 }
 
-class _NerdVpnOnionSetupState extends State<NerdVpnOnionSetup> {
+class _NerdVpnApiKeySetupState extends State<NerdVpnApiKeySetup> {
   bool _opening = false;
 
   Future<void> _openBrowser() async {
@@ -49,7 +50,7 @@ class _NerdVpnOnionSetupState extends State<NerdVpnOnionSetup> {
     final origin = widget.serverUrl;
     setState(() => _opening = true);
     try {
-      await openNerdVpnTorPreferences(context, origin,
+      await openNerdVpnPreferences(context, origin,
           isCurrent: () => mounted && widget.serverUrl == origin);
     } finally {
       if (mounted) setState(() => _opening = false);
@@ -59,11 +60,12 @@ class _NerdVpnOnionSetupState extends State<NerdVpnOnionSetup> {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final onion = isNerdVpnOnionUrl(widget.serverUrl);
     final decoration = InputDecoration(
       label: Text(locals.nerdVpnManualKey),
       hintText: 'nvpn_…',
     );
-    return Shortcuts(
+    final content = Shortcuts(
       shortcuts: {
         LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
       },
@@ -72,12 +74,16 @@ class _NerdVpnOnionSetupState extends State<NerdVpnOnionSetup> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(locals.nerdVpnOnionSetupSteps),
+            Text(onion
+                ? locals.nerdVpnOnionSetupSteps
+                : locals.nerdVpnKeySetupSteps),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: widget.loading || _opening ? null : _openBrowser,
               icon: const Icon(Icons.content_copy),
-              label: Text(locals.nerdVpnTorAddress),
+              label: Text(onion
+                  ? locals.nerdVpnTorAddress
+                  : locals.nerdVpnPreferencesAddress),
             ),
             const SizedBox(height: 8),
             if (widget.television)
@@ -103,11 +109,18 @@ class _NerdVpnOnionSetupState extends State<NerdVpnOnionSetup> {
                 keyboardType: TextInputType.visiblePassword,
               ),
             const SizedBox(height: 8),
-            Text(locals.nerdVpnOnionKeyHelp,
+            Text(
+                onion ? locals.nerdVpnOnionKeyHelp : locals.nerdVpnKeySetupHelp,
                 style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
       ),
     );
+    return onion
+        ? content
+        : ExpansionTile(
+            title: Text(locals.nerdVpnKeyFallback),
+            children: [content],
+          );
   }
 }

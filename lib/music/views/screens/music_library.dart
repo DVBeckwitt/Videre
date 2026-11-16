@@ -8,8 +8,10 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
+import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/podcasts/views/podcast_library.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/views/components/playlist_information.dart';
@@ -21,7 +23,7 @@ import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-enum _LibraryFilter { playlists, songs, channels, downloads }
+enum _LibraryFilter { playlists, songs, podcasts, channels, downloads }
 
 /// The Music home's local Library body. The home owns its navigation and chrome.
 class MusicLibraryPage extends StatefulWidget {
@@ -135,6 +137,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       switch (filter) {
         _LibraryFilter.playlists => locals.musicPlaylists,
         _LibraryFilter.songs => locals.musicSongs,
+        _LibraryFilter.podcasts => locals.podcasts,
         _LibraryFilter.channels => locals.channels,
         _LibraryFilter.downloads => locals.downloads,
       };
@@ -222,6 +225,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       _LibraryFilter.songs => MusicLibraryKind.song,
       _LibraryFilter.channels => MusicLibraryKind.artist,
       _LibraryFilter.downloads => MusicLibraryKind.song,
+      _LibraryFilter.podcasts => MusicLibraryKind.song,
     };
     final entries =
         library.entries.where((entry) => entry.kind == kind).toList();
@@ -397,9 +401,29 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       children: [
                         Padding(
                             padding: const EdgeInsets.all(16),
-                            child: Text(locals.musicLibrary,
-                                style:
-                                    Theme.of(context).textTheme.headlineSmall)),
+                            child: Row(children: [
+                              Expanded(
+                                  child: Text(locals.musicLibrary,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineSmall)),
+                              IconButton(
+                                  tooltip: locals.takeoutImport,
+                                  icon: const Icon(Icons.file_upload_outlined),
+                                  onPressed: state.globalLoading ||
+                                          state.sessionRecoveryRequired
+                                      ? null
+                                      : () async {
+                                          final imported =
+                                              await showTakeoutImport(context);
+                                          if (mounted && imported == true) {
+                                            setState(() {
+                                              _filter = _LibraryFilter.songs;
+                                              _playlistId = null;
+                                            });
+                                          }
+                                        }),
+                            ])),
                         SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -423,9 +447,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                     state.sessionRecoveryRequired
                                 ? const Center(
                                     child: CircularProgressIndicator())
-                                : _filter == _LibraryFilter.downloads && !isTv
-                                    ? _downloads()
-                                    : _catalogLibrary(library)),
+                                : _filter == _LibraryFilter.podcasts
+                                    ? PodcastLibraryPage(
+                                        key: ValueKey(
+                                            'podcasts-${db.profileId}-${state.sessionRevision}'))
+                                    : _filter == _LibraryFilter.downloads &&
+                                            !isTv
+                                        ? _downloads()
+                                        : _catalogLibrary(library)),
                       ],
                     )),
           );

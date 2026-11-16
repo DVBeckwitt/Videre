@@ -29,6 +29,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../podcasts/fake_podcast_player.dart';
+
 class _App extends Cubit<AppState> implements AppCubit {
   _App() : super(AppState(0, null, HomeLayout()));
 
@@ -102,6 +104,15 @@ class _Service extends Service {
 
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
   _Player() : super(PlayerState.init(null));
+
+  @override
+  final podcasts = FakePodcastPlayer();
+
+  @override
+  Future<void> close() async {
+    podcasts.dispose();
+    await super.close();
+  }
 
   @override
   PlaybackSession? get savedSession => null;

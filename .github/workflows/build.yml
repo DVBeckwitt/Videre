@@ -65,9 +65,9 @@ jobs:
         run: ./submodules/flutter/bin/dart tools/validate.dart test
       - run: ./submodules/flutter/bin/flutter pub run flutter_native_splash:create
       - run: ./submodules/flutter/bin/flutter build apk --profile --split-per-abi
-      - name: Test native SOCKS transport
+      - name: Test native transport and local file imports
         working-directory: android
-        run: ./gradlew :videre_proxy:testDebugUnitTest
+        run: ./gradlew :videre_proxy:testDebugUnitTest :app:testDebugUnitTest
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -12,6 +12,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.util.Rational
 import cl.puntito.simple_pip_mode.PipCallbackHelper
 import com.ryanheise.audioservice.AudioServiceActivity
@@ -41,7 +42,7 @@ class MainActivity : AudioServiceActivity() {
     private var pipAspectRatio = Rational(16, 9)
     private var pendingFile: FileRequest? = null
 
-    private class FileRequest(val result: MethodChannel.Result, val bytes: ByteArray?)
+    private class FileRequest(val result: MethodChannel.Result, val bytes: ByteArray?, val takeout: Boolean = false)
     private class FileTooLarge : IOException()
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -91,7 +92,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun pickFile(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method != "save" && call.method != "open") {
+        if (call.method != "save" && call.method != "open" && call.method != "openTakeout") {
             result.notImplemented()
             return
         }
@@ -116,12 +117,18 @@ class MainActivity : AudioServiceActivity() {
             result.error("FILE_TOO_LARGE", "Files must be no larger than 10 MiB.", null)
             return
         }
-        val request = FileRequest(result, bytes)
+        val request = FileRequest(result, bytes, takeout = call.method == "openTakeout")
         pendingFile = request
         val intent = Intent(if (saving) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = if (saving) "application/json" else "*/*"
             if (saving) putExtra(Intent.EXTRA_TITLE, name)
+            else if (request.takeout) {
+                putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/csv", "text/comma-separated-values",
+                    "text/plain", "application/csv", "application/zip", "application/x-zip-compressed",
+                    "application/octet-stream"))
+            }
             else putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain"))
         }
         try {
@@ -146,6 +153,11 @@ class MainActivity : AudioServiceActivity() {
             finishFile(request, error = "FILE_ACCESS", message = "The document picker did not return a file.")
             return
         }
+        if (request.takeout && !TakeoutFiles.isLocalDocument(uri.scheme, uri.authority)) {
+            finishFile(request, error = "LOCAL_FILE_REQUIRED",
+                message = "Save the Takeout CSV or ZIP to Downloads on this device, then choose that local file.")
+            return
+        }
         // Cloud document providers may block; keep their streams off the UI thread.
         fileWorker.execute {
             try {
@@ -154,6 +166,15 @@ class MainActivity : AudioServiceActivity() {
                         it.write(request.bytes)
                     }
                     true
+                } else if (request.takeout) {
+                    val name = if (uri.scheme == "file") java.io.File(uri.path ?: "").name else {
+                        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                            if (it.moveToFirst()) it.getString(0) else null
+                        }
+                    } ?: "takeout.csv"
+                    (contentResolver.openInputStream(uri) ?: throw IOException()).use { input ->
+                        TakeoutFiles.read(input, name, cacheDir)
+                    }
                 } else {
                     (contentResolver.openInputStream(uri) ?: throw IOException()).use { input ->
                         val output = ByteArrayOutputStream()
@@ -168,6 +189,8 @@ class MainActivity : AudioServiceActivity() {
                     }
                 }
                 mainHandler.post { finishFile(request, value) }
+            } catch (error: TakeoutFiles.ReadError) {
+                mainHandler.post { finishFile(request, error = error.code, message = error.message) }
             } catch (_: FileTooLarge) {
                 mainHandler.post { finishFile(request, error = "FILE_TOO_LARGE", message = "Files must be no larger than 10 MiB.") }
             } catch (_: CharacterCodingException) {
