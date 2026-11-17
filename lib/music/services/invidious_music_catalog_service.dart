@@ -5,11 +5,13 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
@@ -143,7 +145,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   // keeps unrelated videos out of Music without another catalog or fallback.
 
   @override
-  Future<List<MusicTrack>> getDiscoverySongs({bool Function()? isCurrent}) {
+  Future<List<MusicTrack>> getDiscoverySongs(
+      {String? artist, bool Function()? isCurrent}) {
+    final artistName =
+        String.fromCharCodes((artist ?? '').trim().runes.take(120));
     return _inSession((api, server, checkSession) async {
       Future<void> check() async {
         if (isCurrent?.call() == false) {
@@ -156,11 +161,19 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       }
 
       await check();
-      final search = await api.search('official music video',
+      final query = artistName.isEmpty
+          ? 'official music video'
+          : '$artistName official music video';
+      final search = await api.search(query,
           type: SearchType.video, serverOverride: server, enrichResults: false);
       await check();
       final candidates = <String>[];
-      final seen = <String>{};
+      final seen = <String>{
+        if (artistName.isNotEmpty)
+          for (final entry
+              in MusicLibraryService.forProfile(db, server.profileId).entries)
+            if (entry.kind == MusicLibraryKind.song) entry.id,
+      };
       for (final video in search.videos) {
         if (!video.filtered &&
             _videoId.hasMatch(video.videoId) &&
@@ -180,8 +193,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           // One noninteractive lookup per candidate. Service retains its own
           // transport policy (short 429 and NerdVPN startup retries), but
           // discovery neither rotates backends nor adds retries or refills.
-          final video =
-              await api.getDiscoveryVideoMetadata(id, serverOverride: server);
+          final video = await api.getDiscoveryVideoMetadata(id,
+              serverOverride: server, isCurrent: isCurrent);
           if (video.videoId != id) {
             throw const MusicCatalogException(
                 'The server returned another music track.');
@@ -391,6 +404,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     if (!_playlistId.hasMatch(playlistId)) {
       throw const MusicCatalogException('Invalid music playlist.');
     }
+    final enrichResults =
+        !musicCharts.any((chart) => chart.playlistId == playlistId);
     return _inSession((api, server, check) async {
       if (playlistId.startsWith('RD')) {
         final mix = await api.getMix(playlistId, serverOverride: server);
@@ -405,7 +420,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         );
       }
       final first = await api.getPublicPlaylists(playlistId,
-          page: 1, saveLastSeen: false, serverOverride: server);
+          page: 1,
+          saveLastSeen: false,
+          serverOverride: server,
+          enrichResults: enrichResults);
       var page = first;
       var hasFilteredEntries = false;
       final tracks = <MusicTrack>[];
@@ -455,7 +473,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         }
         if (pageNumber == 50) break;
         page = await api.getPublicPlaylists(playlistId,
-            page: pageNumber + 1, saveLastSeen: false, serverOverride: server);
+            page: pageNumber + 1,
+            saveLastSeen: false,
+            serverOverride: server,
+            enrichResults: enrichResults);
       }
       throw const MusicCatalogException(
           'The music playlist could not finish loading.');

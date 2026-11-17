@@ -21,9 +21,20 @@ the active Videre profile.
 **Home** centers on saved music, with suggestions based on saved artists, genre
 searches, and shortcuts to **Search** and **Library**. Suggestions open explicit
 Invidious searches; opening Home does not automatically fetch a general feed.
-An optional **Discover music** section loads only when you choose **Load music**.
-Discovery searches your selected instance, then checks
-each candidate's detailed metadata and only shows videos categorized as Music.
+**Top charts** opens public Top 100 Songs and Music Videos playlists from
+[YouTube Music Global Charts](https://www.youtube.com/channel/UCrKZcyOJVWnJ60zM1XWllNw)
+for Worldwide and supported countries. The picker puts your browsing country
+first when it has a chart. Selecting a chart loads the publisher's current
+playlist through your Invidious instance using the
+[standard playlist endpoint](https://docs.invidious.io/api/#get-apiv1playlistsplid).
+Track counts and playback availability depend on the returned playlist and
+instance.
+
+In **Discover music**, choose **Load music** for general suggestions or tap
+an artist under **Explore by saved artist** for suggestions based on saved music.
+The artist search skips songs already saved to your profile. Discovery searches
+your selected instance, then checks each candidate's detailed metadata and only
+shows videos categorized as Music.
 Live, upcoming, missing-category, and unrelated results are excluded. This uses
 the instance's upload categories; it cannot independently verify the audio or
 correct an uploader's inaccurate category. Explicit Search skips this category
@@ -79,11 +90,6 @@ The production music catalog therefore treats that feed as unsupported instead
 of relabeling the response or falling back to another service. See the
 [Invidious trending implementation](https://github.com/iv-org/invidious/blob/9f0b4c89f7a564c1e34ac00cca6cb8ae8f5bd7c9/src/invidious/feeds/trending.cr).
 The existing browsing-country setting applies to Search and discovery.
-
-Music provides Invidious search, channels, public playlists, and local playlists.
-YouTube Music's album, new-release, chart, and mood catalogs have no browsing
-pages or API routes in the app. Personalized Google recommendations and
-synchronized likes are not part of Music.
 
 ## Browse and listen
 

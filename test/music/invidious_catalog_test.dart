@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/notifications/models/db/channel_notifications.dart';
@@ -419,6 +421,44 @@ void main() {
     expect(requests, hasLength(9));
     expect(requests.every((request) => request.url.host == 'invidious.example'),
         isTrue);
+  });
+
+  test('artist discovery skips saved songs and verifies only new candidates',
+      () async {
+    await MusicLibraryService.forProfile(db, db.profileId).save(
+      MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: _discoveryId(0),
+        title: 'Already saved',
+        subtitle: 'A & B',
+      ),
+    );
+    respond = (request) async {
+      expect(request.url.origin, 'https://invidious.example');
+      if (request.url.path == '/api/v1/search') {
+        expect(request.url.queryParameters['q'], 'A & B official music video');
+        return _json([
+          _discoveryVideo(0),
+          _discoveryVideo(1),
+          _discoveryVideo(2),
+          _discoveryVideo(2),
+        ], request);
+      }
+      return _json(
+        request.url.pathSegments.last == _discoveryId(1)
+            ? _discoveryVideo(1, genre: 'Sports')
+            : _discoveryVideo(2),
+        request,
+      );
+    };
+
+    final results = await catalog.getDiscoverySongs(artist: ' A & B ');
+    expect(results.single.videoId, _discoveryId(2));
+    expect(requests.map((request) => request.url.path), [
+      '/api/v1/search',
+      '/api/v1/videos/${_discoveryId(1)}',
+      '/api/v1/videos/${_discoveryId(2)}',
+    ]);
   });
 
   test(
@@ -1079,6 +1119,49 @@ void main() {
     final collection = await catalog.getPlaylist(_playlistId);
     expect(collection.tracks.map((track) => track.videoId), [_songId]);
     expect(requests, hasLength(2));
+  });
+
+  test('official charts use only selected-instance playlist pages', () async {
+    final chartId = musicCharts.first.playlistId;
+    final previousService = service;
+    final enrichmentRequests = <Uri>[];
+    final enrichmentClient = MockClient((request) async {
+      enrichmentRequests.add(request.url);
+      return _json({'titles': [], 'thumbnails': []}, request);
+    });
+    service = Service(httpClient: enrichmentClient);
+    addTearDown(() {
+      service = previousService;
+      enrichmentClient.close();
+    });
+    await db.saveSetting(SettingsValue(dearrowSettingName, 'true'));
+    await db.saveSetting(SettingsValue(dearrowThumbnailsSettingName, 'true'));
+
+    respond = (request) async {
+      expect(request.url.origin, 'https://invidious.example');
+      expect(request.url.path, '/api/v1/playlists/$chartId');
+      final songs = switch (request.url.queryParameters['page']) {
+        '1' => [
+            {..._song(index: 0), 'title': 'First chart song'},
+            {..._song(index: 1), 'title': '[Private video]'},
+          ],
+        '2' => [
+            {..._song(index: 2), 'title': 'Last chart song'},
+          ],
+        _ => <Object>[],
+      };
+      return _json({
+        ..._playlist(songs: songs, count: 3),
+        'playlistId': chartId,
+      }, request);
+    };
+
+    final chart = await catalog.getPlaylist(chartId);
+    expect(chart.tracks.map((track) => track.title),
+        ['First chart song', 'Last chart song']);
+    expect(requests.map((request) => request.url.queryParameters['page']),
+        ['1', '2', '3']);
+    expect(enrichmentRequests, isEmpty);
   });
 
   test('overlapping Invidious pages preserve every playlist occurrence',

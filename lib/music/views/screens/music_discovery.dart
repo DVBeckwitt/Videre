@@ -12,6 +12,7 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
+import 'package:clipious/music/views/components/music_chart_picker.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -76,6 +77,24 @@ class _MusicWelcome extends StatelessWidget {
 
   const _MusicWelcome({required this.onSearch, required this.onLibrary});
 
+  Future<void> _openCharts(BuildContext context) async {
+    final app = context.read<AppCubit>();
+    final session = app.state;
+    final database = db;
+    final route = ModalRoute.of(context);
+    if (session.server == null || !_sameSession(session, session)) return;
+
+    final playlistId = await showMusicChartPicker(context,
+        browsingCountry: database.getSettings(browsingCountry)?.value ?? 'US');
+    if (playlistId != null &&
+        context.mounted &&
+        identical(database, db) &&
+        (route?.isCurrent ?? true) &&
+        _sameSession(session, app.state)) {
+      context.router.push(MusicRoute(playlistId: playlistId));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -111,6 +130,12 @@ class _MusicWelcome extends StatelessWidget {
               onPressed: onLibrary,
               icon: const Icon(Icons.library_music_outlined),
               label: Text(locals.musicLibrary),
+            ),
+            FilledButton.tonalIcon(
+              key: const ValueKey('music-home-charts'),
+              onPressed: () => _openCharts(context),
+              icon: const Icon(Icons.bar_chart_rounded),
+              label: Text(locals.musicTopCharts),
             ),
           ],
         ),
@@ -309,6 +334,23 @@ class _SavedSongRow extends StatelessWidget {
   }
 }
 
+List<String> _savedArtistNames(MusicLibraryService library) {
+  final artists = <String>[];
+  final seen = <String>{};
+  for (final entry in library.entries) {
+    final artist = switch (entry.kind) {
+      MusicLibraryKind.song => entry.subtitle.trim(),
+      MusicLibraryKind.artist => entry.title.trim(),
+      _ => '',
+    };
+    if (artist.isNotEmpty && seen.add(artist.toLowerCase())) {
+      artists.add(artist);
+      if (artists.length == 3) break;
+    }
+  }
+  return artists;
+}
+
 /// Suggestions come only from this profile's saved music. Choosing one opens
 /// an ordinary Invidious search; merely showing Home makes no catalog request.
 class _SavedMusicSuggestions extends StatelessWidget {
@@ -323,19 +365,7 @@ class _SavedMusicSuggestions extends StatelessWidget {
           return ListenableBuilder(
             listenable: library.changes,
             builder: (context, _) {
-              final artists = <String>[];
-              final seen = <String>{};
-              for (final entry in library.entries) {
-                final artist = switch (entry.kind) {
-                  MusicLibraryKind.song => entry.subtitle.trim(),
-                  MusicLibraryKind.artist => entry.title.trim(),
-                  _ => '',
-                };
-                if (artist.isNotEmpty && seen.add(artist.toLowerCase())) {
-                  artists.add(artist);
-                  if (artists.length == 3) break;
-                }
-              }
+              final artists = _savedArtistNames(library);
               if (artists.isEmpty) return const SizedBox.shrink();
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -406,6 +436,7 @@ class _DiscoverySongs extends StatefulWidget {
 
 class _DiscoverySongsState extends State<_DiscoverySongs> {
   _DiscoverySession? _session;
+  String? _artist;
   List<MusicTrack> _songs = const [];
   int _generation = 0;
   bool _attempted = false;
@@ -429,6 +460,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
 
   void _reset() {
     _generation++;
+    _artist = null;
     _songs = const [];
     _attempted = false;
     _loading = false;
@@ -458,12 +490,17 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
   bool _current(int generation, _DiscoverySession session) =>
       _sameConnection(generation, session) && _pageVisible;
 
-  Future<void> _load() async {
-    if (_loading || !_pageVisible) return;
-    final session = _DiscoverySession(context.read<AppCubit>().state);
-    if (!session.eligible) return;
-    if (_session?.matches(session) != true) _reset();
+  Future<void> _load(_DiscoverySession session, String? artist) async {
+    if (_loading || !_current(_generation, session)) return;
+    if (artist != null &&
+        !_savedArtistNames(MusicLibraryService.forProfile(
+                session.database, session.app.profileId))
+            .contains(artist)) {
+      return;
+    }
+    if (_session?.matches(session) != true || _artist != artist) _reset();
     _session = session;
+    _artist = artist;
     final generation = ++_generation;
     setState(() {
       _attempted = true;
@@ -472,7 +509,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     });
     try {
       final songs = await musicCatalogService.getDiscoverySongs(
-          isCurrent: () => _current(generation, session));
+          artist: artist, isCurrent: () => _current(generation, session));
       if (_current(generation, session)) {
         setState(() => _songs = songs);
       }
@@ -526,6 +563,20 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     }
     _visible = visible;
     if (!session.eligible) return const SizedBox.shrink();
+    final library =
+        MusicLibraryService.forProfile(session.database, session.app.profileId);
+    return ListenableBuilder(
+      listenable: library.changes,
+      builder: (context, _) =>
+          _buildSelection(context, session, _savedArtistNames(library)),
+    );
+  }
+
+  Widget _buildSelection(
+      BuildContext context, _DiscoverySession session, List<String> artists) {
+    if (_artist != null && !artists.contains(_artist)) _reset();
+    final artist = _artist;
+    final generation = _generation;
     final locals = AppLocalizations.of(context)!;
     final results = musicTrackResults(_songs, showHidden: _showCommunityHidden);
     return Column(
@@ -538,7 +589,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
               ? IconButton(
                   key: const ValueKey('music-discovery-refresh'),
                   tooltip: locals.refresh,
-                  onPressed: _loading ? null : _load,
+                  onPressed: _loading ? null : () => _load(session, artist),
                   icon: const Icon(Icons.refresh_rounded),
                 )
               : null,
@@ -549,6 +600,30 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant)),
         ),
+        if (artists.isNotEmpty) ...[
+          Text(locals.musicDiscoverByArtist),
+          const SizedBox(height: 6),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final seed in <String?>[null, ...artists])
+                  ChoiceChip(
+                    label: Text(seed ?? locals.musicDiscoverAllMusic,
+                        maxLines: 2, overflow: TextOverflow.ellipsis),
+                    selected: seed == artist,
+                    onSelected: _loading
+                        ? null
+                        : (selected) {
+                            if (selected) _load(session, seed);
+                          },
+                  ),
+              ],
+            ),
+          ),
+        ],
         if (_loading)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
@@ -596,7 +671,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
                     ? null
                     : CommunityMatchLabels(matches: matches, compact: true),
                 onOpen: () {
-                  if (_current(_generation, session)) {
+                  if (_current(generation, session)) {
                     _openSong(context, session.app, song.videoId);
                   }
                 },
@@ -615,7 +690,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
             alignment: Alignment.centerLeft,
             child: FilledButton.tonalIcon(
               key: const ValueKey('music-discovery-load'),
-              onPressed: _load,
+              onPressed: () => _load(session, artist),
               icon: Icon(_attempted ? Icons.refresh : Icons.explore_outlined),
               label: Text(_attempted ? locals.retry : locals.musicDiscoverLoad),
             ),

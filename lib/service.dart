@@ -2473,7 +2473,10 @@ class Service {
   }
 
   Future<Playlist> getPublicPlaylists(String playlistId,
-      {int? page, bool saveLastSeen = true, Server? serverOverride}) async {
+      {int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride,
+      bool enrichResults = true}) async {
     if (playlistId.startsWith('local:')) {
       return getUserPlaylist(playlistId, serverOverride: serverOverride);
     }
@@ -2485,7 +2488,8 @@ class Service {
     final response = await _get(req);
     var playlist = Playlist.fromJson(handleResponse(response));
     var oldLength = playlist.videos.length;
-    final videos = await postProcessVideos(playlist.videos);
+    final videos =
+        await postProcessVideos(playlist.videos, enrichResults: enrichResults);
     playlist = playlist.copyWith(
         videos: videos, removedByFilter: oldLength - videos.length);
 

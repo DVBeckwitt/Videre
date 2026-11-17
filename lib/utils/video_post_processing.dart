@@ -7,7 +7,8 @@ import '../videos/models/video.dart';
 var log = Logger('Video post process');
 const privateVideoString = "[Private video]";
 
-Future<List<Video>> postProcessVideos(List<Video> toProcess) async {
+Future<List<Video>> postProcessVideos(List<Video> toProcess,
+    {bool enrichResults = true}) async {
   try {
     int start = DateTime.now().millisecondsSinceEpoch;
     List<Video> videos = toProcess
@@ -15,10 +16,10 @@ Future<List<Video>> postProcessVideos(List<Video> toProcess) async {
         .toList();
 
     videos = await VideoFilter.filterVideos(videos);
-    videos = await DeArrow.processVideos(videos);
+    if (enrichResults) videos = await DeArrow.processVideos(videos);
 
     log.fine(
-        "Filter + DeArrow took ${DateTime.now().millisecondsSinceEpoch - start}ms for ${toProcess.length} videos");
+        "Video post-processing took ${DateTime.now().millisecondsSinceEpoch - start}ms for ${toProcess.length} videos");
     return videos;
   } catch (err) {
     log.severe('Issue while running post process', err);

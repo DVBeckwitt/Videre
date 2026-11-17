@@ -388,7 +388,8 @@ class _PagedPlaylists extends Service {
   Future<Playlist> getPublicPlaylists(String playlistId,
           {int? page,
           bool saveLastSeen = true,
-          Server? serverOverride}) async =>
+          Server? serverOverride,
+          bool enrichResults = true}) async =>
       throw StateError('Private playlists must use the authenticated endpoint');
 }
 

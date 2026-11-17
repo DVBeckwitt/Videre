@@ -24,7 +24,10 @@ class _Pages extends Service {
 
   @override
   Future<Playlist> getPublicPlaylists(String playlistId,
-          {int? page, bool saveLastSeen = true, Server? serverOverride}) =>
+          {int? page,
+          bool saveLastSeen = true,
+          Server? serverOverride,
+          bool enrichResults = true}) =>
       _request(page, serverOverride, false);
 
   @override

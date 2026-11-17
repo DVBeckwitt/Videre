@@ -36,7 +36,10 @@ class _NotificationService extends Service {
 
   @override
   Future<Playlist> getPublicPlaylists(String playlistId,
-      {int? page, bool saveLastSeen = true, Server? serverOverride}) async {
+      {int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride,
+      bool enrichResults = true}) async {
     expect(saveLastSeen, isFalse);
     requestedServers.add(serverOverride);
     await beforePlaylist?.call();

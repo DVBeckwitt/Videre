@@ -41,7 +41,10 @@ class _MetadataService extends Service {
 
   @override
   Future<Playlist> getPublicPlaylists(String playlistId,
-      {int? page, bool saveLastSeen = true, Server? serverOverride}) async {
+      {int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride,
+      bool enrichResults = true}) async {
     playlistRequests.add(page ?? 1);
     return playlistPages[page ?? 1]!;
   }

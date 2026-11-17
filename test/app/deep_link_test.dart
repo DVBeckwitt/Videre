@@ -78,7 +78,10 @@ class _PlaylistService extends Service {
 
   @override
   Future<Playlist> getPublicPlaylists(String playlistId,
-      {int? page, bool saveLastSeen = true, Server? serverOverride}) async {
+      {int? page,
+      bool saveLastSeen = true,
+      Server? serverOverride,
+      bool enrichResults = true}) async {
     requests.add(playlistId);
     return Playlist(
         title: 'Loaded playlist',

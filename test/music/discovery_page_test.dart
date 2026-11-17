@@ -53,11 +53,14 @@ class _Catalog extends MusicCatalogService {
   bool holdDiscovery = false;
   final discoveries = <Completer<List<MusicTrack>>>[];
   final discoveryGuards = <bool Function()?>[];
+  final discoveryArtists = <String?>[];
 
   @override
-  Future<List<MusicTrack>> getDiscoverySongs({bool Function()? isCurrent}) {
+  Future<List<MusicTrack>> getDiscoverySongs(
+      {String? artist, bool Function()? isCurrent}) {
     discoveryCalls++;
     discoveryGuards.add(isCurrent);
+    discoveryArtists.add(artist);
     if (!holdDiscovery) return Future.value([]);
     final response = Completer<List<MusicTrack>>();
     discoveries.add(response);
@@ -196,6 +199,52 @@ void main() {
     expect(
         (router.pushed!.args as MusicRouteArgs).videoId, _discovered.videoId);
     expect(catalog.trendingCalls, 0);
+  });
+
+  testWidgets('saved artist discovery loads on tap and retries the same artist',
+      (tester) async {
+    await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester);
+    expect(catalog.discoveryArtists, isEmpty);
+    final artistChip = find.widgetWithText(ChoiceChip, 'Saved artist');
+    await tester.ensureVisible(artistChip);
+    await tester.pumpAndSettle();
+    await tester.tap(artistChip);
+    await tester.pump();
+    expect(catalog.discoveryArtists, ['Saved artist']);
+    expect(tester.widget<ChoiceChip>(artistChip).selected, isTrue);
+
+    catalog.discoveries.single.completeError(StateError('Unavailable'));
+    await tester.pumpAndSettle();
+    await loadDiscovery(tester);
+    expect(catalog.discoveryArtists, ['Saved artist', 'Saved artist']);
+    catalog.discoveries.last.complete([_discovered]);
+    await tester.pumpAndSettle();
+    expect(find.text('Discovered recording'), findsOneWidget);
+
+    final generic = find.widgetWithText(ChoiceChip, 'All music');
+    await tester.ensureVisible(generic);
+    await tester.pumpAndSettle();
+    await tester.tap(generic);
+    await tester.pump();
+    expect(catalog.discoveryArtists, ['Saved artist', 'Saved artist', null]);
+    expect(find.text('Discovered recording'), findsNothing);
+    catalog.discoveries.last.complete([]);
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a stale discovery chip cannot search from another profile',
+      (tester) async {
+    await tester.runAsync(() => library.save(_saved));
+    await show(tester);
+    final chip = tester
+        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Saved artist'));
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    chip.onSelected!(true);
+    await tester.pump();
+    expect(catalog.discoveryArtists, isEmpty);
   });
 
   testWidgets('hidden discovery has a reveal and keeps its loaded selection',
