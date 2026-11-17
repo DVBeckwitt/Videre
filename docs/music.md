@@ -44,8 +44,11 @@ the shelf.
 
 Under **Settings → Browsing → AI content filters**, choose **Off**, **Label**,
 or **Hide** for AiSList block entries, AiSList warnings, and the separate AI
-music list. All three rules start off. AiSList applies to YouTube browsing and
-Music songs. The AI music list applies to song search and discovery in Music.
+music list. When adding a first Invidious instance, setup preselects **Hide** for
+AiSList block entries and **Label** for warnings. You can choose either rule's
+action before continuing. The separate AI music list starts off. AiSList
+applies to YouTube browsing and Music songs. The AI music list applies to song
+search and discovery in Music.
 Videre matches the uploader ID or available channel handle locally. Music can
 miss credited artists whose tracks appear under another uploader, and upstream
 lists can contain mistakes. Use **Show hidden** to reveal filtered results for

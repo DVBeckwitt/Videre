@@ -19,6 +19,12 @@ String communityExceptionsSetting(CommunityList list) =>
     'community-exceptions-${list.name}';
 
 const _maxExceptions = 250;
+const _youtubeSetupSetting = 'community-youtube-setup-complete';
+
+CommunityAction? _savedAction(IDbClient owner, CommunityRule rule) {
+  final saved = owner.getSettings(rule.setting)?.value;
+  return CommunityAction.values.where((mode) => mode.name == saved).firstOrNull;
+}
 
 Set<String>? parseCommunityExceptions(String text) {
   if (text.length > 32768) return null;
@@ -92,6 +98,14 @@ class CommunityFilters {
   CommunityAction action(CommunityRule rule) =>
       _actions[rule] ?? CommunityAction.off;
 
+  bool get needsYoutubeSetup =>
+      _isCurrentProfile &&
+      _activeDatabase!.getSettings(_youtubeSetupSetting)?.value != 'true';
+
+  CommunityAction youtubeSetupAction(CommunityRule rule) =>
+      (_isCurrentProfile ? _savedAction(_activeDatabase!, rule) : null) ??
+      rule.setupDefault;
+
   Set<String> exceptions(CommunityList list) =>
       Set.unmodifiable(_exceptions[list] ?? const <String>{});
 
@@ -120,11 +134,7 @@ class CommunityFilters {
     _idsByHandle.clear();
     final owner = database.forProfile(database.profileId);
     for (final rule in CommunityRule.values) {
-      final value = owner.getSettings(rule.setting)?.value;
-      _actions[rule] = CommunityAction.values
-              .where((mode) => mode.name == value)
-              .firstOrNull ??
-          CommunityAction.off;
+      _actions[rule] = _savedAction(owner, rule) ?? CommunityAction.off;
     }
     for (final list in CommunityList.values) {
       _exceptions[list] = parseCommunityExceptions(
@@ -150,10 +160,32 @@ class CommunityFilters {
         await owner.saveSetting(SettingsValue(rule.setting, value.name));
         if (!_isCurrentProfile || epoch != _profileEpoch) return;
         _actions[rule] = value;
-        if (!enabled(rule.source)) _cancelRefresh(rule.source);
-        _changes.value++;
-        if (enabled(rule.source)) unawaited(refreshIfStale());
+        _actionsChanged(rule.source);
       });
+
+  Future<void> completeYoutubeSetup({
+    required CommunityAction block,
+    required CommunityAction warning,
+  }) =>
+      _write((owner) async {
+        if (owner.getSettings(_youtubeSetupSetting)?.value == 'true') return;
+        final epoch = _profileEpoch;
+        await owner.saveSettings([
+          SettingsValue(CommunityRule.youtubeBlock.setting, block.name),
+          SettingsValue(CommunityRule.youtubeWarn.setting, warning.name),
+          SettingsValue(_youtubeSetupSetting, 'true'),
+        ]);
+        if (!_isCurrentProfile || epoch != _profileEpoch) return;
+        _actions[CommunityRule.youtubeBlock] = block;
+        _actions[CommunityRule.youtubeWarn] = warning;
+        _actionsChanged(CommunityList.aislist);
+      });
+
+  void _actionsChanged(CommunityList list) {
+    if (!enabled(list)) _cancelRefresh(list);
+    _changes.value++;
+    if (enabled(list)) unawaited(refreshIfStale());
+  }
 
   Future<void> allow(CommunityMatch match) =>
       _changeException(match.source, match.identity, add: true);
@@ -205,7 +237,8 @@ class CommunityFilters {
         !_isCurrentProfile) {
       return const [];
     }
-    final id = normalizeChannelId(authorId);
+    final id =
+        normalizeChannelId(authorId) ?? channelIdFromAuthorUrl(authorUrl);
     final directHandle = channelHandleFromAuthorUrl(authorUrl);
     if (id != null && directHandle != null) _remember(id, directHandle);
     final handle = directHandle ?? _handlesById[id];

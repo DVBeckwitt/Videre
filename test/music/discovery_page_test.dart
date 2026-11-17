@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
-import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -223,7 +222,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('music-discovery-discover001')),
         findsOneWidget);
-    expect(find.byType(CommunityMatchLabels), findsOneWidget);
+    expect(find.text('Listed by Flow AI music'), findsOneWidget);
     expect(catalog.discoveryCalls, 1);
   });
 

@@ -1,17 +1,25 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:auto_route/auto_route.dart';
+import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app;
 import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
+import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/tv/components/tv_text_field.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -57,6 +65,10 @@ class _ProtectedValidationService extends Service {
   }
 
   @override
+  Future<Server?> authenticateNerdVpn(Server server) =>
+      authenticateProtected(server);
+
+  @override
   Future<void> validateServer(
       String serverUrl, Map<String, String>? headers) async {
     expect(signedIn, isNotNull);
@@ -70,6 +82,16 @@ class _ProtectedValidationService extends Service {
     signedOut = server;
     return server;
   }
+}
+
+class _UnavailableCommunityList implements CommunityListStore {
+  @override
+  Future<CommunitySnapshot?> load(CommunityList list) async => null;
+
+  @override
+  Future<CommunitySnapshot> refresh(CommunityList list,
+          {required bool Function() isCurrent}) async =>
+      throw StateError('Offline test');
 }
 
 void main() {
@@ -202,6 +224,152 @@ void main() {
       service = Service();
     });
 
+    for (final (tv, leaveDuringValidation) in [
+      (false, false),
+      (true, false),
+      (false, true),
+    ]) {
+      testWidgets(
+          leaveDuringValidation
+              ? 'leaving during first instance validation discards choices'
+              : 'first instance offers AiSList choices before connecting (TV=$tv)',
+          (tester) async {
+        final original = communityFilters;
+        communityFilters = CommunityFilters(
+          database: () => db,
+          repository: _UnavailableCommunityList(),
+        );
+        await tester.runAsync(communityFilters.reloadForProfile);
+        app.isTv = tv;
+        addTearDown(() {
+          communityFilters = original;
+          app.isTv = false;
+        });
+        final validator = _ValidationService();
+        service = validator;
+        final router = RootStackRouter.build(routes: [
+          NamedRouteDef(
+            name: 'SetupFixtureRoute',
+            path: '/',
+            builder: (_, __) => const Scaffold(),
+          ),
+          if (tv)
+            AutoRoute(page: TvAddServerRoute.page)
+          else
+            AutoRoute(page: AddServerRoute.page),
+        ]);
+        addTearDown(router.dispose);
+
+        await tester.pumpWidget(MaterialApp.router(
+          routerConfig: router.config(),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(disableAnimations: true),
+            child: child!,
+          ),
+        ));
+        await tester.pumpAndSettle();
+        Server? addedServer;
+        unawaited(router
+            .push<Server>(
+                tv ? const TvAddServerRoute() : const AddServerRoute())
+            .then((server) => addedServer = server));
+        await tester.pumpAndSettle();
+        final url = tv
+            ? tester
+                .widget<TvTextField>(find.byType(TvTextField).first)
+                .controller
+            : tester
+                .widget<TextField>(find.byType(TextField).first)
+                .controller!;
+        url.text = 'https://test.example';
+        await tester.pumpAndSettle();
+        expect(find.byType(AlertDialog), findsNothing);
+
+        final submit = find.text('Test and add server');
+        Future<void> settle() async {
+          for (var attempt = 0; attempt < 8; attempt++) {
+            await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+        }
+
+        Future<void> submitForm() async {
+          await tester.ensureVisible(submit);
+          await tester.runAsync(() async {
+            await tester.tap(submit);
+            await Future<void>.delayed(Duration.zero);
+          });
+          await tester.pump();
+        }
+
+        await submitForm();
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('YouTube channel filters'), findsOneWidget);
+        expect(find.text('Hide matches'), findsOneWidget);
+        expect(find.text('Label matches'), findsOneWidget);
+        expect(find.text('Flow AI music list'), findsNothing);
+        expect(validator.checked, isEmpty);
+
+        if (tv) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+          await tester.pumpAndSettle();
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        } else {
+          await tester.tap(find.text('Cancel'));
+          await settle();
+          expect(communityFilters.needsYoutubeSetup, isTrue);
+          expect(validator.checked, isEmpty);
+          await submitForm();
+          await tester.pump(const Duration(milliseconds: 300));
+          await tester.tap(find.text('AiSList block list'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Off'));
+        }
+        await tester.pumpAndSettle();
+        expect(find.text('Off'), findsOneWidget);
+
+        await tester.runAsync(() async {
+          await tester.tap(find.text('Continue'));
+          await Future<void>.delayed(Duration.zero);
+        });
+        await settle();
+        expect(validator.checked.single.url, 'https://test.example');
+        expect(communityFilters.needsYoutubeSetup, isTrue);
+        expect(addedServer, isNull);
+
+        if (leaveDuringValidation) {
+          final form = tester.element(find.byType(AddServerScreen));
+          final route = ModalRoute.of(form)!;
+          router.pop();
+          expect(route.isCurrent, isFalse);
+          expect(form.mounted, isTrue);
+          validator.response.complete();
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await settle();
+          expect(communityFilters.needsYoutubeSetup, isTrue);
+          expect(addedServer, isNull);
+          expect(tester.takeException(), isNull);
+          return;
+        }
+
+        validator.response.complete();
+        await settle();
+        expect(communityFilters.needsYoutubeSetup, isFalse);
+        expect(addedServer?.url, 'https://test.example');
+        expect(communityFilters.action(CommunityRule.youtubeBlock),
+            CommunityAction.off);
+        expect(communityFilters.action(CommunityRule.youtubeWarn),
+            CommunityAction.label);
+        expect(
+            communityFilters.action(CommunityRule.music), CommunityAction.off);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
     for (final (scheme, legacyHeader) in [
       ('http', false),
       ('http', true),
@@ -324,7 +492,9 @@ void main() {
       cubit.urlController.text = 'inv.example/';
       cubit.nameController.text = 'Other account';
 
-      final added = await cubit.validateServer();
+      final added = await cubit.validateServer(
+        prepareFirstInstance: () async => fail('Profile already has a server'),
+      );
       expect(added!.accountId, isNot(saved.accountId));
       expect(added.name, 'Other account');
       expect(added.authToken, isNull);
@@ -353,14 +523,17 @@ void main() {
       expect(await db.getServers(), isEmpty);
     });
 
-    test('a failed connection leaves no saved server and clears loading',
-        () async {
+    test('a failed connection leaves no server or AiSList choices', () async {
       service = Service(
           httpClient:
               MockClient((_) async => http.Response('Unavailable', 503)));
       cubit.urlController.text = 'inv.example';
 
-      await expectLater(cubit.validateServer(), throwsA(anything));
+      var saved = false;
+      await expectLater(cubit.validateServer(prepareFirstInstance: () async {
+        return () async => saved = true;
+      }), throwsA(anything));
+      expect(saved, isFalse);
       expect(cubit.state.loading, isFalse);
       expect(await db.getServers(), isEmpty);
     });
@@ -474,7 +647,13 @@ void main() {
       service = protected;
       cubit.urlController.text = 'https://protected.example';
       cubit.setProtectedServer(true);
-      expect(await cubit.validateServer(), isNull);
+      var saved = false;
+      expect(
+          await cubit.validateServer(prepareFirstInstance: () async {
+            return () async => saved = true;
+          }),
+          isNull);
+      expect(saved, isFalse);
       expect(protected.validations, 0);
       expect(cubit.state.loading, isFalse);
       expect(await db.getServers(), isEmpty);
@@ -487,6 +666,57 @@ void main() {
       cubit.setProtectedServer(true);
       await expectLater(cubit.validateServer(), throwsStateError);
       expect(protected.signedOut!.accountId, protected.signedIn!.accountId);
+      expect(await db.getServers(), isEmpty);
+    });
+
+    test('approval-pending NerdVPN can complete first-instance choices',
+        () async {
+      final protected = _ProtectedValidationService();
+      service = protected;
+      cubit.urlController.text = 'https://invidious.nerdvpn.de';
+      const access = MethodChannel('videre/nerdvpn_access');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(access, (call) async {
+        expect(call.method, 'status');
+        return {'state': 'waiting'};
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(access, null));
+      var saves = 0;
+
+      final account = await cubit.validateServer(
+        prepareFirstInstance: () async => () async {
+          expect(protected.signedIn, isNotNull);
+          saves++;
+          return true;
+        },
+      );
+
+      expect(account?.accountId, protected.signedIn?.accountId);
+      expect(saves, 1);
+      expect(protected.validations, 0);
+      expect(protected.signedOut, isNull);
+    });
+
+    test('failed setup preference write discards the new protected session',
+        () async {
+      final protected = _ProtectedValidationService();
+      service = protected;
+      cubit.urlController.text = 'https://protected.example';
+      cubit.setProtectedServer(true);
+
+      await expectLater(
+        cubit.validateServer(
+          prepareFirstInstance: () async => () async {
+            expect(protected.validations, 1);
+            throw StateError('Settings write failed');
+          },
+        ),
+        throwsStateError,
+      );
+
+      expect(protected.signedOut?.accountId, protected.signedIn?.accountId);
+      expect(cubit.state.loading, isFalse);
       expect(await db.getServers(), isEmpty);
     });
   });

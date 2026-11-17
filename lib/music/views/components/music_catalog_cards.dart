@@ -114,7 +114,12 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
       return Stack(
         children: [
           card,
-          PositionedDirectional(top: 8, end: 8, child: badge),
+          PositionedDirectional(
+            top: 8,
+            start: 8,
+            end: 8,
+            child: Align(alignment: AlignmentDirectional.topEnd, child: badge),
+          ),
         ],
       );
     }

@@ -816,11 +816,18 @@ class SembastSqfDb extends IDbClient {
   }
 
   @override
-  saveSetting(SettingsValue setting) async {
-    await _writeProfile((owner, txn) => owner
-        ._settingsFor(setting.name)
-        .record(setting.name)
-        .put(txn, setting.toJson()));
+  Future<void> saveSetting(SettingsValue setting) => saveSettings([setting]);
+
+  @override
+  Future<void> saveSettings(List<SettingsValue> settings) async {
+    await _writeProfile((owner, txn) async {
+      for (final setting in settings) {
+        await owner
+            ._settingsFor(setting.name)
+            .record(setting.name)
+            .put(txn, setting.toJson());
+      }
+    });
   }
 
   @override

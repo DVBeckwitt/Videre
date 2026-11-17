@@ -18,6 +18,7 @@ import '../models/errors/invidious_service_error.dart';
 part 'add_server.freezed.dart';
 
 typedef PublicInstance = ({String url, bool api});
+typedef SaveFirstInstancePreferences = Future<bool> Function();
 
 class NerdVpnApiKeyException extends FormatException {
   const NerdVpnApiKeyException(super.message);
@@ -71,7 +72,10 @@ class AddServerCubit extends Cubit<AddServerState> {
     return super.close();
   }
 
-  Future<Server?> validateServer() async {
+  Future<Server?> validateServer({
+    Future<SaveFirstInstancePreferences?> Function()? prepareFirstInstance,
+    bool Function()? isRouteCurrent,
+  }) async {
     if (isClosed || state.loading) return null;
     final serverUrl = normalizeUrl(urlController.text);
     final headers = Map<String, String>.from(state.headers);
@@ -86,6 +90,30 @@ class AddServerCubit extends Cubit<AddServerState> {
         state.advancedTest || state.publicInstance != null || manualSetup;
     Server? protectedSession;
     var credentialsStored = false;
+    SaveFirstInstancePreferences? saveFirstInstancePreferences;
+    bool current() =>
+        !isClosed &&
+        db.profileId == _profileId &&
+        (isRouteCurrent?.call() ?? true);
+
+    Future<void> discardProtectedSession() async {
+      final attempt = protectedSession;
+      protectedSession = null;
+      if (attempt != null) await service.logOutProtected(attempt);
+    }
+
+    Future<Server?> accept(Server server) async {
+      final save = saveFirstInstancePreferences;
+      if (save == null && isRouteCurrent == null) return server;
+      var accepted = false;
+      try {
+        accepted = current() && (save == null || await save()) && current();
+        return accepted ? server : null;
+      } finally {
+        if (!accepted) await discardProtectedSession();
+      }
+    }
+
     emit(state.copyWith(loading: true));
     try {
       if (serverUrl == null) {
@@ -97,10 +125,9 @@ class AddServerCubit extends Cubit<AddServerState> {
             'Account name must not exceed 80 characters');
       }
 
+      final accounts = await db.forProfile(_profileId).getServers();
       final sameEndpointAccounts =
-          (await db.forProfile(_profileId).getServers())
-              .where((account) => account.url == serverUrl)
-              .length;
+          accounts.where((account) => account.url == serverUrl).length;
       var server = Server(
           id: const Uuid().v4(),
           profileId: _profileId,
@@ -138,12 +165,21 @@ class AddServerCubit extends Cubit<AddServerState> {
               'Enter the complete NerdVPN API key: nvpn_ followed by 32 letters or numbers.');
         }
       }
-      if (manualKey != null) {
-        // Match the transport's fail-closed onion policy before creating
-        // an unsaved native credential or starting either validation request.
-        if (onionManualSetup && !NetworkProxy.instance.config.enabled) {
-          throw const NerdVpnAccessRequired('proxyRequired');
+      // Match the transport's fail-closed onion policy before creating an
+      // unsaved native credential or starting either validation request.
+      if (manualKey != null &&
+          onionManualSetup &&
+          !NetworkProxy.instance.config.enabled) {
+        throw const NerdVpnAccessRequired('proxyRequired');
+      }
+      if (accounts.isEmpty && prepareFirstInstance != null) {
+        if (!current()) return null;
+        saveFirstInstancePreferences = await prepareFirstInstance();
+        if (saveFirstInstancePreferences == null || !current()) {
+          return null;
         }
+      }
+      if (manualKey != null) {
         server = server.copyWith(
             customHeaders: Map<String, String>.from(headers)
               ..removeWhere((name, _) => NerdVpnAccess.isKeyHeader(name)));
@@ -153,8 +189,7 @@ class AddServerCubit extends Cubit<AddServerState> {
         await NerdVpnAccess.instance.setKey(server, manualKey);
         credentialsStored = true;
         if (isClosed) {
-          await service.logOutProtected(server);
-          protectedSession = null;
+          await discardProtectedSession();
           return null;
         }
       }
@@ -163,18 +198,14 @@ class AddServerCubit extends Cubit<AddServerState> {
             ? await service.authenticateProtected(server)
             : await service.authenticateNerdVpn(server);
         if (authenticated == null) {
-          if (protectedSession != null) {
-            await service.logOutProtected(protectedSession);
-            protectedSession = null;
-          }
+          await discardProtectedSession();
           return null;
         }
         server = authenticated;
         protectedSession = server;
         credentialsStored = true;
         if (isClosed) {
-          await service.logOutProtected(server);
-          protectedSession = null;
+          await discardProtectedSession();
           return null;
         }
       }
@@ -184,13 +215,12 @@ class AddServerCubit extends Cubit<AddServerState> {
       if (nerdVpn) {
         final access = await NerdVpnAccess.instance.status(server);
         if (isClosed) {
-          await service.logOutProtected(server);
-          protectedSession = null;
+          await discardProtectedSession();
           return null;
         }
         if (!access.ready) {
           if (manualSetup) throw NerdVpnAccessRequired(access.state);
-          return server;
+          return await accept(server);
         }
       }
 
@@ -198,8 +228,7 @@ class AddServerCubit extends Cubit<AddServerState> {
           .validateServer(serverUrl, server.headersForUrl(serverUrl))
           .timeout(const Duration(seconds: 15));
       if (isClosed && protectedSession != null) {
-        await service.logOutProtected(protectedSession);
-        protectedSession = null;
+        await discardProtectedSession();
         return null;
       }
 
@@ -240,24 +269,22 @@ class AddServerCubit extends Cubit<AddServerState> {
       }
 
       if (isClosed && protectedSession != null) {
-        await service.logOutProtected(protectedSession);
-        protectedSession = null;
+        await discardProtectedSession();
         return null;
       }
-      return server;
+      return await accept(server);
     } catch (error) {
+      final pending = protectedSession;
       if (!isClosed &&
           !manualSetup &&
           credentialsStored &&
-          protectedSession != null &&
-          NerdVpnAccess.supports(protectedSession) &&
+          pending != null &&
+          NerdVpnAccess.supports(pending) &&
           (error is NerdVpnAccessRequired ||
               error is InvidiousServiceError && error.isGatewayAccessFailure)) {
-        return protectedSession;
+        return await accept(pending);
       }
-      if (protectedSession != null) {
-        await service.logOutProtected(protectedSession);
-      }
+      await discardProtectedSession();
       rethrow;
     } finally {
       if (!isClosed) emit(state.copyWith(loading: false));

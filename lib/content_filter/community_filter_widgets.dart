@@ -72,25 +72,57 @@ class CommunityMatchLabels extends StatelessWidget {
   Widget build(BuildContext context) {
     if (matches.isEmpty) return const SizedBox.shrink();
     final locals = AppLocalizations.of(context)!;
-    const icon = Icon(Icons.info_outline, size: 18);
     if (compact) {
-      final label = matches.map((match) => _label(locals, match)).join('\n');
-      final colors = Theme.of(context).colorScheme;
-      return Material(
-        color: colors.surfaceContainerHigh,
-        shape: const CircleBorder(),
-        child: interactive
-            ? IconButton(
-                visualDensity: VisualDensity.compact,
-                tooltip: label,
-                onPressed: () => _showMatches(context),
-                icon: icon,
-              )
-            : Tooltip(
-                message: label,
-                child: const Padding(padding: EdgeInsets.all(6), child: icon)),
+      final labels = matches.map((match) => _label(locals, match)).toList();
+      final theme = Theme.of(context);
+      final colors = theme.colorScheme;
+      const padding = EdgeInsets.symmetric(horizontal: 8, vertical: 4);
+      const shape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+      );
+      final text = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final label in labels)
+            Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: colors.onSecondaryContainer,
+              ),
+            ),
+        ],
+      );
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 160),
+        child: Tooltip(
+          message: labels.join('\n'),
+          excludeFromSemantics: true,
+          child: interactive
+              ? TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.onSecondaryContainer,
+                    backgroundColor: colors.secondaryContainer,
+                    minimumSize: Size.zero,
+                    padding: padding,
+                    shape: shape,
+                  ),
+                  onPressed: () => _showMatches(context),
+                  child: text,
+                )
+              : DecoratedBox(
+                  decoration: ShapeDecoration(
+                    color: colors.secondaryContainer,
+                    shape: shape,
+                  ),
+                  child: Padding(padding: padding, child: text),
+                ),
+        ),
       );
     }
+    const icon = Icon(Icons.info_outline, size: 18);
     return Wrap(
       spacing: 8,
       children: [

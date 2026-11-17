@@ -2,6 +2,7 @@ import 'package:clipious/utils/motion.dart';
 import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/content_filter/community_filter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -17,6 +18,7 @@ import 'package:clipious/settings/models/errors/missing_software_key.dart';
 import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
+import 'package:clipious/settings/views/components/community_filter_choice.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/components/nerdvpn_api_key_setup.dart';
@@ -214,6 +216,56 @@ class AddServerScreen extends StatelessWidget {
   void showBasicAuthDialog(BuildContext context) => showServerBasicAuthDialog(
       context,
       (key, value) => context.read<AddServerCubit>().addHeader(key, value));
+
+  static Future<void> validateAndClose(BuildContext context) async {
+    final route = ModalRoute.of(context);
+    // A popped form can remain mounted through its reverse transition.
+    bool isCurrentRoute() => route?.isCurrent ?? true;
+
+    try {
+      final server = await context.read<AddServerCubit>().validateServer(
+          isRouteCurrent: () => context.mounted && isCurrentRoute(),
+          prepareFirstInstance: () =>
+              _prepareAiSListSetup(context, isCurrentRoute));
+      if (server != null && context.mounted && isCurrentRoute()) {
+        AutoRouter.of(context).maybePop(server);
+      }
+    } catch (error) {
+      if (context.mounted && isCurrentRoute()) handleError(context, error);
+    }
+  }
+
+  static Future<SaveFirstInstancePreferences?> _prepareAiSListSetup(
+      BuildContext context, bool Function() isRouteCurrent) async {
+    if (!context.mounted || !isRouteCurrent()) return null;
+    final filters = communityFilters;
+    if (!filters.needsYoutubeSetup) return () async => true;
+    final profile = filters.profileSelection;
+    bool current() =>
+        isRouteCurrent() &&
+        identical(filters, communityFilters) &&
+        profile == filters.profileSelection;
+    final choices = await chooseAiSListSetup(context,
+        block: filters.youtubeSetupAction(CommunityRule.youtubeBlock),
+        warning: filters.youtubeSetupAction(CommunityRule.youtubeWarn));
+    if (choices == null || !context.mounted || !current()) return null;
+    return () async {
+      if (!context.mounted || !current()) return false;
+      try {
+        await filters.completeYoutubeSetup(
+            block: choices.block, warning: choices.warning);
+        return context.mounted && current();
+      } catch (_) {
+        if (context.mounted && current()) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(AppLocalizations.of(context)!.communitySettingsFailed),
+          ));
+        }
+        return false;
+      }
+    };
+  }
 
   static void handleError(BuildContext context, dynamic e) {
     var locals = AppLocalizations.of(context)!;
@@ -435,19 +487,7 @@ class AddServerScreen extends StatelessWidget {
                       FilledButton.tonal(
                           onPressed: state.loading || !state.valid
                               ? null
-                              : () async {
-                                  try {
-                                    final server = await cubit.validateServer();
-
-                                    if (server != null && context.mounted) {
-                                      AutoRouter.of(context).maybePop(server);
-                                    }
-                                  } catch (e) {
-                                    if (context.mounted) {
-                                      handleError(context, e);
-                                    }
-                                  }
-                                },
+                              : () => validateAndClose(context),
                           child: state.loading
                               ? const SizedBox.square(
                                   dimension: 20,

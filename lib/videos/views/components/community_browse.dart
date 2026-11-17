@@ -94,13 +94,17 @@ Widget labelVideoThumbnail(Video video, Widget thumbnail,
     children: [
       thumbnail,
       PositionedDirectional(
-        top: 0,
-        end: 0,
-        child: VideoChannelCommunityLabels(
-          authorId: video.authorId,
-          authorUrl: video.authorUrl,
-          compact: true,
-          interactive: focusable,
+        top: 4,
+        start: 4,
+        end: 4,
+        child: Align(
+          alignment: AlignmentDirectional.topEnd,
+          child: VideoChannelCommunityLabels(
+            authorId: video.authorId,
+            authorUrl: video.authorUrl,
+            compact: true,
+            interactive: focusable,
+          ),
         ),
       ),
     ],

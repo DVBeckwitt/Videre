@@ -212,19 +212,7 @@ class TvAddServerScreen extends StatelessWidget {
                       FilledButton.tonal(
                           onPressed: state.loading || !state.valid
                               ? null
-                              : () async {
-                                  try {
-                                    final server = await cubit.validateServer();
-
-                                    if (server != null && context.mounted) {
-                                      AutoRouter.of(context).maybePop(server);
-                                    }
-                                  } catch (e) {
-                                    if (context.mounted) {
-                                      AddServerScreen.handleError(context, e);
-                                    }
-                                  }
-                                },
+                              : () => AddServerScreen.validateAndClose(context),
                           child: state.loading
                               ? const SizedBox.square(
                                   dimension: 20,

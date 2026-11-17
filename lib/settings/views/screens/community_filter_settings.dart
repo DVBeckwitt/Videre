@@ -1,9 +1,9 @@
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/settings/views/components/community_filter_choice.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 void showCommunityFilterSettings(BuildContext context, {bool tv = false}) {
   Navigator.of(context).push(MaterialPageRoute<void>(
@@ -17,46 +17,10 @@ class CommunityFilterSettingsScreen extends StatelessWidget {
   const CommunityFilterSettingsScreen({super.key, this.tv = false});
 
   Future<void> _chooseAction(BuildContext context, CommunityRule rule) async {
-    final locals = AppLocalizations.of(context)!;
     final filters = communityFilters;
     final profile = filters.profileSelection;
     final current = filters.action(rule);
-    final selected = await showDialog<CommunityAction>(
-      context: context,
-      useRootNavigator: false,
-      animationStyle: AppMotion.dialogStyle(context),
-      builder: (context) => _SelectShortcut(
-        child: AlertDialog(
-          title: Text(_ruleLabel(locals, rule)),
-          scrollable: true,
-          contentPadding: const EdgeInsets.symmetric(vertical: 8),
-          content: SizedBox(
-            width: 360,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final action in CommunityAction.values)
-                  ListTile(
-                    autofocus: action == current,
-                    selected: action == current,
-                    leading: Icon(action == current
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked),
-                    title: Text(_actionLabel(locals, action)),
-                    onTap: () => Navigator.of(context).pop(action),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(locals.cancel),
-            ),
-          ],
-        ),
-      ),
-    );
+    final selected = await chooseCommunityAction(context, rule, current);
     if (selected == null ||
         selected == current ||
         !context.mounted ||
@@ -87,9 +51,9 @@ class CommunityFilterSettingsScreen extends StatelessWidget {
                 ListTile(
                   key: ValueKey(rule),
                   autofocus: rule == CommunityRule.youtubeBlock,
-                  title: Text(_ruleLabel(locals, rule)),
+                  title: Text(communityRuleLabel(locals, rule)),
                   subtitle: Text(
-                    _actionLabel(locals, communityFilters.action(rule)),
+                    communityActionLabel(locals, communityFilters.action(rule)),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _chooseAction(context, rule),
@@ -124,20 +88,6 @@ String _sourceLabel(AppLocalizations locals, CommunityList source) =>
     switch (source) {
       CommunityList.aislist => locals.communityYoutubeFilters,
       CommunityList.aimusic => locals.communityMusicFilter,
-    };
-
-String _ruleLabel(AppLocalizations locals, CommunityRule rule) =>
-    switch (rule) {
-      CommunityRule.youtubeBlock => locals.communityYoutubeBlockRule,
-      CommunityRule.youtubeWarn => locals.communityYoutubeWarnRule,
-      CommunityRule.music => locals.communityMusicRule,
-    };
-
-String _actionLabel(AppLocalizations locals, CommunityAction action) =>
-    switch (action) {
-      CommunityAction.off => locals.communityActionOff,
-      CommunityAction.label => locals.communityActionLabel,
-      CommunityAction.hide => locals.communityActionHide,
     };
 
 Future<void> _saveChange(
@@ -308,25 +258,11 @@ class _SettingsPage extends StatelessWidget {
         child: child,
       ),
     );
-    return _SelectShortcut(
+    return CommunityFilterShortcuts(
       child: Scaffold(
         appBar: AppBar(title: Text(title)),
         body: SafeArea(child: tv ? TvOverscan(child: content) : content),
       ),
     );
   }
-}
-
-class _SelectShortcut extends StatelessWidget {
-  final Widget child;
-
-  const _SelectShortcut({required this.child});
-
-  @override
-  Widget build(BuildContext context) => Shortcuts(
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
-        },
-        child: child,
-      );
 }

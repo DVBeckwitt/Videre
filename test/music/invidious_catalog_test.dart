@@ -321,6 +321,32 @@ void main() {
     expect(track.toVideo().authorUrl, '/@mixedcase');
   });
 
+  test('song search accepts canonical uploader URLs and legacy bare IDs',
+      () async {
+    respond = (request) async => _json([
+          {
+            ..._song(),
+            'authorId': null,
+            'authorUrl': 'https://music.youtube.com/channel/$_channelId',
+          },
+          {
+            ..._discoveryVideo(1),
+            'authorId': null,
+            'authorUrl': _channelId,
+          },
+          {
+            ..._discoveryVideo(2),
+            'authorId': null,
+            'authorUrl': 'https://www.example.com/channel/$_channelId',
+          },
+        ], request);
+
+    final tracks = await catalog.searchSongs('song');
+    expect(tracks.map((track) => track.uploaderChannelId),
+        [_channelId, _channelId, null]);
+    expect(requests.map((request) => request.url.path), ['/api/v1/search']);
+  });
+
   test('unimplemented catalog methods fail without a network fallback',
       () async {
     final contract = _UnimplementedCatalog();

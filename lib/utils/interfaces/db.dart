@@ -83,6 +83,12 @@ abstract class IDbClient {
 
   saveSetting(SettingsValue setting);
 
+  Future<void> saveSettings(List<SettingsValue> settings) async {
+    for (final setting in settings) {
+      await saveSetting(setting);
+    }
+  }
+
   List<SettingsValue> getAllSettings();
 
   deleteSetting(String name);

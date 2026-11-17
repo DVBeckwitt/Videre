@@ -4,11 +4,13 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/community_browse.dart';
 import 'package:clipious/videos/views/components/video_list.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _listedUploader = 'UC0000000000000000000000';
+const _warnedUploader = 'UC1111111111111111111111';
 
 class _ListStore implements CommunityListStore {
   final snapshot = CommunitySnapshot(
@@ -16,7 +18,7 @@ class _ListStore implements CommunityListStore {
     generatedAt: DateTime.now(),
     blockIds: const {_listedUploader},
     blockHandles: const {},
-    warnIds: const {},
+    warnIds: const {_warnedUploader},
     warnHandles: const {},
   );
 
@@ -44,6 +46,43 @@ void main() {
     communityFilters =
         CommunityFilters(database: () => database, repository: _ListStore());
     await communityFilters.reloadForProfile();
+  });
+
+  testWidgets('label mode shows readable block and warning labels on cards',
+      (tester) async {
+    await tester.runAsync(() async {
+      await communityFilters.setAction(
+          CommunityRule.youtubeBlock, CommunityAction.label);
+      await communityFilters.setAction(
+          CommunityRule.youtubeWarn, CommunityAction.label);
+    });
+    await tester.pumpWidget(MaterialApp(
+      locale: const Locale('en'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
+        body: Column(children: [
+          labelVideoThumbnail(
+            const Video(videoId: 'a1b2c3d4e5f', authorId: _listedUploader),
+            const SizedBox(width: 154, height: 86),
+          ),
+          labelVideoThumbnail(
+            const Video(videoId: 'a1b2c3d4e5g', authorId: _warnedUploader),
+            const SizedBox(width: 154, height: 86),
+            focusable: false,
+          ),
+        ]),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final block = find.text('Listed by AiSList');
+    final warning = find.text('Warning from AiSList');
+    expect(block.hitTestable(), findsOneWidget);
+    expect(warning, findsOneWidget);
+    await tester.tap(block);
+    await tester.pumpAndSettle();
+    expect(find.text('Allow this channel'), findsOneWidget);
   });
 
   testWidgets('retrying an all-hidden video page retains results and cursor',

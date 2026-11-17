@@ -1885,6 +1885,7 @@
   "communityFilters": "AI content filters",
   "communityFiltersSummary": "Label or hide channels listed by AiSList or Flow’s AI music list.",
   "communityYoutubeFilters": "YouTube channel filters",
+  "communityYoutubeSetupDescription": "AiSList is a community-maintained list of channels that may publish AI-generated content. Choose how Videre handles matches while browsing. You can change these choices later in Settings → Browsing → AI content filters.",
   "communityYoutubeScope": "AiSList matches channels in YouTube and Music browsing when a channel ID or handle is available.",
   "communityMusicFilter": "Music filter",
   "communityMusicScope": "Match uploader channel IDs in Music search and discovery. Songs uploaded by other channels may still appear.",

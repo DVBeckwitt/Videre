@@ -71,6 +71,66 @@ void main() {
     expect(store.refreshes, isEmpty);
   });
 
+  test('first instance setup offers hide and label before enabling AiSList',
+      () async {
+    expect(filters.needsYoutubeSetup, isTrue);
+    final block = filters.youtubeSetupAction(CommunityRule.youtubeBlock);
+    final warning = filters.youtubeSetupAction(CommunityRule.youtubeWarn);
+    expect(block, CommunityAction.hide);
+    expect(warning, CommunityAction.label);
+    expect(store.loads, isEmpty);
+    expect(store.refreshes, isEmpty);
+
+    await filters.completeYoutubeSetup(block: block, warning: warning);
+    await filters.refreshIfStale();
+    expect(filters.needsYoutubeSetup, isFalse);
+    expect(store.refreshes, [CommunityList.aislist]);
+    expect(filters.match(authorId: _block).single.action, CommunityAction.hide);
+    expect(filters.match(authorId: _warn).single.action, CommunityAction.label);
+    expect(filters.action(CommunityRule.music), CommunityAction.off);
+  });
+
+  test('both Off selections persist and setup cannot overwrite them', () async {
+    await filters.completeYoutubeSetup(
+      block: CommunityAction.off,
+      warning: CommunityAction.off,
+    );
+    await filters.reloadForProfile();
+    expect(filters.needsYoutubeSetup, isFalse);
+    expect(filters.youtubeSetupAction(CommunityRule.youtubeBlock),
+        CommunityAction.off);
+    expect(filters.youtubeSetupAction(CommunityRule.youtubeWarn),
+        CommunityAction.off);
+    await filters.completeYoutubeSetup(
+      block: CommunityAction.hide,
+      warning: CommunityAction.label,
+    );
+    expect(filters.enabled(CommunityList.aislist), isFalse);
+    expect(store.loads, isEmpty);
+    expect(store.refreshes, isEmpty);
+  });
+
+  test('setup preselects existing choices and completion is profile-specific',
+      () async {
+    await database.saveSetting(SettingsValue(
+        CommunityRule.youtubeBlock.setting, CommunityAction.off.name));
+    await filters.reloadForProfile();
+    expect(filters.youtubeSetupAction(CommunityRule.youtubeBlock),
+        CommunityAction.off);
+    expect(filters.youtubeSetupAction(CommunityRule.youtubeWarn),
+        CommunityAction.label);
+    await filters.completeYoutubeSetup(
+      block: CommunityAction.off,
+      warning: CommunityAction.off,
+    );
+    final second = await database.createProfile('Second');
+    await database.useProfile(second.id);
+    await filters.reloadForProfile();
+    expect(filters.needsYoutubeSetup, isTrue);
+    expect(filters.youtubeSetupAction(CommunityRule.youtubeBlock),
+        CommunityAction.hide);
+  });
+
   test('stale AiSList updates automatically with no settings changes',
       () async {
     await filters.setAction(CommunityRule.youtubeBlock, CommunityAction.hide);
@@ -154,6 +214,52 @@ void main() {
         other);
     expect(filters.match(authorId: other).single.identity, other);
     expect(filters.match(authorId: _block.toLowerCase()), isEmpty);
+  });
+
+  test('labels matches by canonical author URL when the ID is missing',
+      () async {
+    await filters.setAction(CommunityRule.youtubeBlock, CommunityAction.label);
+    await filters.refreshIfStale();
+
+    final relative = filters.match(authorUrl: '/channel/$_block').single;
+    expect(relative.action, CommunityAction.label);
+    expect(relative.identity, _block);
+    expect(
+      filters
+          .match(
+              authorId: '',
+              authorUrl: 'https://wWw.YouTube.Com/channel/$_block')
+          .single
+          .identity,
+      _block,
+    );
+    expect(
+      filters.match(authorId: _warn, authorUrl: '/channel/$_block'),
+      isEmpty,
+      reason: 'a valid explicit channel ID takes priority',
+    );
+
+    for (final url in [
+      _block,
+      'https://example.com/channel/$_block',
+      'https://youtube.com.example.com/channel/$_block',
+      'https://youtube.com@example.com/channel/$_block',
+      'https://example.com@youtube.com/channel/$_block',
+      'http://youtube.com/channel/$_block',
+      '//youtube.com/channel/$_block',
+      '/unrelated/../channel/$_block',
+      '/CHANNEL/$_block',
+      'https://wWw.YouTube.Com/CHANNEL/$_block',
+      '/channel/$_block/anything',
+      '/channel/$_block?next=/channel/$_warn',
+      '/channel/$_block\n',
+    ]) {
+      expect(filters.match(authorUrl: url), isEmpty, reason: url);
+    }
+
+    await filters.allow(relative);
+    expect(filters.match(authorId: _block), isEmpty);
+    expect(filters.match(authorUrl: '/channel/$_block'), isEmpty);
   });
 
   test('allow only changes this source and profile and preserves manual data',

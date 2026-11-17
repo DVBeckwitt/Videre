@@ -5,14 +5,17 @@ enum CommunityList { aislist, aimusic }
 enum CommunityAction { off, label, hide }
 
 enum CommunityRule {
-  youtubeBlock(CommunityList.aislist, 'community-youtube-block'),
-  youtubeWarn(CommunityList.aislist, 'community-youtube-warn'),
-  music(CommunityList.aimusic, 'community-music');
+  youtubeBlock(
+      CommunityList.aislist, 'community-youtube-block', CommunityAction.hide),
+  youtubeWarn(
+      CommunityList.aislist, 'community-youtube-warn', CommunityAction.label),
+  music(CommunityList.aimusic, 'community-music', CommunityAction.off);
 
-  const CommunityRule(this.source, this.setting);
+  const CommunityRule(this.source, this.setting, this.setupDefault);
 
   final CommunityList source;
   final String setting;
+  final CommunityAction setupDefault;
 }
 
 class CommunityMatch {
@@ -60,6 +63,9 @@ abstract interface class CommunityListStore {
 }
 
 final _idPattern = RegExp(r'^UC[a-zA-Z0-9_-]{22}$');
+final _channelAuthorUrl = RegExp(
+    r'^(?:https://(?:www\.|m\.|music\.)?youtube\.com)?(/channel/UC[a-zA-Z0-9_-]{22})$',
+    caseSensitive: false);
 final _handleWhitespace = RegExp(
     r'[\u0009-\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]');
 final _handleForbidden = RegExp(r'[/@?#\\\x00-\x1F\x7F]');
@@ -68,6 +74,14 @@ String? normalizeChannelId(String? input) {
   if (input == null) return null;
   final id = input.startsWith('/channel/') ? input.substring(9) : input;
   return _idPattern.hasMatch(id) && id.length == 24 ? id : null;
+}
+
+/// Accept a canonical channel path, with an optional public YouTube origin.
+String? channelIdFromAuthorUrl(String? authorUrl) {
+  if (authorUrl == null || authorUrl.length > 2048) return null;
+  final match = _channelAuthorUrl.firstMatch(authorUrl);
+  if (match == null || match.end != authorUrl.length) return null;
+  return normalizeChannelId(match[1]);
 }
 
 String? normalizeChannelHandle(String? input) {

@@ -76,7 +76,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     }
     final author = video.author;
     final uploaderId = normalizeChannelId(video.authorId) ??
-        normalizeChannelId(video.authorUrl);
+        normalizeChannelId(video.authorUrl) ??
+        channelIdFromAuthorUrl(video.authorUrl);
     final uploaderHandle = channelHandleFromAuthorUrl(video.authorUrl);
     return MusicTrack(
       videoId: video.videoId,
