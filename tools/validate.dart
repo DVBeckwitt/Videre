@@ -9,6 +9,7 @@ const offlineTestTargets = [
   'test/downloads',
   'test/player',
   'test/music',
+  'test/content_filter',
   'test/podcasts',
   'test/network',
   'test/feedback',
@@ -31,6 +32,7 @@ const offlineTestTargets = [
   'test/settings/profile_picker_test.dart',
   'test/settings/connection_help_test.dart',
   'test/settings/network_proxy_test.dart',
+  'test/settings/community_filter_settings_test.dart',
   'test/settings/backend_selector_model_test.dart',
   'test/settings/backend_settings_state_test.dart',
   'test/settings/backend_settings_test.dart',
@@ -49,6 +51,8 @@ const offlineTestTargets = [
 // Keep formatting and strict analysis coverage aligned.
 const strictValidationTargets = [
   './test/music',
+  './test/content_filter',
+  './test/settings/community_filter_settings_test.dart',
   './test/podcasts',
   './test/widget_test.dart',
   './test/service_test.dart',

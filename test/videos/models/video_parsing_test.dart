@@ -49,6 +49,31 @@ void main() {
         isNull);
   });
 
+  test('playback fills a saved song ID and missing artist with upload details',
+      () {
+    const id = 'abcdefghijk';
+    const queued = Video(
+      videoId: id,
+      queueEntryId: 'song#2',
+      musicMetadata: MusicMetadata(title: id, artist: '', album: 'Saved album'),
+    );
+    final artwork = ImageObject(null, '/vi/$id/mqdefault.jpg', 320, 180);
+    final response = Video(
+      videoId: id,
+      title: 'Song title',
+      author: 'Uploader',
+      videoThumbnails: [artwork],
+    );
+    final resolved = response.preservingMusicMetadataFrom(queued);
+    expect(resolved.title, 'Song title');
+    expect(resolved.author, 'Uploader');
+    expect(resolved.musicMetadata?.title, 'Song title');
+    expect(resolved.musicMetadata?.artist, 'Uploader');
+    expect(resolved.musicMetadata?.album, 'Saved album');
+    expect(resolved.videoThumbnails.single, artwork);
+    expect(resolved.queueEntryId, 'song#2');
+  });
+
   test('accepts optional progressive fields and skips malformed streams', () {
     final video = Video.fromJson({
       'videoId': 'video-id',

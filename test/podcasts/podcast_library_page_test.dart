@@ -13,6 +13,7 @@ import 'package:clipious/podcasts/services/podcast_player.dart';
 import 'package:clipious/podcasts/views/podcast_library.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -289,6 +290,65 @@ void main() {
     expect(library.feeds, hasLength(1));
   });
 
+  testWidgets(
+      'cached feed and episode notes display locally and full notes scroll with the remote',
+      (tester) async {
+    final description = List.filled(
+            40, 'Publisher notes with a detailed account of this episode.')
+        .join(' ');
+    final episode = PodcastEpisode(
+        id: _episode.id,
+        title: _episode.title,
+        mediaUrl: _episode.mediaUrl,
+        mimeType: _episode.mimeType,
+        durationSeconds: _episode.durationSeconds,
+        description: description);
+    feeds.result = () async => PodcastFeed(
+          id: _feed.id,
+          feedUrl: _feed.feedUrl,
+          title: _feed.title,
+          author: _feed.author,
+          description: 'About this feed',
+          episodes: [episode],
+        );
+    await tester.runAsync(() => library.subscribe(_feed.feedUrl));
+    feeds.calls.clear();
+    await show(tester);
+    await tester.tap(find.text(_feed.title));
+    await tester.pumpAndSettle();
+
+    expect(find.text(_feed.author), findsOneWidget);
+    expect(find.text('About this feed'), findsOneWidget);
+    final row = find.byKey(ValueKey('podcast-episode-${episode.id}'));
+    final preview = find.descendant(of: row, matching: find.text(description));
+    expect(tester.widget<Text>(preview).maxLines, 2);
+    expect(find.descendant(of: row, matching: find.byTooltip('Download')),
+        findsOneWidget);
+    await tester
+        .tap(find.descendant(of: row, matching: find.byTooltip('Description')));
+    await tester.pumpAndSettle();
+
+    final dialog = find.byType(AlertDialog);
+    final notes = tester.widget<Text>(
+        find.descendant(of: dialog, matching: find.text(description)));
+    expect(notes.maxLines, isNull);
+    final scrollable = tester.state<ScrollableState>(
+        find.descendant(of: dialog, matching: find.byType(Scrollable)).first);
+    expect(scrollable.position.maxScrollExtent, greaterThan(0));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(scrollable.position.pixels, greaterThan(0));
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(player.podcasts.calls, isEmpty);
+
+    await tester.tap(find.text(episode.title));
+    await tester.pumpAndSettle();
+    expect(player.podcasts.calls, [(episode.id, null, db.profileId)]);
+    expect(feeds.calls, isEmpty);
+  });
+
   testWidgets('downloaded episodes remain playable after unsubscribing',
       (tester) async {
     await tester.runAsync(() => library.subscribe(_feed.feedUrl));
@@ -302,6 +362,47 @@ void main() {
     await tester.pumpAndSettle();
     expect(player.podcasts.calls,
         [(_episode.id, '/private/podcast.audio', db.profileId)]);
+    expect(feeds.calls, isEmpty);
+  });
+
+  testWidgets('an older download shows newly cached notes without fetching',
+      (tester) async {
+    await tester.runAsync(() => library.subscribe(_feed.feedUrl));
+    await downloads.download(_feed, _episode);
+    const description = 'Notes cached by the subsequent feed refresh';
+    feeds.result = () async => PodcastFeed(
+          id: _feed.id,
+          feedUrl: _feed.feedUrl,
+          title: _feed.title,
+          episodes: [
+            PodcastEpisode(
+                id: _episode.id,
+                title: 'Updated publisher title',
+                mediaUrl: 'https://publisher.example/updated.mp3',
+                mimeType: _episode.mimeType,
+                description: description),
+          ],
+        );
+    await tester.runAsync(() => library.refresh(_feed.id));
+    feeds.calls.clear();
+    await show(tester);
+    await tester.tap(find.text('Downloaded episodes'));
+    await tester.pumpAndSettle();
+
+    expect(find.text(description), findsOneWidget);
+    expect(find.text('Updated publisher title'), findsNothing);
+    await tester.tap(find.byTooltip('Description'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(find.descendant(of: dialog, matching: find.text(description)),
+        findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(_episode.title));
+    await tester.pumpAndSettle();
+    expect(player.podcasts.calls,
+        [(_episode.id, '/private/podcast.audio', db.profileId)]);
+    expect(downloads.entries.single.episode, same(_episode));
     expect(feeds.calls, isEmpty);
   });
 

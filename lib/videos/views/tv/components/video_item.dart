@@ -14,6 +14,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../../../globals.dart';
+import '../../components/community_browse.dart';
 import '../../components/video_thumbnail.dart';
 
 /// Keeps TV grid rows tall enough for the thumbnail and three text lines.
@@ -58,6 +59,7 @@ class TvVideoItem extends StatelessWidget {
 
   final Video video;
   final bool autoFocus;
+  final bool showCommunityLabels;
   final void Function(bool focus)? onFocusChange;
   final Function(BuildContext context, Video video)? onSelect;
 
@@ -65,6 +67,7 @@ class TvVideoItem extends StatelessWidget {
       {super.key,
       required this.video,
       required this.autoFocus,
+      this.showCommunityLabels = false,
       this.onSelect,
       this.onFocusChange});
 
@@ -101,6 +104,9 @@ class TvVideoItem extends StatelessWidget {
         ? DateTime.fromMillisecondsSinceEpoch(premiereTimestamp * 1000)
             .difference(DateTime.now())
         : Duration.zero;
+    Widget thumbnail(Widget child) => showCommunityLabels
+        ? labelVideoThumbnail(video, child, focusable: false)
+        : child;
 
     return BlocProvider(
       create: (context) =>
@@ -177,7 +183,7 @@ class TvVideoItem extends StatelessWidget {
                                     : Flexible(
                                         // Give the text its actual line height,
                                         // including fallback font metrics.
-                                        child: VideoThumbnailView(
+                                        child: thumbnail(VideoThumbnailView(
                                             musicThumbnails:
                                                 video.musicMetadata?.thumbnails,
                                             videoId: video.videoId,
@@ -308,7 +314,7 @@ class TvVideoItem extends StatelessWidget {
                                                             ],
                                                 ),
                                               ),
-                                            ))),
+                                            )))),
                                 Padding(
                                   padding: const EdgeInsets.only(left: 8.0),
                                   child: Text(

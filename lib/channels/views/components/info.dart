@@ -9,7 +9,10 @@ import 'package:clipious/utils/views/components/text_linkified.dart';
 
 import '../../../subscription_management/view/components/subscribe_button.dart';
 import '../../../utils/models/image_object.dart';
+import '../../../videos/models/community_video_filter.dart';
+import '../../../videos/models/video.dart';
 import '../../../videos/views/components/video_in_list.dart';
+import '../../../videos/views/components/community_browse.dart';
 
 class ChannelInfo extends StatelessWidget {
   final Channel channel;
@@ -38,6 +41,10 @@ class ChannelInfo extends StatelessWidget {
           ),
         ],
       ),
+      VideoChannelCommunityLabels(
+        authorId: channel.authorId,
+        authorUrl: channel.authorUrl,
+      ),
       Padding(
         padding: const EdgeInsets.symmetric(vertical: 8.0),
         child: Row(
@@ -61,20 +68,33 @@ class ChannelInfo extends StatelessWidget {
       ),
     ];
 
-    widgets.add(GridView.count(
-        crossAxisCount: getGridCount(context),
-        padding: const EdgeInsets.all(4),
-        crossAxisSpacing: 5,
-        physics: const NeverScrollableScrollPhysics(),
-        shrinkWrap: true,
-        mainAxisSpacing: 5,
-        childAspectRatio: getGridAspectRatio(context),
-        children: channel.latestVideos?.map((e) {
-              return VideoListItem(
-                video: e,
-              );
-            }).toList() ??
-            []));
+    widgets.add(CommunityBrowse<Video>(
+      items: channel.latestVideos ?? const [],
+      match: videoCommunityMatches,
+      builder: (context, items, hiddenNotice) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (hiddenNotice != null) hiddenNotice,
+          GridView.count(
+            crossAxisCount: getGridCount(context),
+            padding: const EdgeInsets.all(4),
+            crossAxisSpacing: 5,
+            physics: const NeverScrollableScrollPhysics(),
+            shrinkWrap: true,
+            mainAxisSpacing: 5,
+            childAspectRatio: getGridAspectRatio(context),
+            children: [
+              for (final item in items)
+                VideoListItem(
+                  key: ValueKey(item.videoId),
+                  video: item,
+                  showCommunityLabels: true,
+                ),
+            ],
+          ),
+        ],
+      ),
+    ));
 
     final bannerUrl = ImageObject.getBestThumbnail(channel.authorBanners)?.url;
 

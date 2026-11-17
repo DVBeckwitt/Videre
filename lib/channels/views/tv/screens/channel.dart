@@ -16,6 +16,7 @@ import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/tv/components/tv_expandable_text.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
+import 'package:clipious/videos/views/components/community_browse.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -171,6 +172,10 @@ class TvChannelScreen extends StatelessWidget {
                                               channel.channel!.subCount),
                                           onFocusChanged: (focused) => tvCubit
                                               .scrollToTop(context, focused),
+                                        ),
+                                        VideoChannelCommunityLabels(
+                                          authorId: channel.channel?.authorId,
+                                          authorUrl: channel.channel?.authorUrl,
                                         ),
                                         TvExpandableText(
                                           text: channel.channel?.description ??

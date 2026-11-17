@@ -91,6 +91,7 @@ class SettingsScreen extends StatelessWidget {
                         "Return YouTube Dislike",
                         locals.searchHistory,
                         locals.videoFilters,
+                        locals.communityFilters,
                         'DeArrow'
                       ]).join(", "),
                       maxLines: 3,

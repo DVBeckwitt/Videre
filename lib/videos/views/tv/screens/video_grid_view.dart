@@ -1,6 +1,8 @@
 import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/community_video_filter.dart';
+import 'package:clipious/videos/views/components/community_browse.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
@@ -41,8 +43,10 @@ class TvGridScreen extends StatelessWidget {
             final showPageAction = state.itemList is SubscriptionVideoList &&
                 (state.itemList.getHasMore() || hasError);
             final locals = AppLocalizations.of(context)!;
-            return Column(
-              children: [
+            return CommunityBrowse<Video>(
+              items: items,
+              match: videoCommunityMatches,
+              builder: (context, items, hiddenNotice) => Column(children: [
                 Row(
                   children: [
                     Text(
@@ -68,13 +72,17 @@ class TvGridScreen extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Text(locals.nerdVpnAccessPendingShort),
                   ),
+                if (hiddenNotice != null) hiddenNotice,
                 Expanded(
                     child: GridView(
                   controller: cubit.scrollController,
                   gridDelegate: TvVideoGridDelegate(context),
                   children: [
                     ...items.map((e) => TvVideoItem(
-                        key: ValueKey(e.videoId), video: e, autoFocus: false)),
+                        key: ValueKey(e.videoId),
+                        video: e,
+                        autoFocus: false,
+                        showCommunityLabels: true)),
                     if (showPageAction && !state.loading)
                       Center(
                         child: TvButton(
@@ -94,7 +102,7 @@ class TvGridScreen extends StatelessWidget {
                           count: 10)
                   ],
                 ))
-              ],
+              ]),
             );
           }),
         ),

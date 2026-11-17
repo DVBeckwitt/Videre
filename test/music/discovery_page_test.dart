@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -22,6 +23,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/community_filter_fixture.dart';
 
 const _saved = MusicLibraryEntry(
     kind: MusicLibraryKind.song,
@@ -194,6 +197,34 @@ void main() {
     expect(
         (router.pushed!.args as MusicRouteArgs).videoId, _discovered.videoId);
     expect(catalog.trendingCalls, 0);
+  });
+
+  testWidgets('hidden discovery has a reveal and keeps its loaded selection',
+      (tester) async {
+    await tester.runAsync(installCommunityMusicFilters);
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await loadDiscovery(tester);
+    catalog.discoveries.single.complete([
+      const MusicTrack(
+          videoId: 'discover001',
+          title: 'Discovered recording',
+          uploaderChannelId: musicListedUploader),
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('music-discovery-discover001')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('music-discovery-empty')), findsNothing);
+    final toggle = find.textContaining('Show hidden results');
+    await tester.ensureVisible(toggle);
+    await tester.pumpAndSettle();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('music-discovery-discover001')),
+        findsOneWidget);
+    expect(find.byType(CommunityMatchLabels), findsOneWidget);
+    expect(catalog.discoveryCalls, 1);
   });
 
   testWidgets('discovery waits for Home visibility and retains its selection',

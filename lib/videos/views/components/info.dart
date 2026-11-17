@@ -11,6 +11,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 
 import '../../../subscription_management/view/components/subscribe_button.dart';
+import 'community_browse.dart';
 import 'video_dislike_metrics.dart';
 
 class VideoInfo extends StatelessWidget {
@@ -51,6 +52,11 @@ class VideoInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (titleAndChannelInfo)
+            VideoChannelCommunityLabels(
+              authorId: video.authorId,
+              authorUrl: video.authorUrl,
+            ),
           if (titleAndChannelInfo)
             SelectableText(
               video.title ?? '',

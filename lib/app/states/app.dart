@@ -28,6 +28,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   late final StreamSubscription intentDataStreamSubscription;
   Future<void>? _pendingServerSwitch;
   final FileDB _backgroundDatabase;
+  final VoidCallback? _onResume;
   _SessionSelection? _recoverySelection;
   int _sessionGeneration = 0;
   Future<void> Function()? beforeAccountSwitch;
@@ -35,8 +36,10 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
   Future<void> Function()? clearSessionNotifications;
   Future<void> Function(bool hasServer)? resetNavigation;
 
-  AppCubit(super.initialState, {FileDB? backgroundDatabase})
-      : _backgroundDatabase = backgroundDatabase ?? fileDb {
+  AppCubit(super.initialState,
+      {FileDB? backgroundDatabase, VoidCallback? onResume})
+      : _backgroundDatabase = backgroundDatabase ?? fileDb,
+        _onResume = onResume {
     WidgetsBinding.instance.addObserver(this);
     onReady();
     initState();
@@ -119,6 +122,7 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         !this.state.globalLoading &&
         !this.state.sessionRecoveryRequired) {
       service.syncHistory();
+      _onResume?.call();
     }
   }
 

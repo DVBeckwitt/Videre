@@ -5,6 +5,12 @@ feed link. The subscription and episode list are saved in the current local
 profile. Open a podcast to choose an episode. Use **Refresh** to update its list;
 opening Podcasts does not automatically contact a publisher.
 
+When a publisher includes episode notes, the episode list shows a short
+preview. Choose **Description** on the episode to read the saved notes, including
+from **Downloaded episodes**. Videre shows the text without loading embedded
+media. If an older subscription used a description field Videre did not read,
+use **Refresh** to save the notes from the feed.
+
 Podcast playback has its own audio source and uses Videre's Android media
 controls. The compact player remains available while browsing. Open it for
 seeking, playback speed, back 15 seconds, and forward 30 seconds. Starting a

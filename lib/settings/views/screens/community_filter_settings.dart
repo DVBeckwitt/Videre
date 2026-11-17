@@ -1,0 +1,332 @@
+import 'package:clipious/content_filter/community_filter.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+void showCommunityFilterSettings(BuildContext context, {bool tv = false}) {
+  Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => CommunityFilterSettingsScreen(tv: tv),
+  ));
+}
+
+class CommunityFilterSettingsScreen extends StatelessWidget {
+  final bool tv;
+
+  const CommunityFilterSettingsScreen({super.key, this.tv = false});
+
+  Future<void> _chooseAction(BuildContext context, CommunityRule rule) async {
+    final locals = AppLocalizations.of(context)!;
+    final filters = communityFilters;
+    final profile = filters.profileSelection;
+    final current = filters.action(rule);
+    final selected = await showDialog<CommunityAction>(
+      context: context,
+      useRootNavigator: false,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (context) => _SelectShortcut(
+        child: AlertDialog(
+          title: Text(_ruleLabel(locals, rule)),
+          scrollable: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final action in CommunityAction.values)
+                  ListTile(
+                    autofocus: action == current,
+                    selected: action == current,
+                    leading: Icon(action == current
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked),
+                    title: Text(_actionLabel(locals, action)),
+                    onTap: () => Navigator.of(context).pop(action),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(locals.cancel),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected == null ||
+        selected == current ||
+        !context.mounted ||
+        !identical(filters, communityFilters) ||
+        profile != filters.profileSelection) {
+      return;
+    }
+    await _saveChange(
+      context,
+      () => filters.setAction(rule, selected),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    return _SettingsPage(
+      title: locals.communityFilters,
+      tv: tv,
+      child: ListenableBuilder(
+        listenable: communityFilters.changes,
+        builder: (context, _) => ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            for (final source in CommunityList.values) ...[
+              _SourceDescription(key: ValueKey(source), source: source),
+              for (final rule in _rulesFor(source))
+                ListTile(
+                  key: ValueKey(rule),
+                  autofocus: rule == CommunityRule.youtubeBlock,
+                  title: Text(_ruleLabel(locals, rule)),
+                  subtitle: Text(
+                    _actionLabel(locals, communityFilters.action(rule)),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _chooseAction(context, rule),
+                ),
+              if (communityFilters.enabled(source))
+                _ListUpdateTile(
+                    key: ValueKey((source, 'refresh')), source: source),
+              ListTile(
+                key: ValueKey((source, 'exceptions')),
+                title: Text(locals.communityExceptions),
+                subtitle: Text(locals.communityExceptionCount(
+                  communityFilters.exceptions(source).length,
+                )),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => _CommunityExceptions(tv: tv, source: source),
+                )),
+              ),
+              if (source == CommunityList.aislist) const Divider(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+Iterable<CommunityRule> _rulesFor(CommunityList source) =>
+    CommunityRule.values.where((rule) => rule.source == source);
+
+String _sourceLabel(AppLocalizations locals, CommunityList source) =>
+    switch (source) {
+      CommunityList.aislist => locals.communityYoutubeFilters,
+      CommunityList.aimusic => locals.communityMusicFilter,
+    };
+
+String _ruleLabel(AppLocalizations locals, CommunityRule rule) =>
+    switch (rule) {
+      CommunityRule.youtubeBlock => locals.communityYoutubeBlockRule,
+      CommunityRule.youtubeWarn => locals.communityYoutubeWarnRule,
+      CommunityRule.music => locals.communityMusicRule,
+    };
+
+String _actionLabel(AppLocalizations locals, CommunityAction action) =>
+    switch (action) {
+      CommunityAction.off => locals.communityActionOff,
+      CommunityAction.label => locals.communityActionLabel,
+      CommunityAction.hide => locals.communityActionHide,
+    };
+
+Future<void> _saveChange(
+    BuildContext context, Future<void> Function() change) async {
+  try {
+    await change();
+  } catch (_) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(AppLocalizations.of(context)!.communitySettingsFailed),
+    ));
+  }
+}
+
+class _SourceDescription extends StatelessWidget {
+  final CommunityList source;
+
+  const _SourceDescription({super.key, required this.source});
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final (scope, attribution) = switch (source) {
+      CommunityList.aislist => (
+          locals.communityYoutubeScope,
+          locals.communityYoutubeAttribution,
+        ),
+      CommunityList.aimusic => (
+          locals.communityMusicScope,
+          locals.communityMusicAttribution,
+        ),
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_sourceLabel(locals, source),
+              style: theme.textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text(scope),
+          const SizedBox(height: 4),
+          Text(attribution, style: theme.textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _ListUpdateTile extends StatelessWidget {
+  final CommunityList source;
+
+  const _ListUpdateTile({super.key, required this.source});
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final status = communityFilters.status(source);
+    final lastUpdated = status.lastUpdated?.toLocal();
+    final material = MaterialLocalizations.of(context);
+    final lastChecked = lastUpdated == null
+        ? null
+        : locals.communityListUpdated(
+            '${material.formatMediumDate(lastUpdated)} '
+            '${material.formatTimeOfDay(TimeOfDay.fromDateTime(lastUpdated), alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context))}',
+          );
+    final state = status.refreshing
+        ? locals.communityListLoading
+        : status.failed
+            ? (status.version == null
+                ? locals.communityListUnavailable
+                : locals.communityListStale)
+            : (status.version == null ? locals.communityListPending : null);
+    return ListTile(
+      title: Text(locals.communityUpdateList),
+      subtitle: Semantics(
+        liveRegion: true,
+        child: Text([
+          if (state != null) state,
+          if (lastChecked != null) lastChecked,
+        ].join('\n')),
+      ),
+      trailing: status.refreshing
+          ? const SizedBox.square(
+              dimension: 20,
+              child: MotionLoadingIndicator(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          : const Icon(Icons.refresh),
+      onTap: () async {
+        if (communityFilters.status(source).refreshing) return;
+        await _saveChange(context, () => communityFilters.refresh(source));
+      },
+    );
+  }
+}
+
+class _CommunityExceptions extends StatelessWidget {
+  final bool tv;
+  final CommunityList source;
+
+  const _CommunityExceptions({required this.tv, required this.source});
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    return _SettingsPage(
+      title: locals.communityExceptions,
+      tv: tv,
+      child: ListenableBuilder(
+        listenable: communityFilters.changes,
+        builder: (context, _) {
+          final filters = communityFilters;
+          final profile = filters.profileSelection;
+          final exceptions = filters.exceptions(source).toList()..sort();
+          return ListView.builder(
+            itemCount: 1 + exceptions.length,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return ListTile(
+                  title: Text(_sourceLabel(locals, source)),
+                  subtitle: Text(exceptions.isEmpty
+                      ? locals.communityNoExceptions
+                      : locals.communityExceptionCount(exceptions.length)),
+                );
+              }
+              final identity = exceptions[index - 1];
+              return ListTile(
+                key: ValueKey(identity),
+                autofocus: index == 1,
+                title: Text(identity),
+                subtitle: Text(locals.communityRemoveException),
+                trailing: const Icon(Icons.remove_circle_outline),
+                onTap: () async {
+                  if (!identical(filters, communityFilters) ||
+                      profile != filters.profileSelection) {
+                    return;
+                  }
+                  await _saveChange(
+                    context,
+                    () => filters.removeException(source, identity),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _SettingsPage extends StatelessWidget {
+  final String title;
+  final bool tv;
+  final Widget child;
+
+  const _SettingsPage(
+      {required this.title, required this.tv, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: child,
+      ),
+    );
+    return _SelectShortcut(
+      child: Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: SafeArea(child: tv ? TvOverscan(child: content) : content),
+      ),
+    );
+  }
+}
+
+class _SelectShortcut extends StatelessWidget {
+  final Widget child;
+
+  const _SelectShortcut({required this.child});
+
+  @override
+  Widget build(BuildContext context) => Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+        },
+        child: child,
+      );
+}

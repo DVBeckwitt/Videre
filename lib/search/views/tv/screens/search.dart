@@ -1,6 +1,7 @@
 import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/community_browse.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -192,6 +193,8 @@ class TvSearchScreen extends StatelessWidget {
                                               child:
                                                   TvHorizontalPaginatedListView<
                                                       Channel>(
+                                                communityMatch:
+                                                    channelCommunityMatches,
                                                 getPlaceHolder: () =>
                                                     const Padding(
                                                   padding: EdgeInsets.all(8.0),
@@ -232,11 +235,19 @@ class TvSearchScreen extends StatelessWidget {
                                                       padding:
                                                           const EdgeInsets.all(
                                                               8.0),
-                                                      child: Column(
+                                                      child: Row(
                                                         mainAxisSize:
                                                             MainAxisSize.min,
                                                         children: [
                                                           Text(e.author),
+                                                          VideoChannelCommunityLabels(
+                                                            authorId:
+                                                                e.authorId,
+                                                            authorUrl:
+                                                                e.authorUrl,
+                                                            compact: true,
+                                                            interactive: false,
+                                                          ),
                                                         ],
                                                       ),
                                                     ),

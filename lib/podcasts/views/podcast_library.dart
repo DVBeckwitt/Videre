@@ -6,6 +6,7 @@ import 'package:clipious/podcasts/models/podcast.dart';
 import 'package:clipious/podcasts/services/podcast_downloads.dart';
 import 'package:clipious/podcasts/services/podcast_library_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
@@ -138,13 +139,48 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
     }
   }
 
+  Widget? _descriptionPreview(String metadata, String description) {
+    if (description.isEmpty) {
+      return metadata.isEmpty
+          ? null
+          : Text(metadata, maxLines: 2, overflow: TextOverflow.ellipsis);
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (metadata.isNotEmpty)
+          Text(metadata, maxLines: 2, overflow: TextOverflow.ellipsis),
+        Text(description, maxLines: 2, overflow: TextOverflow.ellipsis),
+      ],
+    );
+  }
+
+  Widget _descriptionButton(String title, String description) => IconButton(
+        tooltip: AppLocalizations.of(context)!.podcastDescription,
+        onPressed: () {
+          if (!_current) return;
+          showDialog<void>(
+            context: context,
+            builder: (_) =>
+                _PodcastDescriptionDialog(title: title, text: description),
+          );
+        },
+        icon: const Icon(Icons.description_outlined),
+      );
+
   Widget _episode(PodcastEpisode episode, String feedTitle,
-      {PodcastFeed? feed, bool requireOffline = false}) {
+      {PodcastFeed? feed,
+      bool requireOffline = false,
+      String? fallbackDescription}) {
     final locals = AppLocalizations.of(context)!;
     final saved =
         _downloads.entries.any((item) => item.episode.id == episode.id);
     final busy = _downloads.activeId == episode.id;
     final progress = _downloads.progress[episode.id];
+    final description = episode.description.isEmpty
+        ? fallbackDescription ?? ''
+        : episode.description;
     final details = <String>[
       if (requireOffline) feedTitle,
       if (episode.publishedAt != null)
@@ -155,36 +191,39 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
             Duration(seconds: episode.durationSeconds!).inMinutes),
       if (saved) locals.onDevice,
     ];
+    final downloadButton = IconButton(
+      tooltip: busy
+          ? locals.podcastCancelDownload
+          : saved
+              ? locals.podcastRemoveDownload
+              : locals.download,
+      icon: Icon(busy
+          ? Icons.cancel_outlined
+          : saved
+              ? Icons.delete_outline
+              : Icons.download_outlined),
+      onPressed: busy
+          ? () => _downloads.cancel(episode.id)
+          : saved
+              ? () => _removeDownload(episode.id)
+              : feed == null || _downloads.activeId != null
+                  ? null
+                  : () => _download(feed, episode),
+    );
     return Column(children: [
       ListTile(
         key: ValueKey('podcast-episode-${episode.id}'),
         leading: const Icon(Icons.play_circle_outline),
         title:
             Text(episode.title, maxLines: 2, overflow: TextOverflow.ellipsis),
-        subtitle: details.isEmpty
-            ? null
-            : Text(details.join(' · '),
-                maxLines: 2, overflow: TextOverflow.ellipsis),
+        subtitle: _descriptionPreview(details.join(' · '), description),
         onTap: () => _play(episode, feedTitle, requireOffline: requireOffline),
-        trailing: IconButton(
-          tooltip: busy
-              ? locals.podcastCancelDownload
-              : saved
-                  ? locals.podcastRemoveDownload
-                  : locals.download,
-          icon: Icon(busy
-              ? Icons.cancel_outlined
-              : saved
-                  ? Icons.delete_outline
-                  : Icons.download_outlined),
-          onPressed: busy
-              ? () => _downloads.cancel(episode.id)
-              : saved
-                  ? () => _removeDownload(episode.id)
-                  : feed == null || _downloads.activeId != null
-                      ? null
-                      : () => _download(feed, episode),
-        ),
+        trailing: description.isEmpty
+            ? downloadButton
+            : Row(mainAxisSize: MainAxisSize.min, children: [
+                _descriptionButton(episode.title, description),
+                downloadButton,
+              ]),
       ),
       if (busy)
         LinearProgressIndicator(
@@ -199,6 +238,23 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
     ]);
   }
 
+  Map<(String, String), String> _missingDownloadNotes(
+      List<PodcastFeed> feeds, List<PodcastDownload> downloads) {
+    final missing = <String, Set<String>>{};
+    for (final download in downloads) {
+      if (download.episode.description.isEmpty) {
+        (missing[download.feedId] ??= {}).add(download.episode.id);
+      }
+    }
+    return {
+      for (final feed in feeds)
+        if (missing[feed.id] case final ids?)
+          for (final episode in feed.episodes)
+            if (episode.description.isNotEmpty && ids.contains(episode.id))
+              (feed.id, episode.id): episode.description,
+    };
+  }
+
   Widget _empty(String message) => Center(
       child: Padding(
           padding: const EdgeInsets.all(24),
@@ -210,9 +266,12 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
     return ListenableBuilder(
         listenable: _changes,
         builder: (context, _) {
-          final feed =
-              _library.feeds.where((item) => item.id == _feedId).firstOrNull;
+          final feeds = _library.feeds;
+          final feed = feeds.where((item) => item.id == _feedId).firstOrNull;
           final downloads = _downloads.entries;
+          final downloadNotes = feed == null && _downloaded
+              ? _missingDownloadNotes(feeds, downloads)
+              : const <(String, String), String>{};
           return PopScope(
             canPop: feed == null || !TickerMode.of(context),
             onPopInvokedWithResult: (didPop, _) {
@@ -228,16 +287,17 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
                       icon: const Icon(Icons.arrow_back)),
                   title: Text(feed.title,
                       maxLines: 2, overflow: TextOverflow.ellipsis),
-                  subtitle: feed.author.isEmpty
-                      ? null
-                      : Text(feed.author,
-                          maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: IconButton(
-                      tooltip: locals.refresh,
-                      onPressed: _refreshing.contains(feed.id)
-                          ? null
-                          : () => _refresh(feed),
-                      icon: const Icon(Icons.refresh)),
+                  subtitle: _descriptionPreview(feed.author, feed.description),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (feed.description.isNotEmpty)
+                      _descriptionButton(feed.title, feed.description),
+                    IconButton(
+                        tooltip: locals.refresh,
+                        onPressed: _refreshing.contains(feed.id)
+                            ? null
+                            : () => _refresh(feed),
+                        icon: const Icon(Icons.refresh)),
+                  ]),
                 )
               else
                 Padding(
@@ -266,22 +326,29 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
                           : ListView.builder(
                               itemCount: feed.episodes.length,
                               itemBuilder: (_, index) => _episode(
-                                  feed.episodes[index], feed.title, feed: feed))
+                                  feed.episodes[index], feed.title,
+                                  feed: feed))
                       : _downloaded
                           ? downloads.isEmpty
                               ? _empty(locals.podcastNoDownloads)
                               : ListView.builder(
                                   itemCount: downloads.length,
-                                  itemBuilder: (_, index) => _episode(
-                                      downloads[index].episode,
-                                      downloads[index].feedTitle,
-                                      requireOffline: true))
-                          : _library.feeds.isEmpty
+                                  itemBuilder: (_, index) {
+                                    final download = downloads[index];
+                                    return _episode(
+                                        download.episode, download.feedTitle,
+                                        requireOffline: true,
+                                        fallbackDescription: downloadNotes[(
+                                          download.feedId,
+                                          download.episode.id
+                                        )]);
+                                  })
+                          : feeds.isEmpty
                               ? _empty(locals.podcastEmpty)
                               : ListView.builder(
-                                  itemCount: _library.feeds.length,
+                                  itemCount: feeds.length,
                                   itemBuilder: (_, index) {
-                                    final item = _library.feeds[index];
+                                    final item = feeds[index];
                                     return ListTile(
                                       key: ValueKey('podcast-feed-${item.id}'),
                                       leading: const Icon(Icons.podcasts),
@@ -317,6 +384,75 @@ class _PodcastLibraryPageState extends State<PodcastLibraryPage> {
           );
         });
   }
+}
+
+class _PodcastDescriptionDialog extends StatefulWidget {
+  const _PodcastDescriptionDialog({required this.title, required this.text});
+
+  final String title;
+  final String text;
+
+  @override
+  State<_PodcastDescriptionDialog> createState() =>
+      _PodcastDescriptionDialogState();
+}
+
+class _PodcastDescriptionDialogState extends State<_PodcastDescriptionDialog> {
+  final _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  KeyEventResult _scrollWithRemote(FocusNode node, KeyEvent event) {
+    if (!_scroll.hasClients || event is KeyUpEvent) {
+      return KeyEventResult.ignored;
+    }
+    final step = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => -56.0,
+      LogicalKeyboardKey.arrowDown => 56.0,
+      _ => 0.0,
+    };
+    if (step == 0) return KeyEventResult.ignored;
+    final position = _scroll.position;
+    _scroll.jumpTo((position.pixels + step)
+        .clamp(position.minScrollExtent, position.maxScrollExtent));
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) => Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+        },
+        child: Focus(
+          skipTraversal: true,
+          onKeyEvent: _scrollWithRemote,
+          child: AlertDialog(
+            title: Text(widget.title,
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            content: SizedBox(
+              width: 440,
+              child: Scrollbar(
+                controller: _scroll,
+                child: SingleChildScrollView(
+                  controller: _scroll,
+                  child: SelectionArea(child: Text(widget.text)),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                autofocus: true,
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(MaterialLocalizations.of(context).closeButtonLabel),
+              ),
+            ],
+          ),
+        ),
+      );
 }
 
 class _AddPodcastDialog extends StatefulWidget {

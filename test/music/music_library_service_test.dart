@@ -78,6 +78,97 @@ void main() {
     expect(library.entries, hasLength(30));
   });
 
+  test('fills imported song details in place and preserves existing metadata',
+      () async {
+    const imported = 'takeout0001';
+    const named = 'takeout0002';
+    await library.save(song);
+    await library.markLocalPlaylist('local:my-music');
+    await library.importSongs(const [
+      MusicLibraryEntry(
+          kind: MusicLibraryKind.song, id: imported, title: imported),
+      MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: named,
+          title: 'Export title',
+          subtitle: 'Export artist',
+          album: 'Export album',
+          durationSeconds: 100),
+    ]);
+    final details = [
+      for (final id in [imported, named])
+        MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: id,
+          title: 'Invidious title',
+          subtitle: 'Invidious artist',
+          album: 'Invidious album',
+          durationSeconds: 180,
+          usesVideoThumbnails: true,
+          thumbnails: [
+            ImageObject(
+                null, 'https://i.ytimg.com/vi/$id/default.jpg', 120, 90),
+            ImageObject(null,
+                'https://i.ytimg.com/vi/$id/mqdefault.jpg?key=omit', 320, 180),
+          ],
+        ),
+    ];
+    expect(await library.fillSongDetails(details, isCurrent: () => true), 2);
+
+    final reopened =
+        MusicLibraryService.forProfile(database, database.profileId);
+    expect(
+        reopened.entries.map((entry) => entry.id), [song.id, imported, named]);
+    final repaired = reopened.entries[1];
+    expect(repaired.title, 'Invidious title');
+    expect(repaired.subtitle, 'Invidious artist');
+    expect(repaired.album, 'Invidious album');
+    expect(repaired.durationSeconds, 180);
+    expect(repaired.needsSongDetails, isFalse);
+    expect(repaired.usesVideoThumbnails, isTrue);
+    expect(repaired.thumbnails.single.url,
+        'https://i.ytimg.com/vi/$imported/mqdefault.jpg');
+    final alreadyNamed = reopened.entries[2];
+    expect(alreadyNamed.title, 'Export title');
+    expect(alreadyNamed.subtitle, 'Export artist');
+    expect(alreadyNamed.album, 'Export album');
+    expect(alreadyNamed.durationSeconds, 100);
+    expect(alreadyNamed.thumbnails, hasLength(1));
+    expect(
+        reopened.isMusicPlaylist(const Playlist(
+            title: 'Music',
+            playlistId: 'local:my-music',
+            author: '',
+            videoCount: 0)),
+        isTrue);
+  });
+
+  test('a queued detail repair respects removal and session cancellation',
+      () async {
+    const imported = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: 'takeout0001', title: 'takeout0001');
+    const details = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: 'takeout0001', title: 'Catalog title');
+    await library.importSongs([imported]);
+    final another =
+        MusicLibraryService.forProfile(database, database.profileId);
+    final removal = another.remove(imported.kind, imported.id);
+    final repair = library.fillSongDetails([details], isCurrent: () => true);
+    await removal;
+    expect(await repair, 0);
+    expect(library.entries, isEmpty);
+
+    await library.importSongs([imported]);
+    final stored = database.getSettings(musicLibrarySettingName)?.value;
+    var current = true;
+    final cancelled =
+        library.fillSongDetails([details], isCurrent: () => current);
+    current = false;
+    expect(await cancelled, 0);
+    expect(database.getSettings(musicLibrarySettingName)?.value, stored);
+    expect(library.entries.single.needsSongDetails, isTrue);
+  });
+
   test('captured library writes and notifications stay with their profile',
       () async {
     final originalId = database.profileId;

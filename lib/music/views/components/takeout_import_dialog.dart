@@ -160,10 +160,14 @@ class _TakeoutImportDialogState extends State<_TakeoutImportDialog> {
                 Text(locals.takeoutReading),
               ] else if (_error != null)
                 Text(_error!)
-              else if (_added != null)
+              else if (_added != null) ...[
                 Text(locals.takeoutComplete(
-                    _added!, collection!.songs.length - _added!))
-              else if (collection != null) ...[
+                    _added!, collection!.songs.length - _added!)),
+                if (_added! > 0) ...[
+                  const SizedBox(height: 12),
+                  Text(locals.takeoutDetailsFollowup),
+                ],
+              ] else if (collection != null) ...[
                 Text(locals.takeoutImportDescription),
                 const SizedBox(height: 12),
                 if (_collections!.length > 1)

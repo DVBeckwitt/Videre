@@ -1,5 +1,6 @@
 import 'dart:convert';
 import '../home/models/phone_navigation.dart';
+import '../content_filter/community_filter.dart';
 import '../music/models/music_library_entry.dart';
 
 import '../offline_subscriptions/models/offline_subscription.dart';
@@ -306,6 +307,13 @@ class UserBackup {
 
   static bool validSetting(SettingsValue setting) {
     final name = setting.name, value = setting.value;
+    if (CommunityRule.values.any((rule) => rule.setting == name)) {
+      return CommunityAction.values.any((mode) => mode.name == value);
+    }
+    if (CommunityList.values
+        .any((list) => communityExceptionsSetting(list) == name)) {
+      return parseCommunityExceptions(value) != null;
+    }
     if (name == 'music-library-v1') return _validMusicLibrary(value);
     if (value.length > 2048) return false;
     const booleans = {

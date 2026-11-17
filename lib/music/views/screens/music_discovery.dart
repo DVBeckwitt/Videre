@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_filter.dart';
+import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
@@ -11,6 +13,7 @@ import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/router.dart';
@@ -409,6 +412,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
   bool _loading = false;
   bool _failed = false;
   bool _visible = false;
+  bool _showCommunityHidden = false;
 
   @override
   void initState() {
@@ -429,6 +433,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     _attempted = false;
     _loading = false;
     _failed = false;
+    _showCommunityHidden = false;
   }
 
   Future<void> _beforeProxyChange() async {
@@ -494,7 +499,12 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: communityFilters.changes,
+        builder: (context, _) => _buildDiscovery(context),
+      );
+
+  Widget _buildDiscovery(BuildContext context) {
     // The optional dependency also invalidates on country changes while Home
     // remains mounted under the settings route. Small isolated hosts need only
     // AppCubit; the source of truth for the snapshot is still the database.
@@ -517,6 +527,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     _visible = visible;
     if (!session.eligible) return const SizedBox.shrink();
     final locals = AppLocalizations.of(context)!;
+    final results = musicTrackResults(_songs, showHidden: _showCommunityHidden);
     return Column(
       key: const ValueKey('music-discovery'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -563,17 +574,27 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
               key: const ValueKey('music-discovery-failure'),
             ),
           ),
-        if (_songs.isNotEmpty)
+        if (results.hidden > 0)
+          CommunityHiddenNotice(
+            count: results.hidden,
+            showing: _showCommunityHidden,
+            onToggle: () =>
+                setState(() => _showCommunityHidden = !_showCommunityHidden),
+          ),
+        if (results.visible.isNotEmpty)
           MusicCatalogShelf(
             key: const ValueKey('music-discovery-songs'),
-            itemCount: _songs.length,
+            itemCount: results.visible.length,
             itemBuilder: (context, index) {
-              final song = _songs[index];
+              final (song, matches) = results.visible[index];
               return MusicCatalogCard(
                 key: ValueKey('music-discovery-${song.videoId}'),
                 title: song.title,
                 subtitle: song.artists.join(', '),
                 thumbnails: song.thumbnails,
+                badge: matches.isEmpty
+                    ? null
+                    : CommunityMatchLabels(matches: matches, compact: true),
                 onOpen: () {
                   if (_current(_generation, session)) {
                     _openSong(context, session.app, song.videoId);
@@ -582,7 +603,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
               );
             },
           )
-        else if (!_loading) ...[
+        else if (!_loading && results.hidden == 0) ...[
           if (!_attempted || !_failed)
             Text(
                 _attempted

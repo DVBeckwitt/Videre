@@ -27,6 +27,7 @@ Captured from Videre 1.22.46 on Android. The player shows *Spring* © Blender Fo
 - **Offline Downloads.** Save videos, audio, and playlists on phones and tablets, with quality choices, pause, resume, retry, and Wi-Fi-only transfers.
 - **TV Remote.** Send the current video and position to Videre on your TV over trusted Wi-Fi, then control play/pause from your phone.
 - **YouTube Music.** Find music from YouTube through your chosen Invidious instance, save songs, build playlists, and use the dedicated audio player. Import songs from a local Google Takeout file. [Music guide](./docs/music.md)
+- **Community AI filters.** Optionally label or hide channels listed by AiSList, with separate rules for block entries, warnings, and Music. [Filter coverage and sources](./docs/music.md#home-and-search)
 - **RSS Feeds.** Add publisher podcast feeds, listen in the background, save episodes offline, and pick up where you left off. [Podcast guide](./docs/podcasts.md)
 
 ## Start watching

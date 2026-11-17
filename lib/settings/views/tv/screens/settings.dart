@@ -20,6 +20,7 @@ import '../../../../globals.dart';
 import '../../../../feedback/views/open_feedback.dart';
 import '../../../../downloads/views/components/download_folder.dart';
 import '../../../states/settings.dart';
+import '../../screens/community_filter_settings.dart';
 import '../../screens/network_proxy.dart';
 import '../../../../utils/motion.dart';
 
@@ -302,6 +303,12 @@ class TVSettingsScreen extends StatelessWidget {
                   description: locals.videoFiltersSettingTileDescriptions,
                   onSelected: (context) => AutoRouter.of(context)
                       .push(const TvFilterListSettingsRoute()),
+                ),
+                SettingsTile(
+                  title: locals.communityFilters,
+                  description: locals.communityFiltersSummary,
+                  onSelected: (context) =>
+                      showCommunityFilterSettings(context, tv: true),
                 ),
                 SettingsTile(
                   title: locals.hideWatchedSubscriptions,

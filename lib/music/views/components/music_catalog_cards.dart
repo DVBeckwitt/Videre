@@ -10,6 +10,7 @@ class MusicCatalogCard extends StatefulWidget {
   final List<ImageObject> thumbnails;
   final VoidCallback onOpen;
   final bool artist;
+  final Widget? badge;
 
   const MusicCatalogCard({
     super.key,
@@ -18,6 +19,7 @@ class MusicCatalogCard extends StatefulWidget {
     required this.onOpen,
     this.subtitle,
     this.artist = false,
+    this.badge,
   });
 
   @override
@@ -32,7 +34,7 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final radius = BorderRadius.circular(widget.artist ? 1000 : 12);
-    return Semantics(
+    final card = Semantics(
       button: true,
       child: Material(
         color: Colors.transparent,
@@ -108,6 +110,15 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
         ),
       ),
     );
+    if (widget.badge case final badge?) {
+      return Stack(
+        children: [
+          card,
+          PositionedDirectional(top: 8, end: 8, child: badge),
+        ],
+      );
+    }
+    return card;
   }
 }
 

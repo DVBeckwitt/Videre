@@ -1,5 +1,7 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_filter.dart';
+import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -15,6 +17,7 @@ import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
+import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
@@ -103,6 +106,8 @@ class _MusicScreenState extends State<MusicScreen> {
   bool _retryingSong = false;
   Object? _failure;
   bool _searched = false;
+  bool _explicitSong = false;
+  bool _showCommunityHidden = false;
   bool _starting = false;
   int _generation = 0;
   Future<void> Function()? _retry;
@@ -170,6 +175,8 @@ class _MusicScreenState extends State<MusicScreen> {
       _retryingSong = false;
       _failure = null;
       _searched = false;
+      _explicitSong = false;
+      _showCommunityHidden = false;
       _starting = false;
       _songs = [];
       _artists = [];
@@ -229,6 +236,8 @@ class _MusicScreenState extends State<MusicScreen> {
     final type = _type;
     setState(() {
       _searched = true;
+      _explicitSong = false;
+      _showCommunityHidden = false;
       _collection = null;
       _artistPage = null;
       _browseHistory.clear();
@@ -304,6 +313,8 @@ class _MusicScreenState extends State<MusicScreen> {
         _songs = [song];
         _type = _MusicSearch.songs;
         _searched = true;
+        _explicitSong = true;
+        _showCommunityHidden = false;
         _collection = null;
         _artistPage = null;
         _browseHistory.clear();
@@ -454,7 +465,10 @@ class _MusicScreenState extends State<MusicScreen> {
   }
 
   Widget _song(MusicTrack track,
-      {int? index, List<MusicTrack>? queue, PlaylistReference? reference}) {
+      {int? index,
+      List<MusicTrack>? queue,
+      PlaylistReference? reference,
+      List<CommunityMatch> matches = const []}) {
     return ListTile(
       key: ValueKey('music-song-${index ?? 'search'}-${track.videoId}'),
       leading: index == null
@@ -473,6 +487,7 @@ class _MusicScreenState extends State<MusicScreen> {
           if (index == null && track.albumTitle != null)
             Text(track.albumTitle!,
                 maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (matches.isNotEmpty) CommunityMatchLabels(matches: matches),
         ],
       ),
       trailing: MusicLibraryActions(videos: [track.toVideo()]),
@@ -529,9 +544,30 @@ class _MusicScreenState extends State<MusicScreen> {
     }
     if (_type == _MusicSearch.songs) {
       if (_songs.isEmpty) return Center(child: Text(locals.musicNoResults));
-      return ListView.builder(
-          itemCount: _songs.length,
-          itemBuilder: (_, index) => _song(_songs[index]));
+      return ListenableBuilder(
+        listenable: communityFilters.changes,
+        builder: (_, __) {
+          final results = musicTrackResults(_songs,
+              showHidden: _explicitSong || _showCommunityHidden);
+          final hasNotice = !_explicitSong && results.hidden > 0;
+          return ListView.builder(
+            itemCount: results.visible.length + (hasNotice ? 1 : 0),
+            itemBuilder: (_, index) {
+              if (hasNotice && index == 0) {
+                return CommunityHiddenNotice(
+                  count: results.hidden,
+                  showing: _showCommunityHidden,
+                  onToggle: () => setState(
+                      () => _showCommunityHidden = !_showCommunityHidden),
+                );
+              }
+              final (track, matches) =
+                  results.visible[index - (hasNotice ? 1 : 0)];
+              return _song(track, matches: matches);
+            },
+          );
+        },
+      );
     }
     if (_type == _MusicSearch.artists) {
       if (_artists.isEmpty) return Center(child: Text(locals.musicNoResults));

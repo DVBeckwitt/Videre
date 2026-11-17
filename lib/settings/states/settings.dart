@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:awesome_notifications/awesome_notifications.dart';
@@ -14,6 +15,7 @@ import 'package:locale_names/locale_names.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../globals.dart';
+import '../../content_filter/community_filter.dart';
 import '../../main.dart' show isTv;
 import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
@@ -347,6 +349,9 @@ class SettingsCubit extends Cubit<SettingsState> {
           ? null
           : context.read<DownloadManagerCubit>();
       await db.restoreBackup(backup, replace: replace);
+      if (!backup.subscriptionsOnly) {
+        unawaited(communityFilters.reloadForProfile());
+      }
       if (downloads != null) {
         await downloads.setWifiOnly(
             db.getSettings('downloads-wifi-only')?.value == 'true');

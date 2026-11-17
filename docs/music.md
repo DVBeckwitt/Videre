@@ -26,7 +26,8 @@ Discovery searches your selected instance, then checks
 each candidate's detailed metadata and only shows videos categorized as Music.
 Live, upcoming, missing-category, and unrelated results are excluded. This uses
 the instance's upload categories; it cannot independently verify the audio or
-correct an uploader's inaccurate category. Explicit Search remains unfiltered.
+correct an uploader's inaccurate category. Explicit Search skips this category
+check.
 
 Each discovery load inspects at most eight unique candidates and returns up to
 six tracks. It does not download media, poll in the background, or keep searching
@@ -38,7 +39,35 @@ Refresh is explicit, and session changes discard old results. An unavailable
 instance never causes a direct catalog fallback.
 Discovery uses the instance's original titles and artwork without optional
 DeArrow enrichment or related-video lookups. Your content filters apply to both
-search candidates and verified details; editing filters invalidates the shelf.
+search candidates and verified details; editing those manual filters invalidates
+the shelf.
+
+Under **Settings → Browsing → AI content filters**, choose **Off**, **Label**,
+or **Hide** for AiSList block entries, AiSList warnings, and the separate AI
+music list. All three rules start off. AiSList applies to YouTube browsing and
+Music songs. The AI music list applies to song search and discovery in Music.
+Videre matches the uploader ID or available channel handle locally. Music can
+miss credited artists whose tracks appear under another uploader, and upstream
+lists can contain mistakes. Use **Show hidden** to reveal filtered results for
+the current list, or **Allow this channel** in the match label to save an
+exception for that source and profile. Saved music, playlists, history, and
+downloads remain accessible.
+
+Videre checks enabled lists automatically on launch and when you return to the
+app, usually about once a day. Enabling a rule also checks the list if it has
+no verified copy or is due for an update. Videre downloads a snapshot on first
+use and when a newer version is available. If a check fails or you are offline,
+it keeps using the last verified list. Routine list changes arrive through
+Flow's daily mirror without a Videre update.
+
+[Flow](https://github.com/Flow-Tube/AIlist) publishes signed snapshots of
+[AiSList](https://github.com/Override92/AiSList) under
+[CC BY-NC 4.0](https://github.com/Override92/AiSList/blob/main/LICENSE) and a
+converted music list made from [Soul Over AI](https://github.com/xoundbyte/soul-over-ai)
+([CC BY 4.0](https://github.com/xoundbyte/soul-over-ai/blob/main/LICENSE.md)) and
+[Spotify AI Blocker](https://github.com/CennoxX/spotify-ai-blocker)
+([MIT, © 2026 CennoxX](https://github.com/CennoxX/spotify-ai-blocker/blob/main/LICENSE)).
+Flow combines and converts the music sources to YouTube channel IDs.
 
 Home does not load the instance's trending feed. Current Invidious versions route
 the former `type=Music` trending request to general livestreams, which caused
@@ -130,8 +159,8 @@ rules apply. TV does not offer downloads.
 Use the import button in **Music → Library**, or **Settings → Import Google
 Takeout**, to choose a ZIP or UTF-8 CSV saved in this device's Downloads/storage.
 The picker accepts on-device Android document providers; save files from cloud
-storage to the device first. Videre never signs into Google, opens exported URLs,
-fetches song details/artwork, or uploads the imported collection.
+storage to the device first. The import reads IDs and labels from the local
+file without contacting Google or your Invidious instance.
 
 The preview lists recognized song collections. Choose the wanted collection and
 select **Import songs** to merge it into **Library → Songs** in the current
@@ -145,10 +174,16 @@ older playlist CSVs with a metadata header. A general Music library export can
 include saved songs you have not liked; a Liked videos export can include
 non-music videos. These are labeled separately from Liked Music. When a ZIP
 contains both song metadata and playlist IDs, missing labels are filled only
-from matching IDs in that same local export. Remaining missing titles use the
-song ID, without any lookup. This imports saved-song references, not audio files
-or automatic synchronization with Google; playback still uses the selected
-Invidious instance.
+from matching IDs in that same local export. Remaining missing titles initially
+use the song ID. The import saves references to songs. Playback uses your
+selected Invidious instance.
+
+To fill missing titles, artist labels, and pictures, open **Music → Library →
+Songs → Load song details**. This also works on songs you imported previously.
+Videre sends their video IDs to your selected Invidious instance one at a time
+and fills gaps with the available upload details and thumbnail. It keeps the
+details already saved. You can stop the lookup and keep details already saved
+by it. Private, deleted, or unavailable uploads may still show their IDs.
 
 ZIPs are limited to 64 MiB, individual CSVs to 10 MiB, and archive CSV data to
 16 MiB total. Only relevant CSVs are read from a full Takeout archive; media

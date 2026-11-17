@@ -9,6 +9,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
@@ -18,6 +19,8 @@ import 'package:clipious/playlists/services/playlist_load_session.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -74,6 +77,31 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+class _DetailsCatalog extends MusicCatalogService {
+  _DetailsCatalog(this.responses);
+
+  final Map<String, MusicLibraryEntry> responses;
+  final requests = <String>[];
+  Completer<void>? hold;
+  bool cancelled = false;
+
+  @override
+  Future<void> loadSavedSongDetails(Iterable<String> ids,
+      {required bool Function() isCurrent,
+      required Future<void> Function(String id, MusicLibraryEntry? details)
+          onResult}) async {
+    for (final id in ids) {
+      requests.add(id);
+      await hold?.future;
+      if (!isCurrent()) {
+        cancelled = true;
+        return;
+      }
+      await onResult(id, responses[id]);
+    }
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const song = Video(
@@ -126,6 +154,84 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return true;
       }).timeout(const Duration(seconds: 5));
+
+  for (final cancel in [false, true]) {
+    testWidgets(
+        cancel
+            ? 'cancelling song details leaves the imported bookmark intact'
+            : 'explicit song details update its existing row and artwork in place',
+        (tester) async {
+      const missing = 'abcdefghijk';
+      const unavailable = 'zzzzzzzzzzz';
+      const artwork = '/vi/$missing/mqdefault.jpg';
+      final original = musicCatalogService;
+      final catalog = _DetailsCatalog({
+        missing: MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: missing,
+          title: 'Recovered recording',
+          subtitle: 'Recovered uploader',
+          thumbnails: [ImageObject(null, artwork, 320, 180)],
+          usesVideoThumbnails: true,
+        ),
+      });
+      musicCatalogService = catalog;
+      addTearDown(() => musicCatalogService = original);
+      await tester.runAsync(() => library.importSongs(const [
+            MusicLibraryEntry(
+                kind: MusicLibraryKind.song, id: missing, title: missing),
+            MusicLibraryEntry(
+                kind: MusicLibraryKind.song,
+                id: unavailable,
+                title: unavailable),
+          ]));
+      await show(tester);
+      await tester.tap(find.text('Songs'));
+      await tester.pumpAndSettle();
+      expect(find.text(missing), findsOneWidget);
+      expect(catalog.requests, isEmpty);
+
+      await tester.tap(find.text('Load song details'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('selected Invidious server'), findsOneWidget);
+      expect(catalog.requests, isEmpty);
+
+      if (cancel) {
+        catalog.hold = Completer<void>();
+        await tester.tap(find.text('Load details'));
+        await tester.pump();
+        expect(find.text('Checked 0 of 2 songs'), findsOneWidget);
+        expect(catalog.requests, [missing]);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        catalog.hold!.complete();
+        await tester.pumpAndSettle();
+        expect(catalog.cancelled, isTrue);
+        expect(catalog.requests, [missing]);
+        expect(library.entries.first.title, missing);
+      } else {
+        await tester.runAsync(() async {
+          await tester.tap(find.text('Load details'));
+          await waitFor(
+              () => library.entries.first.title == 'Recovered recording');
+        });
+        await tester.pumpAndSettle();
+        expect(find.text('Updated 1 of 2 songs.'), findsOneWidget);
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+        expect(find.text('Recovered recording'), findsOneWidget);
+        expect(find.text('Recovered uploader'), findsOneWidget);
+        expect(find.text(unavailable), findsOneWidget);
+        final row = find.byKey(const ValueKey('music-saved-song-$missing'));
+        final thumbnail = tester.widget<Thumbnail>(
+            find.descendant(of: row, matching: find.byType(Thumbnail)));
+        expect(thumbnail.images!.single.url, artwork);
+        expect(catalog.requests, [missing, unavailable]);
+        expect(
+            library.entries.map((entry) => entry.id), [missing, unavailable]);
+      }
+    });
+  }
 
   testWidgets(
       'library shows music playlists and explicitly created empty lists',

@@ -35,6 +35,7 @@ class TrendingState extends State<Trending> {
               children: [
                 Expanded(
                   child: VideoList(
+                    communityBrowse: true,
                     animateDownload: true,
                     paginatedVideoList: SingleEndpointList(service.getTrending),
                   ),

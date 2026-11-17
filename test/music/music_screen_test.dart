@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_filter.dart';
+import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -33,6 +35,7 @@ import 'package:flutter_test/flutter_test.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+import 'support/community_filter_fixture.dart';
 
 const artist = MusicArtist(id: 'UCartist', name: 'Artist');
 
@@ -207,6 +210,55 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
   }
+
+  testWidgets(
+      'Music search hides listed uploaders, labels warnings and can reveal the same results',
+      (tester) async {
+    await tester.runAsync(installCommunityMusicFilters);
+    await show(tester);
+    await search(tester, 'music');
+    catalog.responses.single.complete([
+      const MusicTrack(
+          videoId: 'hiddenmusic',
+          title: 'Listed song',
+          uploaderChannelId: musicListedUploader),
+      const MusicTrack(
+          videoId: 'warnedmusic',
+          title: 'Warned song',
+          uploaderChannelId: youtubeWarnedUploader),
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Listed song'), findsNothing);
+    expect(find.text('Warned song'), findsOneWidget);
+    expect(find.byType(CommunityMatchLabels), findsOneWidget);
+    await tester.tap(find.textContaining('Show hidden results'));
+    await tester.pumpAndSettle();
+    expect(find.text('Listed song'), findsOneWidget);
+    expect(find.byType(CommunityMatchLabels), findsNWidgets(2));
+
+    await tester.tap(find.text('Listed by Flow AI music'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Allow this channel'));
+    // Sembast completes writes on the real event loop while the dialog and
+    // result-list updates are scheduled on the widget test's fake clock.
+    for (var attempt = 0; attempt < 8; attempt++) {
+      if (communityFilters
+          .exceptions(CommunityList.aimusic)
+          .contains(musicListedUploader)) {
+        break;
+      }
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(communityFilters.exceptions(CommunityList.aimusic),
+        {musicListedUploader});
+    await tester.pumpAndSettle();
+    expect(find.text('Listed song'), findsOneWidget);
+    expect(find.text('Listed by Flow AI music'), findsNothing);
+    expect(find.text('Hide hidden results'), findsNothing);
+    expect(catalog.searches, ['music']);
+  });
 
   testWidgets('a genre shortcut searches the selected Invidious catalog once',
       (tester) async {

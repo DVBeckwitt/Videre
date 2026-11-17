@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -15,6 +16,37 @@ import 'podcast_http.dart';
 
 const podcastFeedMaximumBytes = 4 * 1024 * 1024;
 const podcastFeedMaximumEpisodes = 1000;
+const _contentNamespace = 'http://purl.org/rss/1.0/modules/content/';
+const _itunesNamespace = 'http://www.itunes.com/dtds/podcast-1.0.dtd';
+const _descriptionSourceLimit = 65536;
+const _hiddenDescriptionTags = {
+  'embed',
+  'iframe',
+  'noscript',
+  'object',
+  'script',
+  'style',
+  'template',
+};
+const _descriptionBreakTags = {
+  'blockquote',
+  'br',
+  'dd',
+  'div',
+  'dt',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'li',
+  'p',
+  'pre',
+  'td',
+  'th',
+};
 
 /// A fresh credential-free publisher client is owned by each fetch. The app's
 /// Invidious Service is intentionally not involved in RSS subscriptions.
@@ -171,7 +203,7 @@ class PodcastFeedParser {
             title: name.isEmpty ? 'Untitled episode' : name,
             mediaUrl: media.toString(),
             mimeType: mime,
-            description: _text(_child(item, 'description'), 4096),
+            description: _episodeDescription(item),
             durationSeconds: _duration(_child(item, 'duration')?.innerText),
             lengthBytes:
                 length != null && length > 0 && length <= 2 * 1024 * 1024 * 1024
@@ -186,7 +218,7 @@ class PodcastFeedParser {
         id: feedId,
         feedUrl: feedUrl.toString(),
         title: title,
-        description: _text(_child(channel, 'description'), 4096),
+        description: _descriptionText(_child(channel, 'description')),
         author: _text(
             _child(channel, 'author') ?? _child(channel, 'managingEditor'),
             512),
@@ -196,6 +228,81 @@ class PodcastFeedParser {
 
   static XmlElement? _child(XmlElement node, String name) =>
       node.childElements.where((child) => child.name.local == name).firstOrNull;
+
+  static String _episodeDescription(XmlElement item) {
+    for (final element in [
+      item.getElement('description') ?? _child(item, 'description'),
+      item.getElement('encoded', namespace: _contentNamespace),
+      item.getElement('summary', namespace: _itunesNamespace),
+    ]) {
+      final text = _descriptionText(element);
+      if (text.isNotEmpty) return text;
+    }
+    return '';
+  }
+
+  static String _descriptionText(XmlElement? element) {
+    if (element == null) return '';
+    final fragment = html.parseFragment(_boundedDescriptionMarkup(element));
+    final buffer = StringBuffer();
+    final space = dom.Text(' ');
+    final pending = fragment.nodes.reversed.toList();
+    while (pending.isNotEmpty) {
+      final node = pending.removeLast();
+      if (node is dom.Text) {
+        buffer.write(node.data);
+      } else if (node is dom.Element) {
+        final name = node.localName?.split(':').last;
+        if (_hiddenDescriptionTags.contains(name)) continue;
+        if (_descriptionBreakTags.contains(name)) {
+          buffer.write(' ');
+          pending.add(space);
+        }
+        pending.addAll(node.nodes.reversed);
+      }
+    }
+    return podcastText(buffer.toString().replaceAll(RegExp(r'\s+'), ' '),
+        limit: 4096);
+  }
+
+  /// Flatten literal XML iteratively. Recursive serialization can overflow
+  /// the stack on a deeply nested description before any size limit applies.
+  static String _boundedDescriptionMarkup(XmlElement element) {
+    final result = StringBuffer();
+    final separator = XmlText(' ');
+    final pending = element.children.reversed.toList();
+    while (pending.isNotEmpty && result.length < _descriptionSourceLimit) {
+      final node = pending.removeLast();
+      if (node is XmlElement) {
+        final name = node.name.local.toLowerCase();
+        if (_hiddenDescriptionTags.contains(name)) continue;
+        if (_descriptionBreakTags.contains(name)) {
+          result.write(' ');
+          pending.add(separator);
+        }
+        pending.addAll(node.children.reversed);
+      } else if (node is XmlText || node is XmlCDATA) {
+        final remaining = _descriptionSourceLimit - result.length;
+        var text = _descriptionPrefix(node.value ?? '', remaining);
+        if (node is XmlText && node.parent != null && node.parent != element) {
+          // Within literal XML markup, preserve escaped text as text when
+          // the combined RSS description is parsed as HTML below.
+          text = const HtmlEscape(HtmlEscapeMode.element).convert(text);
+        }
+        result.write(_descriptionPrefix(text, remaining));
+      }
+    }
+    return result.toString();
+  }
+
+  static String _descriptionPrefix(String text, int limit) {
+    if (text.length <= limit) return text;
+    if (limit > 0) {
+      final last = text.codeUnitAt(limit - 1);
+      if (last >= 0xd800 && last <= 0xdbff) limit--;
+    }
+    return text.substring(0, limit);
+  }
 
   static String _text(XmlElement? element, int limit) {
     if (element == null) return '';

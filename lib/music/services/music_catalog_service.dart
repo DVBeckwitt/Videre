@@ -1,6 +1,7 @@
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
@@ -46,6 +47,14 @@ abstract class MusicCatalogService {
 
   Future<MusicTrack> getSong(String videoId,
           {VideoLoadObserver? loadObserver}) async =>
+      throw const MusicCatalogUnsupported();
+
+  /// Loads display details for explicitly selected saved IDs. Reports null
+  /// for an unavailable recording and stops on connection-wide failures.
+  Future<void> loadSavedSongDetails(Iterable<String> ids,
+          {required bool Function() isCurrent,
+          required Future<void> Function(String id, MusicLibraryEntry? details)
+              onResult}) async =>
       throw const MusicCatalogUnsupported();
 
   Future<MusicArtistPage> getArtist(String id) async =>

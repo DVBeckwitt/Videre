@@ -435,6 +435,7 @@ class TvPlayerControls extends StatelessWidget {
                                         style: textTheme.titleLarge,
                                       ),
                                       TvHorizontalVideoList(
+                                          communityBrowse: false,
                                           onSelect: (ctx, video) =>
                                               onVideoQueueSelected(
                                                   ctx, cubit, video),

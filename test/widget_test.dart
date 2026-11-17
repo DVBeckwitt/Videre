@@ -1548,6 +1548,8 @@ void main() {
     await tester.pumpAndSettle();
     final toggle = find.text('Hide watched subscription videos');
     await tester.ensureVisible(toggle);
+    await tester.pumpAndSettle();
+    expect(toggle.hitTestable(), findsOneWidget);
     await tester.tap(toggle);
     await tester.pumpAndSettle();
     expect(settings.state.hideWatchedSubscriptions, isTrue);

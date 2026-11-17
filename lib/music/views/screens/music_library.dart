@@ -6,6 +6,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
@@ -241,12 +242,29 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             playlistOffset + index,
     };
     if (_filter != _LibraryFilter.playlists) {
-      return entries.isEmpty
-          ? _empty()
-          : ListView.builder(
-              itemCount: entries.length,
-              findChildIndexCallback: (key) => indices[key],
-              itemBuilder: (_, index) => _bookmark(entries[index]));
+      if (entries.isEmpty) return _empty();
+      final list = ListView.builder(
+          itemCount: entries.length,
+          findChildIndexCallback: (key) => indices[key],
+          itemBuilder: (_, index) => _bookmark(entries[index]));
+      if (_filter != _LibraryFilter.songs) return list;
+      return Column(children: [
+        if (entries.any((entry) => entry.needsSongDetails))
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: OutlinedButton.icon(
+                onPressed: () => showMusicDetailsDialog(context, entries),
+                icon: const Icon(Icons.auto_fix_high_outlined),
+                label: Text(locals.musicLoadSongDetails),
+              ),
+            ),
+          )
+        else
+          const SizedBox.shrink(),
+        Expanded(child: list),
+      ]);
     }
     return Column(children: [
       Align(

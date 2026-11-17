@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:clipious/channels/models/channel_sort_by.dart';
+import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -15,6 +17,8 @@ import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/utils/invidious_image.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/video_post_processing.dart'
     show privateVideoString;
 import 'package:clipious/videos/models/video.dart';
@@ -29,6 +33,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   static final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
   static final _channelId = RegExp(r'^UC[a-zA-Z0-9_-]{22}$');
   static final _playlistId = RegExp(r'^(PL|OLAK5uy_|RD)[a-zA-Z0-9_-]+$');
+  static final _videoThumbnail = RegExp(
+      r'/vi(?:_webp)?/([A-Za-z0-9_-]{11})/([A-Za-z0-9_-]+)\.(?:jpg|webp)$');
 
   Future<T> _inSession<T>(
       Future<T> Function(Service, Server, Future<void> Function()) load) async {
@@ -69,6 +75,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           'The server returned an invalid music track.');
     }
     final author = video.author;
+    final uploaderId = normalizeChannelId(video.authorId) ??
+        normalizeChannelId(video.authorUrl);
+    final uploaderHandle = channelHandleFromAuthorUrl(video.authorUrl);
     return MusicTrack(
       videoId: video.videoId,
       title: video.title!,
@@ -78,6 +87,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
               _channelId.hasMatch(video.authorId ?? '')
           ? [MusicArtist(id: video.authorId!, name: author)]
           : [],
+      uploaderChannelId: uploaderId,
+      uploaderChannelUrl: uploaderHandle == null
+          ? null
+          : Uri(pathSegments: ['', '@$uploaderHandle']).toString(),
       durationSeconds: video.lengthSeconds,
       thumbnails: video.videoThumbnails,
       playbackVideo: playbackVideo,
@@ -253,6 +266,93 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
                       video.backendPlayback ??
                       connection));
     });
+  }
+
+  @override
+  Future<void> loadSavedSongDetails(Iterable<String> ids,
+      {required bool Function() isCurrent,
+      required Future<void> Function(String id, MusicLibraryEntry? details)
+          onResult}) async {
+    if (!isCurrent()) return;
+    await _inSession((api, server, check) async {
+      final seen = <String>{};
+      var previousServerFailure = false;
+      for (final id in ids.take(musicLibraryMaximumEntries)) {
+        if (!isCurrent()) return;
+        if (!seen.add(id)) continue;
+        await check();
+        if (!isCurrent()) return;
+
+        MusicLibraryEntry? details;
+        var serverFailure = false;
+        if (_videoId.stringMatch(id) == id) {
+          try {
+            final video = await api.getDiscoveryVideoMetadata(id,
+                serverOverride: server, isCurrent: isCurrent);
+            if (video.videoId == id && video.title != privateVideoString) {
+              details = _savedSongDetails(video, server);
+            }
+          } on StateError {
+            if (!isCurrent()) return;
+            rethrow;
+          } on FormatException {
+            // Malformed metadata belongs to this entry, not the rest of the batch.
+          } on InvidiousServiceError catch (error) {
+            final status = error.statusCode;
+            final itemError = !error.isGatewayAccessFailure &&
+                !error.responseWasHtml &&
+                !error.retryAfterIsInvalid &&
+                error.retryAfter == null;
+            final unavailable = status == 404 ||
+                status == 410 ||
+                (status != null && status >= 200 && status < 300);
+            // Invidious also uses 500 for failures to load individual videos.
+            // Continue past one structured error, but stop on a repeated 500.
+            serverFailure = status == 500 && error.errorCode != null;
+            if (!itemError ||
+                !(unavailable || (serverFailure && !previousServerFailure))) {
+              rethrow;
+            }
+          }
+        }
+        previousServerFailure = serverFailure;
+        if (!isCurrent()) return;
+        await check();
+        if (!isCurrent()) return;
+        await onResult(id, details);
+      }
+    });
+  }
+
+  MusicLibraryEntry? _savedSongDetails(Video video, Server server) {
+    final title = video.title;
+    if (title == null || title.trim().isEmpty) return null;
+    final images = <String, ImageObject>{};
+    for (final source in video.videoThumbnails.take(8)) {
+      final proxied = invidiousImageUrl(source.url, server);
+      if (proxied == null) continue;
+      final path = Uri.tryParse(proxied)?.path;
+      final match = path == null ? null : _videoThumbnail.firstMatch(path);
+      if (match == null || match.group(1) != video.videoId) continue;
+      // Keep only a portable thumbnail path. Rendering resolves it against the
+      // selected instance without retaining credentials or signed parameters.
+      final url = '/vi/${video.videoId}/${match.group(2)}.jpg';
+      images.putIfAbsent(url,
+          () => ImageObject(source.quality, url, source.width, source.height));
+    }
+    final candidates = ImageObject.getThumbnailUrlsForSize(
+        images.values.toList(),
+        width: 320,
+        height: 180);
+    return MusicLibraryEntry.tryParse(MusicLibraryEntry(
+      kind: MusicLibraryKind.song,
+      id: video.videoId,
+      title: title,
+      subtitle: video.author ?? '',
+      durationSeconds: video.lengthSeconds,
+      thumbnails: [for (final url in candidates.take(2)) images[url]!],
+      usesVideoThumbnails: true,
+    ).toJson());
   }
 
   @override

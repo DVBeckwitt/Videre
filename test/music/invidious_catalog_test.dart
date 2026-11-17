@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/network/gateway_context.dart';
@@ -104,6 +105,220 @@ void main() {
 
   test('the production catalog defaults to Invidious', () {
     expect(musicCatalogService, isA<InvidiousMusicCatalogService>());
+  });
+
+  test('saved details use only selected-instance metadata and safe artwork',
+      () async {
+    await db.saveSetting(SettingsValue(dearrowSettingName, 'true'));
+    await db.saveFilter(VideoFilter(value: 'Test song')..hideFromFeed = true);
+    final missing = _discoveryId(1);
+    final private = _discoveryId(2);
+    final results = <String, MusicLibraryEntry?>{};
+    respond = (request) async {
+      expect(request.url.origin, 'https://invidious.example');
+      switch (request.url.path) {
+        case '/api/v1/videos/$_songId':
+          return _json({
+            ..._song(),
+            'genre': 'People & Blogs',
+            'videoThumbnails': [
+              {
+                'url':
+                    'https://i.ytimg.com/vi/$_songId/mqdefault.jpg?sig=sample',
+                'width': 320,
+                'height': 180,
+              },
+              {
+                'url': '/vi/$_songId/hqdefault.jpg?sig=sample',
+                'width': 480,
+                'height': 360,
+              },
+              {
+                'url':
+                    'https://invidious.example/vi/$missing/maxresdefault.jpg',
+                'width': 900,
+                'height': 600,
+              },
+            ],
+            'hlsUrl': 'https://media.example/live.m3u8?sig=sample',
+            'recommendedVideos': [_discoveryVideo(3)],
+          }, request);
+        case final path when path == '/api/v1/videos/$missing':
+          return http.Response('Unavailable', 404, request: request);
+        case final path when path == '/api/v1/videos/$private':
+          return _json({
+            ..._discoveryVideo(2),
+            'title': '[Private video]',
+          }, request);
+        default:
+          fail('Unexpected repair request: ${request.url.path}');
+      }
+    };
+
+    await catalog.loadSavedSongDetails([missing, private, _songId, _songId],
+        isCurrent: () => true,
+        onResult: (id, details) async {
+          results[id] = details;
+        });
+
+    expect(results.keys, [missing, private, _songId]);
+    expect(results[missing], isNull);
+    expect(results[private], isNull);
+    final details = results[_songId]!;
+    expect(details.title, 'Test song');
+    expect(details.subtitle, 'Test artist');
+    expect(details.durationSeconds, 212);
+    expect(details.toVideo().hlsUrl, isNull);
+    expect(details.usesVideoThumbnails, isTrue);
+    expect(details.thumbnails.map((image) => image.url), [
+      '/vi/$_songId/mqdefault.jpg',
+      '/vi/$_songId/hqdefault.jpg',
+    ]);
+    expect(requests.map((request) => request.url.path), [
+      '/api/v1/videos/$missing',
+      '/api/v1/videos/$private',
+      '/api/v1/videos/$_songId',
+    ]);
+  });
+
+  test('saved details stop reporting and requesting after cancellation',
+      () async {
+    var current = true;
+    respond = (request) async {
+      current = false;
+      return _json(_song(), request);
+    };
+    await catalog.loadSavedSongDetails([_songId, _discoveryId(1)],
+        isCurrent: () => current,
+        onResult: (id, details) async => fail('Reported a cancelled result'));
+    expect(requests.single.url.path, '/api/v1/videos/$_songId');
+  });
+
+  for (final status in [429, 500]) {
+    for (final cancelled in [false, true]) {
+      test('NerdVPN saved details retry $status with cancellation=$cancelled',
+          () async {
+        const account = Server(
+          url: 'https://invidious.nerdvpn.de',
+          id: 'music-account',
+          customHeaders: {'X-Instance-Access': 'fixture-access'},
+        );
+        await db.upsertServer(account);
+        await db.useServer(account);
+        var current = true;
+        var waits = 0;
+        catalog = InvidiousMusicCatalogService(
+            api: Service(
+                httpClient: client,
+                wait: (delay) async {
+                  expect(delay, const Duration(seconds: 1));
+                  waits++;
+                  if (cancelled) current = false;
+                }));
+        final results = <MusicLibraryEntry?>[];
+        respond = (request) async {
+          expect(request.url.origin, account.url);
+          expect(request.headers['X-Instance-Access'], 'fixture-access');
+          expect(request.url.path, '/api/v1/videos/$_songId');
+          if (requests.length == 1) {
+            return http.Response(
+              jsonEncode({
+                'error': status == 500
+                    ? 'This backend is still starting and not yet available. '
+                        'Please wait for a short time or use another backend.'
+                    : 'Rate limited',
+              }),
+              status,
+              request: request,
+              headers: {
+                'content-type': 'application/json',
+                'retry-after': '1',
+              },
+            );
+          }
+          return _json(_song(), request);
+        };
+
+        await catalog.loadSavedSongDetails([_songId],
+            isCurrent: () => current,
+            onResult: (_, details) async => results.add(details));
+        expect(waits, 1);
+        if (cancelled) {
+          expect(requests, hasLength(1));
+          expect(results, isEmpty);
+        } else {
+          expect(requests, hasLength(2));
+          expect(requests.last.url, requests.first.url);
+          expect(requests.last.headers, requests.first.headers);
+          expect(results.single?.title, 'Test song');
+        }
+      });
+    }
+  }
+
+  test('saved details stop at a server cooldown with prior results intact',
+      () async {
+    final results = <String>[];
+    respond = (request) async => request.url.path == '/api/v1/videos/$_songId'
+        ? _json(_song(), request)
+        : http.Response('Cooldown', 429, request: request);
+
+    await expectLater(
+        catalog.loadSavedSongDetails(
+            [_songId, _discoveryId(1), _discoveryId(2)],
+            isCurrent: () => true, onResult: (id, _) async => results.add(id)),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.isRateLimited, 'rate limited', isTrue)));
+    expect(results, [_songId]);
+    expect(requests.map((request) => request.url.path), [
+      '/api/v1/videos/$_songId',
+      '/api/v1/videos/${_discoveryId(1)}',
+    ]);
+  });
+
+  test('saved details pass one item failure and stop at a repeated 500',
+      () async {
+    final results = <String, MusicLibraryEntry?>{};
+    respond = (request) async => request.url.path.endsWith(_songId)
+        ? _json(_song(), request)
+        : http.Response('{"error":"Could not load video"}', 500,
+            request: request);
+    final first = _discoveryId(1);
+    final second = _discoveryId(2);
+    final third = _discoveryId(3);
+
+    await expectLater(
+        catalog.loadSavedSongDetails(
+            [first, _songId, second, third, _discoveryId(4)],
+            isCurrent: () => true,
+            onResult: (id, details) async => results[id] = details),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'status code', 500)));
+    expect(results.keys, [first, _songId, second]);
+    expect(results[first], isNull);
+    expect(results[_songId]?.title, 'Test song');
+    expect(results[second], isNull);
+    expect(requests.map((request) => request.url.pathSegments.last),
+        [first, _songId, second, third]);
+  });
+
+  test('song conversion retains uploader identity independently of artist text',
+      () async {
+    respond = (request) async => _json([
+          {
+            ..._song(),
+            'author': null,
+            'authorId': '/channel/$_channelId',
+            'authorUrl': '/@MixedCase?ignored=private',
+          }
+        ], request);
+
+    final track = (await catalog.searchSongs('song')).single;
+    expect(track.artists, isEmpty);
+    expect(track.artistLinks, isEmpty);
+    expect(track.uploaderChannelId, _channelId);
+    expect(track.toVideo().authorId, _channelId);
+    expect(track.toVideo().authorUrl, '/@mixedcase');
   });
 
   test('unimplemented catalog methods fail without a network fallback',

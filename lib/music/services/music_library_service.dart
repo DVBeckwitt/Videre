@@ -4,6 +4,7 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:flutter/foundation.dart';
 
 const musicLibrarySettingName = 'music-library-v1';
@@ -138,6 +139,65 @@ class MusicLibraryService {
       _write((entries, _) =>
           entries.removeWhere((entry) => entry.kind == kind && entry.id == id));
 
+  /// Fill missing display fields in place using verified catalog details.
+  Future<int> fillSongDetails(Iterable<MusicLibraryEntry> details,
+      {required bool Function() isCurrent}) async {
+    if (!isCurrent()) return 0;
+    final incoming = <String, MusicLibraryEntry>{};
+    for (final detail in details) {
+      final clean = MusicLibraryEntry.tryParse(detail.toJson());
+      if (clean != null && clean.kind == MusicLibraryKind.song) {
+        incoming.putIfAbsent(clean.id, () => clean);
+      }
+    }
+    if (incoming.isEmpty) return 0;
+
+    var updated = 0;
+    await _write((entries, _) {
+      if (!isCurrent()) return;
+      for (var index = 0; index < entries.length; index++) {
+        final entry = entries[index];
+        final detail = incoming[entry.id];
+        if (detail == null || !entry.needsSongDetails) continue;
+
+        final title = entry.title == entry.id ? detail.title : entry.title;
+        final artist =
+            entry.subtitle.isEmpty ? detail.subtitle : entry.subtitle;
+        final album = entry.album ?? detail.album;
+        final duration = entry.durationSeconds ?? detail.durationSeconds;
+        ImageObject? artwork;
+        if (entry.thumbnails.isEmpty && detail.thumbnails.isNotEmpty) {
+          // One cover keeps bulk repairs within the existing library limit.
+          final url = ImageObject.getThumbnailUrlsForSize(detail.thumbnails,
+                  width: 320, height: 180)
+              .first;
+          artwork = detail.thumbnails.firstWhere((image) => image.url == url);
+        }
+        if (title == entry.title &&
+            artist == entry.subtitle &&
+            album == entry.album &&
+            duration == entry.durationSeconds &&
+            artwork == null) {
+          continue;
+        }
+        entries[index] = MusicLibraryEntry(
+          kind: entry.kind,
+          id: entry.id,
+          title: title,
+          subtitle: artist,
+          album: album,
+          durationSeconds: duration,
+          thumbnails: artwork == null ? entry.thumbnails : [artwork],
+          usesVideoThumbnails: artwork == null
+              ? entry.usesVideoThumbnails
+              : detail.usesVideoThumbnails,
+        );
+        updated++;
+      }
+    }, shouldWrite: () => updated > 0);
+    return updated;
+  }
+
   Future<void> markLocalPlaylist(String id) {
     if (!_localId(id)) throw ArgumentError('A local playlist is required');
     return _write((_, playlists) => playlists.add(id));
@@ -147,12 +207,14 @@ class MusicLibraryService {
   void notifyChanged() => _changes.changed();
 
   Future<void> _write(
-      void Function(List<MusicLibraryEntry>, Set<String>) update) {
+      void Function(List<MusicLibraryEntry>, Set<String>) update,
+      {bool Function()? shouldWrite}) {
     return _changes.writes = _changes.writes.catchError((_) {}).then((_) async {
       final data = _read();
       final entries = _entries(data);
       final playlists = _playlists(data);
       update(entries, playlists);
+      if (shouldWrite?.call() == false) return;
       final value = jsonEncode({
         'version': 1,
         'entries': entries.map((entry) => entry.toJson()).toList(),

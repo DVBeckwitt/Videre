@@ -3,6 +3,7 @@ import 'package:clipious/app/views/components/session_focus_guard.dart';
 import 'package:clipious/utils/motion_binding.dart';
 import 'dart:async';
 import 'dart:io';
+import 'content_filter/community_filter.dart';
 import 'network/network_proxy.dart';
 
 import 'package:dynamic_color/dynamic_color.dart';
@@ -71,6 +72,7 @@ Future<void> main() async {
   db = await SembastSqfDb.create();
   await fileDb.syncWithDb();
   await NetworkProxy.instance.initialize();
+  unawaited(communityFilters.reloadForProfile());
 
   late final bool hasServer;
   try {
@@ -101,7 +103,8 @@ Future<void> main() async {
     child: MultiBlocProvider(providers: [
       BlocProvider(
         create: (context) {
-          return AppCubit(AppState(0, null, HomeLayout()));
+          return AppCubit(AppState(0, null, HomeLayout()),
+              onResume: () => unawaited(communityFilters.refreshIfStale()));
         },
       ),
       BlocProvider(
@@ -149,6 +152,7 @@ class MyApp extends StatelessWidget {
       await AwesomeNotifications().dismissAllNotifications();
     };
     app.afterAccountSwitch = () async {
+      unawaited(communityFilters.reloadForProfile());
       await settings.reloadForProfile();
       await player.reloadForProfile();
       await downloads.reloadForProfile();

@@ -13,6 +13,7 @@ import '../../player/states/player.dart';
 import '../../service.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../settings/states/settings.dart';
+import '../models/community_video_filter.dart';
 import '../models/video.dart';
 
 part 'video.freezed.dart';
@@ -171,7 +172,8 @@ class VideoCubit extends Cubit<VideoState> {
       List<Video> videos = [state.video!];
       if (!settings.state.distractionFreeMode &&
           settings.state.playRecommendedNext) {
-        videos.addAll(state.video?.recommendedVideos ?? []);
+        videos.addAll(state.video!.recommendedVideos
+            .where((video) => !hideCommunityVideo(video)));
       }
       player.playVideo(videos, audio: audio);
     }

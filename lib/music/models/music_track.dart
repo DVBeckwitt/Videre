@@ -8,6 +8,8 @@ class MusicTrack {
   final String title;
   final List<String> artists;
   final List<MusicArtist> artistLinks;
+  final String? uploaderChannelId;
+  final String? uploaderChannelUrl;
   final String? albumId;
   final String? albumTitle;
   final int? durationSeconds;
@@ -23,6 +25,8 @@ class MusicTrack {
     required this.title,
     this.artists = const [],
     this.artistLinks = const [],
+    this.uploaderChannelId,
+    this.uploaderChannelUrl,
     this.albumId,
     this.albumTitle,
     this.durationSeconds,
@@ -34,6 +38,8 @@ class MusicTrack {
         videoId: videoId,
         title: title,
         author: artists.join(', '),
+        authorId: uploaderChannelId,
+        authorUrl: uploaderChannelUrl,
         lengthSeconds: durationSeconds,
         videoThumbnails: thumbnails,
         musicMetadata: MusicMetadata(

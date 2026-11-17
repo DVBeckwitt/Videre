@@ -14,6 +14,7 @@ import '../../../utils/views/components/select_list_dialog.dart';
 import '../../../utils.dart';
 import '../components/app_customizer.dart';
 import '../components/home_experience_setting.dart';
+import 'community_filter_settings.dart';
 
 @RoutePage()
 class BrowsingSettingsScreen extends StatelessWidget {
@@ -271,6 +272,12 @@ class BrowsingSettingsScreen extends StatelessWidget {
                     description: Text(
                         '${locals.videoFiltersSettingTileDescriptions}${filterCount > 0 ? '\n${locals.nFilters(filterCount)}' : ''}'),
                     onPressed: openVideoFilterSettings,
+                  ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.filter_alt_outlined),
+                    title: Text(locals.communityFilters),
+                    description: Text(locals.communityFiltersSummary),
+                    onPressed: showCommunityFilterSettings,
                   ),
                   SettingsTile.switchTile(
                     leading: const Icon(Icons.visibility_off_outlined),

@@ -211,7 +211,9 @@ class Service {
     }
   }
 
-  Future<Response> _sendGet(ServerRequest request) async {
+  Future<Response> _sendGet(ServerRequest request,
+      {Future<void> Function()? beforeRequest}) async {
+    if (beforeRequest != null) await beforeRequest();
     var response =
         await _instanceHttpClient.get(request.uri, headers: request.headers);
     if (response.statusCode == 429) {
@@ -219,6 +221,7 @@ class Service {
       // A long server cooldown belongs in the UI, not a hidden retry loop.
       if (delay != null && delay <= const Duration(seconds: 2)) {
         if (delay > Duration.zero) await _wait(delay);
+        if (beforeRequest != null) await beforeRequest();
         response = await _instanceHttpClient.get(request.uri,
             headers: request.headers);
       }
@@ -227,7 +230,21 @@ class Service {
   }
 
   Future<Response> _get(ServerRequest request,
-      {bool cache = false, bool coalesce = false}) async {
+      {bool cache = false,
+      bool coalesce = false,
+      Future<void> Function()? beforeRequest}) async {
+    if (beforeRequest != null) {
+      // A guarded request belongs to one operation. Do not let its lifetime
+      // control a coalesced lookup made by another caller.
+      var expired = false;
+      return _sendGet(request, beforeRequest: () async {
+        await beforeRequest();
+        if (expired) throw TimeoutException('Request expired.');
+      }).timeout(const Duration(seconds: 15), onTimeout: () {
+        expired = true;
+        throw TimeoutException('Request expired.');
+      });
+    }
     final key = request._cacheKey;
     if (cache) {
       _browseCache.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
@@ -480,12 +497,13 @@ class Service {
   /// Discovery inspects categories without enriching the video or its related
   /// videos. Keep its bounded lookup budget entirely on the selected instance.
   Future<Video> getDiscoveryVideoMetadata(String videoId,
-      {required Server serverOverride}) async {
+      {required Server serverOverride, bool Function()? isCurrent}) async {
     final owner = db;
     final profileId = owner.profileId;
     final revision = _sessionRevision;
     final proxy = NetworkProxy.instance.config;
     bool current() =>
+        isCurrent?.call() != false &&
         identical(owner, db) &&
         owner.profileId == profileId &&
         revision == _sessionRevision &&
@@ -502,7 +520,8 @@ class Service {
     }
 
     await check();
-    final video = await _getVideoMetadata(videoId, server);
+    final video = await _getVideoMetadata(videoId, server,
+        beforeRequest: isCurrent == null ? null : check);
     await check();
     return video;
   }
@@ -616,11 +635,13 @@ class Service {
       {BackendPlayback? backendRequest,
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver,
+      Future<void> Function()? beforeRequest,
       bool allowSameRouteRetry = true}) async {
     final video = await _loadVideoMetadata(videoId, server,
         backendRequest: backendRequest,
         onBackendRequest: onBackendRequest,
         loadObserver: loadObserver,
+        beforeRequest: beforeRequest,
         allowSameRouteRetry: allowSameRouteRetry);
     // A successful HTTP response can still belong to another cache key. Reject
     // it before source admission, post-processing, or any backend retry.
@@ -664,6 +685,7 @@ class Service {
       {BackendPlayback? backendRequest,
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver,
+      Future<void> Function()? beforeRequest,
       bool allowSameRouteRetry = true}) async {
     final originalDb = db;
     final profileId = originalDb.profileId;
@@ -699,8 +721,10 @@ class Service {
       return _getInteractiveVideoMetadata(request, backendRequest, loadObserver,
           unchanged: unchanged, allowRetry: allowSameRouteRetry);
     }
+    Future<Response> get() =>
+        _get(request, coalesce: true, beforeRequest: beforeRequest);
     if (!isNerdVpnUrl(request.uri.toString())) {
-      final response = await _get(request, coalesce: true);
+      final response = await get();
       return _decodeVideoMetadata(response);
     }
     final owner = originalDb.forProfile(server.profileId);
@@ -729,7 +753,7 @@ class Service {
     Duration remaining() => budget - _now().difference(started);
 
     Future<Video> load() async {
-      final response = await _get(request, coalesce: true);
+      final response = await get();
       try {
         return _decodeVideoMetadata(response);
       } on InvidiousServiceError catch (error) {
@@ -758,12 +782,15 @@ class Service {
         if (!await unchanged()) {
           throw StateError('The playback connection changed.');
         }
+        if (beforeRequest != null) await beforeRequest();
         if (expired || remaining() <= Duration.zero) {
           throw TimeoutException('Video metadata request expired.');
         }
         // One additional request only, even if it returns another retryable
         // status. Do not restart the usual GET retry or its timeout budget.
-        final retried = await httpClient
+        final retryClient =
+            beforeRequest == null ? httpClient : _instanceHttpClient;
+        final retried = await retryClient
             .get(request.uri, headers: request.headers)
             .timeout(remaining());
         if (!await unchanged()) {

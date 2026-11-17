@@ -91,7 +91,13 @@ class MusicLibraryEntry {
         if (usesVideoThumbnails) 'usesVideoThumbnails': true,
       };
 
+  bool get needsSongDetails =>
+      kind == MusicLibraryKind.song &&
+      _songId.stringMatch(id) == id &&
+      (title == id || subtitle.isEmpty || thumbnails.isEmpty);
+
   static final _id = RegExp(r'^[A-Za-z0-9_-]{1,128}$');
+  static final _songId = RegExp(r'^[A-Za-z0-9_-]{11}$');
 
   /// Skip malformed rows individually so one damaged bookmark cannot hide the
   /// rest of a person's library. Copy only the explicitly supported fields.

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clipious/channels/models/channel_videos.dart';
+import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/states/playlist_list.dart';
@@ -10,6 +11,7 @@ import 'package:clipious/utils/views/components/paginated_list_view.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_paginated_list.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _DeferredList<T> extends PaginatedList<T> {
@@ -260,6 +262,87 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Item 1'), findsOneWidget);
       expect(find.text('Retry'), findsNothing);
+    });
+
+    testWidgets(
+        '${isTv ? 'TV' : 'phone'} can reveal an all-hidden page and load the next page',
+        (tester) async {
+      final pages = <int>[];
+      final list = PageBasedPaginatedList<int>(
+        maxResults: 2,
+        getItemsFunc: (page, _) async {
+          pages.add(page);
+          return page == 1 ? [1, 2] : [3];
+        },
+      );
+      List<CommunityMatch> match(int item) => item >= 3
+          ? const []
+          : const [
+              CommunityMatch(
+                source: CommunityList.aislist,
+                action: CommunityAction.hide,
+                warning: false,
+                identity: 'UC0000000000000000000000',
+              ),
+            ];
+      Widget row(int item) => Padding(
+            padding: const EdgeInsets.all(12),
+            child: Text('Item $item'),
+          );
+
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: const Locale('en'),
+        home: Scaffold(
+          body: isTv
+              ? SizedBox(
+                  height: 64,
+                  child: TvHorizontalPaginatedListView<int>(
+                    paginatedList: list,
+                    communityMatch: match,
+                    itemBuilder: row,
+                    getPlaceHolder: () => const SizedBox(width: 20),
+                  ),
+                )
+              : PaginatedListView<int>(
+                  paginatedList: list,
+                  communityMatch: match,
+                  itemBuilder: row,
+                ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final locals =
+          AppLocalizations.of(tester.element(find.byType(Scaffold)))!;
+      expect(pages, [1]);
+      expect(find.text('Item 1'), findsNothing);
+      expect(list.getHasMore(), isTrue);
+
+      await tester.tap(find.textContaining(locals.communityShowHidden));
+      await tester.pumpAndSettle();
+      expect(find.text('Item 1'), findsOneWidget);
+      expect(find.text('Item 2'), findsOneWidget);
+      expect(pages, [1]);
+
+      await tester.tap(find.text(locals.communityHideHidden));
+      await tester.pumpAndSettle();
+      expect(find.text('Item 1'), findsNothing);
+      expect(pages, [1], reason: 'Toggling visibility keeps the loaded page.');
+      final more = find.text(locals.loadMore);
+      expect(more, findsOneWidget);
+      if (isTv) {
+        Focus.of(tester.element(more)).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      } else {
+        await tester.tap(more);
+      }
+      await tester.pumpAndSettle();
+      expect(pages, [1, 2]);
+      expect(find.text('Item 1'), findsNothing);
+      expect(find.text('Item 3'), findsOneWidget);
+      expect(list.getHasMore(), isFalse);
     });
   }
 

@@ -112,6 +112,7 @@ enum HomeDataSource {
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
             animateDownload: true,
+            communityBrowse: true,
             paginatedVideoList: SingleEndpointList(service.getTrending),
           )),
       (HomeDataSource.subscription) => SizedBox(
@@ -120,6 +121,7 @@ enum HomeDataSource {
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
             animateDownload: true,
+            communityBrowse: true,
             paginatedVideoList: SubscriptionVideoList(),
           )),
       (HomeDataSource.popular) => SizedBox(
@@ -128,6 +130,7 @@ enum HomeDataSource {
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
             animateDownload: true,
+            communityBrowse: true,
             paginatedVideoList: SingleEndpointList(service.getPopular),
           )),
       (HomeDataSource.playlist) => SizedBox(

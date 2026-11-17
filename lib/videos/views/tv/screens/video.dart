@@ -21,10 +21,12 @@ import 'package:clipious/videos/views/components/video_metrics.dart';
 
 import '../../../../player/states/player.dart';
 import '../../../../player/views/components/video_retry_notice.dart';
+import '../../../models/community_video_filter.dart';
 import '../../../models/video.dart';
 import '../../../states/tv_video.dart';
 import '../../../states/video.dart';
 import '../../components/video_thumbnail.dart';
+import '../../components/community_browse.dart';
 import '../../components/backend_status.dart';
 import '../../components/watch_status_button.dart';
 
@@ -37,7 +39,8 @@ class TvVideoScreen extends StatelessWidget {
   playVideo(BuildContext context, Video video) {
     AutoRouter.of(context).push(TvPlayerRoute(videos: [
       video,
-      ...video.recommendedVideos.where((element) => !element.filterHide)
+      ...video.recommendedVideos.where(
+          (element) => !element.filterHide && !hideCommunityVideo(element))
     ]));
   }
 
@@ -343,6 +346,12 @@ class TvVideoScreen extends StatelessWidget {
                                                         '',
                                                     maxLines: 3,
                                                   ),
+                                                ),
+                                                VideoChannelCommunityLabels(
+                                                  authorId: videoState
+                                                      .video?.authorId,
+                                                  authorUrl: videoState
+                                                      .video?.authorUrl,
                                                 ),
                                                 Padding(
                                                   padding:

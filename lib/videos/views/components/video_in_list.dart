@@ -15,6 +15,7 @@ import 'package:logging/logging.dart';
 
 import '../../../downloads/models/downloaded_video.dart';
 import '../../../utils/models/image_object.dart';
+import 'community_browse.dart';
 import 'video_metrics.dart';
 import 'video_duration_badge.dart';
 
@@ -28,6 +29,7 @@ class VideoListItem extends StatelessWidget {
   final Function(BuildContext context, Video video)? showVideoModalSheet;
   final Function(BuildContext context, Video video)? openVideoOverride;
   final bool allowModalSheet;
+  final bool showCommunityLabels;
 
   const VideoListItem(
       {super.key,
@@ -38,6 +40,7 @@ class VideoListItem extends StatelessWidget {
       this.showMetrics = true,
       this.showVideoModalSheet,
       this.allowModalSheet = true,
+      this.showCommunityLabels = false,
       this.openVideoOverride})
       : assert(video == null || offlineVideo == null,
             'cannot provide both video and offline video\n');
@@ -73,6 +76,9 @@ class VideoListItem extends StatelessWidget {
 
     String title = video?.title ?? offlineVideo?.title ?? '';
     String author = video?.author ?? offlineVideo?.author ?? '';
+    Widget thumbnail(Widget child) => showCommunityLabels && video != null
+        ? labelVideoThumbnail(video!, child)
+        : child;
 
     return BlocProvider(
       create: (context) => VideoInListCubit(
@@ -142,7 +148,7 @@ class VideoListItem extends StatelessWidget {
                         ),
                       )
                     : video != null
-                        ? VideoThumbnailView(
+                        ? thumbnail(VideoThumbnailView(
                             musicThumbnails: video!.musicMetadata?.thumbnails,
                             videoId: video!.videoId,
                             images: video!.deArrowThumbnailUrl == null
@@ -281,7 +287,7 @@ class VideoListItem extends StatelessWidget {
                                       ],
                               ),
                             ),
-                          )
+                          ))
                         : OfflineVideoThumbnail(video: offlineVideo!),
                 const SizedBox(
                   height: 4,

@@ -22,6 +22,7 @@ class Subscriptions extends StatelessWidget {
               onItemFocus: onItemFocus,
             )
           : VideoList(
+              communityBrowse: true,
               animateDownload: true,
               paginatedVideoList: SubscriptionVideoList(),
             ),

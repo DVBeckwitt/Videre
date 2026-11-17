@@ -10,6 +10,7 @@ import 'package:clipious/search/views/screens/search.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/components/paginated_list_view.dart';
+import 'package:clipious/videos/views/components/community_browse.dart';
 
 @RoutePage()
 class SearchChannelTab extends StatelessWidget {
@@ -29,6 +30,7 @@ class SearchChannelTab extends StatelessWidget {
 
       return PaginatedListView<Channel>(
           key: ValueKey((query, sortBy, date, duration)),
+          communityMatch: channelCommunityMatches,
           paginatedList: PageBasedPaginatedList<Channel>(
             getItemsFunc: (page, maxResults) => service
                 .search(query,
@@ -55,6 +57,11 @@ class SearchChannelTab extends StatelessWidget {
                         e.author,
                         style: TextStyle(color: colors.primary),
                       )),
+                      VideoChannelCommunityLabels(
+                        authorId: e.authorId,
+                        authorUrl: e.authorUrl,
+                        compact: true,
+                      ),
                       const Padding(
                         padding: EdgeInsets.only(right: 8.0),
                         child: Icon(

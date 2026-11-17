@@ -164,11 +164,28 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
           ? this
           : copyWith(queueEntryId: source.queueEntryId);
     }
+    // A Takeout playlist can supply only the video ID. Use metadata from the
+    // existing playback request to fill its placeholders before playing.
+    final songTitle = music.title == videoId && title?.trim().isNotEmpty == true
+        ? title!
+        : music.title;
+    final songArtist =
+        music.artist.trim().isEmpty && author?.trim().isNotEmpty == true
+            ? author!
+            : music.artist;
+    final labels = songTitle == music.title && songArtist == music.artist
+        ? music
+        : MusicMetadata(
+            title: songTitle,
+            artist: songArtist,
+            album: music.album,
+            thumbnails: music.thumbnails,
+          );
     return copyWith(
       queueEntryId: source.queueEntryId,
-      musicMetadata: music,
-      title: music.title,
-      author: music.artist,
+      musicMetadata: labels,
+      title: songTitle,
+      author: songArtist,
       videoThumbnails:
           music.thumbnails.isEmpty ? videoThumbnails : music.thumbnails,
     );

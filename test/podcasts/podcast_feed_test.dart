@@ -6,7 +6,8 @@ import 'package:clipious/podcasts/services/podcast_http.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 String _feed(String items) => '''<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+ xmlns:details="http://purl.org/rss/1.0/modules/content/" xmlns:other="urn:other">
 <channel><title>Local podcast</title><description>Publisher &amp; friends</description>
 <itunes:author>Host</itunes:author>$items</channel></rss>''';
 
@@ -43,6 +44,54 @@ void main() {
     expect(episode.description, 'Notes & more');
     expect(feed.updatedAt, DateTime.utc(2026, 11, 15));
     expect(feed.toJson(), isNot(contains('artwork')));
+  });
+
+  test('episode notes prefer RSS description and fall back by namespace', () {
+    final feed = parse(_feed(_episode(
+            extra: '<description>RSS notes</description>'
+                '<details:encoded>More details</details:encoded>'
+                '<itunes:summary>Short summary</itunes:summary>') +
+        _episode(
+            guid: 'fallback',
+            extra:
+                '<description><![CDATA[<script>Skip</script>]]></description>'
+                '<details:encoded><![CDATA[<p>First &amp; second</p>'
+                '<p>Third<br>fourth <a href="https://publisher.example/secret">link</a>'
+                '<iframe src="https://publisher.example/embed">Ignore</iframe></p>]]></details:encoded>'
+                '<itunes:summary>Short summary</itunes:summary>') +
+        _episode(
+            guid: 'summary',
+            extra: '<other:encoded>Wrong namespace</other:encoded>'
+                '<itunes:summary>Short summary</itunes:summary>')));
+    expect(feed.episodes.map((episode) => episode.description), [
+      'RSS notes',
+      'First & second Third fourth link',
+      'Short summary',
+    ]);
+  });
+
+  test('literal markup in episode notes remains plain text and size bounded',
+      () {
+    final feed = parse(_feed(_episode(
+                extra: '<description><p>First</p><p>Second '
+                    '<script>Remove this</script><style>Hide this</style>'
+                    '<b>sentence</b></p></description>') +
+            _episode(
+                guid: 'long',
+                extra: '<description>${'😀' * 4097}</description>'))
+        .replaceFirst('<description>Publisher &amp; friends</description>',
+            '<description><p>Publisher</p><script>Ignore</script><p>News</p></description>'));
+    expect(feed.description, 'Publisher News');
+    expect(feed.episodes.first.description, 'First Second sentence');
+    expect(feed.episodes.last.description, '😀' * 4096);
+  });
+
+  test('deep literal notes do not prevent the feed opening', () {
+    const depth = 25000;
+    final feed = parse(_feed(_episode(
+        extra: '<description>${'<p>' * depth}Preserved &lt; sample'
+            '${'</p>' * depth}</description>')));
+    expect(feed.episodes.single.description, 'Preserved < sample');
   });
 
   test('stable GUID retains identity when title and media URL change', () {
