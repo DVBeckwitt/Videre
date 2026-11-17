@@ -73,52 +73,54 @@ class CommunityMatchLabels extends StatelessWidget {
     if (matches.isEmpty) return const SizedBox.shrink();
     final locals = AppLocalizations.of(context)!;
     if (compact) {
-      final labels = matches.map((match) => _label(locals, match)).toList();
-      final theme = Theme.of(context);
-      final colors = theme.colorScheme;
-      const padding = EdgeInsets.symmetric(horizontal: 8, vertical: 4);
+      final details = matches.map((match) => _label(locals, match)).join('\n');
       const shape = RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(8)),
+        borderRadius: BorderRadius.all(Radius.circular(10)),
+        side: BorderSide(color: Color(0xff362100), width: 2),
       );
-      final text = Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final label in labels)
-            Text(
-              label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: colors.onSecondaryContainer,
+      final label = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Center(
+          widthFactor: 1,
+          heightFactor: 1,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              'AI',
+              semanticsLabel: 'AI. $details',
+              style: const TextStyle(
+                color: Color(0xff281900),
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
               ),
             ),
-        ],
+          ),
+        ),
       );
-      return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 160),
-        child: Tooltip(
-          message: labels.join('\n'),
-          excludeFromSemantics: true,
-          child: interactive
-              ? TextButton(
-                  style: TextButton.styleFrom(
-                    foregroundColor: colors.onSecondaryContainer,
-                    backgroundColor: colors.secondaryContainer,
-                    minimumSize: Size.zero,
-                    padding: padding,
-                    shape: shape,
-                  ),
-                  onPressed: () => _showMatches(context),
-                  child: text,
-                )
-              : DecoratedBox(
-                  decoration: ShapeDecoration(
-                    color: colors.secondaryContainer,
-                    shape: shape,
-                  ),
-                  child: Padding(padding: padding, child: text),
-                ),
+      return Tooltip(
+        message: details,
+        excludeFromSemantics: true,
+        child: Material(
+          color: const Color(0xffffbf47),
+          elevation: 2,
+          shape: shape,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: 52,
+              minHeight: interactive ? 48 : 40,
+            ),
+            child: interactive
+                ? Semantics(
+                    button: true,
+                    child: InkWell(
+                      customBorder: shape,
+                      onTap: () => _showMatches(context),
+                      child: label,
+                    ),
+                  )
+                : label,
+          ),
         ),
       );
     }

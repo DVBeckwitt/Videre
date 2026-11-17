@@ -222,6 +222,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('music-discovery-discover001')),
         findsOneWidget);
+    final badge = find.text('AI');
+    expect(badge, findsOneWidget);
+    await tester.ensureVisible(badge);
+    await tester.pumpAndSettle();
+    await tester.tap(badge);
+    await tester.pumpAndSettle();
     expect(find.text('Listed by Flow AI music'), findsOneWidget);
     expect(catalog.discoveryCalls, 1);
   });

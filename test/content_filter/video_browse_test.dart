@@ -48,7 +48,7 @@ void main() {
     await communityFilters.reloadForProfile();
   });
 
-  testWidgets('label mode shows readable block and warning labels on cards',
+  testWidgets('matching thumbnails display AI badges with source details',
       (tester) async {
     await tester.runAsync(() async {
       await communityFilters.setAction(
@@ -65,23 +65,28 @@ void main() {
           labelVideoThumbnail(
             const Video(videoId: 'a1b2c3d4e5f', authorId: _listedUploader),
             const SizedBox(width: 154, height: 86),
+            focusable: false,
           ),
           labelVideoThumbnail(
             const Video(videoId: 'a1b2c3d4e5g', authorId: _warnedUploader),
             const SizedBox(width: 154, height: 86),
-            focusable: false,
+          ),
+          labelVideoThumbnail(
+            const Video(videoId: 'a1b2c3d4e5h'),
+            const SizedBox(width: 154, height: 86),
           ),
         ]),
       ),
     ));
     await tester.pumpAndSettle();
 
-    final block = find.text('Listed by AiSList');
-    final warning = find.text('Warning from AiSList');
-    expect(block.hitTestable(), findsOneWidget);
-    expect(warning, findsOneWidget);
-    await tester.tap(block);
+    expect(find.text('AI'), findsNWidgets(2));
+    expect(find.byTooltip('Listed by AiSList'), findsOneWidget);
+    final warning = find.byTooltip('Warning from AiSList');
+    expect(warning.hitTestable(), findsOneWidget);
+    await tester.tap(warning);
     await tester.pumpAndSettle();
+    expect(find.text('Warning from AiSList'), findsOneWidget);
     expect(find.text('Allow this channel'), findsOneWidget);
   });
 
