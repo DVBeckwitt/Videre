@@ -196,6 +196,42 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('portrait watch keeps fullscreen and mute at the video edge',
+      (tester) async {
+    tester.view.physicalSize = const Size(540, 960);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final video = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 512,
+      height: 288,
+      child: PlayerControls(mediaPlayerCubit: video),
+    )));
+    player.setEvent(const MediaEvent<Duration>(
+      state: MediaState.ready,
+      type: MediaEventType.durationChanged,
+      value: Duration(minutes: 33, seconds: 8),
+    ));
+    await tester.pump();
+    final frame = tester.getRect(find.byType(PlayerControls));
+    final pill = find.byKey(const ValueKey('flow-watch-time-pill'));
+    final fullscreen =
+        find.widgetWithIcon(IconButton, Icons.fullscreen_rounded);
+    final mute = find.widgetWithIcon(IconButton, Icons.volume_up_rounded);
+    for (final remaining in [false, true]) {
+      if (remaining) {
+        await tester.tap(pill);
+        await tester.pump();
+      }
+      expect(tester.getRect(pill).left - frame.left, 8);
+      expect(frame.right - tester.getRect(fullscreen).right, 8);
+      expect(tester.getRect(mute).right, tester.getRect(fullscreen).left);
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 4));
+  });
+
   testWidgets('closing controls cancels pending feedback and hide timers',
       (tester) async {
     final controls = PlayerControlsCubit(const PlayerControlsState(), player);

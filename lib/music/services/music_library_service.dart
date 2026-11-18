@@ -14,6 +14,7 @@ class _ProfileChanges extends ChangeNotifier {
   String? storedValue;
   Map<String, dynamic> data = {};
   List<MusicLibraryEntry>? entries;
+  Map<String, List<ImageObject>>? coversBySongId;
 
   void changed() => notifyListeners();
 }
@@ -38,6 +39,7 @@ class MusicLibraryService {
     _changes.storedValue = stored;
     _changes.data = {};
     _changes.entries = null;
+    _changes.coversBySongId = null;
     try {
       final value = jsonDecode(stored ?? '{}');
       if (value is Map<String, dynamic> && value['version'] == 1) {
@@ -52,6 +54,18 @@ class MusicLibraryService {
   List<MusicLibraryEntry> get entries {
     final data = _read();
     return _changes.entries ??= List.unmodifiable(_entries(data));
+  }
+
+  /// Resolve a whole catalog page against one snapshot of this profile's
+  /// saved song covers. The index changes with the stored library data.
+  Map<String, List<ImageObject>> get coversBySongId {
+    final bookmarks = entries;
+    return _changes.coversBySongId ??= Map.unmodifiable({
+      for (final entry in bookmarks)
+        if (entry.kind == MusicLibraryKind.song)
+          if (entry.coverThumbnails case final covers when covers.isNotEmpty)
+            entry.id: List<ImageObject>.unmodifiable(covers),
+    });
   }
 
   static List<MusicLibraryEntry> _entries(Map<String, dynamic> data) {
@@ -105,8 +119,7 @@ class MusicLibraryService {
           videoId.stringMatch(song.id) != song.id) {
         throw ArgumentError('Invalid imported song');
       }
-      // A local import stores text and public IDs only. Discard artwork even
-      // when supplied by a caller so rendering the import cannot fetch it.
+      // Never turn a URL supplied by an import into a request for artwork.
       final clean = MusicLibraryEntry.tryParse({
         'kind': MusicLibraryKind.song.name,
         'id': song.id,
@@ -168,18 +181,25 @@ class MusicLibraryService {
             entry.subtitle.isEmpty ? detail.subtitle : entry.subtitle;
         final album = entry.album ?? detail.album;
         final duration = entry.durationSeconds ?? detail.durationSeconds;
+        final isArtTrack = entry.isArtTrack || detail.isArtTrack;
         ImageObject? artwork;
-        if (entry.thumbnails.isEmpty && detail.thumbnails.isNotEmpty) {
-          // One cover keeps bulk repairs within the existing library limit.
-          final url = ImageObject.getThumbnailUrlsForSize(detail.thumbnails,
+        final detailCovers = detail.coverThumbnails;
+        if ((entry.thumbnails.isEmpty ||
+                entry.coverThumbnails.isEmpty && detailCovers.isNotEmpty) &&
+            detail.thumbnails.isNotEmpty) {
+          // Keep one rendition per repaired entry and preserve its source.
+          final images =
+              detailCovers.isEmpty ? detail.thumbnails : detailCovers;
+          final url = ImageObject.getThumbnailUrlsForSize(images,
                   width: 320, height: 180)
               .first;
-          artwork = detail.thumbnails.firstWhere((image) => image.url == url);
+          artwork = images.firstWhere((image) => image.url == url);
         }
         if (title == entry.title &&
             artist == entry.subtitle &&
             album == entry.album &&
             duration == entry.durationSeconds &&
+            isArtTrack == entry.isArtTrack &&
             artwork == null) {
           continue;
         }
@@ -190,6 +210,7 @@ class MusicLibraryService {
           subtitle: artist,
           album: album,
           durationSeconds: duration,
+          isArtTrack: isArtTrack,
           thumbnails: artwork == null ? entry.thumbnails : [artwork],
           usesVideoThumbnails: artwork == null
               ? entry.usesVideoThumbnails

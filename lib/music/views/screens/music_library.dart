@@ -7,6 +7,8 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/song_artwork.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
@@ -21,6 +23,7 @@ import 'package:clipious/playlists/views/components/playlist_information.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
@@ -87,6 +90,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ? Icon(icon)
             : Thumbnail(
                 images: images,
+                instanceOnly: true,
                 decoration:
                     BoxDecoration(borderRadius: BorderRadius.circular(8))),
       );
@@ -127,13 +131,28 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             icon: const Icon(Icons.bookmark_remove_outlined));
   }
 
+  Widget _bookmarkArtwork(MusicLibraryEntry? entry, Widget fallback) {
+    if (entry == null || entry.kind != MusicLibraryKind.song) return fallback;
+    return CommunityMusicArtwork(
+        videoId: entry.id,
+        music: entry.toVideo().musicMetadata!,
+        durationSeconds: entry.durationSeconds,
+        fallback: fallback);
+  }
+
   Widget _bookmark(MusicLibraryEntry entry) {
     return ListTile(
         key: ValueKey('music-saved-${entry.kind.name}-${entry.id}'),
         leading: entry.kind == MusicLibraryKind.artist
             ? ChannelAvatar(
-                name: entry.title, images: entry.thumbnails, size: 52)
-            : _artwork(entry.thumbnails),
+                name: entry.title,
+                images: entry.thumbnails,
+                size: 52,
+                instanceOnly: true)
+            : SizedBox.square(
+                dimension: 52,
+                child:
+                    _bookmarkArtwork(entry, _artwork(entry.displayThumbnails))),
         title: Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis),
         subtitle: entry.subtitle.isEmpty
             ? null
@@ -156,11 +175,27 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         _LibraryFilter.downloads => locals.downloads,
       };
 
-  Widget _localPlaylist(Playlist playlist) {
+  Widget _localPlaylist(Playlist playlist, MusicLibraryService library) {
     final locals = AppLocalizations.of(context)!;
-    final songs =
-        playlist.videos.where((video) => video.musicMetadata != null).toList();
-    final reference = PlaylistReference.forPlaylist(playlist, db);
+    final savedCovers = library.coversBySongId;
+    final instanceUrl = context.read<AppCubit>().state.server?.url;
+    final songs = <Video>[];
+    for (final video in playlist.videos) {
+      final music = video.musicMetadata;
+      if (music == null) continue;
+      final covers = savedCovers[video.videoId];
+      songs.add(covers == null
+          ? video
+          : video.copyWith(
+              musicMetadata: MusicMetadata(
+                  title: music.title,
+                  artist: music.artist,
+                  album: music.album,
+                  isArtTrack: music.isArtTrack,
+                  thumbnails: covers)));
+    }
+    final reference = PlaylistReference.forPlaylist(
+        playlist, db.forProfile(library.profileId));
     return CustomScrollView(slivers: [
       SliverToBoxAdapter(
           child: Column(children: [
@@ -208,9 +243,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     leading: SizedBox.square(
                       dimension: 52,
                       child: Stack(fit: StackFit.expand, children: [
-                        _artwork(music.thumbnails.isNotEmpty
-                            ? music.thumbnails
-                            : song.videoThumbnails),
+                        CommunityMusicArtwork(
+                            videoId: song.videoId,
+                            music: music,
+                            durationSeconds: song.lengthSeconds,
+                            fallback: _artwork(displaySongThumbnails(
+                                song.videoId,
+                                music.thumbnails,
+                                song.videoThumbnails,
+                                artTrack: music.isArtTrack,
+                                instanceUrl: instanceUrl))),
                         VideoWatchProgress(videoId: song.videoId),
                       ]),
                     ),
@@ -242,7 +284,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final selected = playlists
         .where((playlist) => playlist.playlistId == _playlistId)
         .firstOrNull;
-    if (selected != null) return _localPlaylist(selected);
+    if (selected != null) return _localPlaylist(selected, library);
     final kind = switch (_filter) {
       _LibraryFilter.all => null,
       _LibraryFilter.playlists => MusicLibraryKind.playlist,
@@ -346,7 +388,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Expanded(
         child: items.isEmpty && shortcuts.isEmpty
             ? _empty()
-            : _collection(items, shortcuts),
+            : _collection(items, shortcuts, library),
       ),
     ]);
   }
@@ -387,7 +429,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         _playlistId = null;
       });
 
-  Widget _collection(List<_LibraryItem> items, List<_LibraryFilter> shortcuts) {
+  Widget _collection(List<_LibraryItem> items, List<_LibraryFilter> shortcuts,
+      MusicLibraryService library) {
     // Both lazy layouts retain an item's element when sorting or removing an
     // earlier row. This also keeps keyboard/TV focus on the surviving item.
     final indices = <Key, int>{
@@ -423,6 +466,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 onTap: () => _openItem(item));
           });
     }
+    final savedCovers = library.coversBySongId;
     return LayoutBuilder(builder: (context, constraints) {
       final theme = Theme.of(context).textTheme;
       final scaler = MediaQuery.textScalerOf(context);
@@ -455,7 +499,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               mainAxisExtent: width + titleHeight * 2 + subtitleHeight + 10),
           itemBuilder: (_, index) => index < shortcuts.length
               ? _gridShortcut(shortcuts[index], locals)
-              : _gridItem(items[index - shortcuts.length]));
+              : _gridItem(items[index - shortcuts.length], savedCovers));
     });
   }
 
@@ -473,14 +517,20 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
-  Widget _gridItem(_LibraryItem item) {
+  Widget _gridItem(
+      _LibraryItem item, Map<String, List<ImageObject>> savedCovers) {
     final entry = item.bookmark;
     final song = item.playlist?.videos.firstOrNull;
-    final musicArtwork = song?.musicMetadata?.thumbnails;
-    final images = entry?.thumbnails ??
-        (musicArtwork?.isNotEmpty == true
-            ? musicArtwork!
-            : song?.videoThumbnails ?? const <ImageObject>[]);
+    final music = song?.musicMetadata;
+    final images = entry?.displayThumbnails ??
+        (song == null
+            ? const <ImageObject>[]
+            : displaySongThumbnails(
+                song.videoId,
+                savedCovers[song.videoId] ?? music?.thumbnails ?? const [],
+                song.videoThumbnails,
+                artTrack: music?.isArtTrack ?? false,
+                instanceUrl: context.read<AppCubit>().state.server?.url));
     final artist = entry?.kind == MusicLibraryKind.artist;
     final playlist =
         item.playlist != null || entry?.kind == MusicLibraryKind.playlist;
@@ -491,18 +541,23 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       title: _itemTitle(item),
       subtitle: entry?.subtitle ?? AppLocalizations.of(context)!.onDevice,
       artworkRadius: artist ? 300 : 7,
-      artwork: images.isEmpty
-          ? ColoredBox(
-              color: colors.surfaceContainerHighest,
-              child: Icon(
-                  artist
-                      ? Icons.person_rounded
-                      : playlist
-                          ? Icons.queue_music_rounded
-                          : Icons.music_note_rounded,
-                  size: 48,
-                  color: colors.onSurfaceVariant))
-          : Thumbnail(images: images, decoration: const BoxDecoration()),
+      artwork: _bookmarkArtwork(
+          entry,
+          images.isEmpty
+              ? ColoredBox(
+                  color: colors.surfaceContainerHighest,
+                  child: Icon(
+                      artist
+                          ? Icons.person_rounded
+                          : playlist
+                              ? Icons.queue_music_rounded
+                              : Icons.music_note_rounded,
+                      size: 48,
+                      color: colors.onSurfaceVariant))
+              : Thumbnail(
+                  images: images,
+                  instanceOnly: true,
+                  decoration: const BoxDecoration())),
       action: entry == null ? null : _bookmarkActions(entry),
       plays: plays,
       onOpen: () => _openItem(item),

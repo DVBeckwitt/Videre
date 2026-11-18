@@ -227,12 +227,6 @@ void main() {
 
   Finder watchAction(String name) => find.byKey(ValueKey('watch-$name'));
 
-  Future<void> openWatchMore(WidgetTester tester) async {
-    await tester.tap(watchAction('more-open'));
-    await tester.pumpAndSettle();
-    expect(watchAction('more-menu'), findsOneWidget);
-  }
-
   Future<void> pumpLegacyNavigation(WidgetTester tester,
       {required bool tablet, bool offline = false}) async {
     const video = Video(videoId: 'watch-video', title: 'Playing video');
@@ -343,14 +337,14 @@ void main() {
       await pumpWatch(tester, width: layout.$1, textScale: layout.$2);
       expect(find.byType(FlowWatchBody), findsOneWidget);
       expect(watchAction('pitch-open'), findsNothing);
-      expect(watchAction('repeat'), findsNothing);
+      expect(watchAction('more-open'), findsNothing);
       final bar = tester.getRect(watchAction('playback-actions'));
       expect(bar.height, closeTo(48, 0.01));
       for (final action in [
         shortcut,
         watchAction('mode-toggle'),
         watchAction('speed-open'),
-        watchAction('more-open')
+        watchAction('repeat')
       ]) {
         expect(action.hitTestable(), findsOneWidget);
         final rect = tester.getRect(action);
@@ -364,38 +358,18 @@ void main() {
     });
   }
 
-  testWidgets('More ignores a selection after playback mode changes',
+  testWidgets('a stale Watch repeat button cannot change the new playback mode',
       (tester) async {
     await pumpWatch(tester);
-    await openWatchMore(tester);
+    final oldButton = tester.widget<IconButton>(watchAction('repeat'));
     player.switchAudio(true);
     await tester.pumpAndSettle();
-    await tester.tap(watchAction('repeat'));
+    oldButton.onPressed!();
     await tester.pumpAndSettle();
     expect(settings.state.playerRepeatMode, PlayerRepeat.noRepeat);
     expect(player.state.isAudio, isTrue);
-    expect(watchAction('more-menu'), findsNothing);
     expect(tester.takeException(), isNull);
   });
-
-  for (final dismissal in ['Back', 'scrim']) {
-    testWidgets('More $dismissal restores Back without minimizing',
-        (tester) async {
-      await pumpWatch(tester);
-      final before = BackButtonInterceptor.describe();
-      await openWatchMore(tester);
-      if (dismissal == 'Back') {
-        await pressAndroidBack(tester);
-      } else {
-        await tester.tapAt(const Offset(10, 10));
-        await tester.pumpAndSettle();
-      }
-      expect(watchAction('more-menu'), findsNothing);
-      expect(player.state.isMini, isFalse);
-      expect(BackButtonInterceptor.describe(), before);
-      expect(tester.takeException(), isNull);
-    });
-  }
 
   testWidgets('watch transcript opens in one tap and preserves playback',
       (tester) async {
@@ -483,18 +457,22 @@ void main() {
     });
   }
 
-  testWidgets('watch More opens Pitch and ignores a replaced mode',
+  testWidgets(
+      'one Watch control opens speed and pitch and guards both after a mode change',
       (tester) async {
     await pumpWatch(tester);
     player.setSpeed(1.25);
     player.setPitchSemitones(2);
     await tester.pumpAndSettle();
-    await openWatchMore(tester);
-    await tester.tap(watchAction('pitch-open'));
+    expect(tester.widget<IconButton>(watchAction('speed-open')).tooltip,
+        contains('Speed and pitch'));
+    await tester.tap(watchAction('speed-open'));
     await tester.pumpAndSettle();
+    expect(find.text('Speed and pitch'), findsOneWidget);
     final increase = find.byKey(const ValueKey('playback-pitch-increase'));
-    expect(increase.hitTestable(), findsOneWidget);
-    expect(find.byKey(const ValueKey('playback-speed-slider')), findsNothing);
+    final speed = find.byKey(const ValueKey('playback-speed-increase'));
+    expect(find.byKey(const ValueKey('playback-speed-slider')), findsOneWidget);
+    await tester.ensureVisible(increase);
     await tester.tap(increase);
     await tester.pumpAndSettle();
     expect(player.state.pitchSemitones, 3);
@@ -506,28 +484,29 @@ void main() {
     await tester.tap(increase);
     await tester.pumpAndSettle();
     expect(player.state.pitchSemitones, 3);
+    await tester.ensureVisible(speed);
+    await tester.tap(speed);
+    await tester.pumpAndSettle();
+    expect(player.state.speed, 1.25);
     await pressAndroidBack(tester);
     expect(player.state.isMini, isFalse);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('watch keeps direct Speed and groups shuffle and backend in More',
+  testWidgets(
+      'Watch keeps speed and pitch beside direct Repeat even with a queue and backends',
       (tester) async {
     await pumpWatch(tester, withQueueAndBackend: true);
     await tester.tap(watchAction('speed-open'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('playback-speed-slider')), findsOneWidget);
-    expect(find.byKey(const ValueKey('playback-pitch-slider')), findsNothing);
+    expect(find.byKey(const ValueKey('playback-pitch-slider')), findsOneWidget);
     await pressAndroidBack(tester);
-    await openWatchMore(tester);
-    await tester.tap(watchAction('shuffle'));
+    expect(watchAction('more-open'), findsNothing);
+    await tester.tap(watchAction('repeat'));
     await tester.pumpAndSettle();
-    expect(settings.state.playerShuffleMode, isTrue);
-    await openWatchMore(tester);
-    await tester.tap(find.byKey(const ValueKey('player-backend-shortcut')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('player-backend-cancel')), findsOneWidget);
-    await pressAndroidBack(tester);
+    expect(settings.state.playerRepeatMode, PlayerRepeat.repeatAll);
+    expect(settings.state.playerShuffleMode, isFalse);
     expect(player.state.isMini, isFalse);
     expect(tester.takeException(), isNull);
   });
@@ -536,24 +515,32 @@ void main() {
       (tester) async {
     await pumpWatch(tester);
     expect(settings.state.playerRepeatMode, PlayerRepeat.noRepeat);
-    for (final repeat in [
-      PlayerRepeat.repeatAll,
-      PlayerRepeat.repeatOne,
-      PlayerRepeat.noRepeat
+    final button = watchAction('repeat');
+    final playback = player.state.currentlyPlaying;
+    final before = BackButtonInterceptor.describe();
+    expect(tester.widget<IconButton>(button).tooltip, 'Repeat off');
+    for (final (repeat, label) in [
+      (PlayerRepeat.repeatAll, 'Repeat all'),
+      (PlayerRepeat.repeatOne, 'Repeat one'),
+      (PlayerRepeat.noRepeat, 'Repeat off')
     ]) {
-      await openWatchMore(tester);
-      await tester.tap(watchAction('repeat'));
+      await tester.tap(button);
       await tester.pumpAndSettle();
       expect(settings.state.playerRepeatMode, repeat);
-      await openWatchMore(tester);
+      final shown = tester.widget<IconButton>(button);
+      expect(shown.tooltip, label);
+      expect(shown.isSelected, repeat != PlayerRepeat.noRepeat);
       expect(
           find.descendant(
-              of: watchAction('repeat'),
+              of: button,
               matching: find.byIcon(repeat == PlayerRepeat.repeatOne
                   ? Icons.repeat_one
                   : Icons.repeat)),
           findsOneWidget);
-      await pressAndroidBack(tester);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(BackButtonInterceptor.describe(), before);
+      expect(player.state.currentlyPlaying, same(playback));
+      expect(player.state.position, const Duration(seconds: 42));
     }
     expect(tester.takeException(), isNull);
   });
@@ -654,8 +641,8 @@ void main() {
     await pumpWatch(tester, captions: false);
     expect(tester.widget<IconButton>(shortcut).tooltip, 'Transcript');
     expect(tester.widget<IconButton>(shortcut).onPressed, isNull);
-    expect(tester.widget<IconButton>(watchAction('more-open')).onPressed,
-        isNotNull);
+    expect(
+        tester.widget<IconButton>(watchAction('repeat')).onPressed, isNotNull);
     expect(tester.takeException(), isNull);
   });
 
@@ -677,7 +664,7 @@ void main() {
       for (final action in [
         shortcut,
         watchAction('speed-open'),
-        watchAction('more-open')
+        watchAction('repeat')
       ]) {
         expect(tester.widget<IconButton>(action).onPressed, isNull);
       }
@@ -685,14 +672,15 @@ void main() {
     });
   }
 
-  testWidgets('watch pitch is visibly disabled without Android support',
+  testWidgets('watch offers speed alone when pitch is unsupported',
       (tester) async {
     await pumpWatch(tester);
-    expect(tester.widget<IconButton>(watchAction('speed-open')).onPressed,
-        isNotNull);
-    await openWatchMore(tester);
-    expect(find.text('Pitch'), findsOneWidget);
-    expect(tester.widget<ListTile>(watchAction('pitch-open')).onTap, isNull);
+    await tester.tap(watchAction('speed-open'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('playback-speed-slider')), findsOneWidget);
+    expect(find.byKey(const ValueKey('playback-pitch-slider')), findsNothing);
+    await pressAndroidBack(tester);
+    expect(watchAction('repeat').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
   }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
 

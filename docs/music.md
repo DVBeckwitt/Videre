@@ -1,6 +1,6 @@
 # Music in Videre
 
-Music uses the selected Invidious instance for browsing, artwork, and playback
+Music uses the selected Invidious instance for browsing, YouTube artwork, and playback
 metadata, together with Videre's queues, local library, and download engine.
 Opening Music does not contact `music.youtube.com`. It does not sign in to a
 Google account or synchronize a Google library.
@@ -187,10 +187,10 @@ from matching IDs in that same local export. Remaining missing titles initially
 use the song ID. The import saves references to songs. Playback uses your
 selected Invidious instance.
 
-To fill missing titles, artist labels, and pictures, open **Music → Library →
+To fill missing titles, artist labels, and durations, open **Music → Library →
 Songs → Load song details**. This also works on songs you imported previously.
 Videre sends their video IDs to your selected Invidious instance one at a time
-and fills gaps with the available upload details and thumbnail. It keeps the
+and fills gaps with the available upload details. It keeps the
 details already saved. You can stop the lookup and keep details already saved
 by it. Private, deleted, or unavailable uploads may still show their IDs.
 
@@ -200,6 +200,35 @@ files are not extracted. For larger exports, extract the wanted CSV yourself
 and select it. The existing Music library limit remains 10,000 entries and
 5 MiB of metadata, including previously saved entries. Export formats or data
 that Google does not include cannot be reconstructed by this local importer.
+
+## Audio quality, artwork, and lyrics
+
+In Music Now Playing, **Audio quality** shows the audio renditions available
+from your selected Invidious instance. Choose **Auto** to use Videre's default
+selection. A downloaded audio file has the quality it was saved with.
+
+By default, Music displays a saved cover or an identifiable YouTube Art Track
+image through the selected Invidious instance. Ordinary uploads can show their
+Invidious-proxied video thumbnail. The music-note placeholder appears when
+there is no usable image.
+
+**Settings → YT Music** has a separate opt-in for MusicBrainz and Cover Art
+Archive. When enabled, opening Music Now Playing sends the song title, artist,
+and available album and duration to MusicBrainz. For a confidently matched
+release, Videre loads the front cover from Cover Art Archive and the Internet
+Archive. It reuses the local result on Music screens in that profile. Closing
+Now Playing stops queued lookups and drops late results. Turning the option off
+returns Music to the Invidious artwork. The configured Videre proxy applies to
+both providers.
+[MusicBrainz API](https://musicbrainz.org/doc/MusicBrainz_API) · [Cover Art Archive](https://musicbrainz.org/doc/Cover_Art_Archive/API)
+
+Expand Music Now Playing and tap **Lyrics** on the cover artwork to look up
+synced or plain lyrics from LRCLIB. The first lookup asks you to enable the
+provider. The same switch is available in **Settings → YT Music**. Videre sends
+the song's title, artist, and known album and duration when you open the panel.
+The Videre network proxy applies when enabled. Select a timed line to seek when playback
+supports it. Coverage depends on the recording match and LRCLIB's catalog.
+[LRCLIB API](https://lrclib.net/docs.txt)
 
 ## Ads and SponsorBlock
 
@@ -228,11 +257,11 @@ sessions follow the same rules as Videos. Missing access or a failed request
 does not switch to YouTube Music. Responses and playlist pagination are rejected
 after a profile, account, backend, server, or proxy change.
 
-Google-hosted Music artwork, including saved catalog covers from earlier
-versions, uses the Invidious image proxy. Player, library, video cards, downloads,
-and notification artwork follow the same routing, without a direct Google
-fallback. Existing optional third-party services such as SponsorBlock and
-DeArrow retain their own settings and network routes.
+YouTube Music artwork uses the Invidious image proxy. Music discovery, playback,
+downloads, and notifications can use the selected instance for these images.
+Community cover lookups have their own consent and use a local cache for Music
+screens. Music notifications use stock or already saved download artwork.
+Optional SponsorBlock playback support retains its separate setting.
 
 Video, audio, and downloads always use the selected Invidious media proxy.
 The direct-playback switch has been removed. Previous `use-proxy=false` settings

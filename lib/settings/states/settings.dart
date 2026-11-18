@@ -48,7 +48,7 @@ enum EnableBackGroundNotificationResponse {
 class SettingsCubit extends Cubit<SettingsState> {
   final AppCubit appCubit;
   bool _backupBusy = false;
-  Future<void> _pendingSubtitleSize = Future<void>.value();
+  final _pendingSettingWrites = <String, Future<void>>{};
 
   SettingsCubit(super.initialState, this.appCubit) {
     onReady();
@@ -221,27 +221,18 @@ class SettingsCubit extends Cubit<SettingsState> {
     await setPlayerShuffleMode(b);
   }
 
-  setRepeatMode(PlayerRepeat repeat) async {
-    await setPlayerRepeatMode(repeat);
-  }
+  Future<void> setRepeatMode(PlayerRepeat repeat) =>
+      setPlayerRepeatMode(repeat);
 
   toggleShuffle() {
     setShuffle(!state.playerShuffleMode);
   }
 
-  setNextRepeatMode() {
-    switch (state.playerRepeatMode) {
-      case PlayerRepeat.noRepeat:
-        setRepeatMode(PlayerRepeat.repeatAll);
-        break;
-      case PlayerRepeat.repeatAll:
-        setRepeatMode(PlayerRepeat.repeatOne);
-        break;
-      case PlayerRepeat.repeatOne:
-        setRepeatMode(PlayerRepeat.noRepeat);
-        break;
-    }
-  }
+  Future<void> setNextRepeatMode() => _saveSettingInOrder(playerRepeat, () {
+        final next =
+            (state.playerRepeatMode.index + 1) % PlayerRepeat.values.length;
+        return next.toString();
+      });
 
   setLastSubtitle(String s) async {
     await setLastSubtitles(s);
@@ -441,8 +432,8 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setPlayerShuffleMode(bool b) async => await _set(playerShuffle, b);
 
-  setPlayerRepeatMode(PlayerRepeat repeatMode) async =>
-      await _set(playerRepeat, PlayerRepeat.values.indexOf(repeatMode));
+  Future<void> setPlayerRepeatMode(PlayerRepeat repeatMode) =>
+      _saveSettingInOrder(playerRepeat, () => repeatMode.index.toString());
 
   setLastSubtitles(String s) async => await _set(lastSubtitle, s);
 
@@ -468,7 +459,11 @@ class SettingsCubit extends Cubit<SettingsState> {
   setUseReturnYoutubeDislike(bool b) async =>
       await _set(useReturnYoutubeDislikeSettingName, b);
 
-  Future<void> _updateSubtitleSize(double Function(double) update) {
+  Future<void> _updateSubtitleSize(double Function(double) update) =>
+      _saveSettingInOrder(
+          subtitleSizeSettingName, () => update(state.subtitleSize).toString());
+
+  Future<void> _saveSettingInOrder(String name, String Function() nextValue) {
     final owner = db.forProfile(db.profileId);
     final profile = owner.profileId;
     final session = appCubit.state.sessionRevision;
@@ -479,8 +474,7 @@ class SettingsCubit extends Cubit<SettingsState> {
 
     Future<void> save() async {
       if (!isCurrentSession()) return;
-      final size = update(state.subtitleSize);
-      final setting = SettingsValue(subtitleSizeSettingName, size.toString());
+      final setting = SettingsValue(name, nextValue());
       await owner.saveSetting(setting);
       if (isCurrentSession()) {
         emit(state
@@ -488,9 +482,10 @@ class SettingsCubit extends Cubit<SettingsState> {
       }
     }
 
-    // All subtitle controls share ordering, including a reopened dialog.
-    final saving = _pendingSubtitleSize.then((_) => save());
-    _pendingSubtitleSize = saving.catchError((Object _) {});
+    // Each adjustment sees the result of the previous write to this setting.
+    final previous = _pendingSettingWrites[name] ?? Future<void>.value();
+    final saving = previous.then((_) => save());
+    _pendingSettingWrites[name] = saving.catchError((Object _) {});
     return saving;
   }
 

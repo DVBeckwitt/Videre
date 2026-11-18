@@ -9,6 +9,7 @@ import 'package:audio_service_platform_interface/audio_service_platform_interfac
 import 'package:audio_service_platform_interface/method_channel_audio_service.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/media_handler.dart';
@@ -63,13 +64,15 @@ void main() {
     await db.close();
   });
 
-  Video video(String thumbnail, {Server? server}) => Video(
-      videoId: 'artwork-video',
-      title: 'Artwork video',
-      author: 'Channel',
-      lengthSeconds: 42,
-      videoThumbnails: [ImageObject('default', thumbnail, 320, 180)],
-      backendPlayback: server == null ? null : BackendPlayback(server));
+  Video video(String thumbnail,
+          {Server? server, String id = 'artwork-video'}) =>
+      Video(
+          videoId: id,
+          title: 'Artwork video',
+          author: 'Channel',
+          lengthSeconds: 42,
+          videoThumbnails: [ImageObject('default', thumbnail, 320, 180)],
+          backendPlayback: server == null ? null : BackendPlayback(server));
 
   TestPlayerCubit createPlayer(Video queued, {Video? playing}) {
     return player = TestPlayerCubit(
@@ -164,9 +167,11 @@ void main() {
         title: 'Song',
         artist: 'Singer',
         album: 'Album',
-        thumbnails: [ImageObject(null, cover, 500, 500)]);
+        thumbnails: [ImageObject(null, cover, 128, 128)]);
     final queued =
-        video('/vi/artwork-video/default.jpg').copyWith(musicMetadata: music);
+        Video(videoId: 'stockSong01', musicMetadata: music, videoThumbnails: [
+      ImageObject('high', '/vi/stockSong01/hqdefault.jpg', 480, 360),
+    ]);
     final controller =
         createPlayer(Video.fromJson(jsonDecode(jsonEncode(queued))));
     final item = (await controller.getMediaItem(0))!;
@@ -178,34 +183,96 @@ void main() {
         item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
   });
 
-  test('music notification without a cover keeps the instance video thumbnail',
+  test('music notification without a cover requests the instance thumbnail',
       () async {
     const music = MusicMetadata(title: 'Song', artist: 'Singer');
-    final controller = createPlayer(
-        video('https://i.ytimg.com/vi/artwork-video/default.jpg')
-            .copyWith(musicMetadata: music));
+    final controller = createPlayer(video(
+            'https://i.ytimg.com/vi/stockSong01/default.jpg',
+            id: 'stockSong01')
+        .copyWith(musicMetadata: music));
     final item = (await controller.getMediaItem(0))!;
     expect(item.artUri,
-        Uri.parse('https://selected.example/vi/artwork-video/default.jpg'));
+        Uri.parse('https://selected.example/vi/stockSong01/default.jpg'));
     expect(
         item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
   });
 
-  test('saved Music fallback artwork retains protected instance headers',
+  test('Music notification chooses the stock rendition that fits its display',
       () async {
-    const cover = 'https://selected.example/vi/artwork-video/default.jpg';
-    final saved = MusicLibraryEntry.song(video(cover).copyWith(
-        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Singer')));
+    const id = 'stockSong01';
+    final controller = createPlayer(Video(
+        videoId: id,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Singer'),
+        videoThumbnails: [
+          ImageObject('maxresdefault',
+              'https://i.ytimg.com/vi/$id/maxresdefault.jpg', 1280, 720),
+          ImageObject(
+              'high', 'https://i.ytimg.com/vi/$id/hqdefault.jpg', 480, 360),
+          ImageObject(
+              'medium', 'https://i.ytimg.com/vi/$id/mqdefault.jpg', 320, 180),
+        ]));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.artUri,
+        Uri.parse('https://selected.example/vi/$id/hqdefault.jpg'));
+    expect(
+        item.artHeaders, selectedServer.headersForUrl(item.artUri.toString()));
+  });
+
+  test('saved Music fallback metadata rebinds the stock poster to the instance',
+      () async {
+    const cover = 'https://older.example/vi/stockSong01/default.jpg?stale=1';
+    final saved = MusicLibraryEntry.song(video(cover, id: 'stockSong01')
+        .copyWith(
+            musicMetadata:
+                const MusicMetadata(title: 'Song', artist: 'Singer')));
     final restored = MusicLibraryEntry.tryParse(saved.toJson())!.toVideo();
     final item = (await createPlayer(restored).getMediaItem(0))!;
-    expect(item.artUri, Uri.parse(cover));
-    expect(item.artHeaders, selectedServer.headersForUrl(cover));
+    expect(item.artUri,
+        Uri.parse('https://selected.example/vi/stockSong01/default.jpg'));
+    expect(restored.musicMetadata!.thumbnails, isEmpty);
+  });
+
+  test('Music stock poster uses the mounted instance path and credentials',
+      () async {
+    const server = Server(
+        url: 'https://backend.example/watch-service',
+        customHeaders: {'X-Instance-Access': 'backend-access'});
+    final queued = video(
+            'https://backend.example/watch-service/vi/stockSong01/hqdefault.jpg',
+            id: 'stockSong01')
+        .copyWith(
+            musicMetadata:
+                const MusicMetadata(title: 'Song', artist: 'Singer'));
+    final controller = createPlayer(queued,
+        playing: queued.copyWith(playbackConnection: BackendPlayback(server)));
+    final item = (await controller.getMediaItem(0))!;
+    expect(
+        item.artUri,
+        Uri.parse(
+            'https://backend.example/watch-service/vi/stockSong01/hqdefault.jpg'));
+    expect(item.artHeaders, server.headersForUrl(item.artUri.toString()));
+  });
+
+  test('Music notification ignores DeArrow and another upload’s poster',
+      () async {
+    final queued = video(
+        'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=stockSong01',
+        id: 'stockSong01');
+    final controller = createPlayer(queued.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Singer'),
+        videoThumbnails: [
+          ...queued.videoThumbnails,
+          ImageObject('medium', '/vi/stockSong02/default.jpg', 320, 180)
+        ]));
+    final item = (await controller.getMediaItem(0))!;
+    expect(item.artUri, isNull);
+    expect(item.artHeaders, isNull);
   });
 
   test('old saved Music queue repairs instance artwork provenance', () async {
-    const cover = 'https://selected.example/vi/artwork-video/default.jpg';
+    const cover = 'https://selected.example/vi/stockSong01/default.jpg';
     // Older bookmarks copied their video fallback into both image fields.
-    final legacy = video(cover).copyWith(
+    final legacy = video(cover, id: 'stockSong01').copyWith(
         musicMetadata: MusicMetadata(
             title: 'Song',
             artist: 'Singer',
@@ -213,7 +280,7 @@ void main() {
     final restored = Video.fromJson(jsonDecode(jsonEncode(legacy)));
     final item = (await createPlayer(restored).getMediaItem(0))!;
     expect(item.artUri, Uri.parse(cover));
-    expect(item.artHeaders, selectedServer.headersForUrl(cover));
+    expect(restored.musicMetadata!.thumbnails, isEmpty);
   });
 
   test('standalone Music artwork with an instance-like path remains intact',
@@ -230,37 +297,78 @@ void main() {
     expect(restoredVideo.musicMetadata!.thumbnails.single.url, cover);
   });
 
-  test('downloaded music notifications retain album and artist offline',
-      () async {
-    final documents =
-        await Directory.systemTemp.createTemp('videre-music-art-');
-    const channel = MethodChannel('plugins.flutter.io/path_provider');
-    final messenger =
-        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(channel, (_) async => documents.path);
-    addTearDown(() async {
-      messenger.setMockMethodCallHandler(channel, null);
-      await documents.delete(recursive: true);
+  for (final explicit in [true, false]) {
+    test(
+        'downloaded Music notification uses its local cover (explicit: $explicit)',
+        () async {
+      final documents =
+          await Directory.systemTemp.createTemp('videre-music-art-');
+      const channel = MethodChannel('plugins.flutter.io/path_provider');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (_) async => documents.path);
+      addTearDown(() async {
+        messenger.setMockMethodCallHandler(channel, null);
+        await documents.delete(recursive: true);
+      });
+      final downloaded = DownloadedVideo(
+          videoId: 'stockSong01',
+          title: 'Upload',
+          accountId: selectedServer.accountId,
+          author: 'Channel',
+          lengthSeconds: 180,
+          quality: 'audio',
+          audioOnly: true,
+          downloadComplete: true,
+          musicMetadata: MusicMetadata(
+              title: 'Song',
+              artist: 'Singer',
+              album: 'Album',
+              thumbnails: [
+                ImageObject(
+                    null, 'https://lh3.googleusercontent.com/cover', 500, 500)
+              ]));
+      final first = video('/vi/stockSong01/default.jpg', id: 'stockSong01');
+      final other = first.copyWith(queueEntryId: 'other-occurrence');
+      final state = explicit
+          ? PlayerState.init(null).copyWith(
+              offlineVideos: [downloaded], offlineCurrentlyPlaying: downloaded)
+          : PlayerState.init([first, other]).copyWith(
+              currentlyPlaying: first.copyWith(
+                  musicMetadata: downloaded.musicMetadata,
+                  playbackConnection: BackendPlayback(selectedServer),
+                  playbackSourceId: DownloadPlaybackSource(
+                      'file:///song', null, downloaded, const {}),
+                  downloadPlaybackOnly: true));
+      final controller = player = TestPlayerCubit(state, settings);
+      await File(await downloaded.thumbnailPath).writeAsBytes([1, 2, 3]);
+      final item = (await controller.getMediaItem(0))!;
+      expect(item.title, 'Song');
+      expect(item.artist, 'Singer');
+      expect(item.album, 'Album');
+      expect(item.artUri, isNull);
+      expect(item.artHeaders, isNull);
+
+      final poster = (await downloaded.stockSongPosterFile)!;
+      await poster.parent.create(recursive: true);
+      await poster.writeAsBytes([7, 8, 9]);
+      final withPoster = (await controller.getMediaItem(0))!;
+      expect(withPoster.artUri, poster.uri);
+      expect(withPoster.artHeaders, isNull);
+      final cover = (await downloaded.songCoverFile)!;
+      await cover.parent.create(recursive: true);
+      await cover.writeAsBytes([4, 5, 6]);
+      final withCover = (await controller.getMediaItem(0))!;
+      expect(withCover.artUri, cover.uri);
+      expect(withCover.artHeaders, isNull);
+      if (!explicit) {
+        final otherItem = (await controller.getMediaItem(1))!;
+        expect(otherItem.title, 'Artwork video');
+        expect(otherItem.artUri,
+            Uri.parse('https://selected.example/vi/stockSong01/default.jpg'));
+      }
     });
-    const downloaded = DownloadedVideo(
-        videoId: 'song',
-        title: 'Upload',
-        author: 'Channel',
-        lengthSeconds: 180,
-        quality: 'audio',
-        audioOnly: true,
-        musicMetadata:
-            MusicMetadata(title: 'Song', artist: 'Singer', album: 'Album'));
-    final controller = player = TestPlayerCubit(
-        PlayerState.init(null).copyWith(
-            offlineVideos: [downloaded], offlineCurrentlyPlaying: downloaded),
-        settings);
-    final item = (await controller.getMediaItem(0))!;
-    expect(item.title, 'Song');
-    expect(item.artist, 'Singer');
-    expect(item.album, 'Album');
-    expect(item.artUri!.scheme, 'file');
-  });
+  }
 
   test('malformed artwork does not prevent notification metadata', () async {
     final controller = createPlayer(video('https://[invalid'));

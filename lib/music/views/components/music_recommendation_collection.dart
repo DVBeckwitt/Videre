@@ -5,6 +5,7 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../utils/views/components/thumbnail.dart';
 import '../../models/music_track.dart';
 import '../screens/music.dart';
+import 'community_music_artwork.dart';
 import 'music_library_actions.dart';
 
 /// A recommendation shelf opens as a playable collection, following Muzza's
@@ -89,21 +90,28 @@ class _MusicRecommendationCollectionState
     }
   }
 
-  Widget _art(MusicTrack? track, {required double size}) {
+  Widget _art(MusicTrack? track, {required double size, bool songRow = false}) {
     final colors = Theme.of(context).colorScheme;
     final shape = BorderRadius.circular(6);
-    final images = track?.thumbnails;
+    final images = track?.displayThumbnails;
+    final fallback = images == null || images.isEmpty
+        ? DecoratedBox(
+            decoration: BoxDecoration(
+                color: colors.surfaceContainerHigh, borderRadius: shape),
+            child: const Icon(Icons.queue_music_rounded),
+          )
+        : Thumbnail(
+            images: images, decoration: BoxDecoration(borderRadius: shape));
     return ExcludeSemantics(
       child: SizedBox.square(
         dimension: size,
-        child: images == null || images.isEmpty
-            ? DecoratedBox(
-                decoration: BoxDecoration(
-                    color: colors.surfaceContainerHigh, borderRadius: shape),
-                child: const Icon(Icons.queue_music_rounded),
-              )
-            : Thumbnail(
-                images: images, decoration: BoxDecoration(borderRadius: shape)),
+        child: songRow && track != null
+            ? CommunityMusicArtwork(
+                videoId: track.videoId,
+                music: track.musicMetadata,
+                durationSeconds: track.durationSeconds,
+                fallback: fallback)
+            : fallback,
       ),
     );
   }
@@ -189,7 +197,7 @@ class _MusicRecommendationCollectionState
                             : () => MusicLibraryActions.showSongMenu(
                                 context, song.toVideo(),
                                 onPlay: () => _play(from: song.videoId)),
-                        leading: _art(song, size: 48),
+                        leading: _art(song, size: 48, songRow: true),
                         title: Text(song.title,
                             maxLines: 1, overflow: TextOverflow.ellipsis),
                         subtitle: artists.isEmpty

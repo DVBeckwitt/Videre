@@ -279,6 +279,7 @@ class UserBackup {
               title: music.title,
               artist: music.artist,
               album: music.album,
+              isArtTrack: music.isArtTrack,
               thumbnails: _safeThumbnails(music.thumbnails));
 
   /// Account access and profile ownership are never part of a portable save.

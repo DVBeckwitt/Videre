@@ -9,13 +9,17 @@ import 'native_proxy_http_client.dart';
 class OriginScopedHttpClient extends http.BaseClient {
   final http.Client _inner;
   final bool sameOriginOnly;
+  final Future<void> Function()? beforeRedirect;
 
-  OriginScopedHttpClient(this._inner, {this.sameOriginOnly = false});
+  OriginScopedHttpClient(this._inner,
+      {this.sameOriginOnly = false, this.beforeRedirect});
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     final inner = _inner;
-    if (sameOriginOnly && inner is NativeProxyHttpClient) {
+    if (sameOriginOnly &&
+        beforeRedirect == null &&
+        inner is NativeProxyHttpClient) {
       // Preserve the native worker's single timeout for the entire chain.
       return inner.sendWithinOrigin(request);
     }
@@ -63,6 +67,9 @@ class OriginScopedHttpClient extends http.BaseClient {
               'host',
             }.contains(name.toLowerCase()));
       }
+      // A response can arrive after the account or proxy has changed. Recheck
+      // before giving the next hop the original request headers.
+      if (beforeRedirect != null) await beforeRedirect!();
       current = next;
     }
   }

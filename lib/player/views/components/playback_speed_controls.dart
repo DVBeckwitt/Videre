@@ -12,7 +12,6 @@ Future<void> showPlaybackSpeedSheet(
   required ValueChanged<double> onChanged,
   int initialPitchSemitones = 0,
   ValueChanged<int>? onPitchChanged,
-  bool showSpeed = true,
 }) async {
   await showSafeModalBottomSheet<void>(
     context: context,
@@ -25,7 +24,6 @@ Future<void> showPlaybackSpeedSheet(
           onChanged: onChanged,
           initialPitchSemitones: initialPitchSemitones,
           onPitchChanged: onPitchChanged,
-          showSpeed: showSpeed,
         ),
       ),
     ),
@@ -41,7 +39,6 @@ class PlaybackSpeedControls extends StatefulWidget {
   final int initialPitchSemitones;
   final ValueChanged<int>? onPitchChanged;
   final bool compact;
-  final bool showSpeed;
 
   const PlaybackSpeedControls({
     super.key,
@@ -50,7 +47,6 @@ class PlaybackSpeedControls extends StatefulWidget {
     this.initialPitchSemitones = 0,
     this.onPitchChanged,
     this.compact = false,
-    this.showSpeed = true,
   });
 
   @override
@@ -125,141 +121,137 @@ class _PlaybackSpeedControlsState extends State<PlaybackSpeedControls> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (widget.showSpeed) ...[
-                if (!widget.compact) ...[
-                  Text(
-                      widget.onPitchChanged == null
-                          ? locals.playbackSpeed
-                          : locals.playbackSpeedAndPitch,
-                      style: theme.textTheme.titleLarge,
-                      textAlign: TextAlign.center),
-                  const SizedBox(height: 20),
-                ],
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: colors.secondaryContainer,
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton.filledTonal(
-                        key: const ValueKey('playback-speed-decrease'),
-                        tooltip: locals.decreasePlaybackSpeed(stepLabel),
-                        onPressed: _hundredths > _min
-                            ? () => _select(_hundredths - _step)
-                            : null,
-                        icon: const Icon(Icons.remove),
-                      ),
-                      Expanded(
-                        child: Semantics(
-                          label: locals.playbackSpeed,
-                          value: current,
-                          liveRegion: true,
-                          excludeSemantics: true,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  current,
-                                  key: const ValueKey('playback-speed-value'),
-                                  style: theme.textTheme.headlineLarge
-                                      ?.copyWith(
-                                          color: colors.onSecondaryContainer,
-                                          fontWeight: FontWeight.w600),
-                                ),
+              if (!widget.compact) ...[
+                Text(
+                    widget.onPitchChanged == null
+                        ? locals.playbackSpeed
+                        : locals.playbackSpeedAndPitch,
+                    style: theme.textTheme.titleLarge,
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 20),
+              ],
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                decoration: BoxDecoration(
+                  color: colors.secondaryContainer,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Row(
+                  children: [
+                    IconButton.filledTonal(
+                      key: const ValueKey('playback-speed-decrease'),
+                      tooltip: locals.decreasePlaybackSpeed(stepLabel),
+                      onPressed: _hundredths > _min
+                          ? () => _select(_hundredths - _step)
+                          : null,
+                      icon: const Icon(Icons.remove),
+                    ),
+                    Expanded(
+                      child: Semantics(
+                        label: locals.playbackSpeed,
+                        value: current,
+                        liveRegion: true,
+                        excludeSemantics: true,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                current,
+                                key: const ValueKey('playback-speed-value'),
+                                style: theme.textTheme.headlineLarge?.copyWith(
+                                    color: colors.onSecondaryContainer,
+                                    fontWeight: FontWeight.w600),
                               ),
-                              Text(
-                                '−$stepLabel / +$stepLabel',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                    color: colors.onSecondaryContainer),
-                              ),
-                            ],
-                          ),
+                            ),
+                            Text(
+                              '−$stepLabel / +$stepLabel',
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                  color: colors.onSecondaryContainer),
+                            ),
+                          ],
                         ),
                       ),
-                      IconButton.filledTonal(
-                        key: const ValueKey('playback-speed-increase'),
-                        tooltip: locals.increasePlaybackSpeed(stepLabel),
-                        onPressed: _hundredths < _max
-                            ? () => _select(_hundredths + _step)
-                            : null,
-                        icon: const Icon(Icons.add),
-                      ),
-                    ],
-                  ),
-                ),
-                Semantics(
-                  label: locals.playbackSpeed,
-                  child: Slider(
-                    key: const ValueKey('playback-speed-slider'),
-                    min: _min / 100,
-                    max: _max / 100,
-                    divisions: _max - _min,
-                    value: _hundredths / 100,
-                    label: current,
-                    semanticFormatterCallback: speed,
-                    onChanged: (value) => _select(_normalize(value)),
-                  ),
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(speed(_min / 100), style: theme.textTheme.labelMedium),
-                    Text(speed(_max / 100), style: theme.textTheme.labelMedium),
+                    ),
+                    IconButton.filledTonal(
+                      key: const ValueKey('playback-speed-increase'),
+                      tooltip: locals.increasePlaybackSpeed(stepLabel),
+                      onPressed: _hundredths < _max
+                          ? () => _select(_hundredths + _step)
+                          : null,
+                      icon: const Icon(Icons.add),
+                    ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: _presets.map((value) {
-                    final selected = _hundredths == (value * 100).round();
-                    return ChoiceChip(
-                      key: ValueKey('playback-speed-preset-$value'),
-                      label: Text(speed(value)),
-                      selected: selected,
-                      showCheckmark: false,
-                      onSelected: (_) => _select((value * 100).round()),
-                    );
-                  }).toList(),
+              ),
+              Semantics(
+                label: locals.playbackSpeed,
+                child: Slider(
+                  key: const ValueKey('playback-speed-slider'),
+                  min: _min / 100,
+                  max: _max / 100,
+                  divisions: _max - _min,
+                  value: _hundredths / 100,
+                  label: current,
+                  semanticFormatterCallback: speed,
+                  onChanged: (value) => _select(_normalize(value)),
                 ),
-                const SizedBox(height: 12),
-                Text(locals.playbackSpeedStep,
-                    style: theme.textTheme.labelLarge,
-                    textAlign: TextAlign.center),
-                const SizedBox(height: 4),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: _steps.map((value) {
-                    return ChoiceChip(
-                      key: ValueKey('playback-speed-step-$value'),
-                      label: Text(speed(value)),
-                      selected: _step == (value * 100).round(),
-                      showCheckmark: false,
-                      onSelected: (_) =>
-                          setState(() => _step = (value * 100).round()),
-                    );
-                  }).toList(),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(speed(_min / 100), style: theme.textTheme.labelMedium),
+                  Text(speed(_max / 100), style: theme.textTheme.labelMedium),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: _presets.map((value) {
+                  final selected = _hundredths == (value * 100).round();
+                  return ChoiceChip(
+                    key: ValueKey('playback-speed-preset-$value'),
+                    label: Text(speed(value)),
+                    selected: selected,
+                    showCheckmark: false,
+                    onSelected: (_) => _select((value * 100).round()),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              Text(locals.playbackSpeedStep,
+                  style: theme.textTheme.labelLarge,
+                  textAlign: TextAlign.center),
+              const SizedBox(height: 4),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 4,
+                children: _steps.map((value) {
+                  return ChoiceChip(
+                    key: ValueKey('playback-speed-step-$value'),
+                    label: Text(speed(value)),
+                    selected: _step == (value * 100).round(),
+                    showCheckmark: false,
+                    onSelected: (_) =>
+                        setState(() => _step = (value * 100).round()),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: TextButton.icon(
+                  key: const ValueKey('playback-speed-reset'),
+                  onPressed: _hundredths == 100 ? null : () => _select(100),
+                  icon: const Icon(Icons.restore),
+                  label: Text(locals.resetPlaybackSpeed),
                 ),
-                const SizedBox(height: 8),
-                Center(
-                  child: TextButton.icon(
-                    key: const ValueKey('playback-speed-reset'),
-                    onPressed: _hundredths == 100 ? null : () => _select(100),
-                    icon: const Icon(Icons.restore),
-                    label: Text(locals.resetPlaybackSpeed),
-                  ),
-                ),
-              ],
+              ),
               if (widget.onPitchChanged != null) ...[
-                if (widget.showSpeed) const Divider(height: 32),
+                const Divider(height: 32),
                 Text(locals.playbackPitch,
                     style: theme.textTheme.titleLarge,
                     textAlign: TextAlign.center),

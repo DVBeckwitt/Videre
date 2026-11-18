@@ -1,13 +1,17 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
+import 'package:clipious/music/models/song_artwork.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:crypto/crypto.dart' show sha256;
 
 part 'downloaded_video.freezed.dart';
 
@@ -136,6 +140,56 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
 
   @JsonKey(includeFromJson: false, includeToJson: false)
   Future<String> get thumbnailPath => _privatePath('jpg');
+
+  /// Music artwork is private to the download. A stock poster uses a separate
+  /// filename so it can never satisfy a verified catalog cover lookup.
+  Future<Directory> get songCoverDirectory async =>
+      Directory(await _privatePath('song-covers'));
+
+  String? get songCoverUrl => ImageObject.getBestThumbnail(
+          songCovers(musicMetadata?.thumbnails ?? const []))
+      ?.url;
+
+  Future<File?> get songCoverFile async {
+    final cover = songCoverUrl;
+    if (cover == null || accountId == null) return null;
+    final key = sha256.convert(utf8.encode(jsonEncode([accountId, cover])));
+    final directory = await songCoverDirectory;
+    return File(p.join(directory.path, '$key.jpg'));
+  }
+
+  Future<File?> get stockSongPosterFile async {
+    if (musicMetadata == null || accountId == null) return null;
+    final key = sha256.convert(utf8.encode(accountId!));
+    final directory = await songCoverDirectory;
+    return File(p.join(directory.path, 'stock-$key.jpg'));
+  }
+
+  Future<File?> get existingSongCover =>
+      _existingSongArtwork(allowPoster: false);
+
+  Future<File?> get existingSongArtwork =>
+      _existingSongArtwork(allowPoster: true);
+
+  Future<File?> _existingSongArtwork({required bool allowPoster}) async {
+    if (!downloadComplete ||
+        downloadFailed ||
+        storageFailed ||
+        authenticationRequired) {
+      return null;
+    }
+    try {
+      final cover = await songCoverFile;
+      if (cover != null && await cover.exists()) return cover;
+      if (!allowPoster) return null;
+      final poster = await stockSongPosterFile;
+      return poster != null && await poster.exists() ? poster : null;
+    } on FileSystemException {
+      return null;
+    } on FormatException {
+      return null;
+    }
+  }
 
   /// Retained captions let the Flutter player show subtitles while offline.
   @JsonKey(includeFromJson: false, includeToJson: false)

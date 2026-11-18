@@ -8,11 +8,15 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/services/music_lyrics_preferences.dart';
 import 'package:clipious/music/views/components/music_mini_player.dart';
+import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/screens/music.dart';
@@ -26,6 +30,7 @@ import 'package:clipious/player/views/components/expanded_player.dart';
 import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/views/tablet/expanded_player.dart';
+import 'package:clipious/service.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -34,8 +39,10 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/selected_server.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/views/components/info.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -89,6 +96,25 @@ class _Settings extends TestSettingsCubit {
   @override
   Future<void> saveSetting(SettingsValue value) async {
     emit(state.copyWith(settings: {...state.settings, value.name: value}));
+  }
+}
+
+// A captioned track must never substitute speech recognition for missing lyrics.
+class _CaptionService extends Service {
+  int requests = 0;
+
+  @override
+  Future<String> getPlaybackCaptions(String videoId, Caption caption,
+      {required Server server}) async {
+    requests++;
+    throw StateError('Unexpected caption lookup');
+  }
+
+  @override
+  Future<VideoTranscript> getTranscript(String videoId, Caption caption,
+      {Server? serverOverride}) async {
+    requests++;
+    throw StateError('Unexpected transcript lookup');
   }
 }
 
@@ -190,6 +216,131 @@ void main() {
     await tester.pump();
   }
 
+  testWidgets('Lyrics asks before contacting LRCLIB and looks up the song once',
+      (tester) async {
+    final calls = <(String, String, int?, String)>[];
+    await pump(tester,
+        child: MusicPlayer(lyricsLoader: (track, duration, id) async {
+      calls.add((track.title, track.artist, duration, id));
+      return const MusicLyrics.synced([
+        (start: Duration(seconds: 30), text: 'Fixture refrain'),
+        (start: Duration(seconds: 33), text: 'Fixture refrain'),
+      ], source: 'LRCLIB');
+    }));
+    expect(isLrclibEnabled(), isFalse);
+    expect(calls, isEmpty);
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(calls, isEmpty);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(isLrclibEnabled(), isFalse);
+    expect(calls, isEmpty);
+
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(
+        of: find.byType(AlertDialog), matching: find.byType(FilledButton)));
+    await tester.pumpAndSettle();
+    expect(isLrclibEnabled(), isTrue);
+    expect(calls, [
+      (
+        song.musicMetadata!.title,
+        song.musicMetadata!.artist,
+        song.lengthSeconds,
+        song.videoId
+      )
+    ]);
+    expect(find.text('LRCLIB'), findsOneWidget);
+    final lines = find.widgetWithText(ListTile, 'Fixture refrain');
+    expect(lines, findsNWidgets(2));
+    expect(tester.widget<ListTile>(lines.first).selected, isTrue);
+    expect(tester.widget<ListTile>(lines.last).selected, isFalse);
+    await tester.tap(lines.last);
+    expect(player.sought, const Duration(seconds: 33));
+    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    await tester.pumpAndSettle();
+    expect(lines, findsNothing);
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(player.state.currentlyPlaying?.videoId, next.videoId);
+  });
+
+  testWidgets(
+      'A lyric database miss on a captioned track never fetches speech text',
+      (tester) async {
+    final previousService = service;
+    final captions = _CaptionService();
+    service = captions;
+    addTearDown(() => service = previousService);
+    await tester.runAsync(() => setLrclibEnabled(true));
+    final captioned = song.copyWith(
+        captions: [
+          Caption('English (auto-generated)', 'en', '/api/v1/captions/song')
+        ],
+        playbackConnection:
+            BackendPlayback(const Server(url: 'https://playing.example')));
+    await player.seed(player.state.copyWith(currentlyPlaying: captioned));
+    var lookups = 0;
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, ___) async {
+      lookups++;
+      return const MusicLyrics.unavailable();
+    }));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    expect(lookups, 1);
+    expect(captions.requests, 0);
+    await pressAndroidBack(tester);
+    expect(player.state.position, const Duration(seconds: 30));
+  });
+
+  testWidgets(
+      'Lyrics distinguishes plain text, instrumental, and a provider error',
+      (tester) async {
+    await tester.runAsync(() => setLrclibEnabled(true));
+    var calls = 0;
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, ___) async {
+      calls++;
+      if (calls == 1) throw StateError('temporary service failure');
+      if (calls == 2) {
+        return const MusicLyrics.plain('First line\nSecond line',
+            source: 'LRCLIB');
+      }
+      return const MusicLyrics.instrumental(source: 'LRCLIB');
+    }));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.text('Unable to load lyrics'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('First line\nSecond line'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-lyrics-lines')), findsNothing);
+    await pressAndroidBack(tester);
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.text('Instrumental'), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(calls, 3);
+  });
+
+  testWidgets('Lyrics drops a late database response after consent is revoked',
+      (tester) async {
+    await tester.runAsync(() => setLrclibEnabled(true));
+    final pending = Completer<MusicLyrics>();
+    await pump(tester,
+        child: MusicPlayer(lyricsLoader: (_, __, ___) => pending.future));
+    await tap(tester, 'music-player-lyrics');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.runAsync(() => setLrclibEnabled(false));
+    pending.complete(const MusicLyrics.plain('Stale result'));
+    await tester.pumpAndSettle();
+    expect(find.text('Stale result'), findsNothing);
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    await pressAndroidBack(tester);
+  });
+
   for (final (size, scale) in [
     (const Size(320, 568), 2.5),
     (const Size(390, 844), 1.0),
@@ -227,12 +378,18 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  for (final (admitted, present) in [
-    (true, true),
-    (true, false),
-    (false, true)
+  for (final (source, present, catalogCover, savedCover, savedFrame) in [
+    ('admitted download', true, true, false, false),
+    ('admitted download', false, true, false, true),
+    ('admitted download', true, true, true, true),
+    ('explicit download', true, true, false, false),
+    ('explicit download', true, false, false, true),
+    ('explicit download', true, true, true, true),
+    ('stream', true, false, false, false),
+    ('stream', true, true, true, false),
   ]) {
-    testWidgets('saved Music poster (admitted: $admitted, present: $present)',
+    testWidgets(
+        'Music artwork for $source (poster: $present, catalog: $catalogCover, saved: $savedCover, frame: $savedFrame)',
         (tester) async {
       const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
       final messenger = tester.binding.defaultBinaryMessenger;
@@ -245,7 +402,20 @@ void main() {
         await documents.delete(recursive: true);
       });
       late String poster;
+      File? coverFile;
+      File? frameFile;
       late Server server;
+      late DownloadedVideo saved;
+      const songId = 'stockSong01';
+      final idSong = song.copyWith(videoId: songId);
+      final frame = ImageObject(
+          'medium', 'https://i.ytimg.com/vi/$songId/mqdefault.jpg', 320, 180);
+      final cover = ImageObject(
+          null, 'https://lh3.googleusercontent.com/album=w512-h512', 512, 512);
+      final music = MusicMetadata(
+          title: 'Song',
+          artist: 'Singer',
+          thumbnails: [frame, if (catalogCover) cover]);
       await tester.runAsync(() async {
         await db.upsertServer(
             const Server(url: 'https://inv.example', inUse: true));
@@ -266,7 +436,7 @@ void main() {
             null,
             null);
         final proof = DownloadPlaybackProvenance.create(
-            video: song.copyWith(adaptiveFormats: [audio]),
+            video: idSong.copyWith(adaptiveFormats: [audio]),
             server: server,
             audioOnly: true,
             container: DownloadContainer.webm,
@@ -274,8 +444,8 @@ void main() {
             videoFormat: null,
             byteLength: 12345,
             sha256: 'a' * 64)!;
-        final saved = DownloadedVideo(
-            videoId: song.videoId,
+        saved = DownloadedVideo(
+            videoId: songId,
             title: 'Saved song',
             accountId: server.accountId,
             downloadComplete: true,
@@ -283,70 +453,158 @@ void main() {
             container: DownloadContainer.webm,
             quality: 'audio',
             lengthSeconds: 180,
+            musicMetadata: music,
             playbackProvenance: proof);
         await db.upsertDownload(saved);
         poster = await saved.thumbnailPath;
+        final bytes = base64Decode(
+            'iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAKklEQVR4nGP4z8BAEiJNNRlo1IJRC4ajBaTq+P+fgSQ0asGoBaMW/GcAAMouzU/PxmgLAAAAAElFTkSuQmCC');
         if (present) {
-          await File(poster).writeAsBytes(base64Decode(
-              'iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAKklEQVR4nGP4z8BAEiJNNRlo1IJRC4ajBaTq+P+fgSQ0asGoBaMW/GcAAMouzU/PxmgLAAAAAElFTkSuQmCC'));
+          await File(poster).writeAsBytes(bytes);
+        }
+        if (savedCover) {
+          coverFile = (await saved.songCoverFile)!;
+          await coverFile!.parent.create(recursive: true);
+          await coverFile!.writeAsBytes(bytes);
+        }
+        if (savedFrame) {
+          frameFile = (await saved.stockSongPosterFile)!;
+          await frameFile!.parent.create(recursive: true);
+          await frameFile!.writeAsBytes(bytes);
         }
       });
 
-      const remote = 'https://i.ytimg.com/vi/song/mqdefault.jpg';
-      final queued = song
-          .copyWith(videoThumbnails: [ImageObject('medium', remote, 320, 180)]);
+      final queued =
+          idSong.copyWith(videoThumbnails: [frame], musicMetadata: music);
+      final explicit = source == 'explicit download';
+      final admitted = source == 'admitted download';
       await player.seed(player.state.copyWith(
-          videos: [queued, next],
-          currentlyPlaying: queued.copyWith(
-              playbackConnection: BackendPlayback(server),
-              downloadPlaybackOnly: admitted)));
+          videos: explicit ? [] : [queued, next],
+          offlineVideos: explicit ? [saved] : [],
+          offlineCurrentlyPlaying: explicit ? saved : null,
+          currentlyPlaying: explicit
+              ? null
+              : queued.copyWith(
+                  playbackConnection: BackendPlayback(server),
+                  playbackSourceId: admitted
+                      ? DownloadPlaybackSource('file:///song', null, saved, {})
+                      : null,
+                  downloadPlaybackOnly: admitted)));
       // Exercise fallback selection without starting the image cache client.
       await pump(tester,
           size: const Size(1024, 720),
           child: const ServerScope(server: null, child: MusicPlayer()));
 
-      final image = find.byWidgetPredicate((widget) =>
-          widget is Image &&
-          widget.image is FileImage &&
-          (widget.image as FileImage).file.path == poster);
-      final proxy = find.byType(Thumbnail);
-      final queue = find.byKey(const ValueKey('music-queue-song'));
-      final local = admitted && present;
-      Future<void> verifyArtwork(String artworkKey) async {
-        final artwork = find.byKey(ValueKey(artworkKey));
-        Finder inArtwork(Finder matching) =>
-            find.descendant(of: artwork, matching: matching);
-        final expected = local
-            ? inArtwork(find.byWidgetPredicate(
-                (widget) => widget is RawImage && widget.image != null))
-            : inArtwork(proxy);
-        for (var i = 0; i < 60 && expected.evaluate().isEmpty; i++) {
-          await tester.runAsync(
-              () => Future<void>.delayed(const Duration(milliseconds: 10)));
-          await tester.pump();
+      final showsLocal = source != 'stream' && (savedCover || savedFrame);
+      final files = find.byWidgetPredicate(
+          (widget) => widget is Image && widget.image is FileImage);
+      Future<void> finishLocalCoverReads() async {
+        final lookups = tester
+            .widgetList<FutureBuilder<File?>>(find.byType(FutureBuilder<File?>))
+            .map((widget) => widget.future!)
+            .toList();
+        if (lookups.isEmpty) return;
+        var pending = lookups.length;
+        for (final lookup in lookups) {
+          unawaited(lookup.then<void>((_) {
+            pending--;
+          }));
         }
-        expect(expected, findsOneWidget);
-        if (local) {
-          expect(inArtwork(image), findsOneWidget);
-          expect(proxy, findsNothing);
-        } else {
-          final thumbnail = tester.widget<Thumbnail>(inArtwork(proxy));
+        final decoded = find.descendant(
+            of: files,
+            matching: find.byWidgetPredicate(
+                (widget) => widget is RawImage && widget.image != null));
+        bool waiting() =>
+            pending > 0 ||
+            (showsLocal && decoded.evaluate().length < lookups.length);
+        await tester.runAsync(() async {
+          final clock = Stopwatch()..start();
+          while (waiting() && clock.elapsed < const Duration(seconds: 5)) {
+            await Future<void>.delayed(const Duration(milliseconds: 1));
+            await tester.pump();
+          }
+        });
+        await tester.pump();
+        expect(waiting(), isFalse,
+            reason: 'The mounted cover reads must finish');
+      }
+
+      final proxy = find.byType(Thumbnail);
+      const queueKey = 'music-queue-$songId';
+      final queue = find.byKey(const ValueKey(queueKey));
+      void verifyArtwork(String artworkKey, IconData note) {
+        final artwork = find.byKey(ValueKey(artworkKey));
+        expect(artwork, findsOneWidget);
+        final local = find.descendant(of: artwork, matching: files);
+        final coverWidget = find.descendant(of: artwork, matching: proxy);
+        if (showsLocal) {
+          final file = tester.widget<Image>(local).image as FileImage;
+          expect(file.file.path, (savedCover ? coverFile! : frameFile!).path);
+          expect(file.file.path, isNot(poster));
+          expect(coverWidget, findsNothing);
+          expect(find.descendant(of: artwork, matching: find.byIcon(note)),
+              findsNothing);
+        } else if (source == 'stream') {
+          expect(local, findsNothing);
+          final thumbnail = tester.widget<Thumbnail>(coverWidget);
           expect(thumbnail.useInvidiousProxy, isTrue);
-          expect(thumbnail.images!.single.url, remote);
+          expect(thumbnail.images!.map((image) => image.url), [
+            if (catalogCover) cover.url,
+            '/vi/$songId/mqdefault.jpg',
+          ]);
+        } else {
+          expect(local, findsNothing);
+          expect(coverWidget, findsNothing);
+          expect(find.descendant(of: artwork, matching: find.byIcon(note)),
+              findsOneWidget);
         }
       }
 
-      await verifyArtwork('music-player-artwork');
-      expect(find.descendant(of: queue, matching: local ? image : proxy),
-          findsOneWidget);
+      await finishLocalCoverReads();
+      verifyArtwork('music-player-artwork', Icons.music_note);
+      expect(queue, findsOneWidget);
+      verifyArtwork(queueKey, Icons.music_note);
       await pump(tester,
           child: const ServerScope(server: null, child: MusicMiniPlayer()));
-      await verifyArtwork('music-mini-artwork');
+      await finishLocalCoverReads();
+      verifyArtwork('music-mini-artwork', Icons.music_note_rounded);
       expect(tester.takeException(), isNull);
     });
   }
 
-  testWidgets('portrait controls fit below a long song title', (tester) async {
+  testWidgets('only the active queue occurrence uses the hydrated artwork',
+      (tester) async {
+    const id = 'stockSong01';
+    final queued = song.copyWith(videoId: id, queueEntryId: 'first');
+    final second = queued.copyWith(queueEntryId: 'second');
+    final frame = ImageObject('high', '/vi/$id/hqdefault.jpg', 480, 360);
+    final playing = second.copyWith(
+        videoThumbnails: [frame],
+        musicMetadata: const MusicMetadata(
+            title: 'Song', artist: 'Singer', isArtTrack: true));
+    await player.seed(player.state.copyWith(
+        videos: [queued, second],
+        playedVideos: const ['first'],
+        playQueue: ListQueue<String>(),
+        currentlyPlaying: playing));
+    await pump(tester,
+        size: const Size(1024, 720),
+        child: const ServerScope(server: null, child: MusicPlayer()));
+
+    MusicPlaybackArtwork artwork(String occurrence) =>
+        tester.widget<MusicPlaybackArtwork>(find.descendant(
+            of: find.byKey(ValueKey('music-queue-$occurrence')),
+            matching: find.byType(MusicPlaybackArtwork)));
+    expect(artwork('first').video, same(queued));
+    expect(artwork('first').video!.videoThumbnails, isEmpty);
+    expect(artwork('second').video, same(playing));
+    expect(artwork('second').video!.videoThumbnails.single, frame);
+    expect(artwork('second').music!.isArtTrack, isTrue);
+  });
+
+  testWidgets(
+      'portrait Lyrics and transport are visible with a long song title',
+      (tester) async {
     final longSong = song.copyWith(
       musicMetadata: const MusicMetadata(
         title: 'James Brown - People Get Up And Drive That Funky Soul',
@@ -369,6 +627,14 @@ void main() {
       expect(find.byKey(ValueKey('music-player-$control')).hitTestable(),
           findsOneWidget);
     }
+    final lyrics = find.byKey(const ValueKey('music-player-lyrics'));
+    expect(lyrics.hitTestable(), findsOneWidget);
+    expect(find.descendant(of: lyrics, matching: find.text('Lyrics')),
+        findsOneWidget);
+    await tester.tap(lyrics);
+    await tester.pumpAndSettle();
+    expect(find.text('Enable LRCLIB lyrics?'), findsOneWidget);
+    await pressAndroidBack(tester);
     expect(tester.takeException(), isNull);
   });
 
@@ -555,8 +821,19 @@ void main() {
     expect(player.sought, const Duration(seconds: 45));
     await tap(tester, 'music-player-shuffle');
     expect(settings.state.playerShuffleMode, isTrue);
-    await tap(tester, 'music-player-repeat');
+    final repeatButton = find.byKey(const ValueKey('music-player-repeat'));
+    await tester.ensureVisible(repeatButton);
+    await tester.pump();
+    await tester.runAsync(() async {
+      final committed = settings.stream.firstWhere(
+          (state) => state.playerRepeatMode == PlayerRepeat.repeatAll);
+      await tester.tap(repeatButton);
+      await committed.timeout(const Duration(seconds: 5));
+    });
+    await tester.pump();
     expect(settings.state.playerRepeatMode, PlayerRepeat.repeatAll);
+    expect(db.getSettings(playerRepeat)?.value,
+        PlayerRepeat.repeatAll.index.toString());
     await tap(tester, 'music-player-queue');
     expect(find.byType(MusicQueue), findsOneWidget);
     await tap(tester, 'music-player-close-queue');
@@ -579,17 +856,29 @@ void main() {
 
   testWidgets('unknown duration and live music cannot seek to a fabricated end',
       (tester) async {
+    await tester.runAsync(() => setLrclibEnabled(true));
     for (final track in [
       song.copyWith(lengthSeconds: null),
       song.copyWith(liveNow: true)
     ]) {
       await player.seed(player.state.copyWith(currentlyPlaying: track));
-      await pump(tester);
+      await pump(tester,
+          child: MusicPlayer(
+              lyricsLoader: (_, __, ___) async => const MusicLyrics.synced(
+                  [(start: Duration(seconds: 10), text: 'Fixture line')])));
       final slider = tester
           .widget<Slider>(find.byKey(const ValueKey('music-player-progress')));
       expect(slider.onChanged, isNull);
       expect(slider.onChangeEnd, isNull);
       expect(slider.value.isFinite, isTrue);
+      await tap(tester, 'music-player-lyrics');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('music-lyrics-lines')), findsNothing);
+      expect(find.text('Fixture line'), findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Fixture line'), findsNothing);
+      await tester.tap(find.text('Fixture line'));
+      expect(player.sought, isNull);
+      await pressAndroidBack(tester);
       expect(tester.takeException(), isNull);
     }
   });
@@ -940,6 +1229,14 @@ void main() {
 
   testWidgets('minimizing and expanding music keeps the mounted audio decoder',
       (tester) async {
+    final queued = song.copyWith(
+        videoThumbnails: [
+          ImageObject('medium', '/vi/song/mqdefault.jpg', 320, 180)
+        ],
+        deArrowThumbnailUrl:
+            'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=song');
+    await player.seed(player.state
+        .copyWith(currentlyPlaying: queued, videos: [queued, next]));
     await tester.runAsync(
         () => pump(tester, child: const Stack(children: [Player(844)])));
     final audioBuilder = find.byType(
@@ -954,6 +1251,13 @@ void main() {
           tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
       expect(decoder.audioPlayer, same(native));
       expect(decoder.isClosed, isFalse);
+      expect(
+          find.descendant(
+              of: audioBuilder,
+              matching: find.byType(Thumbnail, skipOffstage: false),
+              skipOffstage: false),
+          findsNothing,
+          reason: 'The hidden decoder must not fetch video or DeArrow artwork');
     }
     await tester.runAsync(() async {
       final closed = decoder.stream.drain<void>();

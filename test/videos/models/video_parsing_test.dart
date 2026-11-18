@@ -74,6 +74,42 @@ void main() {
     expect(resolved.queueEntryId, 'song#2');
   });
 
+  test(
+      'Music hydration retains a usable queued frame when fresh images do not match',
+      () {
+    const id = 'abcdefghijk';
+    final queuedFrame = ImageObject('medium',
+        'https://old.example/vi/$id/mqdefault.jpg?expired=1', 320, 180);
+    final freshFrame = ImageObject('high', '/vi/$id/hqdefault.jpg', 480, 360);
+    final wrongFrame =
+        ImageObject('high', '/vi/otherSong01/hqdefault.jpg', 480, 360);
+    final queued = Video(
+        videoId: id,
+        queueEntryId: 'second',
+        videoThumbnails: [queuedFrame],
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Singer'));
+    final response =
+        Video(videoId: id, genre: 'Music', videoThumbnails: [wrongFrame]);
+    final resolved = response.preservingMusicMetadataFrom(queued);
+    expect(resolved.videoThumbnails.single.url, '/vi/$id/mqdefault.jpg');
+    expect(resolved.musicMetadata!.thumbnails, isEmpty);
+    expect(resolved.queueEntryId, queued.queueEntryId);
+    expect(resolved.genre, response.genre);
+    expect(
+        response
+            .copyWith(videoThumbnails: [freshFrame])
+            .preservingMusicMetadataFrom(queued)
+            .videoThumbnails
+            .single,
+        same(freshFrame));
+    expect(
+        response
+            .preservingMusicMetadataFrom(queued.copyWith(musicMetadata: null))
+            .videoThumbnails
+            .single,
+        same(wrongFrame));
+  });
+
   test('accepts optional progressive fields and skips malformed streams', () {
     final video = Video.fromJson({
       'videoId': 'video-id',

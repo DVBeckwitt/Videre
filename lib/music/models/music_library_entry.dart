@@ -1,5 +1,6 @@
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -20,6 +21,18 @@ class MusicLibraryEntry {
   final int? durationSeconds;
   final List<ImageObject> thumbnails;
   final bool usesVideoThumbnails;
+  final bool isArtTrack;
+
+  List<ImageObject> get coverThumbnails =>
+      kind == MusicLibraryKind.song && !usesVideoThumbnails
+          ? songCovers(thumbnails)
+          : const [];
+
+  List<ImageObject> get displayThumbnails => kind != MusicLibraryKind.song
+      ? thumbnails
+      : displaySongThumbnails(
+          id, usesVideoThumbnails ? const [] : thumbnails, thumbnails,
+          artTrack: isArtTrack);
 
   const MusicLibraryEntry({
     required this.kind,
@@ -30,11 +43,32 @@ class MusicLibraryEntry {
     this.durationSeconds,
     this.thumbnails = const [],
     this.usesVideoThumbnails = false,
+    this.isArtTrack = false,
   });
 
   factory MusicLibraryEntry.song(Video video) {
     final metadata = video.musicMetadata;
     if (metadata == null) throw ArgumentError('A music song is required');
+    final instanceUrl =
+        (video.playbackConnection ?? video.backendPlayback)?.server.url;
+    final covers = songCovers(metadata.thumbnails);
+    final frames = stockSongThumbnails(video.videoId, video.videoThumbnails,
+        artTrack: metadata.isArtTrack, instanceUrl: instanceUrl);
+    final useFrames =
+        metadata.thumbnails.isEmpty || (covers.isEmpty && frames.isNotEmpty);
+    final List<ImageObject> images;
+    if (covers.isNotEmpty && frames.isNotEmpty) {
+      // Bookmarks retain eight images. Reserve one slot for a supplied frame
+      // in case none of the catalog cover renditions can be loaded later.
+      final frame = metadata.isArtTrack
+          ? frames.first
+          : ImageObject.getBestThumbnail(frames)!;
+      images = [...covers.take(7), frame];
+    } else if (useFrames) {
+      images = instanceUrl == null ? video.videoThumbnails : frames;
+    } else {
+      images = metadata.thumbnails;
+    }
     return MusicLibraryEntry(
         kind: MusicLibraryKind.song,
         id: video.videoId,
@@ -42,10 +76,9 @@ class MusicLibraryEntry {
         subtitle: metadata.artist,
         album: metadata.album,
         durationSeconds: video.lengthSeconds,
-        usesVideoThumbnails: metadata.thumbnails.isEmpty,
-        thumbnails: metadata.thumbnails.isEmpty
-            ? video.videoThumbnails
-            : metadata.thumbnails);
+        isArtTrack: metadata.isArtTrack,
+        usesVideoThumbnails: useFrames,
+        thumbnails: images);
   }
 
   factory MusicLibraryEntry.collection(MusicCollection collection,
@@ -67,17 +100,22 @@ class MusicLibraryEntry {
     if (kind != MusicLibraryKind.song) {
       throw StateError('Only songs can be played directly');
     }
+    final covers = coverThumbnails;
+    final frames = covers.isEmpty
+        ? const <ImageObject>[]
+        : stockSongThumbnails(id, thumbnails, artTrack: isArtTrack);
     return Video(
         videoId: id,
         title: title,
         author: subtitle,
         lengthSeconds: durationSeconds,
-        videoThumbnails: thumbnails,
+        videoThumbnails: frames.isNotEmpty ? frames : thumbnails,
         musicMetadata: MusicMetadata(
             title: title,
             artist: subtitle,
             album: album,
-            thumbnails: usesVideoThumbnails ? const [] : thumbnails));
+            thumbnails: covers,
+            isArtTrack: isArtTrack));
   }
 
   Map<String, dynamic> toJson() => {
@@ -89,6 +127,7 @@ class MusicLibraryEntry {
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
         'thumbnails': thumbnails.map((image) => image.toJson()).toList(),
         if (usesVideoThumbnails) 'usesVideoThumbnails': true,
+        if (isArtTrack && kind == MusicLibraryKind.song) 'isArtTrack': true,
       };
 
   bool get needsSongDetails =>
@@ -116,13 +155,16 @@ class MusicLibraryEntry {
     }
     final duration = value['durationSeconds'];
     final images = value['thumbnails'];
+    final thumbnails = [
+      if (images is List)
+        for (final image in images.take(8))
+          if (_image(image) case final image?) image,
+    ];
     final usesVideoThumbnails = kind == MusicLibraryKind.song &&
         (value['usesVideoThumbnails'] is bool
             ? value['usesVideoThumbnails'] as bool
-            : images is List &&
-                images.take(8).whereType<Map>().any((image) =>
-                    image['url'] is String &&
-                    isInvidiousThumbnailUrl(image['url'] as String)));
+            : thumbnails.any((image) => isInvidiousThumbnailUrl(image.url)) &&
+                songCovers(thumbnails).isEmpty);
     return MusicLibraryEntry(
         kind: kind,
         id: id,
@@ -133,11 +175,9 @@ class MusicLibraryEntry {
             ? duration
             : null,
         usesVideoThumbnails: usesVideoThumbnails,
-        thumbnails: [
-          if (images is List)
-            for (final image in images.take(8))
-              if (_image(image) case final image?) image,
-        ]);
+        isArtTrack:
+            kind == MusicLibraryKind.song && value['isArtTrack'] == true,
+        thumbnails: thumbnails);
   }
 
   static String? _text(Object? value) {

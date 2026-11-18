@@ -15,6 +15,7 @@ import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/invidious_image.dart';
@@ -32,6 +33,7 @@ import '../../network/nerdvpn_access.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
+import '../../videos/models/music_metadata.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
@@ -405,9 +407,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             throw StateError('The download account is no longer available');
           }
           if (token.isCancelled) throw token.cancelError!;
+          final loadVideo = video.musicMetadata == null
+              ? service.getVideo
+              : service.getMusicVideo;
           var vid = await Future.any([
-            service
-                .getVideo(video.videoId, serverOverride: server)
+            loadVideo(video.videoId, serverOverride: server)
                 .timeout(const Duration(seconds: 30)),
             // Metadata requests do not accept a cancellation token. Release
             // pause/delete/proxy changes promptly and ignore any late result.
@@ -460,8 +464,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (video.captionLabel != null && caption == null) {
             throw StateError('The selected subtitle track is unavailable');
           }
-          final music = (video.musicMetadata ?? vid.musicMetadata)
+          var music = (video.musicMetadata ?? vid.musicMetadata)
               ?.withoutVideoThumbnailFallbacks(vid.videoThumbnails);
+          if (music != null && vid.isStockArtTrack) {
+            music = MusicMetadata(
+                title: music.title,
+                artist: music.artist,
+                album: music.album ?? vid.stockArtTrackAlbum,
+                thumbnails: music.thumbnails,
+                isArtTrack: true);
+          }
           video = video.copyWith(
               // Interrupted/replaced output must never inherit old proof.
               playbackProvenance: null,
@@ -501,15 +513,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 return url != null && url.isNotEmpty;
               }).toList())
                   ?.url;
-          // An unsupported preferred cover must not hide a usable smaller
-          // image or the video's instance-proxied thumbnail.
-          final thumb = privateThumbnail(music?.thumbnails) ??
-              privateThumbnail(vid.videoThumbnails);
-          if (thumb != null && thumb.isNotEmpty) {
+          final cover = video.songCoverUrl;
+          final posters = music == null
+              ? [if (privateThumbnail(vid.videoThumbnails) case final url?) url]
+              : _stockPosterUrls(vid, server, artTrack: music.isArtTrack);
+          if (cover != null || posters.isNotEmpty) {
             unawaited(token.whenCancel.then(artworkToken.cancel));
             // Optional artwork must not delay the first media request. Keep it
             // part of this job so pause, delete and proxy changes can join it.
-            artwork = _downloadArtwork(dio, video, thumb, server, artworkToken);
+            artwork = _downloadArtwork(dio, video, server, artworkToken,
+                cover: cover, posters: posters);
           }
           await transfer(audio, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
@@ -759,36 +772,69 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     return null;
   }
 
-  Future<void> _downloadArtwork(Dio dio, DownloadedVideo video, String thumb,
-      Server server, CancelToken token) async {
+  List<String> _stockPosterUrls(Video video, Server server,
+      {required bool artTrack}) {
+    final images = stockSongThumbnails(video.videoId, video.videoThumbnails,
+        instanceUrl: server.url);
+    if (images.isEmpty) return const [];
+    final preferred = artTrack
+        ? stockSongThumbnails(video.videoId, images, artTrack: true)
+        : images;
+    final ranked = ImageObject.getThumbnailUrlsByPreferredOrder(images);
+    // Stock metadata lists sizes even when this upload has no HD poster.
+    // Try the best source, then the advertised HQ and MQ before other sizes.
+    return {
+      ImageObject.getBestThumbnail(preferred)!.url,
+      for (final name in ['hqdefault', 'mqdefault'])
+        if (ranked.contains('/vi/${video.videoId}/$name.jpg'))
+          '/vi/${video.videoId}/$name.jpg',
+      ...ranked,
+    }.take(4).toList(growable: false);
+  }
+
+  Future<void> _downloadArtwork(
+      Dio dio, DownloadedVideo video, Server server, CancelToken token,
+      {String? cover, required List<String> posters}) async {
     final deadline = Timer(const Duration(seconds: 5),
         () => token.cancel('Artwork download deadline'));
-    File? partial;
     try {
-      final target = File(await video.thumbnailPath);
-      partial = File('${target.path}.part');
-      if (token.isCancelled || await target.exists()) return;
-      final url = invidiousImageUrl(thumb, server);
-      if (url == null) return;
-      await dio.download(url, partial.path,
-          cancelToken: token,
-          options: Options(
-              headers: server.headersForUrl(url),
-              // Covers are optional; do not try to decode an error response
-              // whose body may not match its advertised content type.
-              receiveDataWhenStatusError: false));
-      if (!token.isCancelled) await partial.rename(target.path);
-    } on DioException {
-      log.fine('Thumbnail unavailable; the media download can continue');
+      for (final source in [if (cover != null) cover, ...posters]) {
+        if (token.isCancelled) return;
+        final File? target;
+        if (source == cover) {
+          target = await video.songCoverFile;
+        } else if (video.musicMetadata != null) {
+          target = await video.stockSongPosterFile;
+        } else {
+          target = File(await video.thumbnailPath);
+        }
+        final url = invidiousImageUrl(source, server);
+        if (target == null || url == null || url.isEmpty) continue;
+        if (await target.exists()) return;
+        final partial = File('${target.path}.part');
+        try {
+          await target.parent.create(recursive: true);
+          await dio.download(url, partial.path,
+              cancelToken: token,
+              options: Options(
+                  headers: server.headersForUrl(url),
+                  receiveDataWhenStatusError: false));
+          if (token.isCancelled) return;
+          if (await partial.length() == 0) continue;
+          await partial.rename(target.path);
+          return;
+        } on DioException catch (error) {
+          // A missing image can fall back to the next stock rendition.
+          // Authentication, cooldowns and cancellation apply to all candidates.
+          if (!const {404, 410}.contains(error.response?.statusCode)) return;
+        } finally {
+          if (await partial.exists()) await partial.delete();
+        }
+      }
     } on FileSystemException {
       log.fine('Thumbnail could not be saved; the media download can continue');
     } finally {
       deadline.cancel();
-      try {
-        if (partial != null && await partial.exists()) await partial.delete();
-      } on FileSystemException {
-        log.fine('The artwork download has a leftover temporary file');
-      }
     }
   }
 
@@ -850,6 +896,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     }
     final artwork = File('${await video.thumbnailPath}.part');
     if (await artwork.exists()) await artwork.delete();
+    final covers = await video.songCoverDirectory;
+    if (await covers.exists()) {
+      final current = {
+        (await video.songCoverFile)?.path,
+        (await video.stockSongPosterFile)?.path
+      };
+      await for (final entry in covers.list(followLinks: false)) {
+        if (entry is File && !current.contains(entry.path))
+          await entry.delete();
+      }
+    }
   }
 
   Future<void> deleteVideo(DownloadedVideo video) => _mutate(() async {
@@ -885,6 +942,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             final file = File(path);
             if (await file.exists()) await file.delete();
           }
+          final covers = await video.songCoverDirectory;
+          if (await covers.exists()) await covers.delete(recursive: true);
           await _library.deleteDownload(video);
           final paused = {...state.pausedVideoIds}..remove(video.videoId);
           await _library.saveSetting(

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/music/views/components/music_playback_artwork.dart';
 
 class OfflineVideoThumbnail extends StatelessWidget {
   final DownloadedVideo video;
@@ -27,6 +28,19 @@ class OfflineVideoThumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final music = video.musicMetadata;
+    if (music != null) {
+      return Center(
+        child: AspectRatio(
+          aspectRatio: 1,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(borderRadius),
+            child: MusicPlaybackArtwork(
+                music: music, offline: video, placeholderSize: 30),
+          ),
+        ),
+      );
+    }
     var colors = Theme.of(context).colorScheme;
     return FutureBuilder<String?>(
         future: getThumbnail(),

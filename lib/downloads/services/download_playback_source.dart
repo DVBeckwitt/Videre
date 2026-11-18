@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../../player/media_source.dart';
+import '../../music/models/song_artwork.dart';
 import '../../player/models/playback_cache_identity.dart';
 import '../../player/models/backend_playback.dart';
 import '../../network/gateway_context.dart';
@@ -22,6 +23,21 @@ class DownloadPlaybackSource {
 
   const DownloadPlaybackSource(
       this.uri, this.videoQuality, this.download, this.playbackCache);
+}
+
+/// The actual saved record admitted for this source. A queued video ID alone
+/// cannot identify which account's private artwork is mounted.
+DownloadedVideo? admittedMusicDownload(Video? video) {
+  if (video == null || !video.downloadPlaybackOnly) return null;
+  final source = video.playbackSourceId;
+  final server = video.playbackConnection?.server;
+  if (source is! DownloadPlaybackSource || server == null) return null;
+  final saved = source.download;
+  return saved.videoId == video.videoId &&
+          saved.profileId == server.profileId &&
+          saved.accountId == server.accountId
+      ? saved
+      : null;
 }
 
 /// Restores trustworthy saved metadata without fabricating an online stream.
@@ -55,12 +71,15 @@ Future<Video?> prepareDownloadedPlaybackVideo({
     final savedMusic = download.musicMetadata;
     final incomingArt = video.musicMetadata?.thumbnails ?? const [];
     final music = savedMusic != null &&
-            savedMusic.thumbnails.isEmpty &&
-            incomingArt.isNotEmpty
+            incomingArt.isNotEmpty &&
+            (savedMusic.thumbnails.isEmpty ||
+                (songCovers(savedMusic.thumbnails).isEmpty &&
+                    songCovers(incomingArt).isNotEmpty))
         ? MusicMetadata(
             title: savedMusic.title,
             artist: savedMusic.artist,
             album: savedMusic.album,
+            isArtTrack: savedMusic.isArtTrack,
             thumbnails: incomingArt)
         : savedMusic ?? video.musicMetadata;
     final candidate = video.copyWith(
@@ -78,8 +97,7 @@ Future<Video?> prepareDownloadedPlaybackVideo({
         adaptiveFormats: null,
         formatStreams: null,
         playbackConnection: BackendPlayback(server),
-        backendPlayback: null,
-        playbackSourceId: Object());
+        backendPlayback: null);
     final local = await resolveDownloadPlaybackSource(
         database: database,
         // Fresh known metadata may contradict an older saved rendition. Do not
@@ -95,7 +113,7 @@ Future<Video?> prepareDownloadedPlaybackVideo({
     // Playback can reuse its saved optional metadata without another lookup or
     // serializing source/credential state into the Video model.
     onPrepared?.call(local);
-    return candidate;
+    return candidate.copyWith(playbackSourceId: local);
   } catch (_) {
     return null;
   }

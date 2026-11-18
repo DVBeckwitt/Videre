@@ -54,6 +54,16 @@ class _GuestService extends Service {
   Future<bool> isLoggedIn() async => false;
 
   @override
+  Future<Video> getMusicVideo(String id,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) =>
+      getVideo(id,
+          serverOverride: serverOverride,
+          onBackendRequest: onBackendRequest,
+          loadObserver: loadObserver);
+
+  @override
   Future<Video> getVideo(String id,
       {Server? serverOverride,
       void Function(BackendPlayback request)? onBackendRequest,

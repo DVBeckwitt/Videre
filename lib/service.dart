@@ -124,6 +124,11 @@ class Service {
   final Client httpClient;
   late final Client _instanceHttpClient =
       OriginScopedHttpClient(httpClient, sameOriginOnly: true);
+  Client _instanceReader(Future<void> Function()? beforeRedirect) =>
+      beforeRedirect == null
+          ? _instanceHttpClient
+          : OriginScopedHttpClient(httpClient,
+              sameOriginOnly: true, beforeRedirect: beforeRedirect);
   late final dashManifestResolver = DashManifestResolver(httpClient);
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
@@ -218,16 +223,15 @@ class Service {
   Future<Response> _sendGet(ServerRequest request,
       {Future<void> Function()? beforeRequest}) async {
     if (beforeRequest != null) await beforeRequest();
-    var response =
-        await _instanceHttpClient.get(request.uri, headers: request.headers);
+    final client = _instanceReader(beforeRequest);
+    var response = await client.get(request.uri, headers: request.headers);
     if (response.statusCode == 429) {
       final delay = _retryAfter(response);
       // A long server cooldown belongs in the UI, not a hidden retry loop.
       if (delay != null && delay <= const Duration(seconds: 2)) {
         if (delay > Duration.zero) await _wait(delay);
         if (beforeRequest != null) await beforeRequest();
-        response = await _instanceHttpClient.get(request.uri,
-            headers: request.headers);
+        response = await client.get(request.uri, headers: request.headers);
       }
     }
     return response;
@@ -237,6 +241,15 @@ class Service {
       {bool cache = false,
       bool coalesce = false,
       Future<void> Function()? beforeRequest}) async {
+    final key = request._cacheKey;
+    if (cache) {
+      _browseCache.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
+      final cached = _browseCache[key];
+      if (cached != null) {
+        if (beforeRequest != null) await beforeRequest();
+        return cached.response;
+      }
+    }
     if (beforeRequest != null) {
       // A guarded request belongs to one operation. Do not let its lifetime
       // control a coalesced lookup made by another caller.
@@ -248,12 +261,6 @@ class Service {
         expired = true;
         throw TimeoutException('Request expired.');
       });
-    }
-    final key = request._cacheKey;
-    if (cache) {
-      _browseCache.removeWhere((_, entry) => !entry.expires.isAfter(_now()));
-      final cached = _browseCache[key];
-      if (cached != null) return cached.response;
     }
     if (coalesce || cache) {
       // Share only the HTTP work. Each caller decodes and applies its settings.
@@ -592,9 +599,41 @@ class Service {
   }
 
   Future<Video> getVideo(String videoId,
-      {Server? serverOverride,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) =>
+      _getPlaybackVideo(videoId,
+          enrichResults: true,
+          serverOverride: serverOverride,
+          onBackendRequest: onBackendRequest,
+          loadObserver: loadObserver);
+
+  /// Music uses the same playback admission and retries, with the original
+  /// metadata from the selected instance on every route.
+  Future<Video> getMusicVideo(String videoId,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) =>
+      _getPlaybackVideo(videoId,
+          enrichResults: false,
+          serverOverride: serverOverride,
+          onBackendRequest: onBackendRequest,
+          loadObserver: loadObserver);
+
+  Future<Video> getCatalogSongVideo(String videoId, Server server,
+          VideoLoadObserver? observer, Future<void> Function() beforeRequest) =>
+      _getPlaybackVideo(videoId,
+          enrichResults: false,
+          serverOverride: observer == null ? server : null,
+          loadObserver: observer,
+          beforeRequest: beforeRequest);
+
+  Future<Video> _getPlaybackVideo(String videoId,
+      {required bool enrichResults,
+      Server? serverOverride,
       void Function(BackendPlayback request)? onBackendRequest,
-      VideoLoadObserver? loadObserver}) async {
+      VideoLoadObserver? loadObserver,
+      Future<void> Function()? beforeRequest}) async {
     final observer = serverOverride == null ? loadObserver : null;
     final originalDb = db;
     final profileId = originalDb.profileId;
@@ -612,8 +651,21 @@ class Service {
     // Keep the original context across that await; migration must not bless a
     // concurrent profile, session, or proxy change as a new playback request.
     final server = await preparePlaybackServer(serverOverride: serverOverride);
+    if (beforeRequest != null) await beforeRequest();
     if (!connectionCurrent()) {
       throw StateError('The playback connection changed.');
+    }
+    if (!enrichResults && beforeRequest == null && serverOverride != null) {
+      // Downloads can belong to an unselected account. Keep that account and
+      // its proxy policy across rate-limit waits, including after a deletion.
+      final owner = originalDb.forProfile(server.profileId);
+      final route = BackendPlayback(server);
+      beforeRequest = () async {
+        final saved = owner.getAccount(server.accountId);
+        if (!connectionCurrent() || saved == null || !route.matches(saved)) {
+          throw StateError('The download connection changed.');
+        }
+      };
     }
     // Explicit callers (downloads and connection tests) own their server snapshot
     // and subsequent request headers. Only normal playback may change routes.
@@ -629,6 +681,7 @@ class Service {
             backendRequest: playback ?? initialRequest,
             onBackendRequest: onBackendRequest,
             loadObserver: observer,
+            beforeRequest: beforeRequest,
             allowSameRouteRetry: (playback?.retryIndex ?? 0) == 0);
         break;
       } catch (error) {
@@ -644,10 +697,12 @@ class Service {
       }
     }
     if (!active()) throw StateError('The video load was cancelled.');
-    final processed = await _processVideo(video.copyWith(
-        backendPlayback: playback,
-        playbackConnection: playback ?? connection,
-        playbackSourceId: Object()));
+    final processed = await _processVideo(
+        video.copyWith(
+            backendPlayback: playback,
+            playbackConnection: playback ?? connection,
+            playbackSourceId: Object()),
+        enrichResults: enrichResults);
     if (initialRequest != null &&
         !initialRequest.matches(await db.getCurrentlySelectedServer())) {
       throw StateError(
@@ -660,7 +715,24 @@ class Service {
   /// A player-side choice uses a transient routing snapshot while retaining the
   /// saved server as its admission baseline. It never bypasses proxy/auth checks.
   Future<Video> getVideoForBackend(String videoId, BackendPlayback request,
-      {void Function(BackendPlayback request)? onBackendRequest,
+          {void Function(BackendPlayback request)? onBackendRequest,
+          bool Function()? isCurrent}) =>
+      _getVideoForBackend(videoId, request,
+          enrichResults: true,
+          onBackendRequest: onBackendRequest,
+          isCurrent: isCurrent);
+
+  Future<Video> getMusicVideoForBackend(String videoId, BackendPlayback request,
+          {void Function(BackendPlayback request)? onBackendRequest,
+          bool Function()? isCurrent}) =>
+      _getVideoForBackend(videoId, request,
+          enrichResults: false,
+          onBackendRequest: onBackendRequest,
+          isCurrent: isCurrent);
+
+  Future<Video> _getVideoForBackend(String videoId, BackendPlayback request,
+      {required bool enrichResults,
+      void Function(BackendPlayback request)? onBackendRequest,
       bool Function()? isCurrent}) async {
     var playback = request;
     bool active() => isCurrent?.call() ?? true;
@@ -673,7 +745,11 @@ class Service {
       Video loaded;
       try {
         loaded = await _getVideoMetadata(videoId, playback.server,
-            backendRequest: playback, onBackendRequest: onBackendRequest);
+            backendRequest: playback,
+            onBackendRequest: onBackendRequest,
+            beforeRequest: enrichResults
+                ? null
+                : () => _requirePlaybackRoute(playback, active));
       } catch (error) {
         if (!active() || !isBackendRetryable(error) || !playback.canRetry) {
           rethrow;
@@ -684,15 +760,28 @@ class Service {
         playback = next;
         continue;
       }
-      final processed = await _processVideo(loaded.copyWith(
-          backendPlayback: playback,
-          playbackConnection: playback,
-          playbackSourceId: Object()));
+      final processed = await _processVideo(
+          loaded.copyWith(
+              backendPlayback: playback,
+              playbackConnection: playback,
+              playbackSourceId: Object()),
+          enrichResults: enrichResults);
       if (!active() ||
           !playback.matches(await db.getCurrentlySelectedServer())) {
         throw StateError('The playback connection changed.');
       }
       return processed;
+    }
+  }
+
+  Future<void> _requirePlaybackRoute(
+      BackendPlayback route, bool Function() active) async {
+    if (!active() ||
+        NetworkProxy.instance.isChanging ||
+        !route.matches(await db.getCurrentlySelectedServer()) ||
+        !active() ||
+        NetworkProxy.instance.isChanging) {
+      throw StateError('The playback connection changed.');
     }
   }
 
@@ -853,9 +942,7 @@ class Service {
         }
         // One additional request only, even if it returns another retryable
         // status. Do not restart the usual GET retry or its timeout budget.
-        final retryClient =
-            beforeRequest == null ? httpClient : _instanceHttpClient;
-        final retried = await retryClient
+        final retried = await _instanceReader(beforeRequest)
             .get(request.uri, headers: request.headers)
             .timeout(remaining());
         if (!await unchanged()) {
@@ -928,10 +1015,10 @@ class Service {
 
     Future<Video> load() async {
       await checkCurrent();
+      final client = _instanceReader(checkCurrent);
       Response? response;
       try {
-        response = await _instanceHttpClient.get(request.uri,
-            headers: request.headers);
+        response = await client.get(request.uri, headers: request.headers);
         await checkCurrent();
         return _decodeVideoMetadata(response);
       } catch (error) {
@@ -944,8 +1031,7 @@ class Service {
         await checkCurrent();
         // Keep one budget for transient failures and rate limits. The follow-up
         // uses the exact original request, with no second retry wrapper.
-        final retried = await _instanceHttpClient.get(request.uri,
-            headers: request.headers);
+        final retried = await client.get(request.uri, headers: request.headers);
         await checkCurrent();
         return _decodeVideoMetadata(retried);
       }
@@ -1003,7 +1089,11 @@ class Service {
         Video loaded;
         try {
           loaded = await _getVideoMetadata(video.videoId, next.server,
-              backendRequest: next, onBackendRequest: onRetry);
+              backendRequest: next,
+              onBackendRequest: onRetry,
+              beforeRequest: video.musicMetadata == null
+                  ? null
+                  : () => _requirePlaybackRoute(next, isCurrent));
         } catch (error) {
           if (!isBackendRetryable(error)) rethrow;
           continue;
@@ -1012,10 +1102,12 @@ class Service {
             !next.matches(await db.getCurrentlySelectedServer())) {
           return null;
         }
-        final processed = await _processVideo(loaded.copyWith(
-            backendPlayback: next,
-            playbackConnection: next,
-            playbackSourceId: Object()));
+        final processed = await _processVideo(
+            loaded.copyWith(
+                backendPlayback: next,
+                playbackConnection: next,
+                playbackSourceId: Object()),
+            enrichResults: video.musicMetadata == null);
         if (!isCurrent() ||
             !next.matches(await db.getCurrentlySelectedServer())) {
           return null;
@@ -1072,11 +1164,13 @@ class Service {
         playbackSourceId: Object());
   }
 
-  Future<Video> _processVideo(Video video) async {
-    video = (await DeArrow.processVideos([video]))[0];
+  Future<Video> _processVideo(Video video,
+      {required bool enrichResults}) async {
+    if (enrichResults) video = (await DeArrow.processVideos([video]))[0];
     video = video.copyWith(
-        recommendedVideos:
-            (await postProcessVideos(video.recommendedVideos)).cast());
+        recommendedVideos: (await postProcessVideos(video.recommendedVideos,
+                enrichResults: enrichResults))
+            .cast());
     return video;
   }
 
@@ -1656,13 +1750,39 @@ class Service {
   }
 
   Future<SearchResults> search(String query,
+          {SearchType? type,
+          int? page,
+          SearchSortBy? sortBy,
+          SearchDate date = SearchDate.any,
+          SearchDuration duration = SearchDuration.any,
+          Server? serverOverride,
+          bool enrichResults = true}) =>
+      _search(query,
+          type: type,
+          page: page,
+          sortBy: sortBy,
+          date: date,
+          duration: duration,
+          serverOverride: serverOverride,
+          enrichResults: enrichResults);
+
+  Future<SearchResults> searchMusic(String query, SearchType type,
+          Server server, Future<void> Function() beforeRequest) =>
+      _search(query,
+          type: type,
+          serverOverride: server,
+          enrichResults: false,
+          beforeRequest: beforeRequest);
+
+  Future<SearchResults> _search(String query,
       {SearchType? type,
       int? page,
       SearchSortBy? sortBy,
       SearchDate date = SearchDate.any,
       SearchDuration duration = SearchDuration.any,
       Server? serverOverride,
-      bool enrichResults = true}) async {
+      required bool enrichResults,
+      Future<void> Function()? beforeRequest}) async {
     final revision = _sessionRevision;
     String countryCode = db.getSettings(browsingCountry)?.value ?? 'US';
     final req =
@@ -1675,7 +1795,7 @@ class Service {
       'date': date != SearchDate.any ? date.name : null,
       'duration': duration != SearchDuration.any ? duration.name : null,
     });
-    final response = await _get(req, cache: true);
+    final response = await _get(req, cache: true, beforeRequest: beforeRequest);
     Iterable i = handleResponse(response);
     // only getting videos for now
     SearchResults results = SearchResults();
@@ -2169,17 +2289,36 @@ class Service {
   }
 
   Future<Channel> getChannel(String channelId,
-      {bool saveLastSeen = true, Server? serverOverride}) async {
+          {bool saveLastSeen = true, Server? serverOverride}) =>
+      _getChannel(channelId,
+          saveLastSeen: saveLastSeen,
+          serverOverride: serverOverride,
+          enrichResults: true);
+
+  Future<Channel> getMusicChannel(String channelId, Server server,
+          Future<void> Function() beforeRequest) =>
+      _getChannel(channelId,
+          saveLastSeen: false,
+          serverOverride: server,
+          enrichResults: false,
+          beforeRequest: beforeRequest);
+
+  Future<Channel> _getChannel(String channelId,
+      {required bool saveLastSeen,
+      required Server? serverOverride,
+      required bool enrichResults,
+      Future<void> Function()? beforeRequest}) async {
     // sometimes the api gives the channel with /channel/<channelid> format
     channelId = channelId.replaceAll("/channel/", '');
     var req = await buildRequest(urlGetChannel,
         pathParams: {':id': channelId}, serverOverride: serverOverride);
 
-    final response = await _get(req);
+    final response = await _get(req, beforeRequest: beforeRequest);
 
     var channel = Channel.fromJson(handleResponse(response));
-    channel.latestVideos =
-        (await postProcessVideos(channel.latestVideos ?? [])).cast();
+    channel.latestVideos = (await postProcessVideos(channel.latestVideos ?? [],
+            enrichResults: enrichResults))
+        .cast();
 
     if (saveLastSeen && channel.latestVideos!.isNotEmpty) {
       await fileDb
@@ -2191,10 +2330,32 @@ class Service {
   }
 
   Future<VideosWithContinuation> getChannelVideos(
+          String channelId, String? continuation,
+          {bool saveLastSeen = true,
+          Server? serverOverride,
+          ChannelSortBy sortBy = ChannelSortBy.newest}) =>
+      _getChannelVideos(channelId, continuation,
+          saveLastSeen: saveLastSeen,
+          serverOverride: serverOverride,
+          sortBy: sortBy,
+          enrichResults: true);
+
+  Future<VideosWithContinuation> getMusicChannelVideos(String channelId,
+          Server server, Future<void> Function() beforeRequest) =>
+      _getChannelVideos(channelId, null,
+          saveLastSeen: false,
+          serverOverride: server,
+          sortBy: ChannelSortBy.popular,
+          enrichResults: false,
+          beforeRequest: beforeRequest);
+
+  Future<VideosWithContinuation> _getChannelVideos(
       String channelId, String? continuation,
-      {bool saveLastSeen = true,
-      Server? serverOverride,
-      ChannelSortBy sortBy = ChannelSortBy.newest}) async {
+      {required bool saveLastSeen,
+      required Server? serverOverride,
+      required ChannelSortBy sortBy,
+      required bool enrichResults,
+      Future<void> Function()? beforeRequest}) async {
     final req = await buildRequest(urlGetChannelVideos,
         pathParams: {':id': channelId},
         query: {
@@ -2202,12 +2363,14 @@ class Service {
           'sort_by': sortBy.name,
         },
         serverOverride: serverOverride);
-    final response = await _get(req);
+    final response = await _get(req, beforeRequest: beforeRequest);
 
     var videosWithContinuation =
         VideosWithContinuation.fromJson(handleResponse(response));
-    videosWithContinuation.videos =
-        (await postProcessVideos(videosWithContinuation.videos)).cast();
+    videosWithContinuation.videos = (await postProcessVideos(
+            videosWithContinuation.videos,
+            enrichResults: enrichResults))
+        .cast();
 
     if (saveLastSeen && videosWithContinuation.videos.isNotEmpty) {
       await fileDb
@@ -2714,10 +2877,13 @@ class Service {
   /// A dynamic mix returns a current batch, without a total or playlist author.
   /// Request its native endpoint instead of parsing the playlist redirect as a
   /// finite public playlist.
-  Future<Playlist> getMix(String mixId, {Server? serverOverride}) async {
+  Future<Playlist> getMix(String mixId,
+      {Server? serverOverride,
+      bool enrichResults = true,
+      Future<void> Function()? beforeRequest}) async {
     final req = await buildRequest(urlGetMix,
         pathParams: {':id': mixId}, serverOverride: serverOverride);
-    final data = handleResponse(await _get(req));
+    final data = handleResponse(await _get(req, beforeRequest: beforeRequest));
     if (data is! Map<String, dynamic> ||
         data['mixId'] != mixId ||
         data['title'] is! String ||
@@ -2728,7 +2894,8 @@ class Service {
     final source = (data['videos'] as List)
         .map((value) => Video.fromJson(Map<String, dynamic>.from(value as Map)))
         .toList();
-    final videos = await postProcessVideos(source);
+    final videos =
+        await postProcessVideos(source, enrichResults: enrichResults);
     return Playlist(
         playlistId: mixId,
         title: data['title'] as String,
@@ -2739,10 +2906,31 @@ class Service {
   }
 
   Future<Playlist> getPublicPlaylists(String playlistId,
+          {int? page,
+          bool saveLastSeen = true,
+          Server? serverOverride,
+          bool enrichResults = true}) =>
+      _getPublicPlaylists(playlistId,
+          page: page,
+          saveLastSeen: saveLastSeen,
+          serverOverride: serverOverride,
+          enrichResults: enrichResults);
+
+  Future<Playlist> getMusicPlaylistPage(String playlistId, int page,
+          Server server, Future<void> Function() beforeRequest) =>
+      _getPublicPlaylists(playlistId,
+          page: page,
+          saveLastSeen: false,
+          serverOverride: server,
+          enrichResults: false,
+          beforeRequest: beforeRequest);
+
+  Future<Playlist> _getPublicPlaylists(String playlistId,
       {int? page,
-      bool saveLastSeen = true,
+      required bool saveLastSeen,
       Server? serverOverride,
-      bool enrichResults = true}) async {
+      required bool enrichResults,
+      Future<void> Function()? beforeRequest}) async {
     if (playlistId.startsWith('local:')) {
       return getUserPlaylist(playlistId, serverOverride: serverOverride);
     }
@@ -2751,7 +2939,7 @@ class Service {
         query: {'page': page?.toString()},
         serverOverride: serverOverride);
 
-    final response = await _get(req);
+    final response = await _get(req, beforeRequest: beforeRequest);
     var playlist = Playlist.fromJson(handleResponse(response));
     var oldLength = playlist.videos.length;
     final videos =

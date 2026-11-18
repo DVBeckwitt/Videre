@@ -27,6 +27,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'music_catalog_cards.dart';
+import 'community_music_artwork.dart';
 import 'music_library_actions.dart';
 import 'music_recommendation_collection.dart';
 import '../screens/music.dart';
@@ -452,7 +453,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
             key: ValueKey('music-${shelf.id}-${song.videoId}'),
             title: song.title,
             subtitle: song.artists.join(', '),
-            thumbnails: song.thumbnails,
+            song: song,
             showPlayIndicator: true,
             onOpen: () => _playShelf(shelf.tracks, from: song.videoId),
             onLongPress: () => MusicLibraryActions.showSongMenu(
@@ -520,7 +521,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
                       when seconds > 0)
                     prettyDurationCustom(Duration(seconds: seconds)),
                 ].join(' • '),
-                thumbnails: track.thumbnails,
+                song: track,
                 onOpen: () => _open(track),
                 onLongPress: () =>
                     MusicLibraryActions.showSongMenu(context, track.toVideo()),
@@ -540,7 +541,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
               return MusicCatalogCard(
                 key: ValueKey('music-daily-mix-$index'),
                 title: title,
-                thumbnails: _mixCovers[mix.seeds.first]?.thumbnails ?? const [],
+                thumbnails:
+                    _mixCovers[mix.seeds.first]?.displayThumbnails ?? const [],
                 onOpen: () => _openShelf(title, const [], mix: mix),
               );
             },
@@ -651,6 +653,8 @@ class _QuickPickRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final track = pick.item;
+    final images = track.displayThumbnails;
     return ListTile(
       contentPadding: const EdgeInsetsDirectional.only(start: 2, end: 4),
       horizontalTitleGap: 12,
@@ -664,17 +668,21 @@ class _QuickPickRow extends StatelessWidget {
       },
       leading: SizedBox.square(
           dimension: 48,
-          child: pick.item.thumbnails.isEmpty
-              ? DecoratedBox(
-                  decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHigh,
-                      borderRadius: BorderRadius.circular(6)),
-                  child: const Icon(Icons.music_note_rounded),
-                )
-              : Thumbnail(
-                  images: pick.item.thumbnails,
-                  decoration:
-                      BoxDecoration(borderRadius: BorderRadius.circular(6)))),
+          child: CommunityMusicArtwork(
+              videoId: track.videoId,
+              music: track.musicMetadata,
+              durationSeconds: track.durationSeconds,
+              fallback: images.isEmpty
+                  ? DecoratedBox(
+                      decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHigh,
+                          borderRadius: BorderRadius.circular(6)),
+                      child: const Icon(Icons.music_note_rounded),
+                    )
+                  : Thumbnail(
+                      images: images,
+                      decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(6))))),
       title: Text(pick.item.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,

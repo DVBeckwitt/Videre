@@ -13,6 +13,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -253,6 +254,44 @@ void main() {
         [_id(22), _id(21)]);
     expect(candidates.listeningHistory(limit: 1).single.videoId, _id(22));
     expect(candidates.listeningHistory(limit: 0), isEmpty);
+    expect(requests, isEmpty);
+  });
+
+  test('older listens reuse a verified cover from the active profile',
+      () async {
+    const cover = 'https://lh3.googleusercontent.com/saved-cover';
+    final frame = '/vi/${_id(1)}/default.jpg';
+    final listen = HistoryVideoCache(_id(1), 'Song', 'Artist', frame,
+        musicMetadata:
+            MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+          ImageObject(null, frame, 320, 180),
+        ]));
+    await db.upsertHistoryVideo(listen);
+    final candidates = RecommendationCandidates(db, api: api);
+    final uncached = candidates.listeningHistory().single;
+    expect(uncached.thumbnails, isEmpty);
+    expect(uncached.displayThumbnails.single.url, frame);
+
+    await MusicLibraryService.forProfile(db, db.profileId).save(
+        MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: _id(1),
+            title: 'Saved title',
+            thumbnails: [ImageObject(null, cover, 512, 512)]));
+    final current = candidates.listeningHistory().single;
+    expect(current.title, 'Song');
+    expect(current.thumbnails.single.url, cover);
+    expect(current.displayThumbnails.map((image) => image.url), [cover, frame]);
+    expect(current.videoThumbnails.single.url, frame);
+
+    final other = await db.createProfile('Another listener');
+    await db.useProfile(other.id);
+    await db.upsertHistoryVideo(listen);
+    expect(candidates.listeningHistory(), isEmpty);
+    final otherListen =
+        RecommendationCandidates(db, api: api).listeningHistory().single;
+    expect(otherListen.thumbnails, isEmpty);
+    expect(otherListen.displayThumbnails.single.url, frame);
     expect(requests, isEmpty);
   });
 

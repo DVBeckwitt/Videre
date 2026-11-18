@@ -15,6 +15,7 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -23,6 +24,7 @@ import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -320,7 +322,8 @@ void main() {
   }
 
   Future<_PlaybackPlayer> showDownloadedSong(
-      WidgetTester tester, DownloadedVideo video) async {
+      WidgetTester tester, DownloadedVideo video,
+      {bool saveSongCover = false}) async {
     const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
     final messenger = tester.binding.defaultBinaryMessenger;
     final documents = (await tester.runAsync(
@@ -329,6 +332,30 @@ void main() {
         pathProvider, (_) async => documents.path);
     final thumbnailPath = (await tester.runAsync(() => video.thumbnailPath))!;
     final thumbnailImage = FileImage(File(thumbnailPath));
+    FileImage? songCoverImage;
+
+    // File and codec work runs on the real clock. Their UI callbacks still
+    // need test frames to show the decoded image or finish a file lookup.
+    Future<void> waitForFixture(bool Function() ready, String reason) async {
+      await tester.runAsync(() async {
+        final elapsed = Stopwatch()..start();
+        while (!ready() && elapsed.elapsed < const Duration(seconds: 5)) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+      });
+      expect(ready(), isTrue, reason: reason);
+    }
+
+    Future<void> waitForImage(FileImage image) {
+      final decoded = find.descendant(
+          of: find.image(image),
+          matching: find.byWidgetPredicate(
+              (widget) => widget is RawImage && widget.image != null));
+      return waitForFixture(() => decoded.evaluate().isNotEmpty,
+          'The download row must render ${image.file.path}.');
+    }
+
     addTearDown(() async {
       // The visible thumbnail owns a separate file lookup from CompactVideo's
       // cubit. Finish that lookup before disposing the row and its image cache.
@@ -338,19 +365,35 @@ void main() {
           matching: find.byType(FutureBuilder<String?>),
         ),
       );
+      var pending = 0;
       for (final lookup in lookups) {
-        await tester.runAsync(() async => await lookup.future);
+        if (lookup.future == null) continue;
+        pending++;
+        unawaited(lookup.future!.then<void>((_) {
+          pending--;
+        }));
+      }
+      if (pending != 0) {
+        await waitForFixture(() => pending == 0, 'Poster lookups must finish.');
       }
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
       await tester.runAsync(() async {
         await thumbnailImage.evict();
+        await songCoverImage?.evict();
         await documents.delete(recursive: true);
       });
       messenger.setMockMethodCallHandler(pathProvider, null);
     });
     await tester.runAsync(() async {
-      await File('assets/icon.png').copy(thumbnailPath);
+      final image = File('assets/icon.png');
+      await image.copy(thumbnailPath);
+      if (saveSongCover) {
+        final cover = (await video.songCoverFile)!;
+        await cover.parent.create(recursive: true);
+        await image.copy(cover.path);
+        songCoverImage = FileImage(cover);
+      }
     });
     final downloads = _Downloads(state: DownloadManagerState(videos: [video]));
     final current = await showSongActions(tester,
@@ -361,19 +404,34 @@ void main() {
     final thumbnail = tester
         .element(find.byType(BlocBuilder<CompactVideoCubit, CompactVideoState>))
         .read<CompactVideoCubit>();
-    await tester.runAsync(() async {
-      await Future.doWhile(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 1));
-        await tester.pump();
-        return thumbnail.state.offlineVideoThumbnailPath == null;
-      }).timeout(const Duration(seconds: 5));
-    });
-    await tester.pumpAndSettle();
-    // Image.file decodes outside the fake clock. Await that reader as well as
-    // the metadata lookup, so Windows can release the fixture during teardown.
-    await tester.runAsync(() => precacheImage(
-        thumbnailImage, tester.element(find.byType(DownloadedVideoView))));
-    await tester.pumpAndSettle();
+    if (video.musicMetadata != null) {
+      final artwork = find.byType(MusicPlaybackArtwork);
+      expect(artwork, findsOneWidget);
+      final lookup = tester.widget<FutureBuilder<File?>>(find.descendant(
+          of: artwork, matching: find.byType(FutureBuilder<File?>)));
+      var pending = true;
+      unawaited(lookup.future!.then<void>((_) {
+        pending = false;
+      }));
+      await waitForFixture(() => !pending, 'Song cover lookup must finish.');
+      await tester.pumpAndSettle();
+      expect(thumbnail.state.offlineVideoThumbnailPath, isNull);
+      expect(find.image(thumbnailImage), findsNothing);
+      final cover = songCoverImage;
+      if (cover == null) {
+        expect(
+            find.descendant(
+                of: artwork, matching: find.byIcon(Icons.music_note)),
+            findsOneWidget);
+      } else {
+        await waitForImage(cover);
+      }
+      return current;
+    }
+    await waitForFixture(
+        () => thumbnail.state.offlineVideoThumbnailPath != null,
+        'The ordinary video row must resolve its poster.');
+    await waitForImage(thumbnailImage);
     return current;
   }
 
@@ -665,6 +723,26 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('a completed Music download displays its local song cover',
+      (tester) async {
+    await showDownloadedSong(
+        tester,
+        DownloadedVideo(
+            videoId: 'saved-audio',
+            title: 'Saved audio',
+            accountId: 'catalog-account',
+            lengthSeconds: 180,
+            quality: 'audio',
+            audioOnly: true,
+            downloadComplete: true,
+            musicMetadata:
+                MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+              ImageObject(
+                  null, 'https://lh3.googleusercontent.com/cover', 512, 512),
+            ])),
+        saveSongCover: true);
+  });
 
   for (final (complete, audioOnly) in [
     (false, true),

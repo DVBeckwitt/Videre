@@ -29,6 +29,10 @@ class Thumbnail extends StatelessWidget {
   /// image providers can opt out; official YouTube hosts are still excluded.
   final bool useInvidiousProxy;
 
+  /// Music catalog images use only the active instance, even when metadata
+  /// contains an independently supported image provider.
+  final bool instanceOnly;
+
   const Thumbnail(
       {super.key,
       this.child,
@@ -36,19 +40,20 @@ class Thumbnail extends StatelessWidget {
       this.thumbnails,
       this.images,
       this.useInvidiousProxy = true,
+      this.instanceOnly = false,
       required this.decoration,
       this.width,
       this.height});
 
   @override
   Widget build(BuildContext context) {
-    if (!useInvidiousProxy) return _build(context, null);
+    if (!useInvidiousProxy && !instanceOnly) return _build(context, null);
     return SelectedServerBuilder(builder: _build);
   }
 
   Widget _build(BuildContext context, Server? server) {
     ColorScheme colors = Theme.of(context).colorScheme;
-    return useInvidiousProxy && server == null
+    return (useInvidiousProxy || instanceOnly) && server == null
         ? Container(
             decoration: decoration,
             width: width,
@@ -83,7 +88,12 @@ class Thumbnail extends StatelessWidget {
               }
               final resolved =
                   server == null ? url : invidiousImageUrl(url, server);
-              return resolved != null && seen.add(resolved);
+              if (resolved == null) return false;
+              if (instanceOnly &&
+                  Uri.parse(resolved).origin != Uri.parse(server!.url).origin) {
+                return false;
+              }
+              return seen.add(resolved);
             }).toList();
             return BlocProvider(
               key: ValueKey(Object.hash(server, Object.hashAll(urls))),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -13,14 +14,19 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/music/services/music_community_cover_preferences.dart';
+import 'package:clipious/music/services/music_lyrics_preferences.dart';
 import 'package:clipious/player/models/video_display_mode.dart';
+import 'package:clipious/player/states/player.dart' show PlayerRepeat;
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/app_customizer.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/views/screens/settings.dart';
 import 'package:clipious/settings/views/screens/video_player.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/backup.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
@@ -399,6 +405,183 @@ Future<void> main() async {
     expect(settingsCubit.state.packageInfo.version, info.version);
     expect(settingsCubit.state.packageInfo.buildNumber, info.buildNumber);
   });
+
+  test('LRCLIB consent defaults off and is stored only for its profile',
+      () async {
+    final first = db.profileId;
+    final other = await db.createProfile('Other');
+    expect(isLrclibEnabled(), isFalse);
+    final write = setLrclibEnabled(true, expectedProfileId: first);
+    await db.useProfile(other.id);
+    await write;
+    expect(isLrclibEnabled(), isFalse);
+    await setLrclibEnabled(true, expectedProfileId: first);
+    expect(isLrclibEnabled(), isFalse);
+    await db.useProfile(first);
+    expect(isLrclibEnabled(), isTrue);
+    final backup = await db.exportBackup();
+    expect(backup.sections['settings']!.map((row) => row['name']),
+        isNot(contains('music-lrclib-enabled')));
+    await setLrclibEnabled(false);
+    expect(isLrclibEnabled(), isFalse);
+  });
+
+  test('cover consent stays in its profile and cannot be transferred by backup',
+      () async {
+    final first = db.profileId;
+    final other = await db.createProfile('Other');
+    expect(isCommunityCoverArtEnabled(), isFalse);
+    final revision = communityCoverArtPreferenceRevision.value;
+    await setLrclibEnabled(true);
+    expect(communityCoverArtPreferenceRevision.value, revision);
+    await setCommunityCoverArtEnabled(true);
+    expect(communityCoverArtPreferenceRevision.value, revision + 1);
+    await setCommunityCoverArtEnabled(false);
+    final writing = setCommunityCoverArtEnabled(true, expectedProfileId: first);
+    await db.useProfile(other.id);
+    await writing;
+    expect(isCommunityCoverArtEnabled(), isFalse);
+    final otherRevision = communityCoverArtPreferenceRevision.value;
+    await setCommunityCoverArtEnabled(true, expectedProfileId: first);
+    expect(isCommunityCoverArtEnabled(), isFalse);
+    expect(communityCoverArtPreferenceRevision.value, otherRevision);
+    await db.useProfile(first);
+    expect(isCommunityCoverArtEnabled(), isTrue);
+    final backup = jsonDecode((await db.exportBackup()).encode()) as Map;
+    expect((backup['settings'] as List).map((row) => row['name']),
+        isNot(contains(musicCommunityCoverSettingName)));
+    backup['settings'] = [
+      SettingsValue(musicCommunityCoverSettingName, 'true').toJson()
+    ];
+    expect(() => UserBackup.parse(jsonEncode(backup)), throwsFormatException);
+    await setCommunityCoverArtEnabled(false);
+    expect(isLrclibEnabled(), isTrue);
+  });
+
+  for (final (provider, read, write, revision) in [
+    ('lyrics', isLrclibEnabled, setLrclibEnabled, lrclibPreferenceRevision),
+    (
+      'covers',
+      isCommunityCoverArtEnabled,
+      setCommunityCoverArtEnabled,
+      communityCoverArtPreferenceRevision
+    ),
+  ]) {
+    test('$provider opt-out blocks requests before its write completes',
+        () async {
+      final database = db;
+      await write(true);
+      final pending = Completer<void>();
+      final started = Completer<void>();
+      db = _DelayedSettingsDb(database, pending, started);
+      try {
+        expect(read(), isTrue);
+        final before = revision.value;
+        final disabling = write(false);
+        await started.future;
+        expect(read(), isFalse);
+        expect(revision.value, greaterThan(before));
+        pending.complete();
+        await disabling;
+        expect(read(), isFalse);
+      } finally {
+        if (!pending.isCompleted) pending.complete();
+        db = database;
+      }
+    });
+
+    test('$provider finishing a write cannot invalidate another profile',
+        () async {
+      final database = db;
+      final other = await database.createProfile('Other');
+      final pending = Completer<void>();
+      final started = Completer<void>();
+      db = _DelayedSettingsDb(database, pending, started);
+      try {
+        final saving = write(true);
+        await started.future;
+        await database.useProfile(other.id);
+        final before = revision.value;
+        pending.complete();
+        await saving;
+        expect(revision.value, before);
+        expect(read(), isFalse);
+      } finally {
+        if (!pending.isCompleted) pending.complete();
+        db = database;
+      }
+    });
+  }
+
+  for (final (name, screen) in const [
+    ('phone', SettingsScreen()),
+    ('TV', TVSettingsScreen()),
+  ]) {
+    testWidgets(
+        '$name YT Music settings keep cover and lyrics opt-ins independent',
+        (tester) async {
+      tester.view.physicalSize =
+          name == 'TV' ? const Size(1280, 720) : const Size(360, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MultiBlocProvider(
+          providers: [
+            BlocProvider<AppCubit>.value(value: appCubit),
+            BlocProvider.value(value: settingsCubit),
+          ],
+          child: MaterialApp(
+              locale: const Locale('en'),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: screen)));
+      await tester.pumpAndSettle();
+      final lyrics = find.byKey(const ValueKey('music-lrclib-setting'));
+      final cover = find.byKey(const ValueKey('music-community-cover-setting'));
+      await tester.scrollUntilVisible(find.text('YT Music'), 400,
+          scrollable: find.byType(Scrollable).first);
+      await tester.ensureVisible(cover);
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(lyrics).value, isFalse);
+      expect(tester.widget<SwitchListTile>(cover).value, isFalse);
+      await tester.runAsync(() => setLrclibEnabled(true));
+      await tester.pumpAndSettle();
+      expect(tester.widget<SwitchListTile>(lyrics).value, isTrue);
+      expect(tester.widget<SwitchListTile>(cover).value, isFalse);
+      if (name == 'TV') {
+        Focus.of(tester.element(find.text('Use LRCLIB for lyrics')))
+            .requestFocus();
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        await tester.pumpAndSettle();
+        expect(isCommunityCoverArtEnabled(), isTrue);
+        // Simulate alternate remote OK keys using a Flutter key map which
+        // defines both names. The widget and focus traversal still use TV UI.
+        for (final (key, expected) in [
+          (LogicalKeyboardKey.accept, false),
+          (LogicalKeyboardKey.open, true),
+        ]) {
+          await tester.sendKeyEvent(key,
+              platform: 'web', physicalKey: PhysicalKeyboardKey.select);
+          await tester.pumpAndSettle();
+          expect(isCommunityCoverArtEnabled(), expected);
+        }
+      } else {
+        await tester.tap(cover);
+      }
+      await tester.pumpAndSettle();
+      expect(isCommunityCoverArtEnabled(), isTrue);
+      expect(tester.widget<SwitchListTile>(cover).value, isTrue);
+      await tester.ensureVisible(lyrics);
+      await tester.pumpAndSettle();
+      await tester.tap(lyrics);
+      await tester.pumpAndSettle();
+      expect(isLrclibEnabled(), isFalse);
+      expect(isCommunityCoverArtEnabled(), isTrue);
+    });
+  }
 
   for (final (name, screen) in const [
     ('phone', VideoPlayerSettingsScreen()),
@@ -906,6 +1089,45 @@ Future<void> main() async {
     }
   });
 
+  test('rapid Repeat taps advance once per input while persistence is busy',
+      () async {
+    final database = db;
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final first = settingsCubit.setNextRepeatMode();
+    await started.future;
+    final second = settingsCubit.setNextRepeatMode();
+    pending.complete();
+    await Future.wait([first, second]);
+    db = database;
+    expect(settingsCubit.state.playerRepeatMode, PlayerRepeat.repeatOne);
+    expect(database.getSettings(playerRepeat)?.value,
+        PlayerRepeat.repeatOne.index.toString());
+  });
+
+  test('pending Repeat changes cannot change another profile’s playback mode',
+      () async {
+    final database = db;
+    final original = database.profileId;
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database.forProfile(original), pending, started);
+    final first = settingsCubit.setNextRepeatMode();
+    await started.future;
+    final second = settingsCubit.setNextRepeatMode();
+    db = database;
+    await database.useProfile(other.id);
+    appCubit.advanceSession();
+    pending.complete();
+    await Future.wait([first, second]);
+    expect(settingsCubit.state.playerRepeatMode, PlayerRepeat.noRepeat);
+    expect(database.getSettings(playerRepeat), isNull);
+    expect(database.forProfile(original).getSettings(playerRepeat)?.value,
+        PlayerRepeat.repeatAll.index.toString());
+  });
+
   test('subtitle size changes from separate controls save in order', () async {
     final database = db;
     final pending = Completer<void>();
@@ -1020,6 +1242,9 @@ class _DelayedSettingsDb implements IDbClient {
   @override
   IDbClient forProfile(String id) =>
       _DelayedSettingsDb(delegate.forProfile(id), pending, started);
+
+  @override
+  SettingsValue? getSettings(String name) => delegate.getSettings(name);
 
   @override
   Future<void> saveSetting(SettingsValue setting) async {

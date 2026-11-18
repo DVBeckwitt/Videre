@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
@@ -55,6 +56,7 @@ import '../models/backend_playback.dart';
 import '../models/backend_recovery.dart';
 import '../models/playback_recovery.dart';
 import '../models/playback_learning_clock.dart';
+import '../models/music_audio_quality.dart';
 
 export '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 
@@ -107,6 +109,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static const _learningCheckpointInterval = Duration(seconds: 15);
   final SettingsCubit settings;
   final musicSound = MusicSoundController();
+  MusicAudioQualityMenu? musicAudioQuality;
   final _learningTime = Stopwatch()..start();
   final int Function()? _learningTimeMicroseconds;
   _RecommendationPlayback? _learningPlayback;
@@ -2185,8 +2188,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           }
 
           try {
+            final isMusic = video is Video && video.musicMetadata != null;
+            final loadVideo =
+                isMusic ? service.getMusicVideo : service.getVideo;
+            final loadBackendVideo = isMusic
+                ? service.getMusicVideoForBackend
+                : service.getVideoForBackend;
             v = backendRequest == null
-                ? await service.getVideo(video.videoId,
+                ? await loadVideo(video.videoId,
                     onBackendRequest: onBackendRequest,
                     loadObserver: VideoLoadObserver(
                       isCurrent: () => active() && metadataPending,
@@ -2197,8 +2206,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                             type: MediaEventType.metadataRetry));
                       },
                     ))
-                : await service.getVideoForBackend(
-                    video.videoId, backendRequest,
+                : await loadBackendVideo(video.videoId, backendRequest,
                     onBackendRequest: onBackendRequest, isCurrent: active);
           } finally {
             metadataPending = false;
@@ -3275,25 +3283,54 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<MediaItem?> getMediaItem(int index) async {
+    final profile = db.profileId;
     if (state.videos.isNotEmpty) {
-      var e = state.videos[index];
-      final music = e.musicMetadata;
-      final musicThumbnails = music?.thumbnails ?? const [];
-      final thumbnail = ImageObject.getBestThumbnail(
-              musicThumbnails.isEmpty ? e.videoThumbnails : musicThumbnails)
-          ?.url;
-      String? artworkUrl;
+      final e = state.videos[index];
+      final playing = state.currentlyPlaying;
+      final source = playing != null &&
+              playing.videoId == e.videoId &&
+              playbackQueueId(playing) == playbackQueueId(e)
+          ? playing
+          : e;
+      final music = source.musicMetadata ?? e.musicMetadata;
+      Uri? artwork;
       Map<String, String>? artworkHeaders;
-      if (thumbnail != null && thumbnail.isNotEmpty) {
-        final playing = state.currentlyPlaying;
-        final server = (playing?.videoId == e.videoId
-                ? playing?.backendPlayback?.server
-                : null) ??
-            e.backendPlayback?.server ??
-            await db.getCurrentlySelectedServer();
-        artworkUrl = invidiousImageUrl(thumbnail, server);
-        if (artworkUrl != null) {
-          artworkHeaders = server.headersForUrl(artworkUrl);
+      if (music != null && source.downloadPlaybackOnly) {
+        final local = admittedMusicDownload(source);
+        if (local?.profileId == profile) {
+          artwork = (await local?.existingSongArtwork)?.uri;
+        }
+      } else {
+        final connection = music == null
+            ? source.backendPlayback ?? e.backendPlayback
+            : source.playbackConnection ??
+                source.backendPlayback ??
+                e.playbackConnection ??
+                e.backendPlayback;
+        final owner = connection?.server;
+        final images = music == null
+            ? e.videoThumbnails
+            : displaySongThumbnails(
+                e.videoId,
+                music.thumbnails,
+                [
+                  ...source.videoThumbnails,
+                  if (!identical(source, e)) ...e.videoThumbnails,
+                ],
+                artTrack: music.isArtTrack || source.isStockArtTrack,
+                instanceUrl: owner?.url ?? settings.appCubit.state.server?.url);
+        final thumbnail = music == null
+            ? ImageObject.getBestThumbnail(images)?.url
+            : ImageObject.getThumbnailUrlsForSize(images,
+                    width: 256, height: 256)
+                .firstOrNull;
+        if (thumbnail != null && thumbnail.isNotEmpty) {
+          final server = owner ?? await db.getCurrentlySelectedServer();
+          final url = invidiousImageUrl(thumbnail, server);
+          if (url != null) {
+            artwork = Uri.tryParse(url);
+            artworkHeaders = server.headersForUrl(url);
+          }
         }
       }
       return MediaItem(
@@ -3302,18 +3339,21 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           artist: music?.artist ?? e.author,
           duration: Duration(seconds: e.lengthSeconds ?? 1),
           album: music?.album ?? '',
-          artUri: artworkUrl == null ? null : Uri.tryParse(artworkUrl),
+          artUri: artwork,
           artHeaders: artworkHeaders);
     } else if (state.offlineVideos.isNotEmpty) {
-      var e = state.offlineVideos[index];
-      var path = await e.thumbnailPath;
+      final e = state.offlineVideos[index];
+      if (e.musicMetadata != null && e.profileId != profile) return null;
+      final artwork = e.musicMetadata == null
+          ? Uri.file(await e.thumbnailPath)
+          : (await e.existingSongArtwork)?.uri;
       return MediaItem(
           id: e.videoId,
           title: e.musicMetadata?.title ?? e.title,
           artist: e.musicMetadata?.artist ?? e.author,
           duration: Duration(seconds: e.lengthSeconds),
           album: e.musicMetadata?.album ?? '',
-          artUri: Uri.file(path));
+          artUri: artwork);
     }
     return null;
   }

@@ -1,6 +1,18 @@
+import 'dart:collection';
+
 import 'package:json_annotation/json_annotation.dart';
 
 part 'image_object.g.dart';
+
+/// Thumbnail size selection stays within each group. A larger fallback
+/// image shouldn't displace a preferred image before its request is tried.
+class _ThumbnailFallbacks extends UnmodifiableListView<ImageObject> {
+  final List<ImageObject> preferred;
+  final List<ImageObject> fallback;
+
+  _ThumbnailFallbacks(this.preferred, this.fallback)
+      : super([...preferred, ...fallback]);
+}
 
 @JsonSerializable()
 class ImageObject {
@@ -16,8 +28,21 @@ class ImageObject {
 
   Map<String, dynamic> toJson() => _$ImageObjectToJson(this);
 
+  static List<ImageObject> withFallback(
+      List<ImageObject> preferred, List<ImageObject> fallback) {
+    if (preferred.isEmpty) return fallback;
+    if (fallback.isEmpty) return preferred;
+    return _ThumbnailFallbacks(preferred, fallback);
+  }
+
   static List<String> getThumbnailUrlsByPreferredOrder(
       List<ImageObject>? images) {
+    if (images is _ThumbnailFallbacks) {
+      return [
+        ...getThumbnailUrlsByPreferredOrder(images.preferred),
+        ...getThumbnailUrlsByPreferredOrder(images.fallback),
+      ];
+    }
     final thumbnails = _getThumbnailsByPreferredORder(images);
     final maxresIndex =
         thumbnails.indexWhere((thumbnail) => thumbnail.quality == 'maxres');
@@ -34,6 +59,14 @@ class ImageObject {
   /// retaining the established fallback order and every supplied candidate.
   static List<String> getThumbnailUrlsForSize(List<ImageObject>? images,
       {required double width, required double height}) {
+    if (images is _ThumbnailFallbacks) {
+      return [
+        ...getThumbnailUrlsForSize(images.preferred,
+            width: width, height: height),
+        ...getThumbnailUrlsForSize(images.fallback,
+            width: width, height: height),
+      ];
+    }
     final urls = getThumbnailUrlsByPreferredOrder(images);
     if (!width.isFinite || !height.isFinite || width <= 0 || height <= 0) {
       return urls;
@@ -71,5 +104,7 @@ class ImageObject {
   }
 
   static ImageObject? getBestThumbnail(List<ImageObject>? images) =>
-      _getThumbnailsByPreferredORder(images).firstOrNull;
+      images is _ThumbnailFallbacks
+          ? getBestThumbnail(images.preferred)
+          : _getThumbnailsByPreferredORder(images).firstOrNull;
 }

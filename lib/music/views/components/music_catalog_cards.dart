@@ -1,13 +1,16 @@
+import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:flutter/material.dart';
 
-/// A focusable catalog item. Artwork never substitutes a video's thumbnail.
+/// A focusable song, artist, or collection from the Music catalog.
 class MusicCatalogCard extends StatefulWidget {
   final String title;
   final String? subtitle;
   final List<ImageObject> thumbnails;
+  final MusicTrack? song;
   final VoidCallback onOpen;
   final VoidCallback? onLongPress;
   final bool artist;
@@ -17,7 +20,8 @@ class MusicCatalogCard extends StatefulWidget {
   const MusicCatalogCard({
     super.key,
     required this.title,
-    required this.thumbnails,
+    this.thumbnails = const [],
+    this.song,
     required this.onOpen,
     this.onLongPress,
     this.subtitle,
@@ -38,9 +42,11 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final radius = BorderRadius.circular(widget.artist ? 1000 : 6);
+    final song = widget.song;
+    final images = song?.displayThumbnails ?? widget.thumbnails;
     final artwork = widget.artist
-        ? ChannelAvatar(name: widget.title, images: widget.thumbnails)
-        : widget.thumbnails.isEmpty
+        ? ChannelAvatar(name: widget.title, images: images, instanceOnly: true)
+        : images.isEmpty
             ? DecoratedBox(
                 decoration: BoxDecoration(
                   color: colors.surfaceContainerHigh,
@@ -50,7 +56,8 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                     size: 40, color: colors.onSurfaceVariant),
               )
             : Thumbnail(
-                images: widget.thumbnails,
+                images: images,
+                instanceOnly: true,
                 decoration: BoxDecoration(borderRadius: radius),
               );
     final card = Semantics(
@@ -83,7 +90,15 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                   aspectRatio: 1,
                   child: ExcludeSemantics(
                     child: Stack(fit: StackFit.expand, children: [
-                      artwork,
+                      if (song == null)
+                        artwork
+                      else
+                        CommunityMusicArtwork(
+                          videoId: song.videoId,
+                          music: song.musicMetadata,
+                          durationSeconds: song.durationSeconds,
+                          fallback: artwork,
+                        ),
                       if (widget.showPlayIndicator)
                         const PositionedDirectional(
                           end: 8,

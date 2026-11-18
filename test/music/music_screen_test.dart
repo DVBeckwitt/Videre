@@ -19,6 +19,7 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/playback_session.dart';
@@ -31,6 +32,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
@@ -361,11 +363,28 @@ void main() {
     expect(find.text('Albums'), findsNothing);
     expect(find.textContaining('selected Invidious instance'), findsOneWidget);
     await search(tester, 'song');
-    catalog.responses.single.complete([first]);
+    final frame = '/vi/${first.videoId}/mqdefault.jpg';
+    catalog.responses.single.complete([
+      MusicTrack(
+          videoId: first.videoId,
+          title: first.title,
+          artists: first.artists,
+          videoThumbnails: [ImageObject(null, frame, 320, 180)])
+    ]);
     await tester.pumpAndSettle();
+    final result = find.byKey(ValueKey('music-song-search-${first.videoId}'));
+    final community = tester.widget<CommunityMusicArtwork>(find.descendant(
+        of: result, matching: find.byType(CommunityMusicArtwork)));
+    expect(community.allowLookup, isFalse);
+    final artwork = tester.widget<Thumbnail>(
+        find.descendant(of: result, matching: find.byType(Thumbnail)));
+    expect(artwork.images!.single.url, frame);
+    expect(artwork.useInvidiousProxy, isTrue);
     await tester.tap(find.text('First song'));
     await tester.pumpAndSettle();
-    expect(player.calls.single.videos.single.videoId, first.videoId);
+    final played = player.calls.single.videos.single;
+    expect(played.videoId, first.videoId);
+    expect(played.musicMetadata!.thumbnails, isEmpty);
     expect(player.calls.single.audio, isTrue);
   });
 
@@ -542,76 +561,84 @@ void main() {
     });
   }
 
-  testWidgets('a saved song link retains the artwork available in Quick Picks',
-      (tester) async {
-    const selected = Server(url: 'https://instance.example', inUse: true);
-    const cover = 'https://instance.example/vi/firstsong01/mqdefault.jpg';
-    final audio = AdaptiveFormat(
-        null,
-        '128000',
-        null,
-        'https://instance.example/audio?itag=251',
-        '251',
-        'audio/webm; codecs="opus"',
-        '12345',
-        '1700000000000',
-        'RECTANGULAR',
-        'webm',
-        'opus',
-        null,
-        null);
-    await tester.runAsync(() async {
-      await db.upsertServer(selected);
-      final server = await db.getCurrentlySelectedServer();
-      await app.initState();
-      await MusicLibraryService.forProfile(db, db.profileId)
-          .save(MusicLibraryEntry(
-        kind: MusicLibraryKind.song,
-        id: first.videoId,
-        title: 'Bookmarked song',
-        subtitle: 'Bookmarked artist',
-        thumbnails: [ImageObject('medium', cover, 320, 180)],
-      ));
-      final provenance = DownloadPlaybackProvenance.create(
-          video: Video(videoId: first.videoId, adaptiveFormats: [audio]),
-          server: server,
-          audioOnly: true,
-          container: DownloadContainer.webm,
-          audio: audio,
-          videoFormat: null,
-          byteLength: 10000,
-          sha256: 'a' * 64)!;
-      await db.upsertDownload(DownloadedVideo(
-          videoId: first.videoId,
-          title: 'Saved song',
-          author: 'Saved artist',
-          accountId: server.accountId,
-          storageUri: 'content://music/saved-song',
-          lengthSeconds: 180,
-          quality: 'audio',
-          container: DownloadContainer.webm,
-          audioOnly: true,
-          downloadComplete: true,
-          playbackProvenance: provenance,
-          musicMetadata: const MusicMetadata(
-              title: 'Saved song',
-              artist: 'Saved artist',
-              album: 'Saved album')));
+  for (final (label, image, expectedCovers) in [
+    ('catalog cover', 'https://lh3.googleusercontent.com/album-cover', 1),
+    (
+      'video thumbnail',
+      'https://instance.example/vi/firstsong01/mqdefault.jpg',
+      0
+    ),
+  ]) {
+    testWidgets('a saved song link handles a cached $label', (tester) async {
+      const selected = Server(url: 'https://instance.example', inUse: true);
+      final audio = AdaptiveFormat(
+          null,
+          '128000',
+          null,
+          'https://instance.example/audio?itag=251',
+          '251',
+          'audio/webm; codecs="opus"',
+          '12345',
+          '1700000000000',
+          'RECTANGULAR',
+          'webm',
+          'opus',
+          null,
+          null);
+      await tester.runAsync(() async {
+        await db.upsertServer(selected);
+        final server = await db.getCurrentlySelectedServer();
+        await app.initState();
+        await MusicLibraryService.forProfile(db, db.profileId)
+            .save(MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: first.videoId,
+          title: 'Bookmarked song',
+          subtitle: 'Bookmarked artist',
+          thumbnails: [ImageObject(null, image, 320, 320)],
+        ));
+        final provenance = DownloadPlaybackProvenance.create(
+            video: Video(videoId: first.videoId, adaptiveFormats: [audio]),
+            server: server,
+            audioOnly: true,
+            container: DownloadContainer.webm,
+            audio: audio,
+            videoFormat: null,
+            byteLength: 10000,
+            sha256: 'a' * 64)!;
+        await db.upsertDownload(DownloadedVideo(
+            videoId: first.videoId,
+            title: 'Saved song',
+            author: 'Saved artist',
+            accountId: server.accountId,
+            storageUri: 'content://music/saved-song',
+            lengthSeconds: 180,
+            quality: 'audio',
+            container: DownloadContainer.webm,
+            audioOnly: true,
+            downloadComplete: true,
+            playbackProvenance: provenance,
+            musicMetadata: const MusicMetadata(
+                title: 'Saved song',
+                artist: 'Saved artist',
+                album: 'Saved album')));
+      });
+      player.sponsorFailureIsAsync = true;
+      await show(tester, screen: MusicScreen(videoId: first.videoId));
+      // The remote cover can keep its loading indicator animated in this test.
+      // The song and its artwork metadata are published before image decoding.
+      await tester.pump();
+      expect(catalog.songObserver, isNull);
+      final played = player.calls.single.videos.single;
+      expect(played.downloadPlaybackOnly, isTrue);
+      expect(played.musicMetadata?.artist, 'Saved artist');
+      expect(played.musicMetadata?.album, 'Saved album');
+      final covers = played.musicMetadata!.thumbnails;
+      expect(covers, hasLength(expectedCovers));
+      if (expectedCovers > 0) expect(covers.single.url, image);
+      expect(find.text('Saved song'), findsOneWidget);
     });
-    player.sponsorFailureIsAsync = true;
-    await show(tester, screen: MusicScreen(videoId: first.videoId));
-    // The remote cover can keep its loading indicator animated in this test.
-    // The song and its artwork metadata are published before image decoding.
-    await tester.pump();
-    expect(catalog.songObserver, isNull);
-    final played = player.calls.single.videos.single;
-    expect(played.downloadPlaybackOnly, isTrue);
-    expect(played.musicMetadata?.artist, 'Saved artist');
-    expect(played.musicMetadata?.album, 'Saved album');
-    expect(played.musicMetadata?.thumbnails.single.url, cover);
-    expect(played.videoThumbnails.single.url, cover);
-    expect(find.text('Saved song'), findsOneWidget);
-  });
+  }
 
   testWidgets('song links show retry feedback and clear it before playback',
       (tester) async {

@@ -2,6 +2,7 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -12,6 +13,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/no_server_selected.dart';
 import 'package:clipious/utils/interfaces/db.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/video_post_processing.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/services/watch_history.dart';
@@ -197,14 +199,21 @@ class RecommendationCandidates {
     if (!_current || limit <= 0) return const [];
     final maximum = limit.clamp(0, maximumLocalCandidates);
     try {
-      return _videos(
+      final videos = _videos(
         _database
             .getLocalHistory()
             .where((entry) => entry.musicMetadata != null)
             .map((entry) => entry.toVideo()),
         limit: maximum,
         music: true,
-      ).map(_musicTrack).toList(growable: false);
+      );
+      if (videos.isEmpty) return const [];
+      final savedCovers =
+          MusicLibraryService.forProfile(_source, _profileId).coversBySongId;
+      return videos
+          .map((video) =>
+              _musicTrack(video, savedCovers: savedCovers[video.videoId]))
+          .toList(growable: false);
     } on UnsupportedError {
       return const [];
     } on StateError {
@@ -442,9 +451,10 @@ class RecommendationCandidates {
         musicMetadata: video.musicMetadata,
       );
 
-  static MusicTrack _musicTrack(Video video) {
+  static MusicTrack _musicTrack(Video video, {List<ImageObject>? savedCovers}) {
     final metadata = video.musicMetadata;
     final artist = metadata?.artist ?? video.author ?? '';
+    final covers = songCovers(metadata?.thumbnails ?? const []);
     return MusicTrack(
       videoId: video.videoId,
       title: metadata?.title ?? video.title ?? video.videoId,
@@ -453,9 +463,9 @@ class RecommendationCandidates {
       uploaderChannelUrl: video.authorUrl,
       albumTitle: metadata?.album,
       durationSeconds: video.lengthSeconds,
-      thumbnails: metadata?.thumbnails.isNotEmpty == true
-          ? metadata!.thumbnails
-          : video.videoThumbnails,
+      isArtTrack: metadata?.isArtTrack ?? false,
+      thumbnails: savedCovers ?? covers,
+      videoThumbnails: video.videoThumbnails,
     );
   }
 }

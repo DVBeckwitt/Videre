@@ -1,3 +1,5 @@
+import 'package:clipious/music/views/components/music_playback_artwork.dart';
+import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
@@ -44,24 +46,34 @@ class AudioPlayer extends StatelessWidget {
             child: Stack(
               alignment: Alignment.topCenter,
               children: [
-                playerState.video != null
-                    ? VideoThumbnailView(
-                        musicThumbnails:
-                            playerState.video!.musicMetadata?.thumbnails,
-                        images: playerState.video!.deArrowThumbnailUrl == null
-                            ? playerState.video!.videoThumbnails
-                            : null,
-                        decoration: const BoxDecoration(),
-                        videoId: playerState.video!.videoId,
-                        thumbnails: playerState.video?.thumbnails ?? [],
-                      )
-                    : playerState.offlineVideo != null
-                        ? OfflineVideoThumbnail(
-                            borderRadius: 0,
-                            key: ValueKey(
-                                playerState.offlineVideo?.videoId ?? ''),
-                            video: playerState.offlineVideo!)
-                        : const SizedBox.shrink(),
+                if ((video?.musicMetadata ?? offlineVideo?.musicMetadata)
+                    case final music?)
+                  if (context.select((PlayerCubit cubit) =>
+                      cubit.state.isPip ||
+                      cubit.state.fullScreenState ==
+                          FullScreenState.fullScreen))
+                    AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: MusicPlaybackArtwork(
+                            music: music, video: video, offline: offlineVideo))
+                  else
+                    // Music has its own visible artwork. This mounted decoder
+                    // stays offstage until fullscreen or picture-in-picture.
+                    const SizedBox.shrink()
+                else if (video case final source?)
+                  VideoThumbnailView(
+                    images: source.deArrowThumbnailUrl == null
+                        ? source.videoThumbnails
+                        : null,
+                    decoration: const BoxDecoration(),
+                    videoId: source.videoId,
+                    thumbnails: source.thumbnails,
+                  )
+                else if (offlineVideo case final source?)
+                  OfflineVideoThumbnail(
+                      borderRadius: 0,
+                      key: ValueKey(source.videoId),
+                      video: source),
                 PlayerControls(
                     mediaPlayerCubit: context.read<AudioPlayerCubit>())
               ],

@@ -15,7 +15,9 @@ import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
@@ -361,7 +363,9 @@ class _MusicScreenState extends State<MusicScreen> {
               uploaderChannelUrl: saved?.authorUrl,
               albumTitle: savedMusic.album,
               durationSeconds: saved?.lengthSeconds,
+              isArtTrack: savedMusic.isArtTrack,
               thumbnails: _savedSongArtwork(saved!, current),
+              videoThumbnails: saved.videoThumbnails,
               playbackVideo: saved)
           : await musicCatalogService.getSong(id,
               loadObserver: VideoLoadObserver(
@@ -386,9 +390,8 @@ class _MusicScreenState extends State<MusicScreen> {
   }
 
   List<ImageObject> _savedSongArtwork(Video saved, bool Function() isCurrent) {
-    final artwork = saved.musicMetadata?.thumbnails ?? const <ImageObject>[];
+    final artwork = songCovers(saved.musicMetadata?.thumbnails ?? const []);
     if (artwork.isNotEmpty) return artwork;
-    if (saved.videoThumbnails.isNotEmpty) return saved.videoThumbnails;
     try {
       // The ID-only route can recover covers already shown in Quick Picks.
       final cached = RecommendationCandidates(db, isCurrent: isCurrent)
@@ -513,6 +516,7 @@ class _MusicScreenState extends State<MusicScreen> {
           ? const Icon(Icons.music_note)
           : Thumbnail(
               images: images,
+              instanceOnly: true,
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
             ));
 
@@ -548,7 +552,14 @@ class _MusicScreenState extends State<MusicScreen> {
     return ListTile(
       key: ValueKey('music-song-${index ?? 'search'}-${track.videoId}'),
       leading: index == null
-          ? _artwork(track.thumbnails)
+          ? SizedBox.square(
+              dimension: 56,
+              child: CommunityMusicArtwork(
+                  videoId: track.videoId,
+                  music: track.musicMetadata,
+                  durationSeconds: track.durationSeconds,
+                  fallback: _artwork(track.displayThumbnails)),
+            )
           : SizedBox.square(
               dimension: 36,
               child: Stack(fit: StackFit.expand, children: [
@@ -667,7 +678,10 @@ class _MusicScreenState extends State<MusicScreen> {
             final artist = _artists[index];
             return ListTile(
                 leading: ChannelAvatar(
-                    name: artist.name, images: artist.thumbnails, size: 56),
+                    name: artist.name,
+                    images: artist.thumbnails,
+                    size: 56,
+                    instanceOnly: true),
                 title: Text(artist.name),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => _openArtist(artist.id));
@@ -755,6 +769,7 @@ class _MusicScreenState extends State<MusicScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           ChannelAvatar(
               name: artistPage.artist.name,
+              instanceOnly: true,
               images: artistPage.artist.thumbnails,
               size: 56),
           const SizedBox(height: 12),

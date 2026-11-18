@@ -24,6 +24,7 @@ import '../../screens/network_proxy.dart';
 import '../../../../utils/motion.dart';
 import '../../../../recommendations/views/recommendation_settings.dart';
 import '../../components/playback_cache_settings.dart';
+import '../../components/music_provider_settings.dart';
 
 var log = Logger('TvSettings');
 
@@ -439,6 +440,8 @@ class TVSettingsScreen extends StatelessWidget {
                   trailing:
                       Switch(onChanged: (value) {}, value: state.forceTvUi),
                 ),
+                SettingsTitle(title: locals.ytMusicSettings),
+                const MusicProviderSettings(),
                 SettingsTitle(title: locals.about),
                 SettingsTile(
                   title: MaterialLocalizations.of(context).licensesPageTitle,

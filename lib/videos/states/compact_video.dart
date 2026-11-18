@@ -17,10 +17,11 @@ class CompactVideoCubit extends Cubit<CompactVideoState> {
   }
 
   getThumbnail() async {
-    if (state.offlineVideo != null) {
+    final video = state.offlineVideo;
+    if (video != null && video.musicMetadata == null) {
       try {
-        var path = await state.offlineVideo?.thumbnailPath;
-        var file = File(path ?? 'abc');
+        var path = await video.thumbnailPath;
+        var file = File(path);
         var exists = await file.exists();
         var hasSize = await file.length() > 0;
         if (exists && hasSize) {

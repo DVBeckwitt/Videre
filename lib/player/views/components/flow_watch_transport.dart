@@ -49,6 +49,8 @@ class _FlowWatchTransportState extends State<FlowWatchTransport> {
   Widget build(BuildContext context) {
     final duration = widget.duration.inMilliseconds.toDouble();
     final visible = widget.showActions || widget.showTime;
+    final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
+    final hasTimePill = widget.isLive || duration > 0;
     final format = Theme.of(context).textTheme.labelMedium;
     final locals = AppLocalizations.of(context)!;
     final current = prettyDurationCustom(widget.position);
@@ -64,52 +66,58 @@ class _FlowWatchTransportState extends State<FlowWatchTransport> {
         if (visible)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(children: [
-              if (widget.isLive || duration > 0)
-                Flexible(
-                  child: Material(
-                    color: Colors.black54,
-                    shape: const StadiumBorder(),
-                    child: InkWell(
-                      key: const ValueKey('flow-watch-time-pill'),
-                      customBorder: const StadiumBorder(),
-                      onTap: widget.isLive
-                          ? null
-                          : () {
-                              setState(() => _remaining = !_remaining);
-                              widget.onInteract();
-                            },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 7),
-                        child: Text(
-                          widget.isLive
-                              ? '$current · ${locals.streamIsLive}'
-                              : '$elapsed / $total',
-                          style: format?.copyWith(color: Colors.white),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+            child: Row(
+                mainAxisAlignment: portrait
+                    ? MainAxisAlignment.spaceBetween
+                    : MainAxisAlignment.start,
+                children: [
+                  if (hasTimePill)
+                    Flexible(
+                      child: Material(
+                        color: Colors.black54,
+                        shape: const StadiumBorder(),
+                        child: InkWell(
+                          key: const ValueKey('flow-watch-time-pill'),
+                          customBorder: const StadiumBorder(),
+                          onTap: widget.isLive
+                              ? null
+                              : () {
+                                  setState(() => _remaining = !_remaining);
+                                  widget.onInteract();
+                                },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 7),
+                            child: Text(
+                              widget.isLive
+                                  ? '$current · ${locals.streamIsLive}'
+                                  : '$elapsed / $total',
+                              style: format?.copyWith(color: Colors.white),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-              if (widget.showActions) ...[
-                const Spacer(),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: widget.onToggleMute,
-                  icon: Icon(widget.muted
-                      ? Icons.volume_off_rounded
-                      : Icons.volume_up_rounded),
-                ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  onPressed: widget.onFullscreen,
-                  icon: const Icon(Icons.fullscreen_rounded),
-                ),
-              ],
-            ]),
+                  if (widget.showActions) ...[
+                    if (!portrait || !hasTimePill) const Spacer(),
+                    Row(mainAxisSize: MainAxisSize.min, children: [
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onToggleMute,
+                        icon: Icon(widget.muted
+                            ? Icons.volume_off_rounded
+                            : Icons.volume_up_rounded),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onFullscreen,
+                        icon: const Icon(Icons.fullscreen_rounded),
+                      ),
+                    ]),
+                  ],
+                ]),
           ),
         if (widget.isLive)
           const ColoredBox(color: Colors.redAccent, child: SizedBox(height: 3))

@@ -30,6 +30,16 @@ class _DelayedMetadataService extends Service {
   final sponsorRequests = <List<SponsorSegmentType>>[];
 
   @override
+  Future<Video> getMusicVideo(String videoId,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) =>
+      getVideo(videoId,
+          serverOverride: serverOverride,
+          onBackendRequest: onBackendRequest,
+          loadObserver: loadObserver);
+
+  @override
   Future<Video> getVideo(String videoId,
       {Server? serverOverride,
       void Function(BackendPlayback request)? onBackendRequest,

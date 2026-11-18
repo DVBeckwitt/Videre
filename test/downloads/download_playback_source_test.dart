@@ -396,9 +396,30 @@ void main() {
     expect(prepared, isNotNull);
     expect(admitted, isNotNull);
     expect(admitted!.download, same(database.download));
+    expect(prepared!.playbackSourceId, same(admitted));
+    expect(admittedMusicDownload(prepared), same(database.download));
+    expect(admittedMusicDownload(prepared.copyWith(playbackSourceId: Object())),
+        isNull);
     expect(admitted!.download.sponsorSegments, hasLength(1));
     expect(admitted!.download.sponsorSegments.single.segment, [10, 15]);
     expect(admitted!.playbackCache['accountId'], _server.accountId);
+  });
+
+  test('queued cover is kept when an older download contains only a frame',
+      () async {
+    final frame = ImageObject(null, '/vi/song/default.jpg', 640, 360);
+    final cover = ImageObject(
+        null, 'https://lh3.googleusercontent.com/album=w500-h500', 500, 500);
+    database.download = database.download!.copyWith(
+        musicMetadata: MusicMetadata(
+            title: 'Saved title', artist: 'Saved artist', thumbnails: [frame]));
+    final queued = Video(
+        videoId: 'song',
+        musicMetadata: MusicMetadata(
+            title: 'Song', artist: 'Artist', thumbnails: [cover]));
+    final prepared = (await prepare(video: queued))!;
+    expect(prepared.musicMetadata!.thumbnails, [cover]);
+    expect(admittedMusicDownload(prepared)!.musicMetadata!.thumbnails, [frame]);
   });
 
   test('rejected local preparation cannot expose saved segment metadata',

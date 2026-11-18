@@ -2,6 +2,7 @@ import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -329,6 +330,76 @@ void main() {
           'https://instance.example/ggpht/album=w512-h512');
       expect(imageCache.requests.single.headers,
           containsPair('X-Test', 'music-artwork'));
+      await expectArtworkPixels(tester);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  for (final artist in [true, false]) {
+    testWidgets(
+        'Music catalog images stay on the instance with external metadata (artist: $artist)',
+        (tester) async {
+      await selectServer(tester);
+      final images = [
+        ImageObject(
+            'maxres',
+            'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=stockSong01',
+            100,
+            100),
+        ImageObject(null, sourceUrl, 16, 16),
+      ];
+      try {
+        await show(
+            tester,
+            SizedBox(
+                width: 128,
+                child: MusicCatalogCard(
+                    title: artist ? 'Artist' : 'Collection',
+                    artist: artist,
+                    thumbnails: images,
+                    onOpen: () {})));
+        expect(imageCache.requests.map((r) => r.url),
+            ['https://instance.example/ggpht/album=w512-h512']);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    });
+  }
+
+  testWidgets(
+      'unavailable catalog cover and Art Track still fall through to the same video',
+      (tester) async {
+    await selectServer(tester);
+    const id = 'stockSong01';
+    const catalog = 'https://instance.example/ggpht/album=w512-h512';
+    const high = 'https://instance.example/vi/$id/maxresdefault.jpg';
+    const low = 'https://instance.example/vi/$id/2.jpg';
+    imageCache.failUrls.addAll([catalog, high]);
+    try {
+      await show(
+          tester,
+          SizedBox(
+              width: 160,
+              child: MusicCatalogCard(
+                  title: 'Song',
+                  onOpen: () {},
+                  song: MusicTrack(
+                      videoId: id,
+                      title: 'Song',
+                      isArtTrack: true,
+                      thumbnails: [
+                        ImageObject(null, sourceUrl, 32, 32)
+                      ],
+                      videoThumbnails: [
+                        ImageObject(null, '/vi/$id/2.jpg', 120, 90),
+                        ImageObject(
+                            null, '/vi/$id/maxresdefault.jpg', 1280, 720),
+                      ]))));
+      expect(imageCache.requests.map((request) => request.url),
+          [catalog, high, low]);
+      expect(imageCache.requests.map((request) => request.headers),
+          everyElement(containsPair('X-Test', 'music-artwork')));
       await expectArtworkPixels(tester);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());

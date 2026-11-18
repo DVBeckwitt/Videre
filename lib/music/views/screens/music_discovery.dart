@@ -12,6 +12,7 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_chart_picker.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_recommendation_shelves.dart';
@@ -289,6 +290,7 @@ class _SavedSongRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final covers = song.displayThumbnails;
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(12),
@@ -307,20 +309,24 @@ class _SavedSongRow extends StatelessWidget {
               ExcludeSemantics(
                 child: SizedBox.square(
                   dimension: 48,
-                  child: song.thumbnails.isEmpty
-                      ? DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: colors.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Icon(Icons.music_note_rounded,
-                              color: colors.onSurfaceVariant),
-                        )
-                      : Thumbnail(
-                          images: song.thumbnails,
-                          decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(6)),
-                        ),
+                  child: CommunityMusicArtwork(
+                      videoId: song.id,
+                      music: song.toVideo().musicMetadata!,
+                      durationSeconds: song.durationSeconds,
+                      fallback: covers.isEmpty
+                          ? DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: colors.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(Icons.music_note_rounded,
+                                  color: colors.onSurfaceVariant),
+                            )
+                          : Thumbnail(
+                              images: covers,
+                              decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(6)),
+                            )),
                 ),
               ),
               const SizedBox(width: 12),
@@ -763,7 +769,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
                 key: ValueKey('music-discovery-${song.videoId}'),
                 title: song.title,
                 subtitle: song.artists.join(', '),
-                thumbnails: song.thumbnails,
+                song: song,
                 showPlayIndicator: true,
                 badge: matches.isEmpty && !_reasons.containsKey(song.videoId)
                     ? null

@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -373,6 +376,53 @@ void main() {
     });
   }
 
+  test('saving playback from a nested instance keeps a portable song thumbnail',
+      () async {
+    const server = Server(url: 'https://private.example/invidious');
+    final path = '/vi/${song.id}/hqdefault.jpg';
+    final video = Video(
+        videoId: song.id,
+        playbackConnection: BackendPlayback(server),
+        videoThumbnails: [
+          ImageObject(null, '${server.url}$path?token=discard', 480, 360),
+          ImageObject(null, 'https://other.example/invidious$path', 480, 360),
+        ],
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    await library.save(MusicLibraryEntry.song(video));
+    final saved = library.entries.single;
+    expect(saved.thumbnails.single.url, path);
+    expect(saved.displayThumbnails.single.url, path);
+    expect(saved.coverThumbnails, isEmpty);
+  });
+
+  test('saving a verified cover retains the separate same-song fallback',
+      () async {
+    const cover = 'https://lh3.googleusercontent.com/album-cover';
+    const frame = '/vi/abcdefghijk/hqdefault.jpg';
+    final video = Video(
+      videoId: song.id,
+      musicMetadata: MusicMetadata(
+          title: song.title,
+          artist: 'Artist',
+          thumbnails: [ImageObject(null, cover, 256, 256)]),
+      videoThumbnails: [
+        ImageObject(null, '/vi/zzzzzzzzzzz/hqdefault.jpg', 1920, 1080),
+        ImageObject(null, 'https://i.ytimg.com$frame?token=discard', 640, 480),
+      ],
+    );
+    await library.save(MusicLibraryEntry.song(video));
+    final stored = database.getSettings(musicLibrarySettingName)!.value;
+    final row = MusicLibraryEntry.tryParse(
+        (jsonDecode(stored)['entries'] as List).single)!;
+
+    expect(row.displayThumbnails.map((image) => image.url), [cover, frame]);
+    expect(row.coverThumbnails.single.url, cover);
+    expect(library.coversBySongId[song.id]!.single.url, cover);
+    expect(row.toVideo().musicMetadata!.thumbnails.single.url, cover);
+    expect(stored, isNot(contains('zzzzzzzzzzz')));
+    expect(stored, isNot(contains('discard')));
+  });
+
   test('catalog bookmarks still reject unrecognized relative artwork',
       () async {
     await library.save(MusicLibraryEntry.artist(MusicArtist(
@@ -408,6 +458,71 @@ void main() {
     expect(restored.musicMetadata!.title, song.title);
     expect(restored.musicMetadata!.album, song.album);
   });
+
+  test('mixed legacy song art survives saving and respects explicit fallback',
+      () async {
+    const frame = '/vi/abcdefghijk/default.jpg';
+    const cover = 'https://lh3.googleusercontent.com/album-cover';
+    final legacy = {
+      ...song.toJson(),
+      'thumbnails': [
+        ImageObject(null, frame, 320, 180).toJson(),
+        ImageObject(null, cover, 512, 512).toJson(),
+      ],
+    };
+    await library.save(MusicLibraryEntry.tryParse(legacy)!);
+    final restored =
+        MusicLibraryService.forProfile(database, database.profileId);
+    final entry = restored.entries.single;
+    expect(entry.thumbnails.map((image) => image.url), [frame, cover]);
+    expect(entry.usesVideoThumbnails, isFalse);
+    expect(entry.coverThumbnails.single.url, cover);
+    expect(entry.displayThumbnails.map((image) => image.url), [cover, frame]);
+    expect(restored.coversBySongId[song.id]!.single.url, cover);
+
+    await library.save(MusicLibraryEntry.tryParse({
+      ...legacy,
+      'usesVideoThumbnails': true,
+    })!);
+    expect(restored.entries.single.thumbnails, hasLength(2));
+    expect(restored.entries.single.displayThumbnails.single.url, frame);
+    expect(restored.entries.single.coverThumbnails, isEmpty);
+    expect(restored.coversBySongId, isEmpty);
+  });
+
+  for (final isArtTrack in [false, true]) {
+    test('saved stock artwork preserves Art Track provenance $isArtTrack',
+        () async {
+      const still = '/vi/abcdefghijk/hqdefault.jpg';
+      const frame = '/vi/abcdefghijk/1.jpg';
+      final track = MusicTrack(
+          videoId: song.id,
+          title: song.title,
+          isArtTrack: isArtTrack,
+          videoThumbnails: [
+            ImageObject(null, '/vi/zzzzzzzzzzz/mqdefault.jpg', 640, 480),
+            ImageObject(null, frame, 320, 180),
+            ImageObject(null, still, 480, 360),
+          ]);
+      final expected = isArtTrack ? [still, frame] : [frame, still];
+      expect(track.displayThumbnails.map((image) => image.url), expected);
+      final video = track.toVideo();
+      expect(video.musicMetadata!.isArtTrack, isArtTrack);
+      await library.save(MusicLibraryEntry.song(video));
+
+      final stored = database.getSettings(musicLibrarySettingName)!.value;
+      final row = (jsonDecode(stored)['entries'] as List).single as Map;
+      expect(row.containsKey('isArtTrack'), isArtTrack);
+      final entry = MusicLibraryEntry.tryParse(row)!;
+      expect(entry.isArtTrack, isArtTrack);
+      expect(entry.displayThumbnails.map((image) => image.url), expected);
+      expect(entry.coverThumbnails, isEmpty);
+      expect(library.coversBySongId, isEmpty);
+      final restored = Video.fromJson(jsonDecode(jsonEncode(entry.toVideo())));
+      expect(restored.musicMetadata!.isArtTrack, isArtTrack);
+      expect(restored.musicMetadata!.thumbnails, isEmpty);
+    });
+  }
 
   for (final url in [
     '/vi/abcdefghijk/default.jpg',
@@ -454,8 +569,39 @@ void main() {
       }..remove('usesVideoThumbnails');
       final saved = MusicLibraryEntry.tryParse(legacy)!;
       final restored = Video.fromJson(jsonDecode(jsonEncode(saved.toVideo())));
-      expect(saved.usesVideoThumbnails, isFalse);
-      expect(restored.musicMetadata!.thumbnails.single.url, url);
+      expect(saved.thumbnails.single.url, url);
+      if (url.contains('/vi/')) {
+        expect(restored.musicMetadata!.thumbnails, isEmpty);
+        expect(saved.coverThumbnails, isEmpty);
+        expect(
+            saved.displayThumbnails.single.url, '/vi/abcdefghijk/default.jpg');
+      } else {
+        expect(saved.usesVideoThumbnails, isFalse);
+        expect(restored.musicMetadata!.thumbnails.single.url, url);
+        expect(saved.coverThumbnails.single.url, url);
+        expect(saved.displayThumbnails.single.url, url);
+      }
     });
   }
+
+  test('song art excludes unclassified proxy paths and external images', () {
+    final row = MusicLibraryEntry(
+        id: song.id,
+        title: song.title,
+        kind: MusicLibraryKind.song,
+        thumbnails: [
+          for (final url in [
+            '/ggpht/unknown',
+            'https://dearrow-thumb.ajay.app/api/v1/getThumbnail',
+            'https://lh3.googleusercontent.com/vi/song/square.jpg',
+            'https://yt3.ggpht.com/%ff',
+            'https://private@lh3.googleusercontent.com/cover',
+            'https://lh3.googleusercontent.com/cover=w512-h512',
+          ])
+            ImageObject(null, url, 512, 512),
+        ]);
+    expect(row.displayThumbnails.single.url,
+        'https://lh3.googleusercontent.com/cover=w512-h512');
+    expect(row.toJson()['thumbnails'], hasLength(6));
+  });
 }

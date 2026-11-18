@@ -13,6 +13,9 @@ import 'package:crypto/crypto.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/views/components/music_audio_quality_button.dart';
+import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -37,6 +40,8 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:just_audio/just_audio.dart' as native_audio show PlayerState;
@@ -1094,6 +1099,104 @@ void main() {
       }
     });
   }
+
+  testWidgets(
+      'Music quality picker displays the effective Auto rendition and selects a bitrate',
+      (tester) async {
+    final video = _video('song', preferred);
+    await tester.runAsync(() async =>
+        player.emit(player.state.copyWith(currentlyPlaying: video)));
+    const low = (itag: '139', bitrate: 64000, codec: 'AAC', trackId: null);
+    const high = (itag: '140', bitrate: 128000, codec: 'AAC', trackId: null);
+    MusicAudioQuality? selected;
+    player.musicAudioQuality = MusicAudioQualityMenu(
+        videoId: video.videoId,
+        choices: [high, low],
+        selected: null,
+        effective: high,
+        saved: false,
+        select: (choice) async {
+          selected = choice;
+          return true;
+        });
+    await tester.pumpWidget(BlocProvider<PlayerCubit>.value(
+      value: player,
+      child: const MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        home: Scaffold(body: MusicAudioQualityButton()),
+      ),
+    ));
+    await tester.tap(find.byTooltip('Audio quality'));
+    await tester.pumpAndSettle();
+    expect(find.text('Auto'), findsOneWidget);
+    expect(find.text('128 kbps · AAC'), findsNWidgets(2));
+    await tester.tap(find.text('64 kbps · AAC'));
+    await tester.pumpAndSettle();
+    expect(selected, low);
+  });
+
+  test('Music quality changes the proxied rendition at the paused playhead',
+      () async {
+    final native = _NativeAudio();
+    final low = _adaptive('https://r1.googlevideo.com/low', bitrate: '64000');
+    final high = _adaptive('https://r1.googlevideo.com/high');
+    final alternate =
+        _adaptive('https://r1.googlevideo.com/dub', bitrate: '256000')
+          ..audioTrack = const AudioTrack(id: 'dub', displayName: 'Dub');
+    final video = _video('song', preferred).copyWith(
+        musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'),
+        adaptiveFormats: [
+          low,
+          high,
+          alternate,
+          _adaptive('https://unrelated.example/untrusted', bitrate: '192000')
+        ]);
+    final audio = create(native, video: video);
+    await audio.playVideo(false);
+    final menu = player.musicAudioQuality!;
+    expect(menu.selected, isNull);
+    expect(menu.choices.map((option) => option.bitrate), [128000, 64000]);
+    expect(menu.effective?.bitrate, 128000);
+    audio.pause();
+    native.nativePosition = const Duration(seconds: 32);
+    expect(await menu.select(menu.choices.last), isTrue);
+    expect(native.sourcePositions.last, const Duration(seconds: 32));
+    expect(native.nativePlaying, isFalse);
+    expect((native.sources.last as UriAudioSource).uri,
+        Uri.parse('${preferred.url}/low?host=r1.googlevideo.com'));
+    expect(player.musicAudioQuality!.selected?.bitrate, 64000);
+    expect(player.state.currentlyPlaying!.videoId, 'song');
+    expect(await menu.select(menu.choices.first), isFalse);
+    expect(await player.musicAudioQuality!.select(null), isTrue);
+    expect(player.musicAudioQuality!.effective?.bitrate, 128000);
+    expect(player.musicAudioQuality!.selected, isNull);
+    expect(native.nativePlaying, isFalse);
+  });
+
+  test('unavailable Music quality falls back and reports the actual rendition',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(
+            musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'),
+            adaptiveFormats: [
+              _adaptive('${preferred.url}/hi'),
+              _adaptive('${preferred.url}/lo', bitrate: '64000')
+            ]));
+    await audio.playVideo(false);
+    final menu = player.musicAudioQuality!;
+    native.errors.add(_retryable());
+    expect(await menu.select(menu.choices.last), isFalse);
+    expect(player.musicAudioQuality!.effective?.bitrate, 128000);
+    expect(player.musicAudioQuality!.selected, isNull);
+    expect(native.nativePlaying, isTrue);
+    expect(retryService.retryCalls, 0);
+    final oldMenu = player.musicAudioQuality!;
+    player.requestedSwitches++;
+    final before = native.sources.length;
+    expect(await oldMenu.select(oldMenu.choices.last), isFalse);
+    expect(native.sources, hasLength(before));
+  });
 
   test('proxy audio-only responses route adaptive audio through the instance',
       () async {

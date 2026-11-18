@@ -11,6 +11,7 @@ import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/states/player.dart';
@@ -162,7 +163,7 @@ void main() {
     testWidgets(
         cancel
             ? 'cancelling song details leaves the imported bookmark intact'
-            : 'explicit song details update its existing row and artwork in place',
+            : 'explicit song details display a proxied video thumbnail in both library layouts',
         (tester) async {
       const missing = 'abcdefghijk';
       const unavailable = 'zzzzzzzzzzz';
@@ -226,9 +227,29 @@ void main() {
         expect(find.text('Recovered uploader'), findsOneWidget);
         expect(find.text(unavailable), findsOneWidget);
         final row = find.byKey(const ValueKey('music-saved-song-$missing'));
-        final thumbnail = tester.widget<Thumbnail>(
-            find.descendant(of: row, matching: find.byType(Thumbnail)));
-        expect(thumbnail.images!.single.url, artwork);
+        final idOnly =
+            find.byKey(const ValueKey('music-saved-song-$unavailable'));
+        final frame =
+            find.descendant(of: row, matching: find.byType(Thumbnail));
+        void expectProxiedFrame() {
+          CommunityMusicArtwork communityArtwork(Finder row) =>
+              tester.widget(find.descendant(
+                  of: row, matching: find.byType(CommunityMusicArtwork)));
+          expect(communityArtwork(row).allowLookup, isFalse);
+          expect(communityArtwork(idOnly).allowLookup, isFalse);
+          final thumbnail = tester.widget<Thumbnail>(frame);
+          expect(thumbnail.images!.single.url, artwork);
+          expect(thumbnail.useInvidiousProxy, isTrue);
+          expect(find.descendant(of: idOnly, matching: find.byType(Thumbnail)),
+              findsNothing);
+        }
+
+        expectProxiedFrame();
+        await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+        await tester.pumpAndSettle();
+        expectProxiedFrame();
+        expect(library.entries.first.thumbnails.single.url, artwork);
+        expect(library.coversBySongId, isEmpty);
         expect(catalog.requests, [missing, unavailable]);
         expect(
             library.entries.map((entry) => entry.id), [missing, unavailable]);
@@ -262,6 +283,128 @@ void main() {
     await tester.pump();
     expect(jsonDecode(jsonEncode(player.online.single)),
         jsonDecode(jsonEncode(song.copyWith(indexId: song.videoId))));
+  });
+
+  testWidgets('local playlist grid previews reject an external song image',
+      (tester) async {
+    const id = 'abcdefghijk';
+    const external =
+        'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=$id';
+    const poster = '/vi/$id/mqdefault.jpg';
+    final keys = <bool, ValueKey<String>>{};
+    await tester.runAsync(() async {
+      for (final hasPoster in [true, false]) {
+        final name = hasPoster ? 'With stock poster' : 'Without stock poster';
+        await MusicLibrarySession(app).createPlaylist(name, [
+          Video(
+              videoId: id,
+              title: 'Legacy recording',
+              musicMetadata: MusicMetadata(
+                  title: 'Legacy recording',
+                  artist: 'Artist',
+                  thumbnails: [ImageObject(null, external, 1280, 720)]),
+              videoThumbnails: [
+                if (hasPoster) ImageObject(null, poster, 320, 180),
+              ]),
+        ]);
+        final playlist =
+            service.getLocalPlaylists().singleWhere((p) => p.title == name);
+        expect(playlist.videos.single.musicMetadata!.thumbnails.single.url,
+            external);
+        keys[hasPoster] = ValueKey('music-local-${playlist.playlistId}');
+      }
+    });
+    await show(tester);
+    await tester.tap(find.text('Playlists'));
+    await tester.pumpAndSettle();
+
+    for (final hasPoster in [true, false]) {
+      final card = find.byKey(keys[hasPoster]!);
+      expect(card, findsOneWidget);
+      final images =
+          find.descendant(of: card, matching: find.byType(Thumbnail));
+      if (hasPoster) {
+        final image = tester.widget<Thumbnail>(images);
+        expect(image.images!.single.url, poster);
+        expect(image.useInvidiousProxy, isTrue);
+      } else {
+        expect(images, findsNothing);
+        expect(
+            find.descendant(
+                of: card, matching: find.byIcon(Icons.queue_music_rounded)),
+            findsOneWidget);
+      }
+      final wrappers = tester.widgetList<CommunityMusicArtwork>(find.descendant(
+          of: card, matching: find.byType(CommunityMusicArtwork)));
+      expect(wrappers.any((art) => art.allowLookup), isFalse);
+    }
+  });
+
+  testWidgets(
+      'local playlist rows and playback use the active profile’s saved covers',
+      (tester) async {
+    const staleId = 'aaaaaaaaaaa';
+    const emptyId = 'bbbbbbbbbbb';
+    const posterId = 'ccccccccccc';
+    const cover = 'https://lh3.googleusercontent.com/saved-cover';
+    const staleCover = 'https://lh3.googleusercontent.com/old-cover';
+    const otherCover = 'https://lh3.googleusercontent.com/other-profile-cover';
+    String frame(String id) => '/vi/$id/mqdefault.jpg';
+    ImageObject image(String url) => ImageObject(null, url, 320, 320);
+    Video track(String id, String title, {String? oldCover}) => Video(
+        videoId: id,
+        title: title,
+        musicMetadata: MusicMetadata(
+            title: title,
+            artist: 'Artist',
+            thumbnails: [if (oldCover != null) image(oldCover)]),
+        videoThumbnails: [image(frame(id))]);
+    final songs = [
+      track(staleId, 'Older cover', oldCover: staleCover),
+      track(emptyId, 'Missing cover'),
+      track(posterId, 'Poster only'),
+    ];
+
+    await tester.runAsync(() async {
+      await MusicLibrarySession(app).createPlaylist('Local recordings', songs);
+      for (final video in songs.take(2)) {
+        await library.save(MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: video.videoId,
+            title: video.title!,
+            thumbnails: [image(cover)]));
+      }
+      await library.save(MusicLibraryEntry.song(songs.last));
+      final other = await db.createProfile('Another listener');
+      await MusicLibraryService.forProfile(db, other.id).save(MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: posterId,
+          title: 'Other recording',
+          thumbnails: [image(otherCover)]));
+    });
+    await show(tester);
+    await tester.tap(find.text('Playlists'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local recordings'));
+    await tester.pumpAndSettle();
+
+    for (final song in songs) {
+      final row = find.widgetWithText(ListTile, song.title!);
+      final thumbnail = tester.widget<Thumbnail>(
+          find.descendant(of: row, matching: find.byType(Thumbnail)));
+      final urls = thumbnail.images!.map((image) => image.url);
+      expect(urls, [if (song.videoId != posterId) cover, frame(song.videoId)]);
+      expect(thumbnail.useInvidiousProxy, isTrue);
+    }
+    await tester.tap(find.text('Play all'));
+    await tester.pump();
+    expect(player.online.map((song) => song.videoId),
+        [staleId, emptyId, posterId]);
+    for (final song in player.online) {
+      expect(song.musicMetadata!.thumbnails.map((image) => image.url),
+          [if (song.videoId != posterId) cover]);
+      expect(song.videoThumbnails.single.url, frame(song.videoId));
+    }
   });
 
   testWidgets(

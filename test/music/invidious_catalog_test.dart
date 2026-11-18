@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
@@ -17,6 +18,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/services.dart';
@@ -28,9 +30,9 @@ const _songId = 'dQw4w9WgXcQ';
 const _channelId = 'UC0123456789012345678901';
 const _playlistId = 'PLtest_music';
 
-Map<String, Object?> _song({int index = 0}) => {
+Map<String, Object?> _song({int index = 0, String id = _songId}) => {
       'type': 'video',
-      'videoId': _songId,
+      'videoId': id,
       'title': 'Test song',
       'author': 'Test artist',
       'authorId': _channelId,
@@ -38,7 +40,7 @@ Map<String, Object?> _song({int index = 0}) => {
       'index': index,
       'videoThumbnails': [
         {
-          'url': '/vi/$_songId/mqdefault.jpg',
+          'url': '/vi/$id/mqdefault.jpg',
           'width': 320,
           'height': 180,
         }
@@ -48,8 +50,7 @@ Map<String, Object?> _song({int index = 0}) => {
 String _discoveryId(int index) => index.toString().padLeft(11, 'v');
 
 Map<String, Object?> _discoveryVideo(int index, {String? genre = 'Music'}) => {
-      ..._song(),
-      'videoId': _discoveryId(index),
+      ..._song(id: _discoveryId(index)),
       'title': 'Discovered song $index',
       'genre': genre,
     };
@@ -75,7 +76,7 @@ Map<String, Object?> _playlist({List<Object>? songs, int count = 3}) => {
     };
 
 http.Response _json(Object body, http.Request request) =>
-    http.Response(jsonEncode(body), 200,
+    http.Response.bytes(utf8.encode(jsonEncode(body)), 200,
         request: request, headers: {'content-type': 'application/json'});
 
 class _UnimplementedCatalog extends MusicCatalogService {}
@@ -108,6 +109,65 @@ void main() {
 
   test('the production catalog defaults to Invidious', () {
     expect(musicCatalogService, isA<InvidiousMusicCatalogService>());
+  });
+
+  test('a configured instance prefix is stripped only for its own origin', () {
+    const selected = 'https://selected.example/path/instance/';
+    final images = [
+      for (final url in [
+        '${selected}vi/$_songId/mqdefault.jpg?session=sample',
+        '/path/instance/vi_webp/$_songId/hqdefault.webp',
+        'https://old.example/path/instance/vi/$_songId/maxres.jpg',
+        'https://old.example/extras/vi/$_songId/0.jpg',
+        '/path/instance/../instance/vi/$_songId/default.jpg',
+        'https://selected.example:8123/path/instance/vi/$_songId/1.jpg',
+      ])
+        ImageObject(null, url, 320, 180)
+    ];
+    expect(
+        stockSongThumbnails(_songId, images, instanceUrl: selected)
+            .map((i) => i.url),
+        ['/vi/$_songId/mqdefault.jpg', '/vi/$_songId/hqdefault.jpg']);
+  });
+
+  test('search and song playback reuse only the current profile’s saved covers',
+      () async {
+    const cover = 'https://lh3.googleusercontent.com/verified-album-cover';
+    final owner = MusicLibraryService.forProfile(db, db.profileId);
+    await owner.save(MusicLibraryEntry(
+      kind: MusicLibraryKind.song,
+      id: _songId,
+      title: 'Saved song',
+      thumbnails: [ImageObject(null, cover, 320, 320)],
+    ));
+    respond = (request) async => _json(
+        request.url.path == '/api/v1/search'
+            ? [_song(), _discoveryVideo(1)]
+            : _song(),
+        request);
+    final fromSearch = await catalog.searchSongs('two songs');
+    expect(fromSearch.first.thumbnails.single.url, cover);
+    expect(fromSearch.last.thumbnails, isEmpty);
+    expect(fromSearch.last.videoThumbnails, isNotEmpty);
+    final fromPlayback = await catalog.getSong(_songId);
+    expect(fromPlayback.toVideo().musicMetadata!.thumbnails.single.url, cover);
+    final cached = owner.coversBySongId;
+    expect(owner.coversBySongId, same(cached));
+
+    final other = await db.createProfile('Another listener');
+    await db.useProfile(other.id);
+    await db.upsertServer(
+        Server(profileId: other.id, url: 'https://invidious.example'));
+    expect((await catalog.searchSongs('two songs')).first.thumbnails, isEmpty);
+    expect(cached[_songId]!.single.url, cover);
+
+    await owner.remove(MusicLibraryKind.song, _songId);
+    expect(owner.coversBySongId, isEmpty);
+    expect(requests.map((request) => request.url.path), [
+      '/api/v1/search',
+      '/api/v1/videos/$_songId',
+      '/api/v1/search',
+    ]);
   });
 
   test('saved details use only selected-instance metadata and safe artwork',
@@ -173,6 +233,9 @@ void main() {
     expect(details.durationSeconds, 212);
     expect(details.toVideo().hlsUrl, isNull);
     expect(details.usesVideoThumbnails, isTrue);
+    expect(details.coverThumbnails, isEmpty);
+    expect(details.displayThumbnails.map((image) => image.url),
+        details.thumbnails.map((image) => image.url));
     expect(details.thumbnails.map((image) => image.url), [
       '/vi/$_songId/mqdefault.jpg',
       '/vi/$_songId/hqdefault.jpg',
@@ -182,6 +245,70 @@ void main() {
       '/api/v1/videos/$private',
       '/api/v1/videos/$_songId',
     ]);
+  });
+
+  test(
+      'stock discovery distinguishes Art Track images from upload posters without extra requests',
+      () async {
+    const description = 'Provided to YouTube by Example Distributor\n\n'
+        'Test song · Artist\n\nExample Album\n\n℗ 2020 Example\n\nAuto-generated by YouTube.';
+    final images = [
+      for (final name in ['2', 'maxresdefault'])
+        {
+          'url': 'https://i.ytimg.com/vi/$_songId/$name.jpg?token=sample',
+          'width': 480,
+          'height': 360
+        },
+      for (final url in [
+        '/vi/00000000000/default.jpg',
+        '/api/v1/getThumbnail?videoID=$_songId',
+        'https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=$_songId',
+        'https://fan:secret@elsewhere.example/vi/$_songId/mqdefault.jpg',
+        '/vi/$_songId/unrecognized.jpg',
+      ])
+        {'url': url, 'width': 1280, 'height': 720}
+    ];
+    final brief = {..._song(), 'author': 'Artist', 'videoThumbnails': images};
+    final detail = {
+      ...brief,
+      'genre': 'Music',
+      'author': 'Artist - Topic',
+      'description': description
+    };
+    respond = (r) async =>
+        _json(r.url.path == '/api/v1/search' ? [brief] : detail, r);
+    final ordinary = (await catalog.searchSongs('Song')).single;
+    expect(ordinary.isArtTrack, isFalse);
+    expect(ordinary.displayThumbnails.map((i) => i.url),
+        ['/vi/$_songId/2.jpg', '/vi/$_songId/maxresdefault.jpg']);
+    final recording = await catalog.getSong(_songId);
+    expect(recording.isArtTrack, isTrue);
+    expect(recording.albumTitle, 'Example Album');
+    expect(recording.displayThumbnails.map((image) => image.url),
+        ['/vi/$_songId/maxresdefault.jpg', '/vi/$_songId/2.jpg']);
+    final bookmark = MusicLibraryEntry.song(recording.toVideo());
+    expect(bookmark.coverThumbnails, isEmpty);
+    expect(MusicLibraryEntry.tryParse(bookmark.toJson())!.isArtTrack, isTrue);
+    expect(requests.map((r) => r.url.path),
+        ['/api/v1/search', '/api/v1/videos/$_songId']);
+    for (final partial in [
+      {...detail, 'genre': 'People & Blogs'},
+      {...detail, 'author': 'Artist VEVO'},
+      {...detail, 'description': 'Auto-generated by YouTube.'},
+      {...detail, 'description': 'Provided to YouTube by Example\nDescription'},
+      {...detail, 'liveNow': true},
+    ]) {
+      expect(Video.fromJson(partial).isStockArtTrack, isFalse);
+    }
+    for (final altered in [
+      description.replaceAll('Test song · Artist', 'Unrelated song · Artist'),
+      description.replaceAll('Example Album', 'Line one\nLine two'),
+      description.replaceAll('℗ 2020 Example', 'Released by a fan'),
+    ]) {
+      final classified = Video.fromJson({...detail, 'description': altered});
+      expect(classified.isStockArtTrack, isTrue);
+      expect(classified.stockArtTrackAlbum, isNull);
+    }
   });
 
   test('saved details stop reporting and requesting after cancellation',
@@ -918,6 +1045,10 @@ void main() {
 
       final songs = await catalog.searchSongs('Test song');
       expect(songs.single.artists, ['Test artist']);
+      final converted = songs.single.toVideo();
+      expect(songs.single.thumbnails, isEmpty);
+      expect(converted.musicMetadata!.thumbnails, isEmpty);
+      expect(converted.videoThumbnails.single.url, contains('/vi/$_songId/'));
       expect(songs.single.artistLinks.single.id, _channelId);
       expect(await catalog.searchArtists('Test artist'), hasLength(1));
       expect(await catalog.searchPlaylists('Test playlist'), hasLength(1));

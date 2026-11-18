@@ -14,6 +14,7 @@ import 'package:flutter/widgets.dart';
 import '../../globals.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../main.dart' show isTv;
+import '../../music/services/music_community_cover_cache.dart';
 import '../../network/content_link.dart';
 import '../../network/network_proxy.dart';
 import '../../playlists/models/playlist.dart';
@@ -422,6 +423,8 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
       await _backgroundDatabase.deleteProfile(profileId);
       _requireOpen();
       await PlaybackCache.removeProfile(profileId);
+      _requireOpen();
+      await communityMusicCoverCache.removeProfile(profileId);
       _requireOpen();
       RecommendationService.forgetProfile(db, profileId);
       await db.deleteProfile(profileId);

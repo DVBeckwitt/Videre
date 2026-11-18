@@ -12,6 +12,7 @@ import 'package:settings_ui/settings_ui.dart';
 import '../../../feedback/views/open_feedback.dart';
 import '../../../downloads/views/components/download_folder.dart';
 import '../../states/settings.dart';
+import '../components/music_provider_settings.dart';
 import 'network_proxy.dart';
 
 settingsTheme(ColorScheme colorScheme) => SettingsThemeData(
@@ -166,6 +167,9 @@ class SettingsScreen extends StatelessWidget {
                     ),
                     onPressed: openAppearanceSettings,
                   ),
+                ]),
+                SettingsSection(title: Text(locals.ytMusicSettings), tiles: [
+                  CustomSettingsTile(child: const MusicProviderSettings()),
                 ]),
                 SettingsSection(tiles: [
                   SettingsTile(

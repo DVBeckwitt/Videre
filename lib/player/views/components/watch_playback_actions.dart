@@ -2,7 +2,6 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/video_transcript_button.dart';
 import 'package:flutter/foundation.dart';
@@ -10,10 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'playback_speed_controls.dart';
-import 'player_backend_picker.dart';
-import 'player_modal_back_handler.dart';
-
-enum _WatchAction { pitch, repeat, shuffle, backend }
 
 /// Visible playback actions for Flow's expanded watch information surface.
 /// Commands continue to reach the mounted Videre decoder through PlayerCubit.
@@ -49,96 +44,19 @@ class WatchPlaybackActions extends StatelessWidget {
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     final repeat = settings.state.playerRepeatMode;
 
-    void openRate({required bool pitch}) => showPlaybackSpeedSheet(
+    void openRate() => showPlaybackSpeedSheet(
           context,
           initialSpeed: player.state.speed,
           onChanged: (value) {
             if (current()) player.setSpeed(value);
           },
           initialPitchSemitones: player.state.pitchSemitones,
-          onPitchChanged: pitch
+          onPitchChanged: pitchSupported
               ? (value) {
                   if (current()) player.setPitchSemitones(value);
                 }
               : null,
-          showSpeed: !pitch,
         );
-
-    Future<void> openMore() async {
-      if (!current()) return;
-      final choice = await showSafeModalBottomSheet<_WatchAction>(
-        context: context,
-        showDragHandle: true,
-        builder: (sheetContext) => PlayerModalBackHandler(
-          child: SingleChildScrollView(
-            key: const ValueKey('watch-more-menu'),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  key: const ValueKey('watch-pitch-open'),
-                  leading: const Icon(Icons.tune_rounded),
-                  title: Text(locals.playbackPitch),
-                  enabled: pitchSupported,
-                  onTap: pitchSupported
-                      ? () => Navigator.pop(sheetContext, _WatchAction.pitch)
-                      : null,
-                ),
-                ListTile(
-                  key: const ValueKey('watch-repeat'),
-                  leading: Icon(repeat == PlayerRepeat.repeatOne
-                      ? Icons.repeat_one
-                      : Icons.repeat),
-                  title: Text(switch (repeat) {
-                    PlayerRepeat.noRepeat => locals.musicRepeatOff,
-                    PlayerRepeat.repeatAll => locals.musicRepeatAll,
-                    PlayerRepeat.repeatOne => locals.watchRepeatOne,
-                  }),
-                  selected: repeat != PlayerRepeat.noRepeat,
-                  onTap: () => Navigator.pop(sheetContext, _WatchAction.repeat),
-                ),
-                if (state.hasQueue)
-                  ListTile(
-                    key: const ValueKey('watch-shuffle'),
-                    leading: const Icon(Icons.shuffle),
-                    title: Text(locals.musicShuffle),
-                    selected: settings.state.playerShuffleMode,
-                    onTap: () =>
-                        Navigator.pop(sheetContext, _WatchAction.shuffle),
-                  ),
-                if (canChoosePlayerBackend(state))
-                  ListTile(
-                    key: const ValueKey('player-backend-shortcut'),
-                    leading: const Icon(Icons.dns_outlined),
-                    title: Text(locals.backendChoose),
-                    onTap: () =>
-                        Navigator.pop(sheetContext, _WatchAction.backend),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
-      // Keep the opening playback identity even if the toolbar rebuilt.
-      if (!context.mounted || !current()) return;
-      switch (choice) {
-        case _WatchAction.pitch:
-          if (pitchSupported) openRate(pitch: true);
-          break;
-        case _WatchAction.repeat:
-          settings.setNextRepeatMode();
-          break;
-        case _WatchAction.shuffle:
-          settings.toggleShuffle();
-          player.generatePlayQueue();
-          break;
-        case _WatchAction.backend:
-          showPlayerBackendPicker(context, player: player);
-          break;
-        case null:
-          break;
-      }
-    }
 
     final canSwitchMode = video.liveNow != true;
     return LayoutBuilder(builder: (_, constraints) {
@@ -186,19 +104,35 @@ class WatchPlaybackActions extends StatelessWidget {
               video: video, enabled: enabled, isCurrent: current),
           IconButton(
             key: const ValueKey('watch-speed-open'),
-            tooltip: '${locals.playbackSpeed}: ${state.speed}×',
+            tooltip:
+                '${pitchSupported ? locals.playbackSpeedAndPitch : locals.playbackSpeed} · ${state.speed}×',
             icon: const Icon(Icons.speed),
             onPressed: enabled
                 ? () {
-                    if (current()) openRate(pitch: false);
+                    if (current()) openRate();
                   }
                 : null,
           ),
           IconButton(
-            key: const ValueKey('watch-more-open'),
-            tooltip: MaterialLocalizations.of(context).moreButtonTooltip,
-            icon: const Icon(Icons.more_horiz),
-            onPressed: enabled ? openMore : null,
+            key: const ValueKey('watch-repeat'),
+            tooltip: switch (repeat) {
+              PlayerRepeat.noRepeat => locals.musicRepeatOff,
+              PlayerRepeat.repeatAll => locals.musicRepeatAll,
+              PlayerRepeat.repeatOne => locals.watchRepeatOne,
+            },
+            isSelected: repeat != PlayerRepeat.noRepeat,
+            style: repeat == PlayerRepeat.noRepeat
+                ? null
+                : IconButton.styleFrom(
+                    backgroundColor: colors.secondaryContainer),
+            icon: Icon(repeat == PlayerRepeat.repeatOne
+                ? Icons.repeat_one
+                : Icons.repeat),
+            onPressed: enabled
+                ? () {
+                    if (current()) settings.setNextRepeatMode();
+                  }
+                : null,
           ),
         ],
       );

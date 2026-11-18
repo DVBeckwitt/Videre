@@ -76,6 +76,16 @@ class _DownloadService extends Service {
   }
 
   @override
+  Future<Video> getMusicVideo(String videoId,
+          {Server? serverOverride,
+          void Function(BackendPlayback request)? onBackendRequest,
+          VideoLoadObserver? loadObserver}) =>
+      getVideo(videoId,
+          serverOverride: serverOverride,
+          onBackendRequest: onBackendRequest,
+          loadObserver: loadObserver);
+
+  @override
   Future<List<SponsorSegment>> getSponsorSegments(
           String videoId, List<SponsorSegmentType> categories) =>
       sponsors?.call(videoId, categories) ?? Future.value([]);
@@ -193,7 +203,8 @@ void main() {
     const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
     mediaServer!.listen((request) async {
       try {
-        if (request.uri.path.startsWith('/vi/')) {
+        if (request.uri.path.startsWith('/vi/') ||
+            request.uri.path.startsWith('/ggpht/')) {
           await onArtwork(request);
         } else {
           onAudio?.call(request);
@@ -2005,7 +2016,7 @@ void main() {
 
   test('music audio download saves its proxied cover with instance headers',
       () async {
-    const coverPath = '/vi/music-cover/cover.jpg';
+    const coverPath = '/ggpht/music-cover';
     final requests = <(String, String?)>[];
     final remote = await audioVideoWithArtwork(onArtwork: (request) async {
       requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
@@ -2014,13 +2025,17 @@ void main() {
     }, onAudio: (request) {
       requests.add((request.uri.path, request.headers.value('X-Instance-Key')));
     });
-    const cover = 'https://i.ytimg.com/vi/music-cover/cover.jpg';
+    const cover = 'https://lh3.googleusercontent.com/music-cover';
     final audio = video.copyWith(
         audioOnly: true,
         musicMetadata: MusicMetadata(
             title: 'Song',
             artist: 'Artist',
             thumbnails: [ImageObject(null, cover, 500, 500)]));
+    // The generic path can belong to a video thumbnail left by an older
+    // version. A new cover must be independently fetched and stored.
+    final poster = File(await audio.thumbnailPath);
+    await poster.writeAsBytes([1, 2]);
     await db.upsertDownload(audio);
     manager.setVideos();
     service = _DownloadService((_) async => remote);
@@ -2032,7 +2047,32 @@ void main() {
         requests,
         unorderedEquals(
             [(coverPath, 'artwork-instance'), ('/audio', 'artwork-instance')]));
-    expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+    final saved = manager.state.videos.single;
+    final localCover = (await saved.existingSongCover)!;
+    expect(await localCover.readAsBytes(), [10, 11, 12]);
+    final stockPoster = (await saved.stockSongPosterFile)!;
+    await stockPoster.writeAsBytes([3]);
+    expect((await saved.existingSongArtwork)?.path, localCover.path);
+    expect(await poster.readAsBytes(), [1, 2]);
+    expect(await saved.copyWith(accountId: 'other-account').existingSongCover,
+        isNull);
+    expect(await saved.copyWith(profileId: 'other-profile').existingSongCover,
+        isNull);
+    expect(
+        await saved
+            .copyWith(
+                musicMetadata: MusicMetadata(
+                    title: 'Song',
+                    artist: 'Artist',
+                    thumbnails: [
+                  ImageObject(
+                      null, 'https://lh3.googleusercontent.com/other', 500, 500)
+                ]))
+            .existingSongCover,
+        isNull);
+    await manager.deleteVideo(saved);
+    expect(await localCover.exists(), isFalse);
+    expect(await (await saved.songCoverDirectory).exists(), isFalse);
   });
 
   test('unsupported Google cover is skipped without delaying audio download',
@@ -2087,7 +2127,12 @@ void main() {
       final unsupported = ImageObject(
           null, 'https://s.ytimg.com/yts/img/cover.png', 1000, 1000);
       final supported = ImageObject(
-          null, 'https://i.ytimg.com/vi/music-cover/cover.jpg', 100, 100);
+          null,
+          source == 'music'
+              ? 'https://lh3.googleusercontent.com/music-cover'
+              : 'https://i.ytimg.com/vi/music-cover/cover.jpg',
+          100,
+          100);
       final audio = video.copyWith(
           audioOnly: true,
           musicMetadata: source == 'video'
@@ -2122,9 +2167,9 @@ void main() {
 
       expect(manager.state.videos.single.downloadComplete, isTrue);
       expect(paths, [
-        source == 'video fallback'
-            ? '/vi/${video.videoId}/default.jpg'
-            : '/vi/music-cover/cover.jpg'
+        if (source == 'music') '/ggpht/music-cover',
+        if (source == 'video') '/vi/music-cover/cover.jpg',
+        if (source == 'video fallback') '/vi/${video.videoId}/default.jpg',
       ]);
       expect(audioPaths, ['/audio']);
       // Both HTTP transfers may share one loopback keep-alive connection.
@@ -2132,12 +2177,34 @@ void main() {
       expect(destinations.every((uri) => uri.host == '127.0.0.1'), isTrue);
       expect(await File(await audio.downloadPath).readAsBytes(),
           [0, 1, 2, 3, 4, 5, 6, 7]);
-      expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
+      final poster = File(await audio.thumbnailPath);
+      if (source == 'video') {
+        expect(await poster.readAsBytes(), [10, 11, 12]);
+      } else {
+        expect(await poster.exists(), isFalse);
+        final cover = await manager.state.videos.single.existingSongCover;
+        if (source == 'music') {
+          expect(await cover!.readAsBytes(), [10, 11, 12]);
+        } else {
+          expect(cover, isNull);
+          final saved = manager.state.videos.single;
+          final stock = (await saved.stockSongPosterFile)!;
+          expect((await saved.existingSongArtwork)?.path, stock.path);
+          expect(await stock.readAsBytes(), [10, 11, 12]);
+          expect(await saved.copyWith(accountId: 'other').existingSongArtwork,
+              isNull);
+          expect(await saved.copyWith(profileId: 'other').existingSongArtwork,
+              isNull);
+          await manager.deleteVideo(saved);
+          expect(await stock.exists(), isFalse);
+        }
+      }
     });
   }
 
   for (final relative in [false, true]) {
-    test('old queued Music fallback retains cover access (relative=$relative)',
+    test(
+        'old queued Music frame is saved as a stock poster (relative=$relative)',
         () async {
       final headers = <String?>[];
       final remote = await audioVideoWithArtwork(onArtwork: (request) async {
@@ -2168,10 +2235,64 @@ void main() {
       await waitFor((state) => state.videos.single.downloadComplete);
 
       expect(headers, ['artwork-instance']);
-      expect(await File(await audio.thumbnailPath).readAsBytes(), [10, 11, 12]);
-      expect(manager.state.videos.single.musicMetadata!.thumbnails, isEmpty);
+      expect(await File(await audio.thumbnailPath).exists(), isFalse);
+      final saved = manager.state.videos.single;
+      expect(saved.musicMetadata!.thumbnails, isEmpty);
+      expect(await saved.existingSongCover, isNull);
+      expect(
+          await (await saved.existingSongArtwork)!.readAsBytes(), [10, 11, 12]);
     });
   }
+
+  test('missing catalog and HD covers use the available Art Track rendition',
+      () async {
+    final paths = <String>[];
+    final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+      paths.add(request.uri.path);
+      expect(request.headers.value('X-Instance-Key'), 'artwork-instance');
+      if (request.uri.path.startsWith('/ggpht/') ||
+          request.uri.path.endsWith('/maxresdefault.jpg')) {
+        request.response.statusCode = HttpStatus.notFound;
+      } else {
+        request.response.add([1, 2, 3]);
+      }
+      await request.response.close();
+    });
+    final audio = video.copyWith(
+        audioOnly: true,
+        musicMetadata:
+            MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+          ImageObject(
+              null, 'https://lh3.googleusercontent.com/missing', 500, 500),
+        ]));
+    await db.upsertDownload(audio);
+    manager.setVideos();
+    service = _DownloadService((_) async => remote.copyWith(
+            author: 'Artist - Topic',
+            title: 'Song',
+            genre: 'Music',
+            description:
+                'Provided to YouTube by Label\n\nSong · Artist\n\nAlbum\n\n℗ Label\n\nAuto-generated by YouTube.',
+            videoThumbnails: [
+              ImageObject(null, '/vi/${video.videoId}/default.jpg', 1280, 720),
+              ImageObject(
+                  null, '/vi/${video.videoId}/maxresdefault.jpg', 1280, 720),
+              ImageObject(null, '/vi/${video.videoId}/hqdefault.jpg', 480, 360),
+              ImageObject(null, '/vi/wrongSongID/maxres.jpg', 2560, 1440),
+            ]));
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    final saved = manager.state.videos.single;
+    expect(saved.musicMetadata!.isArtTrack, isTrue);
+    expect(saved.musicMetadata!.album, 'Album');
+    expect(paths, [
+      '/ggpht/missing',
+      '/vi/${video.videoId}/maxresdefault.jpg',
+      '/vi/${video.videoId}/hqdefault.jpg'
+    ]);
+    expect(await saved.existingSongCover, isNull);
+    expect(await (await saved.existingSongArtwork)!.readAsBytes(), [1, 2, 3]);
+  });
 
   test('media starts while artwork is pending and artwork is committed whole',
       () async {
@@ -2285,45 +2406,58 @@ void main() {
     expect(await File('$path.part').exists(), isFalse);
   });
 
-  test('pausing partial artwork retries it without keeping partial cover data',
-      () async {
-    final audio = video.copyWith(audioOnly: true);
-    await db.upsertDownload(audio);
-    manager.setVideos();
-    final artworkStarted = Completer<void>();
-    final releaseFirstArtwork = Completer<void>();
-    addTearDown(() {
-      if (!releaseFirstArtwork.isCompleted) releaseFirstArtwork.complete();
-    });
-    var artworkRequests = 0;
-    final remote = await audioVideoWithArtwork(onArtwork: (request) async {
-      artworkRequests++;
-      if (artworkRequests == 1) {
-        request.response.add([99]);
-        await request.response.flush();
-        artworkStarted.complete();
-        await releaseFirstArtwork.future;
-      } else {
-        request.response.add([10, 11, 12]);
-      }
-      await request.response.close();
-    });
-    service = _DownloadService((_) async => remote);
+  for (final music in [false, true]) {
+    test(
+        'pausing partial artwork retries it without keeping partial cover data (Music: $music)',
+        () async {
+      final audio = video.copyWith(
+          audioOnly: true,
+          musicMetadata: music
+              ? MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
+                  ImageObject(
+                      null, 'https://lh3.googleusercontent.com/album', 300, 300)
+                ])
+              : null);
+      await db.upsertDownload(audio);
+      manager.setVideos();
+      final artworkStarted = Completer<void>();
+      final releaseFirstArtwork = Completer<void>();
+      addTearDown(() {
+        if (!releaseFirstArtwork.isCompleted) releaseFirstArtwork.complete();
+      });
+      var artworkRequests = 0;
+      final remote = await audioVideoWithArtwork(onArtwork: (request) async {
+        artworkRequests++;
+        if (artworkRequests == 1) {
+          request.response.add([99]);
+          await request.response.flush();
+          artworkStarted.complete();
+          await releaseFirstArtwork.future;
+        } else {
+          request.response.add([10, 11, 12]);
+        }
+        await request.response.close();
+      });
+      service = _DownloadService((_) async => remote);
 
-    await manager.setWifiOnly(false);
-    await artworkStarted.future;
-    await manager.pauseDownload(audio);
-    await waitFor((state) => state.downloadProgresses.isEmpty);
-    final artwork = File(await audio.thumbnailPath);
-    expect(await artwork.exists(), isFalse);
-    expect(await File('${artwork.path}.part').exists(), isFalse);
-    releaseFirstArtwork.complete();
-    await manager.retryDownload(manager.state.videos.single);
-    await waitFor((state) => state.videos.single.downloadComplete);
+      await manager.setWifiOnly(false);
+      await artworkStarted.future;
+      await manager.pauseDownload(audio);
+      await waitFor((state) => state.downloadProgresses.isEmpty);
+      final saved = manager.state.videos.single;
+      final artwork = music
+          ? (await saved.songCoverFile)!
+          : File(await saved.thumbnailPath);
+      expect(await artwork.exists(), isFalse);
+      expect(await File('${artwork.path}.part').exists(), isFalse);
+      releaseFirstArtwork.complete();
+      await manager.retryDownload(manager.state.videos.single);
+      await waitFor((state) => state.videos.single.downloadComplete);
 
-    expect(artworkRequests, 2);
-    expect(await artwork.readAsBytes(), [10, 11, 12]);
-  });
+      expect(artworkRequests, 2);
+      expect(await artwork.readAsBytes(), [10, 11, 12]);
+    });
+  }
 
   test('deleting a download does not wait for its pending metadata request',
       () async {

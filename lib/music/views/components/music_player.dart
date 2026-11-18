@@ -7,6 +7,8 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/services/music_lyrics_service.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
@@ -27,7 +29,9 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import 'music_audio_quality_button.dart';
 import 'music_library_actions.dart';
+import 'music_lyrics_button.dart';
 import 'music_playback_artwork.dart';
 import 'music_sound_sheet.dart';
 import 'music_sponsor_notice.dart';
@@ -36,8 +40,12 @@ import 'music_track_swipe.dart';
 /// Presentation only: commands still reach the existing mounted audio decoder.
 class MusicPlayer extends StatefulWidget {
   final bool television;
+  final MusicLyricsLoader lyricsLoader;
 
-  const MusicPlayer({super.key, this.television = false});
+  const MusicPlayer(
+      {super.key,
+      this.television = false,
+      this.lyricsLoader = loadMusicLyrics});
 
   @override
   State<MusicPlayer> createState() => _MusicPlayerState();
@@ -135,6 +143,13 @@ class _MusicPlayerState extends State<MusicPlayer> {
       final wide = constraints.maxWidth >= 640 && constraints.maxHeight >= 480;
       final showQueue = _queueVisibility ?? (wide && !widget.television);
       final sideQueue = wide && showQueue;
+      final allowCommunityLookup = video != null &&
+          !video.downloadPlaybackOnly &&
+          state.isAudio &&
+          !state.isMini &&
+          !state.isHidden &&
+          !state.isClosing &&
+          (!showQueue || sideQueue);
       final shortLandscape = !sideQueue &&
           constraints.maxWidth >= 480 &&
           constraints.maxWidth > constraints.maxHeight;
@@ -180,7 +195,8 @@ class _MusicPlayerState extends State<MusicPlayer> {
                           SizedBox(
                             height: artArea,
                             child: _artworkFrame(
-                                music, video, offline, artworkSize),
+                                music, video, offline, artworkSize,
+                                allowCommunityLookup: allowCommunityLookup),
                           ),
                         ],
                         Row(
@@ -347,7 +363,8 @@ class _MusicPlayerState extends State<MusicPlayer> {
                       video,
                       offline,
                       math.min(constraints.maxWidth * 0.32,
-                          math.max(1, constraints.maxHeight - 32)))),
+                          math.max(1, constraints.maxHeight - 32)),
+                      allowCommunityLookup: allowCommunityLookup)),
               Expanded(flex: 5, child: nowPlaying),
             ])
           : nowPlaying;
@@ -432,32 +449,47 @@ class _MusicPlayerState extends State<MusicPlayer> {
   }
 
   Widget _artworkFrame(MusicMetadata music, Video? video,
-          DownloadedVideo? offline, double size) =>
+          DownloadedVideo? offline, double size,
+          {required bool allowCommunityLookup}) =>
       Center(
-        child: Semantics(
-          image: true,
-          label: music.album ?? music.title,
-          child: MusicTrackSwipe(
-              child: Container(
-            key: const ValueKey('music-player-artwork'),
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(size * 0.2),
-              boxShadow: const [
-                BoxShadow(
-                    color: Colors.black38,
-                    blurRadius: 24,
-                    offset: Offset(0, 12)),
-              ],
+        child: Stack(children: [
+          Semantics(
+            image: true,
+            label: music.album ?? music.title,
+            child: MusicTrackSwipe(
+                child: Container(
+              key: const ValueKey('music-player-artwork'),
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(size * 0.2),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Colors.black38,
+                      blurRadius: 24,
+                      offset: Offset(0, 12)),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(size * 0.2),
+                child: MusicPlaybackArtwork(
+                    music: music,
+                    video: video,
+                    offline: offline,
+                    allowCommunityLookup: allowCommunityLookup),
+              ),
+            )),
+          ),
+          PositionedDirectional(
+            start: 8,
+            end: 8,
+            bottom: 8,
+            child: Align(
+              alignment: AlignmentDirectional.bottomEnd,
+              child: MusicLyricsButton(loader: widget.lyricsLoader),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(size * 0.2),
-              child: MusicPlaybackArtwork(
-                  music: music, video: video, offline: offline),
-            ),
-          )),
-        ),
+          ),
+        ]),
       );
 
   Widget _progress(
@@ -686,6 +718,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
                   : null),
           action('sound', locals.musicSound, Icons.tune,
               () => showMusicSoundSheet(context, player)),
+          const MusicAudioQualityButton(),
           IconButton(
               tooltip: locals.musicRewind,
               onPressed: player.rewind,
@@ -1053,10 +1086,12 @@ class _MusicQueueState extends State<MusicQueue> {
         final offline = item is DownloadedVideo ? item : null;
         final music = video?.musicMetadata ?? offline?.musicMetadata;
         final isActive = id == currentId;
-        final artworkVideo =
-            isActive && state.currentlyPlaying?.downloadPlaybackOnly == true
-                ? state.currentlyPlaying
-                : video;
+        final mountedVideo = state.currentlyPlaying;
+        final artworkVideo = isActive &&
+                mountedVideo != null &&
+                mountedVideo.videoId == video?.videoId
+            ? mountedVideo
+            : video;
         final isPlaying =
             state.isPlaying && player.playbackStatus == MediaState.playing;
         final nextIndex = upcoming.indexOf(id);
