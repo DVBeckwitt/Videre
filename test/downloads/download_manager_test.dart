@@ -1518,6 +1518,26 @@ void main() {
     expect(downloaded.audioOnly, isTrue);
   });
 
+  test('an imported ID-only song keeps its resolved artist on download',
+      () async {
+    await manager.deleteVideo(video);
+    const id = '12345678901';
+    const channel = 'UC1234567890123456789012';
+    const song =
+        Video(videoId: id, musicMetadata: MusicMetadata(title: id, artist: ''));
+    final remote = (await audioVideo(id))
+        .copyWith(author: 'Recording artist', authorId: channel);
+    service = _DownloadService((_) async => remote);
+    expect(await manager.addDownload(id, audioOnly: true, video: song), isTrue);
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+
+    final downloaded = db.getDownloadByVideoId(id)!;
+    expect(downloaded.title, remote.title);
+    expect(downloaded.author, remote.author);
+    expect(downloaded.musicMetadata!.artistCredits.single.id, channel);
+  });
+
   test('music download caches enabled SponsorBlock data across restart',
       () async {
     final music = video.copyWith(

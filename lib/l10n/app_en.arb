@@ -1848,7 +1848,27 @@
   "playlistCopyServerHelp": "Create a private playlist in your selected server account.",
   "playlistCopySaved": "Saved on server",
   "playlistCopyFailed": "Could not finish saving the playlist. Retry to continue the same copy.",
+  "playlistCopyResume": "Resume server copy",
+  "playlistCopyTrackFailed": "Could not confirm track {position} of {total} (“{title}”). Resume to continue from the tracks already saved.",
+  "@playlistCopyTrackFailed": {
+    "placeholders": {
+      "position": { "type": "int" },
+      "total": { "type": "int" },
+      "title": { "type": "String" }
+    }
+  },
+  "playlistCopyTrackHttpFailed": "The server returned HTTP {status} while adding track {position} of {total} (“{title}”). Resume to continue from the tracks already saved.",
+  "@playlistCopyTrackHttpFailed": {
+    "placeholders": {
+      "position": { "type": "int" },
+      "total": { "type": "int" },
+      "title": { "type": "String" },
+      "status": { "type": "int" }
+    }
+  },
   "playlistCopyCreateUnconfirmed": "The server did not confirm playlist creation. Check your server library before creating another copy.",
+  "playlistCopyCreateNew": "Create a new copy",
+  "playlistCopyDestinationMissing": "The server could not find the previous private copy. You can create a new copy in this account.",
   "playlistCopySignIn": "Sign in to an Invidious account to save playlists on your server.",
   "playlistCopyProgress": "Saving {saved} of {total} videos…",
   "playlistDurationUnknown": "Duration unavailable",

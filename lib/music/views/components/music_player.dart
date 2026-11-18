@@ -9,6 +9,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_service.dart';
+import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -220,16 +221,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
                                         height: 1.14,
                                       )),
                                   const SizedBox(height: 2),
-                                  Text(
-                                      onDevice && music.artist.isEmpty
-                                          ? locals.onDevice
-                                          : music.artist,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style:
-                                          theme.textTheme.titleMedium?.copyWith(
-                                        color: colors.onSurfaceVariant,
-                                      )),
+                                  _artistByline(context, music, onDevice),
                                 ],
                               )),
                               if (video != null && !onDevice) ...[
@@ -454,6 +446,44 @@ class _MusicPlayerState extends State<MusicPlayer> {
         Expanded(child: view),
       ]),
     ]);
+  }
+
+  Widget _artistByline(
+      BuildContext context, MusicMetadata music, bool onDevice) {
+    final theme = Theme.of(context);
+    final style = theme.textTheme.titleMedium
+        ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
+    if (onDevice || !music.artistCredits.any((credit) => credit.id != null)) {
+      return Text(
+          onDevice && music.artist.isEmpty
+              ? AppLocalizations.of(context)!.onDevice
+              : music.artist,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style);
+    }
+    return Wrap(
+      spacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        for (final credit in music.artistCredits)
+          if (credit.id case final id?)
+            TextButton(
+                style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    alignment: AlignmentDirectional.centerStart),
+                onPressed: () => MusicScreen.openPlayingArtist(context, id,
+                    television: widget.television),
+                child: Text(credit.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        style?.copyWith(decoration: TextDecoration.underline)))
+          else
+            Text(credit.name,
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: style),
+      ],
+    );
   }
 
   Widget _artworkFrame(MusicMetadata music, Video? video,

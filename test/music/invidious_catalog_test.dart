@@ -230,6 +230,8 @@ void main() {
     final details = results[_songId]!;
     expect(details.title, 'Test song');
     expect(details.subtitle, 'Test artist');
+    expect(
+        details.toVideo().musicMetadata!.artistCredits.single.id, _channelId);
     expect(details.durationSeconds, 212);
     expect(details.toVideo().hlsUrl, isNull);
     expect(details.usesVideoThumbnails, isTrue);
@@ -473,6 +475,10 @@ void main() {
 
     final tracks = await catalog.searchSongs('song');
     expect(tracks.map((track) => track.uploaderChannelId),
+        [_channelId, _channelId, null]);
+    expect(
+        tracks
+            .map((track) => track.musicMetadata.artistCredits.firstOrNull?.id),
         [_channelId, _channelId, null]);
     expect(requests.map((request) => request.url.path), ['/api/v1/search']);
   });

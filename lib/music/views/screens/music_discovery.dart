@@ -7,6 +7,7 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -268,7 +269,8 @@ class _SavedSongRows extends StatelessWidget {
                     child: _SavedSongRow(
                       key: ValueKey('music-home-saved-${song.id}'),
                       song: song,
-                      onOpen: () => _openSong(context, session, song.id),
+                      onOpen: () => _openSong(
+                          context, session, song.id, song.artistCredits),
                     ),
                   ),
               ],
@@ -512,9 +514,8 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     });
   }
 
-  bool _sameConnection(int generation, _DiscoverySession session) =>
+  bool _sameConnection(_DiscoverySession session) =>
       mounted &&
-      generation == _generation &&
       session.eligible &&
       session.matches(_DiscoverySession(context.read<AppCubit>().state));
 
@@ -524,7 +525,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
       (ModalRoute.of(context)?.isCurrent ?? true);
 
   bool _current(int generation, _DiscoverySession session) =>
-      _sameConnection(generation, session) && _pageVisible;
+      generation == _generation && _sameConnection(session) && _pageVisible;
 
   Future<void> _load(_DiscoverySession session, String? artist) async {
     if (_loading || !_current(_generation, session)) return;
@@ -571,7 +572,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
           _loading = false;
           // A country/proxy change can precede its UI notification. Never keep
           // the old selection or let an abandoned request leave a spinner.
-          if (!_sameConnection(generation, session)) {
+          if (!_sameConnection(session)) {
             _reset();
             _session = null;
           } else if (!_pageVisible) {
@@ -674,7 +675,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
       BuildContext context, _DiscoverySession session, List<String> artists) {
     if (_artist != null && !artists.contains(_artist)) _reset();
     final artist = _artist;
-    final generation = _generation;
+    final selection = _songs;
     final locals = AppLocalizations.of(context)!;
     final recommendations = RecommendationService.forProfile(
         session.database, session.app.profileId);
@@ -765,33 +766,43 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
             itemCount: results.visible.length,
             itemBuilder: (context, index) {
               final (song, matches) = results.visible[index];
+              final reason = _reasons[song.videoId];
+              // Opening a menu can cancel a pending refresh. Its actions still
+              // belong to this displayed list until the selection changes.
+              bool currentSong() =>
+                  identical(_songs, selection) &&
+                  _sameConnection(session) &&
+                  _pageVisible &&
+                  recommendations.eligibleMusic([song],
+                      includeCommunityHidden: _showCommunityHidden).isNotEmpty;
+              final recommendation = reason == null
+                  ? null
+                  : MusicSongRecommendation(
+                      reason: reason,
+                      isCurrent: currentSong,
+                      onFeedback: (feedback) =>
+                          _feedback(_generation, session, song, feedback));
               return MusicCatalogCard(
                 key: ValueKey('music-discovery-${song.videoId}'),
                 title: song.title,
                 subtitle: song.artists.join(', '),
                 song: song,
                 showPlayIndicator: true,
-                badge: matches.isEmpty && !_reasons.containsKey(song.videoId)
-                    ? null
-                    : Row(mainAxisSize: MainAxisSize.min, children: [
-                        if (matches.isNotEmpty)
-                          Flexible(
-                              child: CommunityMatchLabels(
-                                  matches: matches, compact: true)),
-                        if (_reasons[song.videoId] case final reason?)
-                          MusicRecommendationActions(
-                            reason: reason,
-                            isCurrent: () => _current(generation, session),
-                            onFeedback: (feedback) =>
-                                _feedback(generation, session, song, feedback),
-                          ),
-                      ]),
+                badge: Row(mainAxisSize: MainAxisSize.min, children: [
+                  if (matches.isNotEmpty)
+                    Flexible(
+                        child: CommunityMatchLabels(
+                            matches: matches, compact: true)),
+                  MusicLibraryActions(
+                      videos: [song.toVideo()], recommendation: recommendation),
+                ]),
+                onLongPress: () => MusicLibraryActions.showSongMenu(
+                    context, song.toVideo(),
+                    recommendation: recommendation),
                 onOpen: () {
-                  if (_current(generation, session) &&
-                      recommendations.eligibleMusic([song],
-                          includeCommunityHidden:
-                              _showCommunityHidden).isNotEmpty) {
-                    _openSong(context, session.app, song.videoId);
+                  if (currentSong()) {
+                    _openSong(
+                        context, session.app, song.videoId, song.artistCredits);
                   }
                 },
               );
@@ -888,9 +899,11 @@ class _MusicExplore extends StatelessWidget {
   }
 }
 
-void _openSong(BuildContext context, AppState session, String videoId) {
+void _openSong(BuildContext context, AppState session, String videoId,
+    List<MusicArtistCredit> artistCredits) {
   if (_sameSession(session, context.read<AppCubit>().state)) {
-    context.router.push(MusicRoute(videoId: videoId));
+    context.router
+        .push(MusicRoute(videoId: videoId, artistCredits: artistCredits));
   }
 }
 

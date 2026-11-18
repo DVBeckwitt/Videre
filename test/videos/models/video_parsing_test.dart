@@ -62,6 +62,7 @@ void main() {
       videoId: id,
       title: 'Song title',
       author: 'Uploader',
+      authorId: 'UC1234567890123456789012',
       videoThumbnails: [artwork],
     );
     final resolved = response.preservingMusicMetadataFrom(queued);
@@ -69,6 +70,16 @@ void main() {
     expect(resolved.author, 'Uploader');
     expect(resolved.musicMetadata?.title, 'Song title');
     expect(resolved.musicMetadata?.artist, 'Uploader');
+    expect(resolved.musicMetadata!.artistCredits.single.id,
+        'UC1234567890123456789012');
+    final otherArtist = queued.copyWith(
+        musicMetadata: const MusicMetadata(title: id, artist: 'Performer'));
+    expect(
+        response
+            .preservingMusicMetadataFrom(otherArtist)
+            .musicMetadata!
+            .artistCredits,
+        isEmpty);
     expect(resolved.musicMetadata?.album, 'Saved album');
     expect(resolved.videoThumbnails.single, artwork);
     expect(resolved.queueEntryId, 'song#2');

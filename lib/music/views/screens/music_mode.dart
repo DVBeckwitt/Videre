@@ -13,6 +13,15 @@ import 'music_library.dart';
 class MainMusicTab extends StatelessWidget {
   const MainMusicTab({super.key});
 
+  static Future<void> openSearch(TabsRouter tabs) async {
+    final key = GlobalObjectKey<_MusicModeScreenState>(tabs);
+    // A second tap can arrive before the newly selected tab has mounted.
+    if (key.currentState == null) await WidgetsBinding.instance.endOfFrame;
+    if (tabs.current.name == MainMusicRoute.name) {
+      key.currentState?._openSearch();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabs = AutoTabsRouter.of(context, watch: true);
@@ -23,13 +32,19 @@ class MainMusicTab extends StatelessWidget {
       enabled: active,
       child: ExcludeFocus(
         excluding: !active,
-        child: const MusicModeScreen(appBar: null, inMainPager: true),
+        child: MusicModeScreen(
+            key: GlobalObjectKey<_MusicModeScreenState>(tabs),
+            appBar: null,
+            inMainPager: true),
       ),
     );
   }
 }
 
 class MusicModeScreen extends StatefulWidget {
+  static void openSearch(BuildContext context) =>
+      context.findAncestorStateOfType<_MusicModeScreenState>()?._openSearch();
+
   final PreferredSizeWidget? appBar;
   final Widget? mainNavigationBar;
   final Widget? mainNavigationRail;
@@ -50,16 +65,41 @@ class MusicModeScreen extends StatefulWidget {
 class _MusicModeScreenState extends State<MusicModeScreen> {
   final _pages = PageController();
   final _storage = PageStorageBucket();
+  final _search = GlobalKey<MusicScreenState>();
   int _page = 0;
+  Object? _pendingSearchFocus;
 
-  void _show(int page) {
-    if (page == _page) return;
-    if (AppMotion.allowsMovement(context)) {
-      _pages.animateToPage(page,
-          duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
-    } else {
-      _pages.jumpToPage(page);
+  void _openSearch() => _show(1, focusSearch: true);
+
+  Future<void> _show(int page, {bool focusSearch = false}) async {
+    if (focusSearch && _pendingSearchFocus != null) return;
+    final request = focusSearch ? Object() : null;
+    _pendingSearchFocus = request;
+    final from = _page;
+    if (page != from || _pages.position.isScrollingNotifier.value) {
+      if (AppMotion.allowsMovement(context)) {
+        await _pages.animateToPage(page,
+            duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+      } else {
+        _pages.jumpToPage(page);
+      }
     }
+    if (request == null) return;
+    // The retained search field can take focus after the page has been laid out.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || _pendingSearchFocus != request) return;
+    _pendingSearchFocus = null;
+    if (_page == 1 && TickerMode.of(context)) {
+      _search.currentState
+          ?.focusSearch(onBack: from == 1 ? null : () => _show(from));
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // An offstage page's animation may finish only after returning to Music.
+    if (!TickerMode.of(context)) _pendingSearchFocus = null;
   }
 
   @override
@@ -94,7 +134,8 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
                   surfaceTintColor: Colors.transparent,
                   indicatorColor: colors.surfaceContainerHighest,
                   selectedIndex: _page,
-                  onDestinationSelected: _show,
+                  onDestinationSelected: (page) =>
+                      page == 1 ? _openSearch() : _show(page),
                   destinations: [
                     for (var i = 0; i < labels.length; i++)
                       NavigationDestination(
@@ -150,7 +191,10 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
                     physics: widget.inMainPager
                         ? const NeverScrollableScrollPhysics()
                         : null,
-                    onPageChanged: (page) => setState(() => _page = page),
+                    onPageChanged: (page) {
+                      if (page != 1) _search.currentState?.leaveSearch();
+                      setState(() => _page = page);
+                    },
                     children: [
                       _RetainedMusicPage(
                         active: _page == 0,
@@ -161,7 +205,7 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
                       ),
                       _RetainedMusicPage(
                           active: _page == 1,
-                          child: const MusicScreen(embedded: true)),
+                          child: MusicScreen(key: _search, embedded: true)),
                       _RetainedMusicPage(
                           active: _page == 2, child: const MusicLibraryPage()),
                     ],

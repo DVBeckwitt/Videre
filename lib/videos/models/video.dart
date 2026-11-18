@@ -1,5 +1,6 @@
 // ignore_for_file: invalid_annotation_target
 
+import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -206,6 +207,45 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
     return album;
   }
 
+  /// Fill missing catalog labels from this recording's instance metadata.
+  MusicMetadata resolveMusicMetadata(MusicMetadata music) {
+    final songTitle = music.title == videoId && title?.trim().isNotEmpty == true
+        ? title!
+        : music.title;
+    final songArtist =
+        music.artist.trim().isEmpty && author?.trim().isNotEmpty == true
+            ? author!
+            : music.artist;
+    final artTrack = music.isArtTrack || isStockArtTrack;
+    final album = music.album ?? stockArtTrackAlbum;
+    var artistCredits = music.artistCredits;
+    if (artistCredits.isEmpty) {
+      final responseMusic = musicMetadata;
+      if (responseMusic != null && responseMusic.artist == songArtist) {
+        artistCredits = responseMusic.artistCredits;
+      } else if (responseMusic == null &&
+          !downloadPlaybackOnly &&
+          author == songArtist) {
+        final credit = MusicArtistCredit.forAuthor(author, authorId, authorUrl);
+        if (credit != null) artistCredits = [credit];
+      }
+    }
+    return songTitle == music.title &&
+            songArtist == music.artist &&
+            identical(artistCredits, music.artistCredits) &&
+            artTrack == music.isArtTrack &&
+            album == music.album
+        ? music
+        : MusicMetadata(
+            title: songTitle,
+            artist: songArtist,
+            artistCredits: artistCredits,
+            album: album,
+            thumbnails: music.thumbnails,
+            isArtTrack: artTrack,
+          );
+  }
+
   /// Playback responses describe the upload; retain its queue occurrence and
   /// the song's catalog identity when fetching fresh stream URLs.
   Video preservingMusicMetadataFrom(Video source) {
@@ -216,29 +256,7 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
           ? this
           : copyWith(queueEntryId: source.queueEntryId);
     }
-    // A Takeout playlist can supply only the video ID. Use metadata from the
-    // existing playback request to fill its placeholders before playing.
-    final songTitle = music.title == videoId && title?.trim().isNotEmpty == true
-        ? title!
-        : music.title;
-    final songArtist =
-        music.artist.trim().isEmpty && author?.trim().isNotEmpty == true
-            ? author!
-            : music.artist;
-    final artTrack = music.isArtTrack || isStockArtTrack;
-    final album = music.album ?? stockArtTrackAlbum;
-    final labels = songTitle == music.title &&
-            songArtist == music.artist &&
-            artTrack == music.isArtTrack &&
-            album == music.album
-        ? music
-        : MusicMetadata(
-            title: songTitle,
-            artist: songArtist,
-            album: album,
-            thumbnails: music.thumbnails,
-            isArtTrack: artTrack,
-          );
+    final labels = resolveMusicMetadata(music);
     var frames = videoThumbnails;
     if (source.videoThumbnails.isNotEmpty) {
       final instanceUrl = (playbackConnection ?? backendPlayback)?.server.url;
@@ -260,8 +278,8 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
     return copyWith(
       queueEntryId: source.queueEntryId,
       musicMetadata: labels,
-      title: songTitle,
-      author: songArtist,
+      title: labels.title,
+      author: labels.artist,
       videoThumbnails: frames.isEmpty ? music.thumbnails : frames,
     );
   }

@@ -243,6 +243,7 @@ class _SessionApp extends TestAppCubit {
 
 class _TestMusicCatalog extends MusicCatalogService {
   int trendingCalls = 0;
+  Completer<void>? pendingArtist;
 
   @override
   Future<List<MusicTrack>> getTrendingSongs() async {
@@ -273,10 +274,13 @@ class _TestMusicCatalog extends MusicCatalogService {
       MusicTrack(videoId: videoId, title: 'Fresh song');
 
   @override
-  Future<MusicArtistPage> getArtist(String id) async => const MusicArtistPage(
-      artist: MusicArtist(id: 'UCmusic', name: 'Music channel'),
-      description: 'Channel uploads',
-      songs: [MusicTrack(videoId: 'freshsong01', title: 'Fresh song')]);
+  Future<MusicArtistPage> getArtist(String id) async {
+    await pendingArtist?.future;
+    return const MusicArtistPage(
+        artist: MusicArtist(id: 'UCmusic', name: 'Music channel'),
+        description: 'Channel uploads',
+        songs: [MusicTrack(videoId: 'freshsong01', title: 'Fresh song')]);
+  }
 
   @override
   Future<List<MusicPlaylist>> searchPlaylists(String query) async =>
@@ -1290,22 +1294,21 @@ void main() {
     await _selectMusicSection(tester, 1);
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
     expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
-    expect(find.byKey(const ValueKey('music-search')), findsOneWidget);
+    final field = find.byKey(const ValueKey('music-search'));
+    await tester.enterText(field, 'retained song');
     await _selectMusicSection(tester, 2);
     expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
     expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
         findsOneWidget);
 
-    // The primary Search action is the video catalog even from Music.
     await _selectPhoneTab(tester, PhoneNavigationItem.search);
-    expect(
-        tester
-            .widget<EditableText>(find.byType(EditableText))
-            .focusNode
-            .hasFocus,
-        isTrue);
-    expect(find.byKey(const ValueKey('music-search')), findsNothing);
-    await tester.pageBack();
+    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text, 'retained song');
+    tester.testTextInput.hide();
+    await _selectPhoneTab(tester, PhoneNavigationItem.search);
+    expect(tester.testTextInput.isVisible, isTrue);
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
     expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
@@ -1320,6 +1323,32 @@ void main() {
     expect(find.text('Saved songs'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('choosing Music Home overrides a Search shortcut in progress',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await tester.tap(_phoneTab(PhoneNavigationItem.search));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 30));
+    await tester.tap(_musicSection(0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(_musicSection(0)).selected, isTrue);
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
+  testWidgets('leaving Music cancels a pending Search keyboard request',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(390, 844));
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await tester.tap(_phoneTab(PhoneNavigationItem.search));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 30));
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
+    expect(tester.testTextInput.isVisible, isFalse);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    expect(tester.testTextInput.isVisible, isFalse);
   });
 
   testWidgets('Music may start first and move out of the primary bar',
@@ -1338,6 +1367,18 @@ void main() {
     expect(find.text('Saved songs'), findsOneWidget);
     final settings =
         tester.element(find.byType(MusicModeScreen)).read<SettingsCubit>();
+    final topSearch =
+        layout.move(PhoneNavigationItem.search, NavigationArea.top)!;
+    await tester.runAsync(() => settings.setPhoneNavigation(topSearch));
+    await tester.pumpAndSettle();
+    final appBarSearch = find.descendant(
+        of: find.byType(AppBar), matching: find.byTooltip('Search'));
+    await tester.tap(appBarSearch);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(_musicSection(0)).selected, isTrue);
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
 
@@ -1351,6 +1392,17 @@ void main() {
     await tester.tap(find.byTooltip('More shortcuts'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Music'));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved songs'), findsOneWidget);
+    await tester.tap(appBarSearch);
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<TextField>(find.byKey(const ValueKey('music-search')))
+            .focusNode!
+            .hasFocus,
+        isTrue);
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('Saved songs'), findsOneWidget);
     await tester.pageBack();
@@ -1507,6 +1559,24 @@ void main() {
             .controller!
             .text,
         'kept query');
+    await _selectPhoneTab(tester, PhoneNavigationItem.search);
+    final field =
+        tester.widget<TextField>(find.byKey(const ValueKey('music-search')));
+    expect(field.controller!.text, 'kept query');
+    expect(field.focusNode!.hasFocus, isTrue);
+    expect(find.text('Channel uploads'), findsNothing);
+    expect(find.text('Search result kept query'), findsOneWidget);
+    final pending = Completer<void>();
+    (musicCatalogService as _TestMusicCatalog).pendingArtist = pending;
+    await tester.tap(find.widgetWithText(TextButton, 'Music channel'));
+    await tester.pump();
+    await tester.tap(_phoneTab(PhoneNavigationItem.search));
+    await tester.pump();
+    await tester.pump();
+    pending.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Channel uploads'), findsNothing);
+    expect(find.text('Search result kept query'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

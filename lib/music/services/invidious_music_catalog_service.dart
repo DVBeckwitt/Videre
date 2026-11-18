@@ -97,11 +97,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       videoId: video.videoId,
       title: video.title!,
       artists: author == null || author.isEmpty ? [] : [author],
-      artistLinks: author != null &&
-              author.isNotEmpty &&
-              _channelId.hasMatch(video.authorId ?? '')
-          ? [MusicArtist(id: video.authorId!, name: author)]
-          : [],
+      artistLinks: [
+        if (author != null && author.trim().isNotEmpty && uploaderId != null)
+          MusicArtist(id: uploaderId, name: author),
+      ],
       uploaderChannelId: uploaderId,
       uploaderChannelUrl: uploaderHandle == null
           ? null
@@ -486,6 +485,12 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       id: video.videoId,
       title: title,
       subtitle: video.author ?? '',
+      artistCredits: [
+        if (MusicArtistCredit.forAuthor(
+                video.author, video.authorId, video.authorUrl)
+            case final credit?)
+          credit,
+      ],
       album: video.stockArtTrackAlbum,
       durationSeconds: video.lengthSeconds,
       thumbnails: [

@@ -32,7 +32,6 @@ import '../../network/nerdvpn_access.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
-import '../../videos/models/music_metadata.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
@@ -560,15 +559,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           if (video.captionLabel != null && caption == null) {
             throw StateError('The selected subtitle track is unavailable');
           }
-          var music = (video.musicMetadata ?? vid.musicMetadata)
-              ?.withoutVideoThumbnailFallbacks(vid.videoThumbnails);
-          if (music != null && vid.isStockArtTrack) {
-            music = MusicMetadata(
-                title: music.title,
-                artist: music.artist,
-                album: music.album ?? vid.stockArtTrackAlbum,
-                thumbnails: music.thumbnails,
-                isArtTrack: true);
+          var music = video.musicMetadata ?? vid.musicMetadata;
+          if (music != null && video.videoId == vid.videoId) {
+            music = vid
+                .resolveMusicMetadata(music)
+                .withoutVideoThumbnailFallbacks(vid.videoThumbnails);
           }
           video = video.copyWith(
               // Interrupted/replaced output must never inherit old proof.

@@ -36,6 +36,7 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -573,6 +574,8 @@ void main() {
   ]) {
     testWidgets('a saved song link handles a cached $label', (tester) async {
       const selected = Server(url: 'https://instance.example', inUse: true);
+      const channel = 'UC0123456789012345678901';
+      const credits = [MusicArtistCredit(name: 'Saved artist', id: channel)];
       final audio = AdaptiveFormat(
           null,
           '128000',
@@ -597,8 +600,20 @@ void main() {
           id: first.videoId,
           title: 'Bookmarked song',
           subtitle: 'Bookmarked artist',
+          artistCredits: const [
+            MusicArtistCredit(
+                name: 'Bookmarked artist', id: 'UCabcdefghijklmnopqrstuv'),
+          ],
           thumbnails: [ImageObject(null, image, 320, 320)],
         ));
+        if (label == 'video thumbnail') {
+          await db.upsertHistoryVideo(HistoryVideoCache(
+              first.videoId, 'Saved song', 'Saved artist', '',
+              musicMetadata: const MusicMetadata(
+                  title: 'Saved song',
+                  artist: 'Saved artist',
+                  artistCredits: credits)));
+        }
         final provenance = DownloadPlaybackProvenance.create(
             video: Video(videoId: first.videoId, adaptiveFormats: [audio]),
             server: server,
@@ -626,7 +641,10 @@ void main() {
                 album: 'Saved album')));
       });
       player.sponsorFailureIsAsync = true;
-      await show(tester, screen: MusicScreen(videoId: first.videoId));
+      await show(tester,
+          screen: MusicScreen(
+              videoId: first.videoId,
+              artistCredits: label == 'catalog cover' ? credits : const []));
       // The remote cover can keep its loading indicator animated in this test.
       // The song and its artwork metadata are published before image decoding.
       await tester.pump();
@@ -634,6 +652,7 @@ void main() {
       final played = player.calls.single.videos.single;
       expect(played.downloadPlaybackOnly, isTrue);
       expect(played.musicMetadata?.artist, 'Saved artist');
+      expect(played.musicMetadata!.artistCredits.single.id, channel);
       expect(played.musicMetadata?.album, 'Saved album');
       final covers = played.musicMetadata!.thumbnails;
       expect(covers, hasLength(expectedCovers));

@@ -5,22 +5,23 @@ metadata, together with Videre's queues, local library, and download engine.
 Opening Music does not contact `music.youtube.com`. It does not sign in to a
 Google account or synchronize a Google library.
 
-Use the **Videos / Music** switch at the top of the home screen on phones,
-tablets, and TVs. Music has its own **Home**, **Search**, and **Library**
-destinations. Search finds songs, channels, and public playlists through the
-selected Invidious instance.
+Music has its own **Home**, **Search**, and **Library** destinations. On a
+phone, open **Music** from the main navigation. While Music is selected, the
+bottom **Search** button opens Music Search and focuses its search field.
+From a video tab the same button opens video search. Music Search finds songs,
+channels, and public playlists through the selected Invidious instance.
 
-Choose **Settings → Browsing → Home experience** to show **Videos and Music**
-(the default), **Videos only**, or **Music only**. The same choice is available
-in the home and navigation customizers. A single-mode choice opens that home
-directly and hides the switch. The preference and last selected mode belong to
-the active Videre profile.
+To move **Music** or **Search** on a phone, open **Settings → Browsing →
+Customize app sections**. You can also choose Music as your startup tab.
 
 ## Home and Search
 
 **Home** centers on saved music, with suggestions based on saved artists, genre
 searches, and shortcuts to **Search** and **Library**. Suggestions open explicit
 Invidious searches; opening Home does not automatically fetch a general feed.
+On a recommended song in **Quick Picks**, tap **⋮** for **Play next**, **Add to
+queue**, and recommendation feedback such as **More like this**. Holding a song
+also opens its actions.
 **Top charts** opens public Top 100 Songs and Music Videos playlists from
 [YouTube Music Global Charts](https://www.youtube.com/channel/UCrKZcyOJVWnJ60zM1XWllNw)
 for Worldwide and supported countries. The picker puts your browsing country
@@ -114,6 +115,10 @@ of the most recently opened Music session. Progress indicators use the same
 per-video history as Videos; marking a recording watched does not discard its
 precise timestamp. Playlist progress belongs to the active Videre profile.
 
+In the expanded Music player, tap a linked artist name to open that artist’s
+Music page while the song continues. Songs with only an artist name display it
+as plain text.
+
 Music playback keeps song titles, artists, albums, and artwork in the player,
 queue, local playlists, offline downloads, and Android media notification.
 Shuffle, repeat, seeking, playback speed, and the sleep timer reuse the existing
@@ -149,6 +154,19 @@ public playlists. Local playlist pages show their Music tracks and provide
 playlist** in a song's Music actions to remove it from that local playlist.
 These operations belong to the active Videre profile. Switching profiles closes
 an open save dialog and stops any remaining collection operation.
+
+When signed in, choose **Save a copy on server** on a fully loaded playlist to
+create a private copy in the selected Invidious account. After **Saved on
+server** appears, open the app’s main **Playlists** list and look for the
+copy labeled **On your server**.
+
+If Invidious returns HTTP 500 while adding a song, Videre checks which songs
+it already saved and resumes once automatically. If the song still fails,
+Videre shows its name and position. **Resume server copy** continues from the
+saved entries in that same playlist.
+If you deleted the previous server copy, choose **Create a new copy** to
+replace it. If the server did not confirm creation, check the server playlist
+list before choosing that action.
 
 Library backups include these saved items. **Merge** combines Music bookmarks
 and local-playlist markers, keeping the existing copy of a duplicate. **Replace**

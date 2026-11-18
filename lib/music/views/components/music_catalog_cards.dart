@@ -145,7 +145,16 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
             top: 8,
             start: 8,
             end: 8,
-            child: Align(alignment: AlignmentDirectional.topEnd, child: badge),
+            child: Align(
+              alignment: AlignmentDirectional.topEnd,
+              child: IconButtonTheme(
+                data: IconButtonThemeData(
+                    style: IconButton.styleFrom(
+                        backgroundColor: colors.surfaceContainerHigh,
+                        foregroundColor: colors.onSurface)),
+                child: badge,
+              ),
+            ),
           ),
         ],
       );

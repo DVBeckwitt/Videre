@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../globals.dart' as globals;
 import '../../service.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
+import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../utils/sembast_sqflite_database.dart';
 import '../../videos/services/watch_history.dart';
@@ -14,7 +16,25 @@ import '../models/playlist.dart';
 import '../models/playlist_reference.dart';
 import 'playlist_load_session.dart';
 
-class PlaylistCreationUnconfirmed implements Exception {}
+sealed class PlaylistCopyNeedsConfirmation implements Exception {
+  final String id;
+  const PlaylistCopyNeedsConfirmation(this.id);
+}
+
+class PlaylistCreationUnconfirmed extends PlaylistCopyNeedsConfirmation {
+  const PlaylistCreationUnconfirmed(super.id);
+}
+
+class PlaylistCopyMissing extends PlaylistCopyNeedsConfirmation {
+  const PlaylistCopyMissing(super.id);
+}
+
+class PlaylistTrackSaveFailure implements Exception {
+  final int index;
+  final int? statusCode;
+
+  const PlaylistTrackSaveFailure(this.index, this.statusCode);
+}
 
 /// A copy resumes against the server's actual prefix after a lost response.
 /// Its checkpoint contains only playlist identities, never credentials.
@@ -62,7 +82,48 @@ class PlaylistServerCopy {
     }
   }
 
-  Future<String> save({void Function(int, int)? onProgress}) async {
+  Future<int> _readSavedCount(String destination, List<String> ids) async {
+    await _assertCurrent();
+    var saved = 0;
+    int? declaredCount;
+    for (var page = 1; page <= PlaylistLoadSession.maximumPages; page++) {
+      final Playlist remote;
+      try {
+        remote = await client.getServerPlaylist(destination,
+            page: page, serverOverride: server);
+      } on InvidiousServiceError catch (error) {
+        if (page != 1 ||
+            error.statusCode != 404 ||
+            error.isGatewayAccessFailure ||
+            error.responseWasHtml) {
+          rethrow;
+        }
+        await _assertCurrent();
+        throw PlaylistCopyMissing(destination);
+      }
+      await _assertCurrent();
+      declaredCount ??= remote.videoCount;
+      if (remote.playlistId != destination ||
+          remote.videoCount != declaredCount ||
+          remote.videoCount > ids.length ||
+          saved + remote.videos.length > remote.videoCount) {
+        throw StateError('The server copy has been changed');
+      }
+      for (final video in remote.videos) {
+        if (video.videoId != ids[saved]) {
+          throw StateError('The server copy has been changed');
+        }
+        saved++;
+      }
+      if (saved == remote.videoCount) return saved;
+      if (remote.videos.isEmpty) break;
+    }
+    throw StateError('Could not read the complete server copy');
+  }
+
+  Future<String> save(
+      {void Function(int, int)? onProgress,
+      PlaylistCopyNeedsConfirmation? confirmedReplacement}) async {
     final db = database;
     final key = db is SembastSqfDb ? db.db : db;
     final writes = _writes[key] ??= {};
@@ -79,53 +140,82 @@ class PlaylistServerCopy {
       final stored = database.getSettings(_checkpointKey)?.value;
       final record = stored == null ? null : jsonDecode(stored);
       String? destination;
+      int? existing;
       if (record is Map &&
           record['title'] == playlist.title &&
           record['videos'] is List &&
           listEquals(record['videos'] as List, ids)) {
         destination = record['playlistId'] as String?;
+        final attempt = record['pendingCreate'];
+        if (attempt is String &&
+            !(confirmedReplacement is PlaylistCreationUnconfirmed &&
+                confirmedReplacement.id == attempt)) {
+          throw PlaylistCreationUnconfirmed(attempt);
+        }
+      }
+      if (destination != null) {
+        try {
+          existing = await _readSavedCount(destination, ids);
+        } on PlaylistCopyMissing {
+          // Recheck before replacing: the private destination might be
+          // accessible again or another screen may already have replaced it.
+          if (confirmedReplacement is! PlaylistCopyMissing ||
+              confirmedReplacement.id != destination) {
+            rethrow;
+          }
+          destination = null;
+        }
       }
       if (destination == null) {
+        Future<void> checkpoint(String field, String value) =>
+            database.saveSetting(SettingsValue(
+                _checkpointKey,
+                jsonEncode({
+                  'title': playlist.title,
+                  'videos': ids,
+                  field: value,
+                })));
+        // Creation has no idempotency key. Remember the attempt before the
+        // POST so a second screen or app restart cannot silently send it again.
+        final attempt = const Uuid().v4();
+        await checkpoint('pendingCreate', attempt);
         await _assertCurrent();
         try {
           destination = await client.createServerPlaylist(
               playlist.title, 'private', server);
         } catch (_) {
-          // POST creation has no idempotency key. Do not automatically retry it.
-          throw PlaylistCreationUnconfirmed();
+          throw PlaylistCreationUnconfirmed(attempt);
         }
-        await database.saveSetting(SettingsValue(
-            _checkpointKey,
-            jsonEncode({
-              'title': playlist.title,
-              'videos': ids,
-              'playlistId': destination,
-            })));
+        await checkpoint('playlistId', destination);
       }
-      await _assertCurrent();
-      final existing = <String>[];
-      for (var page = 1; page <= PlaylistLoadSession.maximumPages; page++) {
-        final remote = await client.getServerPlaylist(destination,
-            page: page, serverOverride: server);
+      var saved = existing ?? await _readSavedCount(destination, ids);
+      var recoveredServerError = false;
+      onProgress?.call(saved, ids.length);
+      while (saved < ids.length) {
         await _assertCurrent();
-        if (remote.playlistId != destination ||
-            existing.length + remote.videos.length > ids.length) {
-          throw StateError('The server copy has been changed');
+        try {
+          await client.addVideoToServerPlaylist(
+              destination, ids[saved], server);
+          saved++;
+        } on InvidiousServiceError catch (error) {
+          if (recoveredServerError ||
+              error.statusCode != 500 ||
+              error.isGatewayAccessFailure ||
+              error.responseWasHtml) {
+            throw PlaylistTrackSaveFailure(saved, error.statusCode);
+          }
+          recoveredServerError = true;
+          // A failed response may follow a committed insert. Reconcile once
+          // against this account before deciding whether to send the track.
+          final verified = await _readSavedCount(destination, ids);
+          if (verified != saved && verified != saved + 1) {
+            throw StateError('The server copy has been changed');
+          }
+          saved = verified;
+        } on Exception {
+          throw PlaylistTrackSaveFailure(saved, null);
         }
-        existing.addAll(remote.videos.map((video) => video.videoId));
-        if (existing.length >= remote.videoCount) break;
-        if (remote.videos.isEmpty || page == PlaylistLoadSession.maximumPages) {
-          throw StateError('Could not read the complete server copy');
-        }
-      }
-      if (!listEquals(existing, ids.take(existing.length).toList())) {
-        throw StateError('The server copy has been changed');
-      }
-      onProgress?.call(existing.length, ids.length);
-      for (var index = existing.length; index < ids.length; index++) {
-        await _assertCurrent();
-        await client.addVideoToServerPlaylist(destination, ids[index], server);
-        onProgress?.call(index + 1, ids.length);
+        onProgress?.call(saved, ids.length);
       }
       return destination;
     } finally {

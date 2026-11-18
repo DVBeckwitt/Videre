@@ -150,17 +150,20 @@ class _MainScreenState extends State<MainContentScreen> {
     AutoRouter.of(context).push(const ManageSubscriptionsRoute());
   }
 
-  AppBar _musicAppBar(BuildContext context, {bool showSearch = true}) {
+  AppBar _musicAppBar(BuildContext context,
+      {bool showSearch = true, VoidCallback? onSearch}) {
     final locals = AppLocalizations.of(context)!;
     return AppBar(
       titleSpacing: 16,
       title: Text(locals.music),
       actions: [
         if (showSearch)
-          IconButton(
-              tooltip: locals.search,
-              onPressed: () => AutoRouter.of(context).push(MusicRoute()),
-              icon: const Icon(Icons.search)),
+          Builder(
+              builder: (context) => IconButton(
+                  tooltip: locals.search,
+                  onPressed:
+                      onSearch ?? () => MusicModeScreen.openSearch(context),
+                  icon: const Icon(Icons.search))),
         IconButton(
             tooltip: locals.settings,
             onPressed: () => openSettings(context),
@@ -333,6 +336,13 @@ class _MainScreenState extends State<MainContentScreen> {
 
       void select(BuildContext context, PhoneNavigationItem item) {
         if (phone) {
+          final tabs = _initializedTabsRouter;
+          if (item == PhoneNavigationItem.search &&
+              tabs != null &&
+              tabs.current.name == MainMusicRoute.name) {
+            MainMusicTab.openSearch(tabs);
+            return;
+          }
           final index = tabItems.indexOf(item);
           if (index < 0) {
             _openItem(context, item);
@@ -432,7 +442,11 @@ class _MainScreenState extends State<MainContentScreen> {
                               (item) => select(context, item))
                           : null,
                       appBar: selectedItem == PhoneNavigationItem.music
-                          ? _musicAppBar(context, showSearch: false)
+                          ? _musicAppBar(context,
+                              showSearch: phoneNavigation.top
+                                  .contains(PhoneNavigationItem.search),
+                              onSearch: () =>
+                                  MainMusicTab.openSearch(tabsRouter))
                           : AppBar(
                               title: Text(selectedPage!.getLabel(locals),
                                   overflow: TextOverflow.ellipsis),

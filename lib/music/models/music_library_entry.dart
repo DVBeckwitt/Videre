@@ -17,6 +17,7 @@ class MusicLibraryEntry {
   final String id;
   final String title;
   final String subtitle;
+  final List<MusicArtistCredit> artistCredits;
   final String? album;
   final int? durationSeconds;
   final List<ImageObject> thumbnails;
@@ -39,6 +40,7 @@ class MusicLibraryEntry {
     required this.id,
     required this.title,
     this.subtitle = '',
+    this.artistCredits = const [],
     this.album,
     this.durationSeconds,
     this.thumbnails = const [],
@@ -74,6 +76,7 @@ class MusicLibraryEntry {
         id: video.videoId,
         title: metadata.title,
         subtitle: metadata.artist,
+        artistCredits: metadata.artistCredits,
         album: metadata.album,
         durationSeconds: video.lengthSeconds,
         isArtTrack: metadata.isArtTrack,
@@ -113,6 +116,7 @@ class MusicLibraryEntry {
         musicMetadata: MusicMetadata(
             title: title,
             artist: subtitle,
+            artistCredits: artistCredits,
             album: album,
             thumbnails: covers,
             isArtTrack: isArtTrack));
@@ -123,6 +127,9 @@ class MusicLibraryEntry {
         'id': id,
         'title': title,
         'subtitle': subtitle,
+        if (artistCredits.isNotEmpty && kind == MusicLibraryKind.song)
+          'artistCredits':
+              artistCredits.map((credit) => credit.toJson()).toList(),
         if (album != null) 'album': album,
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
         'thumbnails': thumbnails.map((image) => image.toJson()).toList(),
@@ -170,6 +177,9 @@ class MusicLibraryEntry {
         id: id,
         title: title,
         subtitle: _text(value['subtitle']) ?? '',
+        artistCredits: kind == MusicLibraryKind.song
+            ? MusicArtistCredit.parseList(value['artistCredits'])
+            : const [],
         album: _text(value['album']),
         durationSeconds: duration is int && duration >= 0 && duration <= 604800
             ? duration

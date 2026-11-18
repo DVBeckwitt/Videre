@@ -105,6 +105,10 @@ void main() {
           id: id,
           title: 'Invidious title',
           subtitle: 'Invidious artist',
+          artistCredits: const [
+            MusicArtistCredit(
+                name: 'Invidious artist', id: 'UC1234567890123456789012')
+          ],
           album: 'Invidious album',
           durationSeconds: 180,
           usesVideoThumbnails: true,
@@ -125,6 +129,8 @@ void main() {
     final repaired = reopened.entries[1];
     expect(repaired.title, 'Invidious title');
     expect(repaired.subtitle, 'Invidious artist');
+    expect(repaired.toVideo().musicMetadata!.artistCredits.single.id,
+        'UC1234567890123456789012');
     expect(repaired.album, 'Invidious album');
     expect(repaired.durationSeconds, 180);
     expect(repaired.needsSongDetails, isFalse);
@@ -134,6 +140,7 @@ void main() {
     final alreadyNamed = reopened.entries[2];
     expect(alreadyNamed.title, 'Export title');
     expect(alreadyNamed.subtitle, 'Export artist');
+    expect(alreadyNamed.artistCredits, isEmpty);
     expect(alreadyNamed.album, 'Export album');
     expect(alreadyNamed.durationSeconds, 100);
     expect(alreadyNamed.thumbnails, hasLength(1));

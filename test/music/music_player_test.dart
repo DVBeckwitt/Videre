@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:auto_route/auto_route.dart';
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
@@ -14,7 +15,11 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
@@ -35,6 +40,7 @@ import 'package:clipious/player/views/components/expanded_player.dart';
 import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/views/tablet/expanded_player.dart';
+import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -59,11 +65,20 @@ import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
+class _ArtistCatalog extends MusicCatalogService {
+  @override
+  Future<MusicArtistPage> getArtist(String id) async => MusicArtistPage(
+      artist: MusicArtist(name: 'Featured artist', id: id),
+      description: 'Channel $id',
+      songs: const [MusicTrack(videoId: 'next', title: 'Artist track')]);
+}
+
 class _Player extends TestPlayerCubit {
   int nextCalls = 0;
   int previousCalls = 0;
   int playlistRetries = 0;
   final localQueueRequests = <List<LocalMusicTrack>>[];
+  final musicPlayRequests = <List<Video>>[];
   Object? playlistError;
   Duration? sought;
 
@@ -79,6 +94,12 @@ class _Player extends TestPlayerCubit {
 
   @override
   void playPrevious() => previousCalls++;
+
+  @override
+  Future<void> playVideo(List<Video> videos,
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+    musicPlayRequests.add(videos);
+  }
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
@@ -285,6 +306,86 @@ void main() {
         offlineCurrentlyPlaying: entries.first,
         playQueue: ListQueue.of([entries.last.videoId])));
     return tracks;
+  }
+
+  for (final tv in [false, true]) {
+    testWidgets('fullscreen artist opens the selected Music channel (TV: $tv)',
+        (tester) async {
+      const id = 'UC0123456789012345678901';
+      final catalog = musicCatalogService;
+      final previousTv = app_main.isTv;
+      musicCatalogService = _ArtistCatalog();
+      app_main.isTv = tv;
+      addTearDown(() {
+        musicCatalogService = catalog;
+        app_main.isTv = previousTv;
+      });
+      final linked = const MusicTrack(videoId: 'song', title: 'Song', artists: [
+        'First artist',
+        'Featured artist',
+        'Guest'
+      ], artistLinks: [
+        MusicArtist(id: 'UCabcdefghijklmnopqrstuv', name: 'First artist'),
+        MusicArtist(id: id, name: 'Featured artist'),
+      ]).toVideo();
+      await player.seed(player.state
+          .copyWith(videos: [linked, next], currentlyPlaying: linked));
+      final router = RootStackRouter.build(routes: [
+        if (tv)
+          NamedRouteDef(
+              name: 'PlayingRoute',
+              path: '/',
+              builder: (_, __) =>
+                  const Scaffold(body: MusicPlayer(television: true)))
+        else
+          NamedRouteDef(
+              name: MainRoute.name,
+              path: '/',
+              children: [
+                NamedRouteDef(
+                    name: 'BrowseRoute',
+                    path: '',
+                    builder: (_, __) => const Text('Previous page')),
+                AutoRoute(page: MusicRoute.page),
+              ],
+              builder: (context, _) => Scaffold(
+                      body: Stack(children: [
+                    const AutoRouter(),
+                    if (!context.watch<PlayerCubit>().state.isMini)
+                      const MusicPlayer(),
+                  ]))),
+      ]);
+      addTearDown(router.dispose);
+      await pump(tester, child: Router.withConfig(config: router.config()));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextButton, 'First artist'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Guest'), findsNothing);
+      expect(find.text('Guest'), findsOneWidget);
+      final link = find.widgetWithText(TextButton, 'Featured artist');
+      await tester.ensureVisible(link);
+      await tester.tap(link);
+      await tester.pumpAndSettle();
+      expect(find.text('Channel $id'), findsOneWidget);
+      expect(player.state.currentlyPlaying?.videoId, 'song');
+      expect(player.state.playQueue, ['next']);
+      expect(player.state.position, const Duration(seconds: 30));
+      expect(player.state.isMini, !tv);
+      expect(player.musicPlayRequests, isEmpty);
+      if (tv) {
+        await tester.tap(find.byKey(const ValueKey('music-play-artist-songs')));
+        await tester.pumpAndSettle();
+        expect(player.musicPlayRequests.single.single.videoId, 'next');
+        expect(find.byType(MusicPlayer), findsOneWidget);
+      } else {
+        final pages = router.innerRouterOf<StackRouter>(MainRoute.name)!;
+        expect(router.stack, hasLength(1));
+        expect(pages.stack.map((page) => page.name),
+            ['BrowseRoute', MusicRoute.name]);
+        await pages.maybePop();
+        await tester.pumpAndSettle();
+        expect(find.text('Previous page'), findsOneWidget);
+      }
+    });
   }
 
   testWidgets(

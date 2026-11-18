@@ -5,6 +5,7 @@ import 'package:clipious/app/views/screens/main.dart';
 import 'package:clipious/app/views/tv/screens/tv_home.dart';
 import 'package:clipious/channels/views/screens/info_tab.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/player/views/tv/screens/tv_player_view.dart';

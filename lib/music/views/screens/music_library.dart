@@ -25,7 +25,6 @@ import 'package:clipious/playlists/views/components/playlist_information.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
-import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
@@ -197,13 +196,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       final covers = savedCovers[video.videoId];
       songs.add(covers == null
           ? video
-          : video.copyWith(
-              musicMetadata: MusicMetadata(
-                  title: music.title,
-                  artist: music.artist,
-                  album: music.album,
-                  isArtTrack: music.isArtTrack,
-                  thumbnails: covers)));
+          : video.copyWith(musicMetadata: music.withThumbnails(covers)));
     }
     final reference = PlaylistReference.forPlaylist(
         playlist, db.forProfile(library.profileId));

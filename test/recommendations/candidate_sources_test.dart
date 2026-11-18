@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -257,6 +258,27 @@ void main() {
     expect(requests, isEmpty);
   });
 
+  test('history keeps the linked occurrence of two identically named artists',
+      () async {
+    const id = 'UCabcdefghijklmnopqrstuv';
+    const metadata =
+        MusicMetadata(title: 'Duet', artist: 'River, River', artistCredits: [
+      MusicArtistCredit(name: 'River'),
+      MusicArtistCredit(name: 'River', id: id),
+    ]);
+    await db.upsertHistoryVideo(HistoryVideoCache(
+        _id(21), 'Duet', 'River, River', '',
+        musicMetadata: metadata));
+    final track =
+        RecommendationCandidates(db, api: api).listeningHistory().single;
+    expect(
+        track.toVideo().musicMetadata!.artistCredits.map((credit) => credit.id),
+        [null, id]);
+    final ambiguous = MusicArtistCredit.fromCatalog(
+        ['River', 'River'], [const MusicArtist(name: 'River', id: id)]);
+    expect(ambiguous.map((credit) => credit.id), [null, null]);
+  });
+
   test('older listens reuse a verified cover from the active profile',
       () async {
     const cover = 'https://lh3.googleusercontent.com/saved-cover';
@@ -483,7 +505,11 @@ void main() {
           MusicTrack(
             videoId: _id(i),
             title: 'Song $i',
-            artists: const ['Artist'],
+            artists: const ['Artist', 'Guest', 'Artist'],
+            artistLinks: const [
+              MusicArtist(name: 'Artist', id: 'UC1234567890123456789012'),
+              MusicArtist(name: 'Artist', id: 'UCabcdefghijklmnopqrstuv'),
+            ],
             playbackVideo: Video(
                 videoId: _id(i), hlsUrl: 'https://invidious.example/stream'),
           ),
@@ -495,6 +521,9 @@ void main() {
     expect(catalog.calls, 1);
     expect(catalog.artist, 'Artist');
     expect(tracks, hasLength(6));
+    expect(tracks.first.artists, ['Artist', 'Guest', 'Artist']);
+    expect(tracks.first.musicMetadata.artistCredits.map((credit) => credit.id),
+        ['UC1234567890123456789012', null, 'UCabcdefghijklmnopqrstuv']);
     expect(tracks.every((track) => track.playbackVideo == null), isTrue);
     expect(requests, isEmpty);
   });

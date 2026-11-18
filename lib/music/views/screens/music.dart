@@ -39,6 +39,7 @@ import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/views/components/playlist_information.dart';
 import 'package:clipious/recommendations/candidate_sources.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
+import 'package:clipious/router.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -57,6 +58,7 @@ enum _MusicSearch { songs, artists, playlists }
 @RoutePage()
 class MusicScreen extends StatefulWidget {
   final String? videoId;
+  final List<MusicArtistCredit> artistCredits;
   final String? playlistId;
   final String? artistId;
   final String? initialQuery;
@@ -66,6 +68,7 @@ class MusicScreen extends StatefulWidget {
   const MusicScreen(
       {super.key,
       this.videoId,
+      this.artistCredits = const [],
       this.playlistId,
       this.artistId,
       this.initialQuery,
@@ -74,6 +77,21 @@ class MusicScreen extends StatefulWidget {
 
   static Widget tvAudio({Video? video, DownloadedVideo? offlineVideo}) =>
       _MusicTvAudio(video: video, offlineVideo: offlineVideo);
+
+  static void openPlayingArtist(BuildContext context, String id,
+      {required bool television}) {
+    final player = context.read<PlayerCubit>();
+    if (television) {
+      Navigator.of(context).push(_TvPlayingArtistRoute(id, player));
+    } else {
+      // The phone player overlays Main's nested pages as their sibling.
+      final router = context.router;
+      final pages =
+          router.root.innerRouterOf<StackRouter>(MainRoute.name) ?? router;
+      player.showMiniPlayer();
+      pages.push(MusicRoute(artistId: id));
+    }
+  }
 
   static Future<void> playLocalTracks(
       BuildContext context, List<LocalMusicTrack> tracks,
@@ -96,7 +114,8 @@ class MusicScreen extends StatefulWidget {
       Duration startAt = Duration.zero}) async {
     if (videos.isEmpty) return;
     if (reference != null && reference.profileId != db.profileId) return;
-    if (isTv) {
+    final artistRoute = ModalRoute.of(context);
+    if (isTv && artistRoute is! _TvPlayingArtistRoute) {
       await Navigator.of(context).push<void>(MaterialPageRoute(
           builder: (_) => _MusicTvPlayer(
               videos: videos,
@@ -113,14 +132,21 @@ class MusicScreen extends StatefulWidget {
       await context.read<PlayerCubit>().playVideo(videos,
           audio: true, startAt: startAt, startIndex: startIndex);
     }
+    if (artistRoute is _TvPlayingArtistRoute &&
+        artistRoute.isCurrent &&
+        context.mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
-  State<MusicScreen> createState() => _MusicScreenState();
+  State<MusicScreen> createState() => MusicScreenState();
 }
 
-class _MusicScreenState extends State<MusicScreen> {
+class MusicScreenState extends State<MusicScreen> {
   final _search = TextEditingController();
+  final _queryFocus = FocusNode();
+  VoidCallback? _shortcutBack;
   _MusicSearch _type = _MusicSearch.songs;
   List<MusicTrack> _songs = [];
   List<MusicArtist> _artists = [];
@@ -130,6 +156,7 @@ class _MusicScreenState extends State<MusicScreen> {
   final _browseHistory =
       <({MusicCollection? collection, MusicArtistPage? artist})>[];
   bool _loading = false;
+  bool _browseRequest = false;
   bool _retryingSong = false;
   Object? _failure;
   bool _searched = false;
@@ -140,6 +167,24 @@ class _MusicScreenState extends State<MusicScreen> {
   Future<void> Function()? _retry;
 
   bool get _hasBrowsePage => _collection != null || _artistPage != null;
+
+  void focusSearch({VoidCallback? onBack}) {
+    if (onBack != null) setState(() => _shortcutBack = onBack);
+    if (_hasBrowsePage || _browseRequest) {
+      _browseHistory.clear();
+      _backToSearch();
+    }
+    if (_queryFocus.hasFocus) {
+      // Android's Back button can hide the IME while the field keeps focus.
+      SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+    } else {
+      _queryFocus.requestFocus();
+    }
+  }
+
+  void leaveSearch() {
+    if (_shortcutBack != null) setState(() => _shortcutBack = null);
+  }
 
   // A direct catalog link has no search results to return to. Preserve in-page
   // history first; submitting a search establishes a new local destination.
@@ -180,6 +225,7 @@ class _MusicScreenState extends State<MusicScreen> {
   void dispose() {
     _generation++;
     _search.dispose();
+    _queryFocus.dispose();
     super.dispose();
   }
 
@@ -231,12 +277,14 @@ class _MusicScreenState extends State<MusicScreen> {
   }
 
   Future<void> _run(Future<void> Function(int, AppState) operation,
-      Future<void> Function() retry) async {
+      Future<void> Function() retry,
+      {bool browse = false}) async {
     final session = context.read<AppCubit>().state;
     if (!_sameSession(session)) return;
     final generation = ++_generation;
     setState(() {
       _loading = true;
+      _browseRequest = browse;
       _retryingSong = false;
       _failure = null;
       _retry = retry;
@@ -320,7 +368,7 @@ class _MusicScreenState extends State<MusicScreen> {
           _artistPage = null;
         });
       }
-    }, () => _openCollection(id));
+    }, () => _openCollection(id), browse: true);
   }
 
   void _rememberBrowsePage() {
@@ -343,7 +391,7 @@ class _MusicScreenState extends State<MusicScreen> {
           _collection = null;
         });
       }
-    }, () => _openArtist(id));
+    }, () => _openArtist(id), browse: true);
   }
 
   Future<void> _openSong(String id, {Duration startAt = Duration.zero}) async {
@@ -374,17 +422,7 @@ class _MusicScreenState extends State<MusicScreen> {
       final song = savedMusic != null &&
               selected != null &&
               saved?.playbackConnection?.matches(selected) == true
-          ? MusicTrack(
-              videoId: id,
-              title: savedMusic.title,
-              artists: [savedMusic.artist],
-              uploaderChannelUrl: saved?.authorUrl,
-              albumTitle: savedMusic.album,
-              durationSeconds: saved?.lengthSeconds,
-              isArtTrack: savedMusic.isArtTrack,
-              thumbnails: _savedSongArtwork(saved!, current),
-              videoThumbnails: saved.videoThumbnails,
-              playbackVideo: saved)
+          ? _savedSong(saved!, current)
           : await musicCatalogService.getSong(id,
               loadObserver: VideoLoadObserver(
                   isCurrent: current,
@@ -407,17 +445,49 @@ class _MusicScreenState extends State<MusicScreen> {
     }, () => _openSong(id, startAt: startAt));
   }
 
-  List<ImageObject> _savedSongArtwork(Video saved, bool Function() isCurrent) {
-    final artwork = songCovers(saved.musicMetadata?.thumbnails ?? const []);
-    if (artwork.isNotEmpty) return artwork;
-    try {
-      // The ID-only route can recover covers already shown in Quick Picks.
-      final cached = RecommendationCandidates(db, isCurrent: isCurrent)
-          .localMusic(ids: {saved.videoId}, limit: 1).firstOrNull;
-      return cached?.thumbnails ?? const [];
-    } catch (_) {
-      return const [];
+  MusicTrack _savedSong(Video saved, bool Function() isCurrent) {
+    final music = saved.musicMetadata!;
+    var artwork = songCovers(music.thumbnails);
+    var credits = music.artistCredits;
+    void useMatchingCredits(List<MusicArtistCredit> candidate) {
+      if (!credits.any((credit) => credit.id != null) &&
+          candidate.any((credit) => credit.id != null) &&
+          candidate.artistNames.join(', ') == music.artist) {
+        credits = candidate;
+      }
     }
+
+    useMatchingCredits(widget.artistCredits);
+    if (artwork.isEmpty || !credits.any((credit) => credit.id != null)) {
+      try {
+        final cached = RecommendationCandidates(db, isCurrent: isCurrent)
+            .localMusic(ids: {saved.videoId}, limit: 1).firstOrNull;
+        if (artwork.isEmpty && cached != null) artwork = cached.thumbnails;
+        if (cached != null) useMatchingCredits(cached.artistCredits);
+        // A legacy bookmark can take precedence over a newer matched listen.
+        if (!credits.any((credit) => credit.id != null)) {
+          useMatchingCredits(db
+                  .getHistoryVideoByVideoId(saved.videoId)
+                  ?.musicMetadata
+                  ?.artistCredits ??
+              const []);
+        }
+      } catch (_) {
+        // Optional catalog labels never prevent playback of an admitted file.
+      }
+    }
+    return MusicTrack(
+        videoId: saved.videoId,
+        title: music.title,
+        artists: [music.artist],
+        artistCredits: credits,
+        uploaderChannelUrl: saved.authorUrl,
+        albumTitle: music.album,
+        durationSeconds: saved.lengthSeconds,
+        isArtTrack: music.isArtTrack,
+        thumbnails: artwork,
+        videoThumbnails: saved.videoThumbnails,
+        playbackVideo: saved);
   }
 
   Future<void> _play(List<MusicTrack> tracks,
@@ -460,6 +530,7 @@ class _MusicScreenState extends State<MusicScreen> {
         _artistPage = null;
       }
       _loading = false;
+      _browseRequest = false;
       _retryingSong = false;
       _failure = null;
       _retry = null;
@@ -554,26 +625,24 @@ class _MusicScreenState extends State<MusicScreen> {
               decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
             ));
 
-  Widget _artistByline(List<String> names, List<MusicArtist> links) {
-    if (links.isEmpty) {
+  Widget _artistByline(List<String> names, List<MusicArtistCredit> credits) {
+    if (!credits.any((credit) => credit.id != null)) {
       return Text(names.join(', '),
           maxLines: 1, overflow: TextOverflow.ellipsis);
     }
-    final labels = names.isEmpty ? links.map((artist) => artist.name) : names;
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: 8,
       children: [
-        for (final name in labels)
-          if (links.where((artist) => artist.name == name).firstOrNull
-              case final artist?)
+        for (final credit in credits)
+          if (credit.id case final id?)
             TextButton(
                 style: TextButton.styleFrom(
                     padding: EdgeInsets.zero, alignment: Alignment.centerLeft),
-                onPressed: () => _openArtist(artist.id),
-                child: Text(name))
+                onPressed: () => _openArtist(id),
+                child: Text(credit.name))
           else
-            Text(name),
+            Text(credit.name),
       ],
     );
   }
@@ -604,7 +673,7 @@ class _MusicScreenState extends State<MusicScreen> {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _artistByline(track.artists, track.artistLinks),
+          _artistByline(track.artists, track.artistCredits),
           if (index == null && track.albumTitle != null)
             Text(track.albumTitle!,
                 maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -748,7 +817,10 @@ class _MusicScreenState extends State<MusicScreen> {
           _artwork(collection.thumbnails),
           const SizedBox(height: 12),
           Text(collection.title, style: Theme.of(context).textTheme.titleLarge),
-          _artistByline(collection.artists, collection.artistLinks),
+          _artistByline(
+              collection.artists,
+              MusicArtistCredit.fromCatalog(
+                  collection.artists, collection.artistLinks)),
           PlaylistInformation(
               playlist: Playlist(
                   title: collection.title,
@@ -868,10 +940,14 @@ class _MusicScreenState extends State<MusicScreen> {
           (!before.sessionRecoveryRequired && after.sessionRecoveryRequired),
       listener: (context, state) => _clearForSession(),
       child: PopScope(
-        canPop: !TickerMode.of(context) || !_hasBrowsePage || _returnToOrigin,
+        canPop: !TickerMode.of(context) ||
+            (_shortcutBack == null && (!_hasBrowsePage || _returnToOrigin)),
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && TickerMode.of(context) && !_returnToOrigin) {
+          if (didPop || !TickerMode.of(context)) return;
+          if (_hasBrowsePage && !_returnToOrigin) {
             _backToSearch();
+          } else {
+            _shortcutBack?.call();
           }
         },
         child: Shortcuts(
@@ -912,6 +988,7 @@ class _MusicScreenState extends State<MusicScreen> {
                     child: TextField(
                       key: const ValueKey('music-search'),
                       controller: _search,
+                      focusNode: _queryFocus,
                       textInputAction: TextInputAction.search,
                       onSubmitted: (_) => _submit(learn: true),
                       decoration: InputDecoration(
@@ -976,6 +1053,15 @@ class _MusicScreenState extends State<MusicScreen> {
       ),
     );
   }
+}
+
+/// Keep TV audio mounted under the artist page. Choosing a track reuses its
+/// player and returns to it, just as Back does after browsing.
+class _TvPlayingArtistRoute extends MaterialPageRoute<void> {
+  _TvPlayingArtistRoute(String artistId, PlayerCubit player)
+      : super(
+            builder: (_) => BlocProvider.value(
+                value: player, child: MusicScreen(artistId: artistId)));
 }
 
 /// TV routes own their player, as the TV home does not mount the phone player.

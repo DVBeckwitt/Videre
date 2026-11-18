@@ -7,8 +7,16 @@ import 'package:clipious/videos/models/video.dart';
 class MusicTrack {
   final String videoId;
   final String title;
-  final List<String> artists;
-  final List<MusicArtist> artistLinks;
+  final List<String> _artists;
+  final List<MusicArtist> _artistLinks;
+  final List<MusicArtistCredit> _savedCredits;
+  List<String> get artists =>
+      _savedCredits.isEmpty ? _artists : _savedCredits.artistNames;
+  List<MusicArtist> get artistLinks =>
+      _savedCredits.isEmpty ? _artistLinks : _savedCredits.artistLinks;
+  List<MusicArtistCredit> get artistCredits => _savedCredits.isEmpty
+      ? MusicArtistCredit.fromCatalog(_artists, _artistLinks)
+      : _savedCredits;
   final String? uploaderChannelId;
   final String? uploaderChannelUrl;
   final String? albumId;
@@ -24,13 +32,18 @@ class MusicTrack {
       displaySongThumbnails(videoId, thumbnails, videoThumbnails,
           artTrack: isArtTrack);
 
-  MusicMetadata get musicMetadata => MusicMetadata(
-        title: title,
-        artist: artists.join(', '),
-        album: albumTitle,
-        thumbnails: songCovers(thumbnails),
-        isArtTrack: isArtTrack,
-      );
+  MusicMetadata get musicMetadata {
+    final names =
+        artists.isEmpty ? artistLinks.map((artist) => artist.name) : artists;
+    return MusicMetadata(
+      title: title,
+      artist: names.join(', '),
+      artistCredits: artistCredits,
+      album: albumTitle,
+      thumbnails: songCovers(thumbnails),
+      isArtTrack: isArtTrack,
+    );
+  }
 
   /// Fresh metadata for immediate playback of an interactive song link.
   /// Ordinary conversion stays catalog-only so later selections and bookmarks
@@ -40,8 +53,9 @@ class MusicTrack {
   const MusicTrack({
     required this.videoId,
     required this.title,
-    this.artists = const [],
-    this.artistLinks = const [],
+    List<String> artists = const [],
+    List<MusicArtist> artistLinks = const [],
+    List<MusicArtistCredit> artistCredits = const [],
     this.uploaderChannelId,
     this.uploaderChannelUrl,
     this.albumId,
@@ -51,7 +65,9 @@ class MusicTrack {
     this.videoThumbnails = const [],
     this.isArtTrack = false,
     this.playbackVideo,
-  });
+  })  : _artists = artists,
+        _artistLinks = artistLinks,
+        _savedCredits = artistCredits;
 
   Video toVideo() => Video(
         videoId: videoId,

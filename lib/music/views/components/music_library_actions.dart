@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show SemanticsRole;
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
@@ -175,6 +176,100 @@ enum _LibraryAction {
   download
 }
 
+enum _RecommendationAction { why, more, less, block }
+
+/// Feedback is available only for songs the ranking service has scored.
+class MusicSongRecommendation {
+  final String reason;
+  final ValueChanged<RecommendationFeedback> onFeedback;
+  final bool Function() isCurrent;
+
+  const MusicSongRecommendation(
+      {required this.reason,
+      required this.onFeedback,
+      required this.isCurrent});
+
+  DialogRoute<void> _explanation(BuildContext context) => DialogRoute<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(AppLocalizations.of(context)!.recommendationWhy),
+          content: Text(reason),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child:
+                    Text(MaterialLocalizations.of(context).closeButtonLabel)),
+          ],
+        ),
+      );
+}
+
+class _RecommendedSongMenu extends StatelessWidget {
+  final List<PopupMenuEntry<_LibraryAction>> songItems;
+
+  const _RecommendedSongMenu(this.songItems);
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    Widget section(String title, List<Widget> items) => FocusTraversalGroup(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 12, 4),
+                child: Semantics(
+                    header: true,
+                    child: Text(title,
+                        style: Theme.of(context).textTheme.titleSmall))),
+            ...items,
+          ]),
+        );
+    final song = section(locals.musicLibraryActions, songItems);
+    final feedback = section(locals.localRecommendations, [
+      for (final (action, label) in [
+        (_RecommendationAction.why, locals.recommendationWhy),
+        (_RecommendationAction.more, locals.recommendationMoreLikeThis),
+        (_RecommendationAction.less, locals.recommendationNotInterested),
+        (_RecommendationAction.block, locals.recommendationBlockCreator),
+      ])
+        PopupMenuItem(value: action, child: Text(label)),
+    ]);
+    return Dialog(
+      constraints: const BoxConstraints(maxWidth: 640),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: LayoutBuilder(builder: (context, bounds) {
+          final minColumnWidth =
+              MediaQuery.textScalerOf(context).scale(16) * 16;
+          return Semantics(
+            role: SemanticsRole.menu,
+            explicitChildNodes: true,
+            label: locals.musicLibraryActions,
+            child: SingleChildScrollView(
+              child: bounds.maxWidth >= minColumnWidth * 2 + 16
+                  ? Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                          Expanded(child: song),
+                          const SizedBox(width: 16),
+                          Expanded(child: feedback),
+                        ])
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                          song,
+                          const Divider(),
+                          feedback,
+                        ]),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
 class MusicLibraryActions extends StatefulWidget {
   final List<Video> videos;
   final bool compact;
@@ -183,6 +278,7 @@ class MusicLibraryActions extends StatefulWidget {
   final bool inPlayer;
   final Future<void> Function()? onPlay;
   final List<DownloadedVideo>? downloads;
+  final MusicSongRecommendation? recommendation;
 
   const MusicLibraryActions(
       {super.key,
@@ -192,7 +288,8 @@ class MusicLibraryActions extends StatefulWidget {
       this.iconStyle,
       this.inPlayer = false,
       this.onPlay,
-      this.downloads});
+      this.downloads,
+      this.recommendation});
 
   static MusicLibraryEntry? _song(List<Video> videos) =>
       videos.length == 1 && videos.single.musicMetadata != null
@@ -307,9 +404,14 @@ class MusicLibraryActions extends StatefulWidget {
       {Future<void> Function()? onPlay,
       String? localPlaylistId,
       bool inPlayer = false,
-      List<DownloadedVideo>? downloads}) async {
+      List<DownloadedVideo>? downloads,
+      MusicSongRecommendation? recommendation}) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
-    if (!session.isCurrent || video.musicMetadata == null) return;
+    if (!session.isCurrent ||
+        video.musicMetadata == null ||
+        recommendation?.isCurrent() == false) {
+      return;
+    }
     final videos = List<Video>.unmodifiable([video]);
     final saved = downloads == null
         ? null
@@ -330,22 +432,43 @@ class MusicLibraryActions extends StatefulWidget {
       }
     });
     try {
-      final action = await showMenu<_LibraryAction>(
-          context: context,
-          position: RelativeRect.fromRect(
-              Rect.fromCenter(center: center, width: 0, height: 0),
-              Offset.zero & overlay.size),
-          items: _items(context, videos, localPlaylistId,
-              downloads: saved,
-              first: (child) => Builder(builder: (context) {
-                    route = ModalRoute.of(context);
-                    return inPlayer
-                        ? PlayerModalBackHandler(child: child)
-                        : child;
-                  })));
-      if (action != null && context.mounted && session.isCurrent) {
+      final items = _items(context, videos, localPlaylistId,
+          downloads: saved,
+          first: (child) => Builder(builder: (context) {
+                route ??= ModalRoute.of(context);
+                return inPlayer ? PlayerModalBackHandler(child: child) : child;
+              }));
+      final action = await (recommendation == null
+          ? showMenu<_LibraryAction>(
+              context: context,
+              position: RelativeRect.fromRect(
+                  Rect.fromCenter(center: center, width: 0, height: 0),
+                  Offset.zero & overlay.size),
+              items: items)
+          : showDialog<Enum>(
+              context: context,
+              useRootNavigator: false,
+              builder: (_) => _RecommendedSongMenu(items)));
+      if (!context.mounted ||
+          !session.isCurrent ||
+          recommendation?.isCurrent() == false) {
+        return;
+      }
+      if (action is _LibraryAction) {
         await _apply(
             context, session, action, videos, localPlaylistId, onPlay, saved);
+      } else if (action is _RecommendationAction && recommendation != null) {
+        if (action == _RecommendationAction.why) {
+          final explanation = recommendation._explanation(context);
+          route = explanation;
+          await Navigator.of(context).push(explanation);
+        } else {
+          recommendation.onFeedback(switch (action) {
+            _RecommendationAction.more => RecommendationFeedback.like,
+            _RecommendationAction.block => RecommendationFeedback.block,
+            _ => RecommendationFeedback.notInterested,
+          });
+        }
       }
     } catch (_) {
       if (context.mounted && session.isCurrent) {
@@ -514,6 +637,22 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
     final removable = widget.localPlaylistId?.startsWith('local:') == true &&
         widget.videos.length == 1;
     if (widget.compact) {
+      final recommendation = widget.recommendation;
+      if (song != null && recommendation != null) {
+        return IconButton(
+            tooltip: locals.musicLibraryActions,
+            style: widget.iconStyle,
+            icon: const Icon(Icons.more_vert),
+            onPressed: enabled
+                ? () => MusicLibraryActions.showSongMenu(
+                    context, widget.videos.single,
+                    onPlay: widget.onPlay,
+                    localPlaylistId: widget.localPlaylistId,
+                    downloads: widget.downloads,
+                    inPlayer: widget.inPlayer,
+                    recommendation: recommendation)
+                : null);
+      }
       return PopupMenuButton<_LibraryAction>(
         tooltip: locals.musicLibraryActions,
         style: widget.iconStyle,

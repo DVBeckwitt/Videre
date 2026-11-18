@@ -9,7 +9,6 @@ import '../../player/models/backend_playback.dart';
 import '../../network/gateway_context.dart';
 import '../../settings/models/db/server.dart';
 import '../../utils/interfaces/db.dart';
-import '../../videos/models/music_metadata.dart';
 import '../../videos/models/video.dart';
 import '../models/download_formats.dart';
 import '../models/downloaded_video.dart';
@@ -75,12 +74,7 @@ Future<Video?> prepareDownloadedPlaybackVideo({
             (savedMusic.thumbnails.isEmpty ||
                 (songCovers(savedMusic.thumbnails).isEmpty &&
                     songCovers(incomingArt).isNotEmpty))
-        ? MusicMetadata(
-            title: savedMusic.title,
-            artist: savedMusic.artist,
-            album: savedMusic.album,
-            isArtTrack: savedMusic.isArtTrack,
-            thumbnails: incomingArt)
+        ? savedMusic.withThumbnails(incomingArt)
         : savedMusic ?? video.musicMetadata;
     final candidate = video.copyWith(
         downloadPlaybackOnly: true,

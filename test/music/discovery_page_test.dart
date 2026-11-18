@@ -254,12 +254,48 @@ void main() {
     expect(tester.getRect(first).top, lessThan(tester.getRect(second).top));
     expect(requests.first['domain'], 'music');
     expect(requests.first['surface'], 'quick_picks');
-    await tester.tap(find.descendant(
-        of: first, matching: find.byType(PopupMenuButton<int>)));
+    final actions =
+        find.descendant(of: first, matching: find.byTooltip('Music actions'));
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    final enqueue = find.byKey(const ValueKey('music-song-add-to-queue'));
+    expect(tester.getRect(enqueue).right,
+        lessThan(tester.getRect(find.text('Why this?')).left));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.text('From your local listening preferences'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(player.plays, isEmpty);
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(enqueue);
+    await tester.pumpAndSettle();
+    expect(player.plays.single.ids, ['quickpick01']);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(360, 560);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    await show(tester, textScale: 1.8);
+    await tester.ensureVisible(first);
+    await tester.longPress(first);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(enqueue).bottom,
+        lessThan(tester.getRect(find.text('Why this?')).top));
+    await tester.ensureVisible(find.text('Why this?'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Why this?'));
     await tester.pumpAndSettle();
     expect(find.text('From your local listening preferences'), findsOneWidget);
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.change(app.state.copyWith(profileId: next.id));
+    await tester.pumpAndSettle();
+    expect(find.text('From your local listening preferences'), findsNothing);
     expect(catalog.searchCalls, 0);
     expect(catalog.discoveryCalls, 0);
     expect(catalog.trendingCalls, 0);
@@ -455,14 +491,11 @@ void main() {
     expect(catalog.trendingCalls, 0);
   });
 
-  testWidgets(
-      'discovery exclusions survive native unavailability without refetch',
-      (tester) async {
-    var nativeAvailable = true;
+  void rankDiscovery({bool Function()? available}) {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
             (call) async {
-      if (!nativeAvailable) throw MissingPluginException();
+      if (available?.call() == false) throw MissingPluginException();
       final args = call.arguments as Map;
       return {
         'ranked': [
@@ -473,6 +506,43 @@ void main() {
         'summary': <String, Object?>{},
       };
     });
+  }
+
+  testWidgets('ranked discovery can queue a displayed song while refreshing',
+      (tester) async {
+    rankDiscovery();
+    catalog.holdDiscovery = true;
+    await show(tester);
+    await loadDiscovery(tester);
+    catalog.discoveries.single.complete([_discovered]);
+    await tester.pumpAndSettle();
+    final refresh = find.byKey(const ValueKey('music-discovery-refresh'));
+    await tester.ensureVisible(refresh);
+    await tester.tap(refresh);
+    await tester.pump();
+    expect(catalog.discoveryCalls, 2);
+    final card = find.byKey(const ValueKey('music-discovery-discover001'));
+    final actions =
+        find.descendant(of: card, matching: find.byTooltip('Music actions'));
+    await tester.ensureVisible(actions);
+    await tester.pump();
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-song-add-to-queue')));
+    await tester.pumpAndSettle();
+    expect(player.plays.map((play) => play.ids), [
+      [_discovered.videoId]
+    ]);
+    catalog.discoveries.last.complete([]);
+    await tester.pumpAndSettle();
+    expect(card, findsOneWidget);
+  });
+
+  testWidgets(
+      'discovery exclusions survive native unavailability without refetch',
+      (tester) async {
+    var nativeAvailable = true;
+    rankDiscovery(available: () => nativeAvailable);
     catalog.holdDiscovery = true;
     await show(tester);
     await loadDiscovery(tester);
@@ -482,8 +552,10 @@ void main() {
     await tester.ensureVisible(card);
     await tester.pumpAndSettle();
     await tester.tap(
-        find.descendant(of: card, matching: find.byType(PopupMenuButton<int>)));
+        find.descendant(of: card, matching: find.byTooltip('Music actions')));
     await tester.pumpAndSettle();
+    expect(
+        find.byKey(const ValueKey('music-song-add-to-queue')), findsOneWidget);
     nativeAvailable = false;
     await tester.runAsync(() async {
       final recommendations =

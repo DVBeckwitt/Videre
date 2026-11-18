@@ -179,6 +179,9 @@ class MusicLibraryService {
         final title = entry.title == entry.id ? detail.title : entry.title;
         final artist =
             entry.subtitle.isEmpty ? detail.subtitle : entry.subtitle;
+        final useDetailCredits = entry.artistCredits.isEmpty &&
+            detail.artistCredits.isNotEmpty &&
+            artist == detail.subtitle;
         final album = entry.album ?? detail.album;
         final duration = entry.durationSeconds ?? detail.durationSeconds;
         final isArtTrack = entry.isArtTrack || detail.isArtTrack;
@@ -197,6 +200,7 @@ class MusicLibraryService {
         }
         if (title == entry.title &&
             artist == entry.subtitle &&
+            !useDetailCredits &&
             album == entry.album &&
             duration == entry.durationSeconds &&
             isArtTrack == entry.isArtTrack &&
@@ -208,6 +212,8 @@ class MusicLibraryService {
           id: entry.id,
           title: title,
           subtitle: artist,
+          artistCredits:
+              useDetailCredits ? detail.artistCredits : entry.artistCredits,
           album: album,
           durationSeconds: duration,
           isArtTrack: isArtTrack,

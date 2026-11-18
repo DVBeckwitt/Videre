@@ -311,7 +311,10 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
   }
 
   void _open(MusicTrack track) {
-    if (_current) context.router.push(MusicRoute(videoId: track.videoId));
+    if (_current) {
+      context.router.push(MusicRoute(
+          videoId: track.videoId, artistCredits: track.artistCredits));
+    }
   }
 
   List<MusicTrack> _eligible(Iterable<MusicTrack> tracks) => _current
@@ -455,6 +458,9 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
             subtitle: song.artists.join(', '),
             song: song,
             showPlayIndicator: true,
+            badge: MusicLibraryActions(
+                videos: [song.toVideo()],
+                onPlay: () => _playShelf(shelf.tracks, from: song.videoId)),
             onOpen: () => _playShelf(shelf.tracks, from: song.videoId),
             onLongPress: () => MusicLibraryActions.showSongMenu(
                 context, song.toVideo(),
@@ -522,6 +528,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
                     prettyDurationCustom(Duration(seconds: seconds)),
                 ].join(' • '),
                 song: track,
+                badge: MusicLibraryActions(videos: [track.toVideo()]),
                 onOpen: () => _open(track),
                 onLongPress: () =>
                     MusicLibraryActions.showSongMenu(context, track.toVideo()),
@@ -655,14 +662,17 @@ class _QuickPickRow extends StatelessWidget {
     final theme = Theme.of(context);
     final track = pick.item;
     final images = track.displayThumbnails;
+    final recommendation = MusicSongRecommendation(
+        reason: pick.reason, onFeedback: onFeedback, isCurrent: isCurrent);
     return ListTile(
       contentPadding: const EdgeInsetsDirectional.only(start: 2, end: 4),
       horizontalTitleGap: 12,
       minLeadingWidth: 0,
       visualDensity: VisualDensity.compact,
       onTap: onOpen,
-      onLongPress: () =>
-          MusicLibraryActions.showSongMenu(context, pick.item.toVideo()),
+      onLongPress: () => MusicLibraryActions.showSongMenu(
+          context, track.toVideo(),
+          recommendation: recommendation),
       onFocusChange: (focused) {
         if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
       },
@@ -693,59 +703,8 @@ class _QuickPickRow extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodyMedium
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-      trailing: MusicRecommendationActions(
-          reason: pick.reason, onFeedback: onFeedback, isCurrent: isCurrent),
-    );
-  }
-}
-
-/// Shared local feedback for Quick Picks and explicitly loaded discovery.
-class MusicRecommendationActions extends StatelessWidget {
-  final String reason;
-  final ValueChanged<RecommendationFeedback> onFeedback;
-  final bool Function()? isCurrent;
-
-  const MusicRecommendationActions(
-      {super.key,
-      required this.reason,
-      required this.onFeedback,
-      this.isCurrent});
-
-  @override
-  Widget build(BuildContext context) {
-    final locals = AppLocalizations.of(context)!;
-    return PopupMenuButton<int>(
-      tooltip: locals.musicLibraryActions,
-      onSelected: (value) {
-        if (isCurrent?.call() == false) return;
-        if (value == 0) {
-          showDialog<void>(
-              context: context,
-              builder: (context) => AlertDialog(
-                    title: Text(locals.recommendationWhy),
-                    content: Text(reason),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: Text(MaterialLocalizations.of(context)
-                              .closeButtonLabel))
-                    ],
-                  ));
-        } else {
-          onFeedback(switch (value) {
-            1 => RecommendationFeedback.like,
-            3 => RecommendationFeedback.block,
-            _ => RecommendationFeedback.notInterested,
-          });
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(value: 0, child: Text(locals.recommendationWhy)),
-        PopupMenuItem(value: 1, child: Text(locals.recommendationMoreLikeThis)),
-        PopupMenuItem(
-            value: 2, child: Text(locals.recommendationNotInterested)),
-        PopupMenuItem(value: 3, child: Text(locals.recommendationBlockCreator)),
-      ],
+      trailing: MusicLibraryActions(
+          videos: [track.toVideo()], recommendation: recommendation),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart' as globals;
+import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/song_artwork.dart';
@@ -454,11 +455,19 @@ class RecommendationCandidates {
   static MusicTrack _musicTrack(Video video, {List<ImageObject>? savedCovers}) {
     final metadata = video.musicMetadata;
     final artist = metadata?.artist ?? video.author ?? '';
+    final credits = metadata?.artistCredits ??
+        [
+          if (MusicArtistCredit.forAuthor(
+                  video.author, video.authorId, video.authorUrl)
+              case final credit?)
+            credit,
+        ];
     final covers = songCovers(metadata?.thumbnails ?? const []);
     return MusicTrack(
       videoId: video.videoId,
       title: metadata?.title ?? video.title ?? video.videoId,
-      artists: artist.isEmpty ? const [] : [artist],
+      artists: [if (artist.isNotEmpty) artist],
+      artistCredits: credits,
       uploaderChannelId: video.authorId,
       uploaderChannelUrl: video.authorUrl,
       albumTitle: metadata?.album,
