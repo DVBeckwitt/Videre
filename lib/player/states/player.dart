@@ -594,6 +594,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       return _sessionWrite;
     }
     final queueId = snapshot.currentQueueId!;
+    if (isLocalMusicPlaybackId(id) && localMusicTrackForPlayback(id) == null) {
+      return _sessionWrite;
+    }
     final database = _profileDatabase;
     final watchRepository = _watchRepository;
     final watchRevision = _watchRevision;
@@ -608,6 +611,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
               .toList(),
           offlineIds: snapshot.offlineVideos.map((v) => v.videoId).toList(),
           currentId: queueId,
+          localSelectionId: isLocalMusicPlaybackId(id)
+              ? LocalMusicLibrary.instance.selectionId
+              : null,
           seconds: snapshot.position.inSeconds,
           audio: snapshot.isAudio,
           played: snapshot.playedVideos,
@@ -636,6 +642,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void restoreSession() {
     final saved = savedSession;
     if (saved == null) return;
+    if (isLocalMusicPlaybackId(saved.currentId) &&
+        !LocalMusicLibrary.instance
+            .acceptsSessionSelection(saved.localSelectionId)) {
+      return;
+    }
     _sessionTransitionPending = false;
     _bindPlaylist(
         saved.playlistReference?.profileId == _profileDatabase.profileId
@@ -688,8 +699,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final generation = _videoSwitchGeneration;
       final profile = _profileDatabase.profileId;
       final library = LocalMusicLibrary.instance;
+      final retry = state.mediaEvent.state == MediaState.error;
+      setEvent(const MediaEvent(state: MediaState.loading));
       await library.initialize();
-      if (library.enabled && !library.loaded) await library.refresh();
+      if (retry) await library.revalidate();
+      if (library.acceptsSessionSelection(saved.localSelectionId) &&
+          (!library.loaded ||
+              retry && library.trackById(saved.currentId) == null)) {
+        await library.refresh();
+      }
       if (isClosed ||
           _isDisposing ||
           _switchingProfile ||
@@ -698,7 +716,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           savedSession?.currentId != saved.currentId) {
         return;
       }
-      if (library.trackById(saved.currentId) == null) {
+      if (!library.acceptsSessionSelection(saved.localSelectionId) ||
+          library.trackById(saved.currentId) == null) {
         setEvent(const MediaEvent(state: MediaState.error));
         return;
       }

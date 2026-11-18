@@ -73,6 +73,9 @@ void main() {
                 'durationMs': 12000,
               }
           ];
+        case 'checkFolderAccess':
+          expect(call.arguments['treeUri'], tree);
+          return !revoked;
         case 'forgetFolder':
           consent = null;
           return null;
@@ -137,6 +140,56 @@ void main() {
     expect(calls, ['getFolder', 'pickFolder']);
     expect(find.textContaining('folder picker is unavailable'), findsOneWidget);
     expect(library.enabled, isFalse);
+  });
+
+  testWidgets('resuming removes revoked tracks and shows the reconnect action',
+      (tester) async {
+    consent = picked;
+    await show(tester, settings: false);
+    expect(find.text('First'), findsOneWidget);
+    calls.clear();
+    revoked = true;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(calls, ['checkFolderAccess']);
+    expect(find.text('First'), findsNothing);
+    expect(
+        find.textContaining('Access to this folder was lost'), findsOneWidget);
+    expect(find.text('Choose music folder'), findsOneWidget);
+  });
+
+  testWidgets('returning to On this device rechecks an already loaded library',
+      (tester) async {
+    consent = picked;
+    await show(tester, settings: false);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    calls.clear();
+    revoked = true;
+    await show(tester, settings: false);
+    expect(calls, ['checkFolderAccess']);
+    expect(find.text('First'), findsNothing);
+    expect(
+        find.textContaining('Access to this folder was lost'), findsOneWidget);
+  });
+
+  testWidgets('uncovering a mounted library route also rechecks access',
+      (tester) async {
+    consent = picked;
+    await show(tester, settings: false);
+    final nav = Navigator.of(tester.element(find.text('First')));
+    nav.push(MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Another screen'))));
+    await tester.pumpAndSettle();
+    calls.clear();
+    revoked = true;
+    nav.pop();
+    await tester.pumpAndSettle();
+    expect(calls, ['checkFolderAccess']);
+    expect(find.text('First'), findsNothing);
+    expect(
+        find.textContaining('Access to this folder was lost'), findsOneWidget);
   });
 
   testWidgets(

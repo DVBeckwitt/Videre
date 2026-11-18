@@ -104,6 +104,17 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
                 DownloadDocumentIntegrity.inspect(context, call.argument<String>("uri")!!,
                     call.argument<String>("folderUri")!!)
             }
+            "exportExists" -> run(result) {
+                val uri = Uri.parse(call.argument<String>("uri")!!)
+                val folderValue = call.argument<String>("folderUri")!!
+                if (folderValue == SharedMusicDownload.COLLECTION) {
+                    SharedMusicDownload.exportExists(context, uri)
+                } else {
+                    document(uri.toString(), writable = false)
+                    require(Uri.parse(folderValue) == DocumentsContract.buildTreeDocumentUri(uri.authority, DocumentsContract.getTreeDocumentId(uri)))
+                    exists(uri)
+                }
+            }
             "prepareDocument" -> run(result) {
                 val tree = Uri.parse(call.argument<String>("folder")!!)
                 val existing = call.argument<String>("existing")
@@ -127,8 +138,7 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
             "deleteDocument" -> run(result) {
                 val uri = Uri.parse(call.argument<String>("uri")!!)
                 if (SharedMusicDownload.isItem(uri.toString())) {
-                    if (SharedMusicDownload.pending(context, uri) != null &&
-                        context.contentResolver.delete(uri, null, null) != 1) throw IOException()
+                    SharedMusicDownload.deleteAtDestination(context, uri)
                 } else if (exists(document(uri.toString())) &&
                     !DocumentsContract.deleteDocument(context.contentResolver, uri)) throw IOException()
                 null
@@ -278,7 +288,8 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         val id = DocumentsContract.getDocumentId(uri)
         context.contentResolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
             null, null, null)?.use {
-            if (it.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false)) throw IOException()
+            if (it.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false) ||
+                it.extras.containsKey(DocumentsContract.EXTRA_ERROR)) throw IOException()
             while (it.moveToNext()) {
                 if (it.isNull(0) || it.getString(0) == id) throw IOException()
             }

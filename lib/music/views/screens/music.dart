@@ -524,12 +524,12 @@ class _MusicScreenState extends State<MusicScreen> {
             unawaited(library.initialize());
             return ListenableBuilder(
                 listenable: library,
-                builder: (context, _) => library.enabled &&
-                        !library.unavailable &&
-                        (!library.loaded ||
-                            library.trackById(saved.currentId) != null)
-                    ? resume
-                    : const SizedBox.shrink());
+                builder: (context, _) =>
+                    library.acceptsSessionSelection(saved.localSelectionId) &&
+                            (!library.loaded ||
+                                library.trackById(saved.currentId) != null)
+                        ? resume
+                        : const SizedBox.shrink());
           }
           final offline = db.getDownloadByVideoId(saved.currentId);
           if (offline?.downloadComplete == true &&
@@ -1017,13 +1017,19 @@ class _MusicTvPlayer extends StatelessWidget {
             child: BlocBuilder<PlayerCubit, PlayerState>(
               builder: (context, state) {
                 final player = context.read<PlayerCubit>();
-                if (localTracks case final tracks?
-                    when state.offlineCurrentlyPlaying == null) {
+                final tracks = localTracks;
+                if (state.offlineCurrentlyPlaying == null &&
+                    (tracks != null ||
+                        resumeSession &&
+                            isLocalMusicPlaybackId(
+                                player.savedSession?.currentId))) {
                   if (state.isClosing ||
                       state.mediaEvent.state == MediaState.error) {
                     return _MusicPlaybackFailure(
-                        onRetry: () => player.playLocalMusic(tracks,
-                            startIndex: startIndex));
+                        onRetry: tracks == null
+                            ? player.resumeSession
+                            : () => player.playLocalMusic(tracks,
+                                startIndex: startIndex));
                   }
                   return const Center(child: CircularProgressIndicator());
                 }

@@ -6,6 +6,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalMusicCatalogTest {
+    @Test fun onlyAnUninterruptedFolderSelectionRetainsItsSessions() {
+        fun choose(previous: String?, same: Boolean = true, readable: Boolean = true, lost: Boolean = false) =
+            LocalMusicPlugin.selectionIdForPick(previous, same, readable, lost)
+        assertEquals(null, choose(null)) // continuous legacy grant
+        assertEquals("existing", choose("existing"))
+        val fresh = listOf(choose(null, same = false), choose("existing", same = false),
+            choose("existing", readable = false), choose("existing", lost = true))
+        assertTrue(fresh.all { it != null && it != "existing" })
+        assertEquals(fresh.size, fresh.toSet().size)
+    }
+
     @Test fun recognizesAudioWithIncompleteProviderMetadata() {
         assertTrue(LocalMusicCatalog.isAudio("audio/mpeg", "Recording"))
         assertTrue(LocalMusicCatalog.isAudio("application/octet-stream", "Song.FLAC"))

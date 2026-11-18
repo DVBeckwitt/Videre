@@ -43,3 +43,26 @@ loaded the shared folder and played the exported MP3 and a new M4A download.
 The emulator also reproduced an accessibility overlap in YT Music settings.
 In the corrected build, activating the format row opened its chooser and
 preserved both provider switches.
+
+## Android local build 60946
+
+The Android 16 emulator upgraded from 60945 with its saved account, music
+folder, and local queue intact. In the TV interface, temporarily moving the
+queued file produced a Retry button. Restoring the file and pressing Retry
+played the saved song. On the phone interface, moving the approved folder
+during background playback stopped the song on return, cleared its media
+session title, and displayed the folder picker action. Selecting the same
+folder again restored its songs without restoring the old queue. Forgetting
+the folder immediately after a restart also preserved the audio file.
+
+Two repeat exports of the same M4A used the same published Android audio row.
+A device test moved a shared song out of Music/Videre, removed its Videre
+entry, and verified the moved file byte for byte. In Your feeds, Continue
+watching scrolled offscreen and back. A widget regression verified that adding
+or removing the shelf on page two preserves the visible row and the loaded page.
+
+Auxio's **Settings → Refresh music** picked up the shared MP3 on this emulator.
+Android reported active Auxio playback for both the MP3 and M4A. In Videre,
+opening Lyrics with LRCLIB disabled displayed its consent prompt. The portrait
+Watch fullscreen control opened the full-screen player, and the speed control
+opened the combined speed and pitch sheet.

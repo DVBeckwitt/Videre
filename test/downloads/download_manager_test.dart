@@ -400,8 +400,8 @@ void main() {
           written.addAll(
               await File(call.arguments['source'] as String).readAsBytes());
           return null;
-        case 'inspectDocument':
-          return {'byteLength': 3, 'sha256': 'a' * 64};
+        case 'exportExists':
+          return true;
         case 'deleteDocument':
           removed.add(call.arguments['uri'] as String);
           return null;
@@ -435,6 +435,61 @@ void main() {
     expect(db.getDownloadByVideoId(original.videoId)!.storageUri, isNull);
     await manager.deleteVideo(original);
     expect(removed, isEmpty);
+  });
+
+  test('export retries only create a copy after confirming it is missing',
+      () async {
+    const shared = 'content://media/external_primary/audio/media';
+    const previous = ExportedMusicCopy(
+        shared, '$shared/42', MusicDownloadFormat.mp3,
+        complete: true);
+    const replacement = '$shared/43';
+    bool? exists;
+    var creates = 0;
+    var writes = 0;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'sharedMusicFolder':
+          return shared;
+        case 'exportExists':
+          expect(call.arguments['uri'], previous.uri);
+          expect(call.arguments['folderUri'], shared);
+          if (exists == null) throw PlatformException(code: 'DOWNLOAD_STORAGE');
+          return exists;
+        case 'prepareDocument':
+          expect(call.arguments['existing'], isNull);
+          creates++;
+          return replacement;
+        case 'writeDocument':
+          expect(call.arguments['uri'], replacement);
+          writes++;
+          return null;
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+    await openAndroidStorageManager();
+    final original = video.copyWith(
+        audioOnly: true,
+        musicFormat: MusicDownloadFormat.mp3,
+        downloadComplete: true,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        exportedMusic: previous);
+    await db.upsertDownload(original);
+    await File(await original.effectivePath).writeAsBytes([1, 2]);
+    await expectLater(
+        manager.exportMusic(original), throwsA(isA<PlatformException>()));
+    expect(db.getDownloadByVideoId(original.videoId)!.exportedMusic, previous);
+    exists = true;
+    expect(await manager.exportMusic(original), isTrue);
+    expect(creates, 0);
+    expect(writes, 0);
+    exists = false;
+    expect(await manager.exportMusic(original), isTrue);
+    expect(creates, 1);
+    expect(writes, 1);
+    expect(db.getDownloadByVideoId(original.videoId)!.exportedMusic!.uri,
+        replacement);
   });
 
   test(

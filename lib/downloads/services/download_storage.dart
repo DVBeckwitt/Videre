@@ -94,6 +94,14 @@ class DownloadStorage {
   Future<void> deleteDocument(String uri) =>
       _channel.invokeMethod<void>('deleteDocument', {'uri': uri});
 
+  /// False only when the exported file is confirmed absent from this destination.
+  Future<bool> exportExists(String uri, String folderUri) async {
+    final exists = await _channel.invokeMethod<bool>(
+        'exportExists', {'uri': uri, 'folderUri': folderUri});
+    if (exists == null) throw PlatformException(code: 'DOWNLOAD_STORAGE');
+    return exists;
+  }
+
   /// Fingerprints the completed owned document, never a path supplied by media.
   Future<({int byteLength, String sha256})?> inspectDocument(
       String uri, String folderUri) async {

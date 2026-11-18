@@ -12,6 +12,7 @@ class PlaybackSession {
   final List<String> offlineIds;
   final String currentId;
   final int seconds;
+  final String? localSelectionId;
   final bool audio;
   final List<String> played;
   final List<String> next;
@@ -24,6 +25,7 @@ class PlaybackSession {
     this.offlineIds = const [],
     required this.currentId,
     required this.seconds,
+    this.localSelectionId,
     this.audio = false,
     this.played = const [],
     this.next = const [],
@@ -53,6 +55,8 @@ class PlaybackSession {
         'offlineIds': offlineIds,
         'currentId': currentId,
         'seconds': seconds,
+        if (localSelectionId != null && isLocalMusicPlaybackId(currentId))
+          'localSelectionId': localSelectionId,
         'audio': audio,
         'played': played,
         'next': next,
@@ -110,6 +114,9 @@ class PlaybackSession {
         offlineIds: offlineIds,
         currentId: currentId,
         seconds: seconds,
+        localSelectionId: isLocalMusicPlaybackId(currentId)
+            ? json['localSelectionId'] as String?
+            : null,
         audio: json['audio'] == true,
         played: List<String>.from(json['played'] ?? [])
             .where(ids.contains)

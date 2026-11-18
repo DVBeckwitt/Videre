@@ -10,6 +10,8 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
@@ -1035,6 +1037,84 @@ void main() {
         Focus.of(tester.element(find.text('Resume listening'))).hasPrimaryFocus,
         isTrue);
     expect(tester.testTextInput.isVisible, isFalse);
+  });
+
+  testWidgets(
+      'TV local resume shows progress, then retries a failed folder scan',
+      (tester) async {
+    isTv = true;
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    const tree = 'content://documents/tree/Music';
+    const song =
+        LocalMusicTrack(uri: '$tree/document/recording', title: 'Recording');
+    final scans = <Completer<List<Object?>>>[];
+    var accessible = true;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    const audioSession = MethodChannel('com.ryanheise.audio_session');
+    messenger.setMockMethodCallHandler(audioSession, (_) async => null);
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return {'uri': tree, 'name': 'Music', 'selectionId': 'current'};
+        case 'checkFolderAccess':
+          return accessible;
+        case 'listTracks':
+          final scan = Completer<List<Object?>>();
+          scans.add(scan);
+          return scan.future;
+        case 'forgetFolder':
+          return null;
+        default:
+          throw UnsupportedError(call.method);
+      }
+    });
+    addTearDown(() async {
+      await LocalMusicLibrary.instance.disable();
+      messenger.setMockMethodCallHandler(audioSession, null);
+      messenger.setMockMethodCallHandler(channel, null);
+      isTv = false;
+    });
+    await tester.runAsync(() => db.saveSetting(SettingsValue(
+        playbackSessionSetting,
+        PlaybackSession(
+                offlineIds: [song.playbackId],
+                currentId: song.playbackId,
+                seconds: 17,
+                audio: true,
+                localSelectionId: 'current')
+            .encode())));
+    await show(tester);
+    await tester.pump();
+    await tester.tap(find.text('Resume listening'));
+    await tester.runAsync(() => tester.pump());
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(scans, hasLength(1));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('Retry'), findsNothing);
+    await tester.runAsync(() async {
+      scans.first.complete([]);
+      await Future<void>.delayed(Duration.zero);
+    });
+    await tester.pump();
+    expect(find.text('Retry'), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(scans, hasLength(2));
+    expect(find.text('Retry'), findsNothing);
+    await tester.runAsync(() async {
+      scans.last.completeError(PlatformException(code: 'FOLDER_UNAVAILABLE'));
+      await Future<void>.delayed(Duration.zero);
+    });
+    await tester.pump();
+    expect(find.text('Retry'), findsOneWidget);
+    accessible = false;
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(scans, hasLength(2));
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('Retry'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets(

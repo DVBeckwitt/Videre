@@ -35,7 +35,8 @@ internal class LocalMusicCatalog(private val context: Context, cache: File) {
                     Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE), null, null, null, signal)
                     ?: throw IOException()
                 cursor.use {
-                    if (it.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false)) throw IOException()
+                    if (it.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false) ||
+                        it.extras.containsKey(DocumentsContract.EXTRA_ERROR)) throw IOException()
                     while (it.moveToNext()) {
                         signal.throwIfCanceled()
                         val child = it.getString(0) ?: continue

@@ -25,6 +25,7 @@ void main() {
   Map<String, String>? saved;
   Map<String, String>? choice;
   late Future<List<Object?>> Function() scan;
+  late Future<bool?> Function() checkAccess;
   Future<void> Function()? pickerWait;
   setUp(() {
     library = LocalMusicLibrary();
@@ -33,6 +34,7 @@ void main() {
     choice = null;
     pickerWait = null;
     scan = () async => [doc];
+    checkAccess = () async => true;
     messenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call.method);
       switch (call.method) {
@@ -45,6 +47,9 @@ void main() {
         case 'listTracks':
           expect(call.arguments['treeUri'], saved?['uri']);
           return scan();
+        case 'checkFolderAccess':
+          expect(call.arguments['treeUri'], saved?['uri']);
+          return checkAccess();
         case 'forgetFolder':
           expect(call.arguments['treeUri'], saved?['uri']);
           saved = null;
@@ -62,6 +67,7 @@ void main() {
     expect(library.enabled, isFalse);
     await library.initialize();
     await library.refresh();
+    await library.revalidate();
     expect(calls, ['getFolder']);
     expect(await library.chooseFolder(), isFalse);
     expect(library.enabled, isFalse);
@@ -152,6 +158,60 @@ void main() {
     await refreshing;
     expect(library.tracks, isEmpty);
     expect(library.enabled, isFalse);
+  });
+
+  test('external loss clears the library and invalidates an older scan',
+      () async {
+    saved = folder;
+    await library.refresh();
+    final track = library.tracks.single;
+    final entered = Completer<void>();
+    final blocked = Completer<List<Object?>>();
+    scan = () {
+      entered.complete();
+      return blocked.future;
+    };
+    final scanning = library.refresh();
+    await entered.future;
+    checkAccess = () async => false;
+    await library.revalidate();
+    expect(library.unavailable, isTrue);
+    expect(library.folderName, 'Music');
+    expect(library.trackById(track.playbackId), isNull);
+    blocked.complete([doc]);
+    await scanning;
+    expect(library.tracks, isEmpty);
+    expect(calls.where((c) => c == 'pickFolder'), isEmpty);
+    expect(calls.where((c) => c == 'listTracks'), hasLength(2));
+  });
+
+  test('temporary provider failure preserves confirmed membership', () async {
+    saved = folder;
+    await library.refresh();
+    final track = library.tracks.single;
+    checkAccess = () async => null;
+    await library.revalidate();
+    expect(library.trackById(track.playbackId), same(track));
+    expect(library.unavailable, isFalse);
+    expect(calls, ['getFolder', 'listTracks', 'checkFolderAccess']);
+  });
+
+  test('an interrupted child scan preserves the current queue source and art',
+      () async {
+    saved = folder;
+    await library.refresh();
+    final track = library.tracks.single;
+    scan = () async => throw PlatformException(code: 'SCAN_UNAVAILABLE');
+    await library.refresh();
+    expect(library.error, 'SCAN_UNAVAILABLE');
+    expect(library.unavailable, isFalse);
+    expect(library.loaded, isTrue);
+    expect(library.trackById(track.playbackId), same(track));
+    expect(library.containsUri(track.uri), isTrue);
+    expect(library.tracks.single.artPath, doc['artPath']);
+    scan = () async => [doc];
+    await library.refresh();
+    expect(library.error, isNull);
   });
 
   test('switching folders removes old tracks before the replacement scan',

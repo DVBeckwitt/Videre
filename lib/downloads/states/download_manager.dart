@@ -1089,14 +1089,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     final previous = saved.exportedMusic;
     final sameTarget = previous?.folder == folder && previous?.format == format;
     if (sameTarget && previous!.complete) {
-      // An exported song may since have been moved or removed outside Videre.
-      try {
-        if (await storage.inspectDocument(previous.uri, folder) != null) {
-          return true;
-        }
-      } on PlatformException {
-        // Recreate a missing export without overwriting a different document.
-      }
+      // Only confirmed absence warrants another copy. A temporary provider
+      // failure leaves the original record intact so a later retry can find it.
+      if (await storage.exportExists(previous.uri, folder)) return true;
     }
     if (previous != null && !previous.complete && !sameTarget) {
       await storage.deleteDocument(previous.uri);

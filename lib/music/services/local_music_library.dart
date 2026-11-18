@@ -1,12 +1,14 @@
-import 'package:flutter/foundation.dart';
+import 'dart:async';
+
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 import '../models/local_music_track.dart';
 
-typedef _SelectedFolder = ({Uri uri, String name});
+typedef _SelectedFolder = ({Uri uri, String name, String? selectionId});
 
 /// Device-local library. Only the native picker can establish a folder grant.
-class LocalMusicLibrary extends ChangeNotifier {
+class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   static final instance = LocalMusicLibrary();
   static const _channel =
       MethodChannel('com.github.dvbeckwitt.videre/local_music');
@@ -31,6 +33,9 @@ class LocalMusicLibrary extends ChangeNotifier {
   bool get loaded => _loaded;
   bool get unavailable => _unavailable;
   String? get folderName => _folder?.name;
+  String? get selectionId => _folder?.selectionId;
+  bool acceptsSessionSelection(String? id) =>
+      enabled && !unavailable && id == selectionId;
   String? get error => _error;
   List<LocalMusicTrack> get tracks => _tracks;
   bool containsUri(String uri) => _uris.contains(uri);
@@ -41,6 +46,7 @@ class LocalMusicLibrary extends ChangeNotifier {
   Future<void> initialize() => _initialization ??= _initialize();
 
   Future<void> _initialize() async {
+    WidgetsBinding.instance.addObserver(this);
     final revision = _revision;
     try {
       final folder = await _readFolder();
@@ -55,6 +61,51 @@ class LocalMusicLibrary extends ChangeNotifier {
   Future<_SelectedFolder?> _readFolder() async =>
       _parseFolder(await _channel.invokeMethod<dynamic>('getFolder'));
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(revalidate());
+  }
+
+  /// Android can revoke a grant while the Activity is in the background.
+  /// A negative result invalidates scans and notifies the active audio player.
+  Future<void> revalidate() async {
+    if (_choosing != null) await _choosing;
+    final folder = _folder;
+    if (_disposed || folder == null || _disabling != null) {
+      return;
+    }
+    final revision = _revision;
+    bool? available;
+    try {
+      available = await _channel.invokeMethod<bool>(
+          'checkFolderAccess', {'treeUri': folder.uri.toString()});
+    } on PlatformException {
+      return;
+    } on MissingPluginException {
+      return;
+    }
+    if (available == null || _revision != revision || _disposed) return;
+    if (available) {
+      if (_unavailable) {
+        _unavailable = false;
+        _error = null;
+        _notify();
+      }
+      return;
+    }
+    if (_unavailable) return;
+    if (_choosing != null) {
+      // The pending picker may replace this tree or leave its grant unchanged.
+      await revalidate();
+      return;
+    }
+    ++_revision;
+    _clearTracks();
+    _unavailable = true;
+    _error = 'FOLDER_UNAVAILABLE';
+    _notify();
+  }
+
   static _SelectedFolder? _parseFolder(dynamic result) {
     if (result == null) return null;
     if (result is Map && result['uri'] is String && result['name'] is String) {
@@ -67,7 +118,11 @@ class LocalMusicLibrary extends ChangeNotifier {
           uri.pathSegments.length == 2 &&
           uri.pathSegments.first == 'tree' &&
           uri.pathSegments.last.isNotEmpty) {
-        return (uri: uri, name: result['name'] as String);
+        return (
+          uri: uri,
+          name: result['name'] as String,
+          selectionId: result['selectionId'] as String?
+        );
       }
     }
     throw const FormatException('Invalid local music folder');
@@ -95,7 +150,10 @@ class LocalMusicLibrary extends ChangeNotifier {
       final selection = _parseFolder(await _picker);
       _picker = null;
       if (_revision != revision || selection == null) return false;
-      if (selection.uri != _folder?.uri) _clearTracks();
+      if (selection.uri != _folder?.uri ||
+          selection.selectionId != selectionId) {
+        _clearTracks();
+      }
       _folder = selection;
       _error = null;
       _unavailable = false;
@@ -206,6 +264,7 @@ class LocalMusicLibrary extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    if (_initialization != null) WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 }

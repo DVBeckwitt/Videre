@@ -28,6 +28,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder> {
   LocalMusicLibrary get _library =>
       widget.library ?? LocalMusicLibrary.instance;
   bool _ready = false;
+  bool? _routeCurrent;
 
   @override
   void initState() {
@@ -35,11 +36,28 @@ class _LocalMusicFolderState extends State<LocalMusicFolder> {
     _load();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final current = ModalRoute.isCurrentOf(context) ?? true;
+    if (current && _routeCurrent == false) {
+      // A covered library route stays mounted while Settings or Now Playing is open.
+      _ready = false;
+      _load();
+    }
+    _routeCurrent = current;
+  }
+
   Future<void> _load() async {
     await _library.initialize();
     if (!mounted) return;
+    await _library.revalidate();
+    if (!mounted) return;
     setState(() => _ready = true);
-    if (!widget._settings && _library.enabled && !_library.loaded) {
+    if (!widget._settings &&
+        _library.enabled &&
+        !_library.unavailable &&
+        !_library.loaded) {
       await _library.refresh();
     }
   }
@@ -162,7 +180,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder> {
                           ),
                       ]),
                 ),
-                if (enabled && !_library.unavailable)
+                if (_ready && enabled && !_library.unavailable)
                   SliverList.builder(
                     itemCount: tracks.length,
                     itemBuilder: (context, index) {

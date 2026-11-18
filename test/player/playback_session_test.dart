@@ -155,21 +155,30 @@ Future<void> waitForSavedPosition(int seconds, {String? videoId}) async {
   }).timeout(const Duration(seconds: 5));
 }
 
-Future<List<LocalMusicTrack>> openDeviceFolder() async {
+Future<List<LocalMusicTrack>> openDeviceFolder(
+    {bool legacy = false, bool Function()? canRead}) async {
   const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
   const tree =
       'content://com.android.externalstorage.documents/tree/primary%3AMusic';
-  final folder = {'uri': tree, 'name': 'Music'};
+  var selection = 0;
+  Map<String, String> folder() => {
+        'uri': tree,
+        'name': 'Music',
+        if (!legacy || selection > 1) 'selectionId': 'approval-$selection'
+      };
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   var granted = false;
   messenger.setMockMethodCallHandler(channel, (call) async {
     switch (call.method) {
       case 'getFolder':
-        return granted ? folder : null;
+        return granted ? folder() : null;
       case 'pickFolder':
+        if (!granted) selection++;
         granted = true;
-        return folder;
+        return folder();
+      case 'checkFolderAccess':
+        return granted && (canRead?.call() ?? true);
       case 'listTracks':
         expect(granted, isTrue);
         expect(call.arguments['treeUri'], tree);
@@ -642,6 +651,7 @@ void main() {
       final encoded = db.getSettings(playbackSessionSetting)!.value;
       final session = PlaybackSession.decode(encoded)!;
       expect(session.offlineIds, songs.map((song) => song.playbackId));
+      expect(session.localSelectionId, 'approval-1');
       expect(encoded, isNot(contains('content://')));
       expect(encoded, isNot(contains('Local artist')));
       expect(db.getAllProgress(), isEmpty);
@@ -650,8 +660,29 @@ void main() {
       expect((service as _GuestService).requestedCategories, isNull);
     });
 
+    test('external grant revocation stops the active local decoder and queue',
+        () async {
+      var readable = true;
+      final songs = await openDeviceFolder(canRead: () => readable);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.playLocalMusic(songs);
+      expect(player.state.currentQueueId, songs.first.playbackId);
+      var stopped = false;
+      player.addBeforeProfileSwitch(() async {
+        stopped = true;
+      });
+      readable = false;
+      await LocalMusicLibrary.instance.revalidate();
+      expect(stopped, isTrue);
+      expect(player.state.offlineCurrentlyPlaying, isNull);
+      expect(player.state.offlineVideos, isEmpty);
+      expect(player.state.playQueue, isEmpty);
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
+    });
+
     test('restoring device audio needs the current folder grant', () async {
-      final songs = await openDeviceFolder();
+      final songs = await openDeviceFolder(legacy: true);
       final saved = PlaybackSession(
           offlineIds: songs.map((track) => track.playbackId).toList(),
           currentId: songs.last.playbackId,
@@ -688,6 +719,46 @@ void main() {
       expect(reopened.state.offlineVideos, isEmpty);
       expect((service as _GuestService).requestedVideoIds, isEmpty);
       expect((service as _GuestService).requestedCategories, isNull);
+    });
+
+    test(
+        'a fresh grant to the same folder cannot revive dormant queues across profiles',
+        () async {
+      final songs = await openDeviceFolder();
+      final library = LocalMusicLibrary.instance;
+      final id = songs.first.playbackId;
+      final originalSelection = library.selectionId;
+      expect(originalSelection, isNotNull);
+      expect(await library.chooseFolder(), isTrue);
+      expect(library.selectionId, originalSelection);
+      final saved = PlaybackSession(
+          offlineIds: [id],
+          currentId: id,
+          seconds: 37,
+          audio: true,
+          localSelectionId: originalSelection);
+      final database = db as SembastSqfDb;
+      final other = await database.createProfile('Second listener');
+      for (final profile in [database.profileId, other.id]) {
+        await database
+            .forProfile(profile)
+            .saveSetting(SettingsValue(playbackSessionSetting, saved.encode()));
+      }
+      expect(player.state.offlineVideos, isEmpty);
+      await library.disable();
+      expect(await library.chooseFolder(), isTrue);
+      expect(library.containsUri(songs.first.uri), isTrue);
+      expect(library.selectionId, isNot(originalSelection));
+      player.restoreSession();
+      await player.resumeSession();
+      expect(player.state.offlineVideos, isEmpty);
+      await player.prepareForProfileSwitch();
+      await database.useProfile(other.id);
+      await player.reloadForProfile();
+      await player.resumeSession();
+      expect(player.state.offlineCurrentlyPlaying, isNull);
+      expect(player.state.offlineVideos, isEmpty);
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
     });
 
     test('music hydration preserves catalog identity and restored resume time',
