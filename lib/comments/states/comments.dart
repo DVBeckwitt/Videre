@@ -11,8 +11,8 @@ part 'comments.freezed.dart';
 class CommentsCubit extends Cubit<CommentsState> {
   bool _loading = false;
 
-  CommentsCubit(super.initialState) {
-    onReady();
+  CommentsCubit(super.initialState, {bool loadInitial = true}) {
+    if (loadInitial) onReady();
   }
 
   void onReady() {

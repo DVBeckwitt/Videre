@@ -21,7 +21,13 @@ class SearchFiltersButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final activeFilters = [
+      initialFilters.date != SearchDate.any,
+      initialFilters.duration != SearchDuration.any,
+      initialFilters.sortBy != SearchSortBy.relevance,
+    ].where((active) => active).length;
     return IconButton(
+      tooltip: locals.searchFilterOptions,
       onPressed: () {
         showDialog(
           animationStyle: AppMotion.dialogStyle(context),
@@ -106,7 +112,11 @@ class SearchFiltersButton extends StatelessWidget {
           },
         );
       },
-      icon: const Icon(Icons.filter_list_alt),
+      icon: Badge.count(
+        count: activeFilters,
+        isLabelVisible: activeFilters != 0,
+        child: const Icon(Icons.filter_list_alt),
+      ),
     );
   }
 }

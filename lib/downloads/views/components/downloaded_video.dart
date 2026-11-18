@@ -5,7 +5,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/video.dart';
 
 import '../../../videos/views/components/compact_video.dart';
 
@@ -118,6 +121,27 @@ class DownloadedVideoView extends StatelessWidget {
           onTap: video.downloadComplete
               ? () => context.read<PlayerCubit>().playOfflineVideos([video])
               : () => openVideoSheet(context),
+          onLongPress: video.downloadComplete && video.audioOnly
+              ? () {
+                  final metadata = video.musicMetadata ??
+                      MusicMetadata(
+                          title: video.title, artist: video.author ?? '');
+                  MusicLibraryActions.showSongMenu(
+                    context,
+                    Video(
+                      videoId: video.videoId,
+                      title: metadata.title,
+                      author: metadata.artist,
+                      lengthSeconds: video.lengthSeconds,
+                      musicMetadata: metadata,
+                      videoThumbnails: metadata.thumbnails,
+                    ),
+                    downloads: [video],
+                    onPlay: () =>
+                        context.read<PlayerCubit>().playOfflineVideos([video]),
+                  );
+                }
+              : null,
           trailing: [
             if (video.audioOnly) const Icon(Icons.audiotrack),
             if (pending && progress != null && !paused && !state.waitingForWifi)

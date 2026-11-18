@@ -38,6 +38,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   static final _videoThumbnail = RegExp(
       r'/vi(?:_webp)?/([A-Za-z0-9_-]{11})/([A-Za-z0-9_-]+)\.(?:jpg|webp)$');
 
+  static const _discoveryCandidateLimit = 8;
+  static const _discoverySongLimit = 6;
+
   Future<T> _inSession<T>(
       Future<T> Function(Service, Server, Future<void> Function()) load) async {
     final owner = db;
@@ -150,15 +153,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     final artistName =
         String.fromCharCodes((artist ?? '').trim().runes.take(120));
     return _inSession((api, server, checkSession) async {
-      Future<void> check() async {
-        if (isCurrent?.call() == false) {
-          throw const MusicCatalogException('The music request was cancelled.');
-        }
-        await checkSession();
-        if (isCurrent?.call() == false) {
-          throw const MusicCatalogException('The music request was cancelled.');
-        }
-      }
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
 
       await check();
       final query = artistName.isEmpty
@@ -179,74 +174,199 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             _videoId.hasMatch(video.videoId) &&
             seen.add(video.videoId)) {
           candidates.add(video.videoId);
-          if (candidates.length == 8) break;
+          if (candidates.length == _discoveryCandidateLimit) break;
         }
       }
-
-      Future<({MusicTrack? track, bool failed, bool cooldown})> inspect(
-          String id) async {
-        await check();
-        MusicTrack? track;
-        var failed = false;
-        var cooldown = false;
-        try {
-          // One noninteractive lookup per candidate. Service retains its own
-          // transport policy (short 429 and NerdVPN startup retries), but
-          // discovery neither rotates backends nor adds retries or refills.
-          final video = await api.getDiscoveryVideoMetadata(id,
-              serverOverride: server, isCurrent: isCurrent);
-          if (video.videoId != id) {
-            throw const MusicCatalogException(
-                'The server returned another music track.');
-          }
-          if (video.genre?.trim().toLowerCase() == 'music' &&
-              video.title != privateVideoString &&
-              video.liveNow != true &&
-              video.isUpcoming != true &&
-              (video.premiereTimestamp ?? 0) <=
-                  DateTime.now().millisecondsSinceEpoch ~/ 1000 &&
-              !db.getAllFilters().any((filter) => filter.filterVideo(video))) {
-            track = _track(video);
-          }
-        } catch (error) {
-          // One unavailable or malformed candidate must not hide other verified
-          // music. Session cancellation is checked outside this partial result.
-          failed = true;
-          cooldown = error is InvidiousServiceError &&
-              (error.isRateLimited ||
-                  error.retryAfterIsInvalid ||
-                  (error.retryAfter ?? Duration.zero) > Duration.zero);
-        }
-        await check();
-        return (track: track, failed: failed, cooldown: cooldown);
-      }
-
-      final host = Uri.parse(server.url).host.toLowerCase();
-      final concurrency = NetworkProxy.instance.config.enabled ||
-              host.replaceFirst(RegExp(r'\.+$'), '').endsWith('.onion')
-          ? 1
-          : 2;
-      final songs = <MusicTrack>[];
-      var failures = 0;
-      for (var offset = 0; offset < candidates.length;) {
-        await check();
-        final batch = candidates.skip(offset).take(concurrency).toList();
-        final inspected = await Future.wait(batch.map(inspect));
-        await check();
-        offset += batch.length;
-        for (final item in inspected) {
-          if (item.failed) failures++;
-          if (item.track case final track?) songs.add(track);
-        }
-        // An instance cooldown also applies to requests for other candidates.
-        if (songs.length >= 6 || inspected.any((item) => item.cooldown)) break;
-      }
-      if (songs.isEmpty && failures > 0) {
-        throw const MusicCatalogException(
-            'Music discovery could not verify any tracks. Retry the request.');
-      }
-      return songs.take(6).toList();
+      return _inspectDiscoverySongs(api, server, candidates, check, isCurrent);
     });
+  }
+
+  @override
+  Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
+      {bool Function()? isCurrent}) async {
+    final seeds = <String>{};
+    for (final id in seedIds) {
+      if (_videoId.hasMatch(id)) seeds.add(id);
+      if (seeds.length == 3) break;
+    }
+    if (seeds.isEmpty) return const [];
+    _requireCurrentDiscovery(isCurrent);
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      final lanes = <List<String>>[];
+      var seedFailures = 0;
+      for (final seed in seeds) {
+        await check();
+        try {
+          final video = await _discoveryVideo(api, server, seed, isCurrent);
+          lanes.add({
+            for (final related in video.recommendedVideos)
+              if (_videoId.hasMatch(related.videoId) &&
+                  !seeds.contains(related.videoId) &&
+                  !related.filtered &&
+                  !related.filterHide)
+                related.videoId,
+          }.take(_discoveryCandidateLimit).toList());
+        } catch (error) {
+          await check();
+          if (_discoveryCooldown(error) ||
+              error is InvidiousServiceError &&
+                  (error.isAuthenticationFailure ||
+                      error.isGatewayAccessFailure)) {
+            rethrow;
+          }
+          seedFailures++;
+        }
+        await check();
+      }
+
+      // Flow recalls multiple seed lanes. Interleave their first entries so
+      // one long Invidious lane cannot use the entire verification budget.
+      final candidates = <String>{};
+      for (var index = 0; index < _discoveryCandidateLimit; index++) {
+        for (final lane in lanes) {
+          if (index < lane.length) candidates.add(lane[index]);
+        }
+      }
+      return _inspectDiscoverySongs(api, server,
+          candidates.take(_discoveryCandidateLimit).toList(), check, isCurrent,
+          seedFailures: seedFailures);
+    });
+  }
+
+  static void _requireCurrentDiscovery(bool Function()? isCurrent) {
+    if (isCurrent?.call() == false) {
+      throw const MusicCatalogException('The music request was cancelled.');
+    }
+  }
+
+  static Future<void> _checkDiscovery(
+      Future<void> Function() checkSession, bool Function()? isCurrent) async {
+    _requireCurrentDiscovery(isCurrent);
+    await checkSession();
+    _requireCurrentDiscovery(isCurrent);
+  }
+
+  static bool _discoveryCooldown(Object error) =>
+      error is InvidiousServiceError &&
+      (error.isRateLimited ||
+          error.retryAfterIsInvalid ||
+          (error.retryAfter ?? Duration.zero) > Duration.zero);
+
+  static Future<Video> _discoveryVideo(
+      Service api, Server server, String id, bool Function()? isCurrent) async {
+    final video = await api.getDiscoveryVideoMetadata(id,
+        serverOverride: server, isCurrent: () => isCurrent?.call() != false);
+    if (video.videoId != id) {
+      throw const MusicCatalogException(
+          'The server returned another music track.');
+    }
+    return video;
+  }
+
+  @override
+  Future<List<MusicTrack>> getSubscriptionSongs(Iterable<Video> uploads,
+      {required Server expectedServer, bool Function()? isCurrent}) async {
+    final expected = BackendPlayback(expectedServer);
+    final authors = <String, String>{};
+    for (final upload in uploads) {
+      final creator = upload.authorId;
+      if (!_videoId.hasMatch(upload.videoId) ||
+          creator == null ||
+          !_channelId.hasMatch(creator) ||
+          upload.filtered ||
+          upload.filterHide) {
+        continue;
+      }
+      authors.putIfAbsent(upload.videoId, () => creator);
+      if (authors.length >= 8) break;
+    }
+    if (authors.isEmpty || isCurrent?.call() == false) return const [];
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() async {
+        if (isCurrent?.call() == false || !expected.matches(server)) {
+          throw const MusicCatalogException('The music request was cancelled.');
+        }
+        await checkSession();
+        if (isCurrent?.call() == false) {
+          throw const MusicCatalogException('The music request was cancelled.');
+        }
+      }
+
+      return _inspectDiscoverySongs(
+          api, server, authors.keys.toList(), check, isCurrent,
+          expectedAuthors: authors);
+    });
+  }
+
+  Future<List<MusicTrack>> _inspectDiscoverySongs(
+      Service api,
+      Server server,
+      List<String> candidates,
+      Future<void> Function() check,
+      bool Function()? isCurrent,
+      {int seedFailures = 0,
+      Map<String, String>? expectedAuthors}) async {
+    Future<({MusicTrack? track, bool failed, bool cooldown})> inspect(
+        String id) async {
+      await check();
+      MusicTrack? track;
+      var failed = false;
+      var cooldown = false;
+      try {
+        // One noninteractive lookup per candidate. Service retains its own
+        // transport policy (short 429 and NerdVPN startup retries), but
+        // discovery neither rotates backends nor adds retries or refills.
+        final video = await _discoveryVideo(api, server, id, isCurrent);
+        if ((expectedAuthors == null ||
+                video.authorId == expectedAuthors[id]) &&
+            video.genre?.trim().toLowerCase() == 'music' &&
+            video.title != privateVideoString &&
+            video.liveNow != true &&
+            video.isUpcoming != true &&
+            (video.premiereTimestamp ?? 0) <=
+                DateTime.now().millisecondsSinceEpoch ~/ 1000 &&
+            !db.getAllFilters().any((filter) => filter.filterVideo(video))) {
+          track = _track(video);
+        }
+      } catch (error) {
+        // One unavailable or malformed candidate must not hide other verified
+        // music. Session cancellation is checked outside this partial result.
+        failed = true;
+        cooldown = _discoveryCooldown(error);
+      }
+      await check();
+      return (track: track, failed: failed, cooldown: cooldown);
+    }
+
+    final host = Uri.parse(server.url).host.toLowerCase();
+    final concurrency = NetworkProxy.instance.config.enabled ||
+            host.replaceFirst(RegExp(r'\.+$'), '').endsWith('.onion')
+        ? 1
+        : 2;
+    final songs = <MusicTrack>[];
+    var failures = seedFailures;
+    for (var offset = 0; offset < candidates.length;) {
+      await check();
+      final batch = candidates.skip(offset).take(concurrency).toList();
+      final inspected = await Future.wait(batch.map(inspect));
+      await check();
+      offset += batch.length;
+      for (final item in inspected) {
+        if (item.failed) failures++;
+        if (item.track case final track?) songs.add(track);
+      }
+      // An instance cooldown also applies to requests for other candidates.
+      if (songs.length >= _discoverySongLimit ||
+          inspected.any((item) => item.cooldown)) {
+        break;
+      }
+    }
+    if (songs.isEmpty && failures > 0) {
+      throw const MusicCatalogException(
+          'Music discovery could not verify any tracks. Retry the request.');
+    }
+    return songs.take(_discoverySongLimit).toList();
   }
 
   @override

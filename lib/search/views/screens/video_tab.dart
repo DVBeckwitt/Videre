@@ -8,6 +8,7 @@ import 'package:clipious/search/states/search.dart';
 import 'package:clipious/search/views/screens/search.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/videos/views/components/video_list.dart';
+import 'package:clipious/videos/views/components/video_in_list.dart';
 
 @RoutePage()
 class SearchVideoTab extends StatelessWidget {
@@ -16,26 +17,30 @@ class SearchVideoTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Builder(builder: (context) {
-      final query =
-          context.select((SearchCubit s) => s.state.queryController.value.text);
+      final query = context.select((SearchCubit s) => s.submittedQuery);
       final sortBy = context.select((SearchCubit s) => s.state.filters.sortBy);
       final date = context.select((SearchCubit s) => s.state.filters.date);
       final duration =
           context.select((SearchCubit s) => s.state.filters.duration);
 
-      return VideoList(
-        communityBrowse: true,
-        key: ValueKey((query, sortBy, date, duration)),
-        paginatedVideoList: PageBasedPaginatedList<Video>(
-          getItemsFunc: (page, maxResults) => service
-              .search(query,
-                  page: page,
-                  sortBy: sortBy,
-                  type: SearchType.video,
-                  date: date,
-                  duration: duration)
-              .then((value) => value.videos),
-          maxResults: searchPageSize,
+      final search = context.read<SearchCubit>();
+      return ValueListenableBuilder<bool>(
+        valueListenable: search.compactResults,
+        builder: (context, compact, _) => VideoList(
+          communityBrowse: true,
+          layout: compact ? VideoCardLayout.flowRow : VideoCardLayout.flowFeed,
+          key: ValueKey((query, sortBy, date, duration)),
+          paginatedVideoList: PageBasedPaginatedList<Video>(
+            getItemsFunc: (page, maxResults) => service
+                .search(query,
+                    page: page,
+                    sortBy: sortBy,
+                    type: SearchType.video,
+                    date: date,
+                    duration: duration)
+                .then((value) => value.videos),
+            maxResults: searchPageSize,
+          ),
         ),
       );
     });

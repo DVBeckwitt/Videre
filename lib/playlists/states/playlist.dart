@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:bloc/bloc.dart';
 import 'package:flutter/material.dart';
@@ -222,6 +223,20 @@ class PlaylistCubit extends Cubit<PlaylistState> {
 
   Future<void> play(bool? isAudio) async =>
       _play(await playbackRequest(fromBeginning: true, audio: isAudio));
+
+  /// Start one playable occurrence and let the existing shuffle queue admit
+  /// the remaining entries, including later pages from the same loader.
+  Future<void> playShuffled() async {
+    await loader.ready;
+    final playable = playableVideos;
+    if (playable.isEmpty || reference == null) return;
+    final settings = player.settings;
+    if (!settings.state.playerShuffleMode) await settings.setShuffle(true);
+    final current = playableVideos;
+    if (current.isEmpty) return;
+    await _play(await playbackRequest(
+        video: current[Random().nextInt(current.length)], fromBeginning: true));
+  }
 
   Future<void> playEntry(Video video, {bool? audio}) async =>
       _play(await playbackRequest(video: video, audio: audio));

@@ -117,7 +117,7 @@ class _RemoteLoadPlayer extends _SessionPlayer {
   // Exercise remote intent without creating a native media controller.
   @override
   Future<void> playVideo(List<Video> videos,
-          {bool? audio, Duration? startAt, bool? playing}) =>
+          {bool? audio, Duration? startAt, bool? playing, int? startIndex}) =>
       super.playVideo([], audio: audio, startAt: startAt, playing: playing);
 }
 

@@ -54,6 +54,15 @@ object GatewaySessions : GatewayCookieAccess {
     private fun enabled(context: GatewayContext) = store().getString("origin_${context.key}", null) == context.origin.toString()
     private fun revision(context: GatewayContext) = store().getLong("revision_${context.key}", 0)
 
+    /** Local-only cache admission: never loads cookies or starts a WebView. */
+    internal fun cacheAdmissionRevision(context: GatewayContext): Long {
+        if (store().getBoolean("pending_${context.key}", false) ||
+            (enabled(context) && store().getBoolean("expired_${context.key}", false))) {
+            throw GatewayAuthenticationRequired()
+        }
+        return revision(context)
+    }
+
     fun status(context: GatewayContext): Map<String, Any> = onMain {
         val available = supported()
         val pending = store().getBoolean("pending_${context.key}", false)

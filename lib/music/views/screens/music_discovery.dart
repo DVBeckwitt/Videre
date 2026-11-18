@@ -14,9 +14,12 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/music/views/components/music_chart_picker.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_recommendation_shelves.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
+import 'package:clipious/recommendations/views/recommendation_settings.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -28,9 +31,14 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 class MusicHomePage extends StatefulWidget {
   final VoidCallback onSearch;
   final VoidCallback onLibrary;
+  final bool showSearchShortcut;
 
-  const MusicHomePage(
-      {super.key, required this.onSearch, required this.onLibrary});
+  const MusicHomePage({
+    super.key,
+    required this.onSearch,
+    required this.onLibrary,
+    this.showSearchShortcut = true,
+  });
 
   @override
   State<MusicHomePage> createState() => _MusicHomePageState();
@@ -40,6 +48,12 @@ class MusicHomePage extends StatefulWidget {
 /// upstream trending endpoint no longer provides a Music category.
 class _MusicHomePageState extends State<MusicHomePage> {
   final _scroll = ScrollController();
+  final _discovery = GlobalKey();
+
+  void _showDiscovery() {
+    final target = _discovery.currentContext;
+    if (target != null) Scrollable.ensureVisible(target);
+  }
 
   @override
   void dispose() {
@@ -54,28 +68,32 @@ class _MusicHomePageState extends State<MusicHomePage> {
       storageKey: 'music-home',
       controller: _scroll,
       children: [
-        _MusicWelcome(onSearch: widget.onSearch, onLibrary: widget.onLibrary),
-        _SavedSongs(onLibrary: widget.onLibrary),
-        _SectionHeading(title: locals.musicSearchSuggestions),
-        const _SavedMusicSuggestions(),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: Text(locals.musicExploreHint,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        _MusicHomeShortcuts(
+          onSearch: widget.showSearchShortcut ? widget.onSearch : null,
+          onLibrary: widget.onLibrary,
+          onDiscover: _showDiscovery,
         ),
+        const MusicRecommendationShelves(),
+        _SavedSongs(onLibrary: widget.onLibrary),
+        const _SavedMusicSuggestions(),
+        _SectionHeading(title: locals.musicExplore),
         const _MusicExplore(),
-        const _DiscoverySongs(),
+        _DiscoverySongs(key: _discovery),
       ],
     );
   }
 }
 
-class _MusicWelcome extends StatelessWidget {
-  final VoidCallback onSearch;
+class _MusicHomeShortcuts extends StatelessWidget {
+  final VoidCallback? onSearch;
   final VoidCallback onLibrary;
+  final VoidCallback onDiscover;
 
-  const _MusicWelcome({required this.onSearch, required this.onLibrary});
+  const _MusicHomeShortcuts({
+    required this.onSearch,
+    required this.onLibrary,
+    required this.onDiscover,
+  });
 
   Future<void> _openCharts(BuildContext context) async {
     final app = context.read<AppCubit>();
@@ -97,49 +115,49 @@ class _MusicWelcome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
+    final colors = Theme.of(context).colorScheme;
     final locals = AppLocalizations.of(context)!;
-    return Column(
-      key: const ValueKey('music-home-welcome'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Semantics(
-          header: true,
-          child: Text(locals.music,
-              style: theme.textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.w700, color: colors.onSurface)),
-        ),
-        const SizedBox(height: 4),
-        Text(locals.musicHomeSubtitle,
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: colors.onSurfaceVariant)),
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 10,
-          runSpacing: 8,
-          children: [
-            FilledButton.tonalIcon(
-              key: const ValueKey('music-home-search'),
-              onPressed: onSearch,
-              icon: const Icon(Icons.search_rounded),
-              label: Text(locals.search),
+    final shortcuts = <(String, String, VoidCallback)>[
+      if (onSearch case final search?) ('search', locals.search, search),
+      ('library', locals.musicLibrary, onLibrary),
+      ('charts', locals.musicTopCharts, () => _openCharts(context)),
+      ('discover', locals.musicDiscover, onDiscover),
+      (
+        'recommendations',
+        locals.localRecommendations,
+        () => showRecommendationSettings(context)
+      ),
+    ];
+    final style = TextButton.styleFrom(
+      backgroundColor: colors.surfaceContainerHigh,
+      foregroundColor: colors.onSurfaceVariant,
+      minimumSize: const Size(0, 32),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      shape: const StadiumBorder(),
+    );
+    return SingleChildScrollView(
+      key: const ValueKey('music-home-shortcuts'),
+      scrollDirection: Axis.horizontal,
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: Row(
+        children: [
+          for (final (id, label, action) in shortcuts)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(end: 8),
+              child: Builder(
+                builder: (buttonContext) => TextButton(
+                  key: ValueKey('music-home-$id'),
+                  onPressed: action,
+                  onFocusChange: (focused) {
+                    if (focused) Scrollable.ensureVisible(buttonContext);
+                  },
+                  style: style,
+                  child: Text(label),
+                ),
+              ),
             ),
-            FilledButton.tonalIcon(
-              key: const ValueKey('music-home-library'),
-              onPressed: onLibrary,
-              icon: const Icon(Icons.library_music_outlined),
-              label: Text(locals.musicLibrary),
-            ),
-            FilledButton.tonalIcon(
-              key: const ValueKey('music-home-charts'),
-              onPressed: () => _openCharts(context),
-              icon: const Icon(Icons.bar_chart_rounded),
-              label: Text(locals.musicTopCharts),
-            ),
-          ],
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -182,16 +200,16 @@ class _SavedSongs extends StatelessWidget {
                   if (songs.isEmpty)
                     Container(
                       key: const ValueKey('music-home-saved-empty'),
-                      padding: const EdgeInsets.all(20),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(6),
                         color:
                             Theme.of(context).colorScheme.surfaceContainerLow,
                       ),
                       child: Row(children: [
                         Icon(Icons.favorite_border_rounded,
                             color: Theme.of(context).colorScheme.primary),
-                        const SizedBox(width: 16),
+                        const SizedBox(width: 12),
                         Expanded(child: Text(locals.musicHomeEmpty)),
                       ]),
                     )
@@ -220,7 +238,7 @@ class _SavedSongRows extends StatelessWidget {
     final title = textTheme.titleSmall!;
     final subtitle = textTheme.bodySmall!;
     final rowHeight = math.max(
-        72.0,
+        64.0,
         20 +
             (scaler.scale(title.fontSize!) * (title.height ?? 1.3))
                 .ceilToDouble() +
@@ -276,22 +294,24 @@ class _SavedSongRow extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         onTap: onOpen,
+        onLongPress: () =>
+            MusicLibraryActions.showSongMenu(context, song.toVideo()),
         borderRadius: BorderRadius.circular(12),
         onFocusChange: (focused) {
           if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
         },
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
           child: Row(
             children: [
               ExcludeSemantics(
                 child: SizedBox.square(
-                  dimension: 56,
+                  dimension: 48,
                   child: song.thumbnails.isEmpty
                       ? DecoratedBox(
                           decoration: BoxDecoration(
                             color: colors.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           child: Icon(Icons.music_note_rounded,
                               color: colors.onSurfaceVariant),
@@ -299,7 +319,7 @@ class _SavedSongRow extends StatelessWidget {
                       : Thumbnail(
                           images: song.thumbnails,
                           decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(10)),
+                              borderRadius: BorderRadius.circular(6)),
                         ),
                 ),
               ),
@@ -367,29 +387,37 @@ class _SavedMusicSuggestions extends StatelessWidget {
             builder: (context, _) {
               final artists = _savedArtistNames(library);
               if (artists.isEmpty) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+              return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    for (var index = 0; index < artists.length; index++)
-                      ActionChip(
-                        key: ValueKey('music-suggestion-$index'),
-                        avatar: const Icon(Icons.search, size: 18),
-                        label: Text(artists[index],
-                            maxLines: 2, overflow: TextOverflow.ellipsis),
-                        onPressed: () {
-                          if (_sameSession(
-                              session, context.read<AppCubit>().state)) {
-                            context.router.push(MusicRoute(
-                                initialQuery: '${artists[index]} music'));
-                          }
-                        },
-                      ),
-                  ],
-                ),
-              );
+                    _SectionHeading(
+                        title: AppLocalizations.of(context)!
+                            .musicSearchSuggestions),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (var index = 0; index < artists.length; index++)
+                          ActionChip(
+                            key: ValueKey('music-suggestion-$index'),
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHigh,
+                            side: BorderSide.none,
+                            shape: const StadiumBorder(),
+                            label: Text(artists[index],
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                            onPressed: () {
+                              if (_sameSession(
+                                  session, context.read<AppCubit>().state)) {
+                                context.router.push(MusicRoute(
+                                    initialQuery: '${artists[index]} music'));
+                              }
+                            },
+                          ),
+                      ],
+                    ),
+                  ]);
             },
           );
         },
@@ -428,7 +456,7 @@ class _DiscoverySession {
 }
 
 class _DiscoverySongs extends StatefulWidget {
-  const _DiscoverySongs();
+  const _DiscoverySongs({super.key});
 
   @override
   State<_DiscoverySongs> createState() => _DiscoverySongsState();
@@ -438,6 +466,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
   _DiscoverySession? _session;
   String? _artist;
   List<MusicTrack> _songs = const [];
+  Map<String, String> _reasons = const {};
   int _generation = 0;
   bool _attempted = false;
   bool _loading = false;
@@ -462,6 +491,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     _generation++;
     _artist = null;
     _songs = const [];
+    _reasons = const {};
     _attempted = false;
     _loading = false;
     _failed = false;
@@ -510,8 +540,20 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     try {
       final songs = await musicCatalogService.getDiscoverySongs(
           artist: artist, isCurrent: () => _current(generation, session));
+      if (!_current(generation, session)) return;
+      final recommendations = RecommendationService.forProfile(
+          session.database, session.app.profileId);
+      final ranked =
+          await recommendations.rankMusic(songs, surface: 'discover');
       if (_current(generation, session)) {
-        setState(() => _songs = songs);
+        setState(() {
+          _songs = _rankedSelection(recommendations, songs, ranked);
+          _reasons = {
+            if (ranked.available)
+              for (final entry in ranked.items)
+                entry.item.videoId: entry.reason,
+          };
+        });
       }
     } catch (_) {
       if (_current(generation, session)) {
@@ -531,6 +573,51 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
             _failed = false;
           }
         });
+      }
+    }
+  }
+
+  List<MusicTrack> _rankedSelection(RecommendationService recommendations,
+      List<MusicTrack> songs, RecommendationResult<MusicTrack> ranked) {
+    // Keep explicitly loaded metadata for temporary community-filter reveal.
+    // Such hidden entries do not enter the ranker or get an invented reason.
+    // Personal exclusions and manual filters still remove them permanently.
+    final admitted =
+        recommendations.eligibleMusic(songs, includeCommunityHidden: true);
+    if (!ranked.available) return admitted;
+    final admittedIds = admitted.map((track) => track.videoId).toSet();
+    final rankedIds = ranked.items.map((entry) => entry.item.videoId).toSet();
+    return [
+      ...ranked.items
+          .map((entry) => entry.item)
+          .where((track) => admittedIds.contains(track.videoId)),
+      ...admitted.where((track) => !rankedIds.contains(track.videoId)),
+    ];
+  }
+
+  Future<void> _feedback(int generation, _DiscoverySession session,
+      MusicTrack song, RecommendationFeedback feedback) async {
+    if (!_current(generation, session)) return;
+    final recommendations = RecommendationService.forProfile(
+        session.database, session.app.profileId);
+    try {
+      await recommendations.feedback(
+          song.toVideo(), RecommendationDomain.music, feedback);
+      if (!_current(generation, session)) return;
+      final ranked =
+          await recommendations.rankMusic(_songs, surface: 'discover');
+      if (!_current(generation, session)) return;
+      setState(() {
+        _songs = _rankedSelection(recommendations, _songs, ranked);
+        _reasons = {
+          if (ranked.available)
+            for (final entry in ranked.items) entry.item.videoId: entry.reason,
+        };
+      });
+    } catch (_) {
+      if (mounted && _current(generation, session)) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(AppLocalizations.of(context)!.recommendationError)));
       }
     }
   }
@@ -565,10 +652,15 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     if (!session.eligible) return const SizedBox.shrink();
     final library =
         MusicLibraryService.forProfile(session.database, session.app.profileId);
+    final recommendations = RecommendationService.forProfile(
+        session.database, session.app.profileId);
     return ListenableBuilder(
       listenable: library.changes,
-      builder: (context, _) =>
-          _buildSelection(context, session, _savedArtistNames(library)),
+      builder: (context, _) => ListenableBuilder(
+        listenable: recommendations.changes,
+        builder: (context, _) =>
+            _buildSelection(context, session, _savedArtistNames(library)),
+      ),
     );
   }
 
@@ -578,7 +670,12 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
     final artist = _artist;
     final generation = _generation;
     final locals = AppLocalizations.of(context)!;
-    final results = musicTrackResults(_songs, showHidden: _showCommunityHidden);
+    final recommendations = RecommendationService.forProfile(
+        session.database, session.app.profileId);
+    final admitted =
+        recommendations.eligibleMusic(_songs, includeCommunityHidden: true);
+    final results =
+        musicTrackResults(admitted, showHidden: _showCommunityHidden);
     return Column(
       key: const ValueKey('music-discovery'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -667,11 +764,27 @@ class _DiscoverySongsState extends State<_DiscoverySongs> {
                 title: song.title,
                 subtitle: song.artists.join(', '),
                 thumbnails: song.thumbnails,
-                badge: matches.isEmpty
+                showPlayIndicator: true,
+                badge: matches.isEmpty && !_reasons.containsKey(song.videoId)
                     ? null
-                    : CommunityMatchLabels(matches: matches, compact: true),
+                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                        if (matches.isNotEmpty)
+                          Flexible(
+                              child: CommunityMatchLabels(
+                                  matches: matches, compact: true)),
+                        if (_reasons[song.videoId] case final reason?)
+                          MusicRecommendationActions(
+                            reason: reason,
+                            isCurrent: () => _current(generation, session),
+                            onFeedback: (feedback) =>
+                                _feedback(generation, session, song, feedback),
+                          ),
+                      ]),
                 onOpen: () {
-                  if (_current(generation, session)) {
+                  if (_current(generation, session) &&
+                      recommendations.eligibleMusic([song],
+                          includeCommunityHidden:
+                              _showCommunityHidden).isNotEmpty) {
                     _openSong(context, session.app, song.videoId);
                   }
                 },
@@ -712,14 +825,10 @@ class _MusicExplore extends StatelessWidget {
     final colors = theme.colorScheme;
     final session = context.watch<AppCubit>().state;
     final genres = [
-      (locals.musicGenrePop, 'pop music', Icons.mic_external_on_rounded),
-      (locals.musicGenreJazz, 'jazz music', Icons.piano_rounded),
-      (locals.musicGenreClassical, 'classical music', Icons.music_note_rounded),
-      (
-        locals.musicGenreElectronic,
-        'electronic music',
-        Icons.graphic_eq_rounded
-      ),
+      (locals.musicGenrePop, 'pop music'),
+      (locals.musicGenreJazz, 'jazz music'),
+      (locals.musicGenreClassical, 'classical music'),
+      (locals.musicGenreElectronic, 'electronic music'),
     ];
     return LayoutBuilder(builder: (context, constraints) {
       final columns = constraints.maxWidth >= 760 ? 4 : 2;
@@ -734,10 +843,8 @@ class _MusicExplore extends StatelessWidget {
                 builder: (tileContext) => SizedBox(
                       width: width,
                       child: Material(
-                        color: index.isEven
-                            ? colors.secondaryContainer
-                            : colors.tertiaryContainer,
-                        borderRadius: BorderRadius.circular(20),
+                        color: colors.surfaceContainerHigh,
+                        borderRadius: BorderRadius.circular(6),
                         clipBehavior: Clip.antiAlias,
                         child: InkWell(
                           key: ValueKey('music-explore-$index'),
@@ -754,26 +861,16 @@ class _MusicExplore extends StatelessWidget {
                                   MusicRoute(initialQuery: genres[index].$2));
                             }
                           },
-                          child: Padding(
-                            padding: const EdgeInsets.all(18),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                ExcludeSemantics(
-                                    child: Icon(genres[index].$3,
-                                        color: index.isEven
-                                            ? colors.onSecondaryContainer
-                                            : colors.onTertiaryContainer,
-                                        size: 28)),
-                                const SizedBox(height: 18),
-                                Text(genres[index].$1,
-                                    style: theme.textTheme.titleMedium
-                                        ?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                            color: index.isEven
-                                                ? colors.onSecondaryContainer
-                                                : colors.onTertiaryContainer)),
-                              ],
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 48),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              child: Align(
+                                alignment: AlignmentDirectional.centerStart,
+                                child: Text(genres[index].$1,
+                                    style: theme.textTheme.titleSmall),
+                              ),
                             ),
                           ),
                         ),
@@ -812,9 +909,9 @@ class _DiscoveryScroll extends StatelessWidget {
           controller: controller,
           primary: false,
           padding: EdgeInsets.fromLTRB(
-              MediaQuery.sizeOf(context).width < 600 ? 16 : 28,
-              16,
-              MediaQuery.sizeOf(context).width < 600 ? 16 : 28,
+              MediaQuery.sizeOf(context).width < 600 ? 12 : 24,
+              8,
+              MediaQuery.sizeOf(context).width < 600 ? 12 : 24,
               32),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -5,6 +5,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:logging/logging.dart';
 
+import '../../downloads/services/download_playback_source.dart';
 import '../../downloads/states/download_manager.dart';
 import '../../globals.dart';
 import '../../network/nerdvpn_access.dart';
@@ -25,13 +26,15 @@ class VideoCubit extends Cubit<VideoState> {
   final DownloadManagerCubit downloadManager;
   final PlayerCubit player;
   final SettingsCubit settings;
+  final Duration? startAt;
   StreamSubscription<DownloadManagerState>? _downloadSubscription;
   StreamSubscription<(bool, String)>? _dislikeSettingsSubscription;
   int _loadGeneration = 0;
   int _dislikeGeneration = 0;
 
   VideoCubit(
-      super.initialState, this.downloadManager, this.player, this.settings) {
+      super.initialState, this.downloadManager, this.player, this.settings,
+      {this.startAt}) {
     var dislikeSettings = (
       settings.state.useReturnYoutubeDislike,
       settings.state.returnYoutubeDislikeUrl,
@@ -55,30 +58,87 @@ class VideoCubit extends Cubit<VideoState> {
   Future<void> onReady() async {
     if (isClosed) return;
     final generation = ++_loadGeneration;
+    final database = db;
+    final profileId = database.profileId;
+    final videoId = state.videoId;
+    bool isCurrent() =>
+        !isClosed &&
+        generation == _loadGeneration &&
+        identical(db, database) &&
+        database.profileId == profileId;
     emit(state.copyWith(
         loadingVideo: true,
         retryingVideo: false,
         error: '',
         requestedBackend: null));
+    Video? local;
     try {
-      Video video =
-          await service.getVideo(state.videoId, onBackendRequest: (request) {
-        if (!isClosed && generation == _loadGeneration) {
+      // The details route loads metadata before PlayerCubit receives a normal
+      // tap. Prime its existing optional cache now so initial skips can be ready
+      // with that metadata, without delaying either local or online playback.
+      try {
+        unawaited(player
+            .prepareSponsorSegments(videoId)
+            .onError((_, stackTrace) => []));
+      } catch (_) {
+        // Optional preparation cannot turn a usable metadata/local load into
+        // an error, including a synchronous settings/cache lookup failure.
+      }
+      // Ordinary video taps reach this route before the player. Restore saved
+      // metadata here so a compatible completed download can start without an
+      // online metadata request. Legacy or unavailable records remain optional.
+      DownloadedVideo? download;
+      try {
+        download = database.getDownloadByVideoId(videoId);
+      } catch (_) {}
+      if (download?.playbackProvenance != null) {
+        local = await prepareDownloadedPlaybackVideo(
+            database: database,
+            video: Video(videoId: videoId),
+            audioOnly: false,
+            preferredQuality: settings.state.rememberVideoQuality
+                ? settings.state.lastVideoQuality
+                : null,
+            isCurrent: isCurrent);
+        if (!isCurrent()) return;
+        if (local != null) {
+          final selected = await database.getCurrentlySelectedServer();
+          if (!isCurrent() || !local.playbackConnection!.matches(selected)) {
+            return;
+          }
+          emit(state.copyWith(
+              loadingVideo: false, retryingVideo: false, video: local));
+          getDownloadStatus();
+        }
+      }
+      // Enrich the details after publishing the playable saved candidate. This
+      // request must neither delay playback nor replace it with a load error.
+      Video video = await service.getVideo(videoId,
+          onBackendRequest: (request) {
+        if (isCurrent() && local == null) {
           emit(state.copyWith(requestedBackend: request, retryingVideo: false));
         }
       },
-              loadObserver: VideoLoadObserver(
-                  isCurrent: () => !isClosed && generation == _loadGeneration,
-                  onRetry: () {
-                    if (!isClosed &&
-                        generation == _loadGeneration &&
-                        state.loadingVideo) {
-                      emit(state.copyWith(retryingVideo: true));
-                    }
-                  }));
-      if (isClosed || generation != _loadGeneration) return;
+          loadObserver: VideoLoadObserver(
+              isCurrent: () =>
+                  isCurrent() &&
+                  (local == null ||
+                      local.playbackConnection!
+                          .matches(local.playbackConnection!.preferredServer)),
+              onRetry: () {
+                if (isCurrent() && state.loadingVideo) {
+                  emit(state.copyWith(retryingVideo: true));
+                }
+              }));
+      if (!isCurrent()) return;
       final isLoggedIn = await service.isLoggedIn();
-      if (isClosed || generation != _loadGeneration) return;
+      if (!isCurrent()) return;
+      if (local != null) {
+        final selected = await database.getCurrentlySelectedServer();
+        if (!isCurrent() || !local.playbackConnection!.matches(selected)) {
+          return;
+        }
+      }
       emit(state.copyWith(
           loadingVideo: false,
           retryingVideo: false,
@@ -91,6 +151,7 @@ class VideoCubit extends Cubit<VideoState> {
             _loadDislikes(video.videoId, generation, ++_dislikeGeneration));
       }
     } catch (err) {
+      if (local != null) return;
       late String error;
       if (err is InvidiousServiceError) {
         error = (err).message;
@@ -99,7 +160,7 @@ class VideoCubit extends Cubit<VideoState> {
       } else {
         error = coulnotLoadVideos;
       }
-      if (!isClosed && generation == _loadGeneration) {
+      if (isCurrent()) {
         emit(state.copyWith(
             error: error, loadingVideo: false, retryingVideo: false));
       }
@@ -163,11 +224,11 @@ class VideoCubit extends Cubit<VideoState> {
   void restartVideo(bool? audio) {
     if (state.video != null) {
       player.showBigPlayer();
-      player.seek(Duration.zero);
+      player.seek(startAt ?? Duration.zero);
     }
   }
 
-  void playVideo(bool? audio) {
+  void playVideo(bool? audio, {bool selectedByUser = true}) {
     if (state.video != null) {
       List<Video> videos = [state.video!];
       if (!settings.state.distractionFreeMode &&
@@ -175,7 +236,8 @@ class VideoCubit extends Cubit<VideoState> {
         videos.addAll(state.video!.recommendedVideos
             .where((video) => !hideCommunityVideo(video)));
       }
-      player.playVideo(videos, audio: audio);
+      if (selectedByUser) player.noteWatchSelection(state.video!.videoId);
+      player.playVideo(videos, audio: audio, startAt: startAt);
     }
   }
 }

@@ -84,6 +84,7 @@ import 'home/views/screens/subscription_tab.dart';
 import 'home/views/screens/trending_tab.dart';
 import 'main.dart';
 import 'music/views/screens/music.dart';
+import 'music/views/screens/music_mode.dart';
 
 part 'router.gr.dart';
 
@@ -165,6 +166,7 @@ class AppRouter extends RootStackRouter {
                       AutoRoute(
                           page: SubscriptionRoute.page, path: subscriptionPath),
                       AutoRoute(page: HistoryRoute.page, path: historyPath),
+                      AutoRoute(page: MainMusicRoute.page),
                       AutoRoute(page: PlaylistsRoute.page, path: playlistsPath),
                       AutoRoute(page: PopularRoute.page, path: popularPath),
                       AutoRoute(page: TrendingRoute.page, path: trendingPath),

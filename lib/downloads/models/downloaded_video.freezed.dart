@@ -30,6 +30,8 @@ mixin _$DownloadedVideo {
   bool get storageFailed;
   String? get folderUri;
   String? get storageUri;
+  @_PlaybackProvenanceConverter()
+  DownloadPlaybackProvenance? get playbackProvenance;
   bool get audioOnly;
   DownloadContainer? get container;
   String? get audioTrackId;
@@ -78,6 +80,8 @@ mixin _$DownloadedVideo {
                 other.folderUri == folderUri) &&
             (identical(other.storageUri, storageUri) ||
                 other.storageUri == storageUri) &&
+            (identical(other.playbackProvenance, playbackProvenance) ||
+                other.playbackProvenance == playbackProvenance) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
             (identical(other.container, container) ||
@@ -109,6 +113,7 @@ mixin _$DownloadedVideo {
         storageFailed,
         folderUri,
         storageUri,
+        playbackProvenance,
         audioOnly,
         container,
         audioTrackId,
@@ -119,7 +124,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -144,6 +149,8 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       bool storageFailed,
       String? folderUri,
       String? storageUri,
+      @_PlaybackProvenanceConverter()
+      DownloadPlaybackProvenance? playbackProvenance,
       bool audioOnly,
       DownloadContainer? container,
       String? audioTrackId,
@@ -179,6 +186,7 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? storageFailed = null,
     Object? folderUri = freezed,
     Object? storageUri = freezed,
+    Object? playbackProvenance = freezed,
     Object? audioOnly = null,
     Object? container = freezed,
     Object? audioTrackId = freezed,
@@ -243,6 +251,10 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.storageUri
           : storageUri // ignore: cast_nullable_to_non_nullable
               as String?,
+      playbackProvenance: freezed == playbackProvenance
+          ? _self.playbackProvenance
+          : playbackProvenance // ignore: cast_nullable_to_non_nullable
+              as DownloadPlaybackProvenance?,
       audioOnly: null == audioOnly
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable
@@ -377,6 +389,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             bool storageFailed,
             String? folderUri,
             String? storageUri,
+            @_PlaybackProvenanceConverter()
+            DownloadPlaybackProvenance? playbackProvenance,
             bool audioOnly,
             DownloadContainer? container,
             String? audioTrackId,
@@ -404,6 +418,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageFailed,
             _that.folderUri,
             _that.storageUri,
+            _that.playbackProvenance,
             _that.audioOnly,
             _that.container,
             _that.audioTrackId,
@@ -445,6 +460,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             bool storageFailed,
             String? folderUri,
             String? storageUri,
+            @_PlaybackProvenanceConverter()
+            DownloadPlaybackProvenance? playbackProvenance,
             bool audioOnly,
             DownloadContainer? container,
             String? audioTrackId,
@@ -471,6 +488,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageFailed,
             _that.folderUri,
             _that.storageUri,
+            _that.playbackProvenance,
             _that.audioOnly,
             _that.container,
             _that.audioTrackId,
@@ -509,6 +527,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             bool storageFailed,
             String? folderUri,
             String? storageUri,
+            @_PlaybackProvenanceConverter()
+            DownloadPlaybackProvenance? playbackProvenance,
             bool audioOnly,
             DownloadContainer? container,
             String? audioTrackId,
@@ -535,6 +555,7 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageFailed,
             _that.folderUri,
             _that.storageUri,
+            _that.playbackProvenance,
             _that.audioOnly,
             _that.container,
             _that.audioTrackId,
@@ -566,6 +587,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.storageFailed = false,
       this.folderUri,
       this.storageUri,
+      @_PlaybackProvenanceConverter() this.playbackProvenance,
       this.audioOnly = false,
       this.container,
       this.audioTrackId,
@@ -619,6 +641,9 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   final String? folderUri;
   @override
   final String? storageUri;
+  @override
+  @_PlaybackProvenanceConverter()
+  final DownloadPlaybackProvenance? playbackProvenance;
   @override
   @JsonKey()
   final bool audioOnly;
@@ -678,6 +703,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.folderUri == folderUri) &&
             (identical(other.storageUri, storageUri) ||
                 other.storageUri == storageUri) &&
+            (identical(other.playbackProvenance, playbackProvenance) ||
+                other.playbackProvenance == playbackProvenance) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
             (identical(other.container, container) ||
@@ -709,6 +736,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
         storageFailed,
         folderUri,
         storageUri,
+        playbackProvenance,
         audioOnly,
         container,
         audioTrackId,
@@ -719,7 +747,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -746,6 +774,8 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       bool storageFailed,
       String? folderUri,
       String? storageUri,
+      @_PlaybackProvenanceConverter()
+      DownloadPlaybackProvenance? playbackProvenance,
       bool audioOnly,
       DownloadContainer? container,
       String? audioTrackId,
@@ -781,6 +811,7 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? storageFailed = null,
     Object? folderUri = freezed,
     Object? storageUri = freezed,
+    Object? playbackProvenance = freezed,
     Object? audioOnly = null,
     Object? container = freezed,
     Object? audioTrackId = freezed,
@@ -845,6 +876,10 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.storageUri
           : storageUri // ignore: cast_nullable_to_non_nullable
               as String?,
+      playbackProvenance: freezed == playbackProvenance
+          ? _self.playbackProvenance
+          : playbackProvenance // ignore: cast_nullable_to_non_nullable
+              as DownloadPlaybackProvenance?,
       audioOnly: null == audioOnly
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable

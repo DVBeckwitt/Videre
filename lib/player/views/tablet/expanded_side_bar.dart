@@ -13,8 +13,52 @@ import '../../../videos/models/video.dart';
 import '../../../videos/views/components/info.dart';
 import '../../../videos/views/components/recommended_videos.dart';
 
-class ExpandedSideBar extends StatelessWidget {
+class ExpandedSideBar extends StatefulWidget {
   const ExpandedSideBar({super.key});
+
+  @override
+  State<ExpandedSideBar> createState() => _ExpandedSideBarState();
+}
+
+class _ExpandedSideBarState extends State<ExpandedSideBar>
+    with TickerProviderStateMixin {
+  TabController? _controller;
+  List<int> _tabs = const [];
+  bool _syncing = false;
+
+  void _tabChanged() {
+    final controller = _controller;
+    if (!mounted || _syncing || controller == null) return;
+    final player = context.read<PlayerCubit>();
+    final selected = _tabs[controller.index];
+    if (!player.isClosed && player.state.selectedFullScreenIndex != selected) {
+      player.selectTab(selected);
+    }
+  }
+
+  void _syncTabs(List<int> tabs, int selected) {
+    final visible = tabs.indexOf(selected);
+    final index = visible < 0 ? 0 : visible;
+    if (_controller == null || _tabs.length != tabs.length) {
+      _controller?.removeListener(_tabChanged);
+      _controller?.dispose();
+      _tabs = tabs;
+      _controller =
+          TabController(length: tabs.length, initialIndex: index, vsync: this)
+            ..addListener(_tabChanged);
+    } else if (_controller!.index != index) {
+      _syncing = true;
+      _controller!.index = index;
+      _syncing = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.removeListener(_tabChanged);
+    _controller?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -33,60 +77,64 @@ class ExpandedSideBar extends StatelessWidget {
     return Builder(builder: (context) {
       var selectedIndex = context
           .select((PlayerCubit value) => value.state.selectedFullScreenIndex);
+      _syncTabs(distractionFreeMode ? const [0, 3] : const [0, 1, 2, 3],
+          selectedIndex);
       return !isFullScreen &&
               !controller.isMini &&
               (video != null || offlineVid != null)
           ? video != null
-              ? DefaultTabController(
-                  initialIndex: selectedIndex,
-                  length: distractionFreeMode ? 2 : 4,
-                  child: Column(children: [
-                    TabBar(tabs: [
-                      Tab(
-                        icon: const Icon(Icons.info),
-                        text: locals.info,
-                      ),
-                      if (!distractionFreeMode)
+              ? Column(children: [
+                  TabBar(
+                      controller: _controller,
+                      onTap: (index) => player.selectTab(_tabs[index]),
+                      tabs: [
                         Tab(
-                          icon: const Icon(Icons.chat_bubble),
-                          text: locals.comments,
+                          icon: const Icon(Icons.info),
+                          text: locals.info,
                         ),
-                      if (!distractionFreeMode)
-                        Tab(
-                          icon: const Icon(Icons.schema),
-                          text: locals.recommended,
-                        ),
-                      Tab(
-                        icon: const Icon(Icons.playlist_play),
-                        text: locals.videoQueue,
-                      )
-                    ]),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: innerHorizontalPadding),
-                        child: TabBarView(children: <Widget>[
-                          SingleChildScrollView(
-                            child: VideoInfo(
-                              video: video,
-                              titleAndChannelInfo: false,
-                            ),
+                        if (!distractionFreeMode)
+                          Tab(
+                            icon: const Icon(Icons.chat_bubble),
+                            text: locals.comments,
                           ),
-                          if (!distractionFreeMode)
+                        if (!distractionFreeMode)
+                          Tab(
+                            icon: const Icon(Icons.schema),
+                            text: locals.recommended,
+                          ),
+                        Tab(
+                          icon: const Icon(Icons.playlist_play),
+                          text: locals.videoQueue,
+                        )
+                      ]),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: innerHorizontalPadding),
+                      child: TabBarView(
+                          controller: _controller,
+                          children: <Widget>[
                             SingleChildScrollView(
-                              child: CommentsContainer(
+                              child: VideoInfo(
                                 video: video,
-                                key: ValueKey('comms-${video.videoId}'),
+                                titleAndChannelInfo: false,
                               ),
                             ),
-                          if (!distractionFreeMode)
-                            SingleChildScrollView(
-                                child: RecommendedVideos(video: video)),
-                          const VideoQueue(),
-                        ]),
-                      ),
-                    )
-                  ]))
+                            if (!distractionFreeMode)
+                              SingleChildScrollView(
+                                child: CommentsContainer(
+                                  video: video,
+                                  key: ValueKey('comms-${video.videoId}'),
+                                ),
+                              ),
+                            if (!distractionFreeMode)
+                              SingleChildScrollView(
+                                  child: RecommendedVideos(video: video)),
+                            const VideoQueue(),
+                          ]),
+                    ),
+                  )
+                ])
               : const SizedBox.shrink()
           : const SizedBox.shrink();
     });

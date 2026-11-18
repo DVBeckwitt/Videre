@@ -14,6 +14,7 @@ import 'package:clipious/utils.dart';
 
 import '../../../globals.dart';
 import '../../../settings/models/db/server.dart';
+import '../../../utils/models/sharelink.dart';
 import '../../../utils/views/components/device_widget.dart';
 import '../../../utils/views/components/selected_server.dart';
 import '../../models/playlist.dart';
@@ -132,66 +133,71 @@ class PlaylistViewScreen extends StatelessWidget {
       child: BlocBuilder<PlaylistCubit, PlaylistState>(
         builder: (context, playlistState) {
           final cubit = context.read<PlaylistCubit>();
+          final source = cubit.reference;
+          final hasEntries = playlistState.loading ||
+              playlistState.error.isNotEmpty ||
+              playlistState.playlist.videos.isNotEmpty;
+          final headerActions = <Widget>[
+            IconButton(
+              tooltip: locals.downloadPlaylist,
+              onPressed: playlistState.loading ||
+                      !cubit.canPlayEntries ||
+                      !cubit.loader.complete ||
+                      playlistState.playlist.videos.isEmpty
+                  ? null
+                  : () => downloadPlaylist(context),
+              icon: const Icon(Icons.download),
+            ),
+            if (!canDeleteVideos && source != null)
+              PlaylistBookmarkButton(
+                playlist: playlistState.playlist,
+                reference: source,
+                compact: true,
+              ),
+            if (source?.kind == PlaylistSourceKind.public)
+              IconButton(
+                tooltip: locals.share,
+                onPressed: () => showSharingSheet(
+                    context, PublicPlaylistShareLinks(source!.playlistId)),
+                icon: const Icon(Icons.share_outlined),
+              ),
+            if ((canDeleteVideos || bookmarkOwner != null) &&
+                playlist.playlistId != localWatchLaterId)
+              IconButton(
+                tooltip: locals.delete,
+                onPressed: () => deletePlayList(context),
+                icon: const Icon(Icons.delete_outline),
+              ),
+            if (!canDeleteVideos && !playlist.isLocal)
+              BellIcon(
+                  itemId: playlist.playlistId, type: BellIconType.playlist),
+          ];
           return scopeArtwork(
-              cubit.reference,
+              source,
               Scaffold(
                   appBar: AppBar(
-                    title: Text(
-                      playlist.playlistId == localWatchLaterId
-                          ? locals.watchLater
-                          : playlistState.playlist.title,
-                    ),
-                    actions: [
-                      if (!canDeleteVideos && cubit.reference != null)
-                        PlaylistBookmarkButton(
-                          playlist: playlistState.playlist,
-                          reference: cubit.reference!,
-                          compact: true,
-                        ),
-                      IconButton(
-                        tooltip: locals.downloadPlaylist,
-                        onPressed: playlistState.loading ||
-                                !cubit.canPlayEntries ||
-                                !cubit.loader.complete ||
-                                playlistState.playlist.videos.isEmpty
-                            ? null
-                            : () => downloadPlaylist(context),
-                        icon: const Icon(Icons.download),
-                      ),
-                      if ((canDeleteVideos || bookmarkOwner != null) &&
-                          playlist.playlistId != localWatchLaterId)
-                        InkWell(
-                          onTap: () => deletePlayList(context),
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Icon(
-                              Icons.delete,
-                              color: colors.secondary,
-                            ),
-                          ),
-                        ),
-                      if (!canDeleteVideos && !playlist.isLocal)
-                        BellIcon(
-                            itemId: playlist.playlistId,
-                            type: BellIconType.playlist)
-                    ],
+                    title: hasEntries
+                        ? null
+                        : Text(playlist.playlistId == localWatchLaterId
+                            ? locals.watchLater
+                            : playlistState.playlist.title),
                   ),
                   backgroundColor: colors.surface,
                   body: SafeArea(
                       bottom: false,
-                      child: playlistState.loading ||
-                              playlistState.error.isNotEmpty ||
-                              playlistState.playlist.videos.isNotEmpty
+                      child: hasEntries
                           ? DeviceWidget(
                               phone: PlaylistInnerView(
                                 canDeleteVideos: canDeleteVideos,
                                 openVideo: openVideo,
+                                headerActions: headerActions,
                                 removeVideoFromPlaylist:
                                     removeVideoFromPlayList,
                               ),
                               tablet: TabletPlaylistInnerView(
                                 canDeleteVideos: canDeleteVideos,
                                 openVideo: openVideo,
+                                headerActions: headerActions,
                                 removeVideoFromPlaylist:
                                     removeVideoFromPlayList,
                               ))
@@ -200,6 +206,7 @@ class PlaylistViewScreen extends StatelessWidget {
                                   horizontal: innerHorizontalPadding),
                               children: [
                                   const PlaylistInformation(),
+                                  Wrap(children: headerActions),
                                   Center(child: Text(locals.noVideoInPlayList)),
                                 ]))));
         },

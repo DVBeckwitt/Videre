@@ -3,6 +3,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/extensions.dart';
 import 'package:logging/logging.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
 
 import '../../globals.dart';
 import '../../playlists/models/playlist.dart';
@@ -19,9 +20,33 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
     onReady();
   }
 
-  addToPlaylist(String playlistId) async {
+  Future<void> addToPlaylist(String playlistId) async {
+    final owner = RecommendationService.forProfile(db, db.profileId);
+    final generation = owner.generation(_recommendationDomain);
+    final alreadySaved = state.playlists.any((playlist) =>
+        playlist.playlistId == playlistId &&
+        playlist.videos.any((item) => item.videoId == state.videoId));
     await service.addVideoToPlaylist(playlistId, state.videoId, video: video);
+    if (!alreadySaved) {
+      await _recordPreference(owner, RecommendationFeedback.save, generation);
+    }
     await onReady();
+  }
+
+  RecommendationDomain get _recommendationDomain => video?.musicMetadata == null
+      ? RecommendationDomain.video
+      : RecommendationDomain.music;
+
+  Future<void> _recordPreference(RecommendationService owner,
+      RecommendationFeedback feedback, int generation) async {
+    final item = video;
+    if (item == null || !owner.learningEnabled(_recommendationDomain)) return;
+    try {
+      await owner.feedback(item, _recommendationDomain, feedback,
+          expectedGeneration: generation);
+    } catch (_) {
+      log.fine('Local recommendation learning unavailable');
+    }
   }
 
   Future<void> onReady() async {
@@ -31,7 +56,7 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
     await checkVideoLikeStatus();
   }
 
-  getAllPlaylists() async {
+  Future<void> getAllPlaylists() async {
     emit(state.copyWith(loading: true));
     final playlists = await service.getUserPlaylists(postProcessing: false);
     if (!isClosed) emit(state.copyWith(playlists: playlists, loading: false));
@@ -44,7 +69,7 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
     return pl;
   }
 
-  checkVideoLikeStatus() async {
+  Future<void> checkVideoLikeStatus() async {
     Playlist? p = await likePlaylist();
     Video? video = p?.videos
         .firstWhereOrNull((element) => element.videoId == state.videoId);
@@ -63,7 +88,7 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
     return likePlaylist();
   }
 
-  countPlaylistsForVideo() async {
+  Future<void> countPlaylistsForVideo() async {
     int playListCount = state.playlists
         .where((list) =>
             list.videos.indexWhere((video) => video.videoId == state.videoId) >=
@@ -76,6 +101,8 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
   }
 
   Future<void> toggleLike() async {
+    final owner = RecommendationService.forProfile(db, db.profileId);
+    final generation = owner.generation(_recommendationDomain);
     emit(state.copyWith(loading: true));
 
     await onReady();
@@ -95,15 +122,14 @@ class AddToPlaylistCubit extends Cubit<AddToPlaylistController> {
         log.fine('Video is not liked yet, we add it to the like playlist');
         await service.addVideoToPlaylist(p.playlistId, state.videoId,
             video: video);
+        await _recordPreference(owner, RecommendationFeedback.like, generation);
       }
     }
     if (!isClosed) await onReady();
   }
 
-  saveVideoToPlaylist(String selectedPlaylistId) async {
-    await service.addVideoToPlaylist(selectedPlaylistId, state.videoId,
-        video: video);
-    await onReady();
+  Future<void> saveVideoToPlaylist(String selectedPlaylistId) async {
+    await addToPlaylist(selectedPlaylistId);
   }
 }
 

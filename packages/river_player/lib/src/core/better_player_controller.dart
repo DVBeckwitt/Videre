@@ -555,6 +555,7 @@ class BetterPlayerController {
               _betterPlayerDataSource!.cacheConfiguration?.maxCacheFileSize ??
                   0,
           cacheKey: _betterPlayerDataSource?.cacheConfiguration?.key,
+          playbackCache: betterPlayerDataSource.playbackCache,
           showNotification: _betterPlayerDataSource
               ?.notificationConfiguration?.showNotification,
           title: _betterPlayerDataSource?.notificationConfiguration?.title,

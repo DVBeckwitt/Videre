@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
+import 'package:clipious/home/models/home_tabs_layout.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -15,6 +16,7 @@ import 'package:clipious/main.dart' as app;
 import 'package:clipious/player/models/video_display_mode.dart';
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/states/app_customizer.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/video_player.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
@@ -78,50 +80,70 @@ Future<void> main() async {
     expect(settingsCubit.state.motionPreference, MotionPreference.system);
   });
 
-  test('home experience defaults to both and restores each saved choice',
+  test('legacy home experience values do not force the selected TV destination',
       () async {
-    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
     expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
-    expect(
-        settingsCubit.state.effectiveHomeContentMode, HomeContentMode.videos);
-    expect(settingsCubit.state.showContentModeSelector, isTrue);
-
-    await settingsCubit.setHomeContentMode(HomeContentMode.music);
-    for (final experience in HomeExperience.values) {
-      await settingsCubit.setHomeExperience(experience);
-      final restored = SettingsState.init();
-      expect(restored.homeExperience, experience);
-      expect(restored.homeContentMode, HomeContentMode.music);
-      expect(
-          restored.effectiveHomeContentMode,
-          experience == HomeExperience.videosOnly
-              ? HomeContentMode.videos
-              : HomeContentMode.music);
-      expect(restored.showContentModeSelector,
-          experience == HomeExperience.videosAndMusic);
-    }
-    await settingsCubit.setHomeContentMode(HomeContentMode.videos);
-    expect(settingsCubit.state.effectiveHomeContentMode, HomeContentMode.music);
-    await settingsCubit.setHomeExperience(HomeExperience.videosAndMusic);
-    expect(
-        settingsCubit.state.effectiveHomeContentMode, HomeContentMode.videos);
-  });
-
-  test('unknown home experience values safely keep both experiences available',
-      () async {
-    for (final value in ['', 'unknown', 'MusicOnly', 'null']) {
+    for (final value in [
+      'videosOnly',
+      'musicOnly',
+      'videosAndMusic',
+      'unknown'
+    ]) {
       await settingsCubit
           .saveSetting(SettingsValue(homeExperienceSettingName, value));
-      expect(
-          SettingsState.init().homeExperience, HomeExperience.videosAndMusic);
-      expect(SettingsState.init().showContentModeSelector, isTrue);
+      await settingsCubit.setHomeContentMode(HomeContentMode.music);
+      expect(SettingsState.init().homeContentMode, HomeContentMode.music);
+      await settingsCubit.setHomeContentMode(HomeContentMode.videos);
+      expect(SettingsState.init().homeContentMode, HomeContentMode.videos);
     }
   });
 
-  test('single experiences preserve saved video layouts and the music library',
+  test('Home tabs preserve an explicit empty selection and navigation',
       () async {
     final navigation = PhoneNavigation.defaults()
-        .move(PhoneNavigationItem.playlist, NavigationArea.bottom)!
+        .move(PhoneNavigationItem.music, NavigationArea.top)!
+        .startAt(PhoneNavigationItem.history);
+    await settingsCubit.setPhoneNavigation(navigation);
+    final layout = HomeTabsLayout(enabledOrder: [], continueWatching: true);
+    await settingsCubit.setHomeTabsLayout(layout);
+    final restored = SettingsState.init();
+    expect(restored.homeTabsLayout.enabledOrder, isEmpty);
+    expect(restored.homeTabsLayout.continueWatching, isTrue);
+    expect(restored.phoneNavigation.encode(), navigation.encode());
+  });
+
+  test('removing app sections preserves the actual startup destination',
+      () async {
+    await settingsCubit.setAppLayout([
+      HomeDataSource.home,
+      HomeDataSource.history,
+      HomeDataSource.playlist,
+    ]);
+    await settingsCubit.selectOnOpen(1);
+    final customizer =
+        AppCustomizerCubit(settingsCubit.state.appLayout, settingsCubit);
+    addTearDown(customizer.close);
+
+    await customizer.updateSource(HomeDataSource.home, false);
+    expect(settingsCubit.state.appLayout,
+        [HomeDataSource.history, HomeDataSource.playlist]);
+    expect(settingsCubit.state.onOpen, 0);
+    expect(SettingsState.init().onOpen, 0);
+
+    await customizer.updateSource(HomeDataSource.home, true);
+    expect(settingsCubit.state.appLayout[settingsCubit.state.onOpen],
+        HomeDataSource.history);
+
+    await customizer.updateSource(HomeDataSource.history, false);
+    expect(settingsCubit.state.onOpen, 0);
+    expect(settingsCubit.state.appLayout[settingsCubit.state.onOpen],
+        HomeDataSource.playlist);
+  });
+
+  test('retired experiences preserve video layouts and the music library',
+      () async {
+    final navigation = PhoneNavigation.defaults()
+        .move(PhoneNavigationItem.music, NavigationArea.top)!
         .startAt(PhoneNavigationItem.history);
     await settingsCubit.setPhoneNavigation(navigation);
     await settingsCubit
@@ -130,13 +152,9 @@ Future<void> main() async {
     const library = '{"likedSongs":[{"videoId":"abcdefghijk"}]}';
     await settingsCubit.saveSetting(SettingsValue('music-library-v1', library));
     final original = SettingsState.init();
-
-    for (final experience in [
-      HomeExperience.videosOnly,
-      HomeExperience.musicOnly,
-      HomeExperience.videosAndMusic,
-    ]) {
-      await settingsCubit.setHomeExperience(experience);
+    for (final value in ['videosOnly', 'musicOnly', 'videosAndMusic']) {
+      await settingsCubit
+          .saveSetting(SettingsValue(homeExperienceSettingName, value));
       final restored = SettingsState.init();
       expect(restored.phoneNavigation.encode(), navigation.encode());
       expect(restored.appLayout, original.appLayout);
@@ -145,77 +163,179 @@ Future<void> main() async {
     }
   });
 
-  test('each profile restores its own experience and last selected mode',
+  for (final reorder in [false, true]) {
+    test('pending navigation save survives editor close (reorder=$reorder)',
+        () async {
+      await settingsCubit.setAppLayout([
+        HomeDataSource.home,
+        HomeDataSource.history,
+        HomeDataSource.playlist,
+      ]);
+      await settingsCubit.selectOnOpen(1);
+      final customizer =
+          AppCustomizerCubit(settingsCubit.state.appLayout, settingsCubit);
+      final database = db;
+      final pending = Completer<void>();
+      final started = Completer<void>();
+      db = _DelayedSettingsDb(database, pending, started);
+      final saving = reorder
+          ? customizer.reorder(0, 2)
+          : customizer.updateSource(HomeDataSource.home, false);
+      await started.future;
+      await customizer.close();
+      db = database;
+      pending.complete();
+      await saving;
+      final restored = SettingsState.init();
+      expect(restored.appLayout, [
+        HomeDataSource.history,
+        HomeDataSource.playlist,
+        if (reorder) HomeDataSource.home,
+      ]);
+      expect(restored.onOpen, 0);
+      expect(settingsCubit.state.onOpen, 0);
+    });
+
+    test(
+        'pending navigation save retains its profile and TV key (reorder=$reorder)',
+        () async {
+      app.isTv = true;
+      final initial = [
+        HomeDataSource.home,
+        HomeDataSource.history,
+        HomeDataSource.playlist,
+      ];
+      await settingsCubit.setAppLayout(initial);
+      await settingsCubit.selectOnOpen(1);
+      final customizer = AppCustomizerCubit(initial, settingsCubit);
+      addTearDown(customizer.close);
+      final database = db;
+      final other = await database.createProfile('Other');
+      final otherDb = database.forProfile(other.id);
+      await otherDb
+          .saveSetting(SettingsValue(appLayoutSettingName, 'popular,trending'));
+      await otherDb.saveSetting(SettingsValue(onOpenSettingName, '1'));
+      final pending = Completer<void>();
+      final started = Completer<void>();
+      db = _DelayedSettingsDb(database, pending, started);
+      final saving = reorder
+          ? customizer.reorder(0, 2)
+          : customizer.updateSource(HomeDataSource.home, false);
+      await started.future;
+      db = database;
+      await db.useProfile(other.id);
+      await fileDb.useProfile(other.id);
+      app.isTv = false;
+      appCubit.advanceSession();
+      await settingsCubit.reloadForProfile();
+      pending.complete();
+      await saving;
+      expect(customizer.state, initial);
+      expect(settingsCubit.state.appLayout,
+          [HomeDataSource.popular, HomeDataSource.trending]);
+      expect(settingsCubit.state.onOpen, 1);
+      expect(otherDb.getSettings(tvAppLayoutSettingName), isNull);
+      final original = database.forProfile('default');
+      expect(original.getSettings(tvAppLayoutSettingName)?.value,
+          reorder ? 'history,playlist,home' : 'history,playlist');
+      expect(original.getSettings(appLayoutSettingName), isNull);
+      expect(original.getSettings(onOpenSettingName)?.value, '0');
+    });
+  }
+
+  test('pending navigation save cannot emit into a later owner session',
       () async {
-    await settingsCubit.setHomeContentMode(HomeContentMode.music);
-    await settingsCubit.setHomeExperience(HomeExperience.videosOnly);
-    final other = await db.createProfile('Other');
-    await db.useProfile(other.id);
-    await fileDb.useProfile(other.id);
-    await settingsCubit.reloadForProfile();
-    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
-    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
-    await settingsCubit.setHomeExperience(HomeExperience.musicOnly);
-
-    await db.useProfile('default');
-    await fileDb.useProfile('default');
-    await settingsCubit.reloadForProfile();
-    expect(settingsCubit.state.homeExperience, HomeExperience.videosOnly);
-    expect(settingsCubit.state.homeContentMode, HomeContentMode.music);
-    expect(
-        settingsCubit.state.effectiveHomeContentMode, HomeContentMode.videos);
-
-    await db.useProfile(other.id);
-    await fileDb.useProfile(other.id);
-    await settingsCubit.reloadForProfile();
-    expect(settingsCubit.state.homeExperience, HomeExperience.musicOnly);
-    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
-    expect(settingsCubit.state.effectiveHomeContentMode, HomeContentMode.music);
-  });
-
-  test('pending experience saves remain with their owner after profile switch',
-      () async {
+    await settingsCubit
+        .setAppLayout([HomeDataSource.home, HomeDataSource.history]);
+    await settingsCubit.selectOnOpen(1);
+    final customizer =
+        AppCustomizerCubit(settingsCubit.state.appLayout, settingsCubit);
+    addTearDown(customizer.close);
     final database = db;
-    final other = await database.createProfile('Other');
     final pending = Completer<void>();
     final started = Completer<void>();
     db = _DelayedSettingsDb(database, pending, started);
-    final saving = settingsCubit.setHomeExperience(HomeExperience.musicOnly);
-    await started.future;
-    db = database;
-    await db.useProfile(other.id);
-    await fileDb.useProfile(other.id);
-    await settingsCubit.reloadForProfile();
-    pending.complete();
-    await saving;
-
-    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
-    expect(db.getSettings(homeExperienceSettingName), isNull);
-    expect(
-        database
-            .forProfile('default')
-            .getSettings(homeExperienceSettingName)
-            ?.value,
-        HomeExperience.musicOnly.name);
-  });
-
-  test(
-      'pending experience saves cannot emit into a later session for the same profile',
-      () async {
-    final database = db;
-    final pending = Completer<void>();
-    final started = Completer<void>();
-    db = _DelayedSettingsDb(database, pending, started);
-    final saving = settingsCubit.setHomeExperience(HomeExperience.musicOnly);
+    final saving = customizer.updateSource(HomeDataSource.home, false);
     await started.future;
     db = database;
     appCubit.advanceSession();
     await settingsCubit.reloadForProfile();
     pending.complete();
     await saving;
+    expect(customizer.state, [HomeDataSource.home, HomeDataSource.history]);
+    expect(settingsCubit.state.onOpen, 1);
+    expect(SettingsState.init().onOpen, 0);
+  });
 
-    expect(settingsCubit.state.homeExperience, HomeExperience.videosAndMusic);
-    expect(SettingsState.init().homeExperience, HomeExperience.musicOnly);
+  test('each profile restores its own Home tabs and last selected TV mode',
+      () async {
+    final first = HomeTabsLayout(
+        enabledOrder: [HomeTabsLayout.yourFeeds], continueWatching: true);
+    final second = HomeTabsLayout(enabledOrder: []);
+    await settingsCubit.setHomeContentMode(HomeContentMode.music);
+    await settingsCubit.setHomeTabsLayout(first);
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.homeTabsLayout.continueWatching, isFalse);
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
+    await settingsCubit.setHomeTabsLayout(second);
+    await db.useProfile('default');
+    await fileDb.useProfile('default');
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.homeTabsLayout.encode(), first.encode());
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.music);
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.homeTabsLayout.encode(), second.encode());
+    expect(settingsCubit.state.homeContentMode, HomeContentMode.videos);
+  });
+
+  test('pending Home tab saves remain with their owner after profile switch',
+      () async {
+    final database = db;
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final layout = HomeTabsLayout(enabledOrder: [], continueWatching: true);
+    final saving = settingsCubit.setHomeTabsLayout(layout);
+    await started.future;
+    db = database;
+    await db.useProfile(other.id);
+    await fileDb.useProfile(other.id);
+    await settingsCubit.reloadForProfile();
+    pending.complete();
+    await saving;
+    expect(settingsCubit.state.homeTabsLayout.continueWatching, isFalse);
+    expect(db.getSettings(homeTabsLayoutSettingName), isNull);
+    expect(
+        database
+            .forProfile('default')
+            .getSettings(homeTabsLayoutSettingName)
+            ?.value,
+        layout.encode());
+  });
+
+  test(
+      'pending Home tab saves cannot emit into a later session for the same profile',
+      () async {
+    final database = db;
+    final pending = Completer<void>();
+    final started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final layout = HomeTabsLayout(enabledOrder: [], continueWatching: true);
+    final saving = settingsCubit.setHomeTabsLayout(layout);
+    await started.future;
+    db = database;
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    pending.complete();
+    await saving;
+    expect(settingsCubit.state.homeTabsLayout.continueWatching, isFalse);
+    expect(SettingsState.init().homeTabsLayout.encode(), layout.encode());
   });
 
   test('disabling notifications cancels a pending frequency restart', () async {
@@ -404,6 +524,7 @@ Future<void> main() async {
     expect(layout.bottom, [
       PhoneNavigationItem.history,
       PhoneNavigationItem.home,
+      PhoneNavigationItem.music,
       PhoneNavigationItem.search
     ]);
     expect(layout.startup, PhoneNavigationItem.history);
@@ -419,8 +540,9 @@ Future<void> main() async {
   test(
       'navigation moves preserve startup identity and reject unusable bottom bars',
       () {
-    var layout =
-        PhoneNavigation.defaults().startAt(PhoneNavigationItem.history);
+    var layout = PhoneNavigation.defaults()
+        .move(PhoneNavigationItem.music, NavigationArea.hidden)!
+        .startAt(PhoneNavigationItem.history);
     layout = layout.move(PhoneNavigationItem.history, NavigationArea.bottom,
         before: PhoneNavigationItem.home)!;
     expect(layout.startup, PhoneNavigationItem.history);
@@ -477,6 +599,69 @@ Future<void> main() async {
       expect(settingsCubit.state.phoneNavigation.encode(),
           PhoneNavigation.defaults().encode());
     }
+  });
+
+  test('older navigation gains Music without disturbing explicit places', () {
+    final legacyDefault = PhoneNavigation.decode(
+        '{"bottom":["home","subscription","history","search"],'
+        '"top":["downloads","queue","playlist"],"startup":"home"}')!;
+    expect(legacyDefault.bottom, PhoneNavigation.defaults().bottom);
+    expect(legacyDefault.top, PhoneNavigation.defaults().top);
+
+    final full = PhoneNavigation.decode(
+        '{"bottom":["history","home","trending","popular","search"],'
+        '"top":["downloads","queue"],"startup":"history"}')!;
+    expect(full.bottom, [
+      PhoneNavigationItem.history,
+      PhoneNavigationItem.home,
+      PhoneNavigationItem.trending,
+      PhoneNavigationItem.popular,
+      PhoneNavigationItem.search,
+    ]);
+    expect(full.top.last, PhoneNavigationItem.music);
+    expect(full.startup, PhoneNavigationItem.history);
+
+    final explicitTop =
+        PhoneNavigation.decode('{"bottom":["home","history","search"],'
+            '"top":["downloads","music","queue"],"startup":"history"}')!;
+    expect(explicitTop.top[1], PhoneNavigationItem.music);
+    expect(explicitTop.bottom, isNot(contains(PhoneNavigationItem.music)));
+
+    final explicitBottom =
+        PhoneNavigation.decode('{"bottom":["music","history","search"],'
+            '"top":[],"startup":"history"}')!;
+    expect(explicitBottom.bottom.first, PhoneNavigationItem.music);
+    expect(explicitBottom.top, isEmpty);
+  });
+
+  test('Music can start, move and remain intentionally hidden after a reload',
+      () async {
+    final layout = PhoneNavigation.defaults()
+        .move(PhoneNavigationItem.music, NavigationArea.bottom,
+            before: PhoneNavigationItem.home)!
+        .startAt(PhoneNavigationItem.music);
+    await settingsCubit.setPhoneNavigation(layout);
+    final reloaded = SettingsState.init().phoneNavigation;
+    expect(reloaded.bottom.first, PhoneNavigationItem.music);
+    expect(reloaded.startup, PhoneNavigationItem.music);
+
+    final hidden =
+        reloaded.move(PhoneNavigationItem.music, NavigationArea.hidden)!;
+    await settingsCubit.setPhoneNavigation(hidden);
+    final afterHide = SettingsState.init().phoneNavigation;
+    expect(afterHide.hidden, contains(PhoneNavigationItem.music));
+    expect(afterHide.startup, PhoneNavigationItem.home);
+    expect(afterHide.encode(), hidden.encode());
+  });
+
+  test('Videos only falls back safely from Music and Search', () {
+    final layout = PhoneNavigation(
+        [PhoneNavigationItem.music, PhoneNavigationItem.search], []);
+    final available = layout.available(searchHistory: true, music: false);
+    expect(available.bottom,
+        [PhoneNavigationItem.home, PhoneNavigationItem.search]);
+    expect(available.startup, PhoneNavigationItem.home);
+    expect(layout.startup, PhoneNavigationItem.music);
   });
 
   test('queue autoplay defaults on and its opt-out persists independently',

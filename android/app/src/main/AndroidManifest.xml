@@ -66,44 +66,23 @@
                     android:required="false" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Accept shared links as identifiers without requesting OS domain verification. -->
+            <!-- Android's Open by default settings owns web-link preferences.
+                 Accept every path on these exact domains; Dart interprets links
+                 locally and loads content only through the selected Invidious
+                 instance. Do not request verification from YouTube domains. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
 
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data
-                    android:host="youtube.com"
-                    android:pathPrefix="/watch"
-                    android:scheme="https" />
-                <data
-                    android:host="www.youtube.com"
-                    android:pathPrefix="/watch"
-                    android:scheme="https" />
-                <data
-                    android:host="m.youtube.com"
-                    android:pathPrefix="/watch"
-                    android:scheme="https" />
-            </intent-filter>
-            <!-- Short links use /VIDEO_ID, not YouTube's /watch path. -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="youtu.be"
-                    android:scheme="https" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="music.youtube.com" />
-                <data android:pathPrefix="/watch" />
-                <data android:pathPrefix="/browse/" />
-                <data android:pathPrefix="/channel/" />
-                <data android:pathPrefix="/playlist" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:host="youtube.com" />
+                <data android:host="www.youtube.com" />
+                <data android:host="m.youtube.com" />
+                <data android:host="music.youtube.com" />
+                <data android:host="youtu.be" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

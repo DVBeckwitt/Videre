@@ -7,7 +7,6 @@ import 'package:clipious/utils.dart';
 import '../../states/app_customizer.dart';
 import '../../states/settings.dart';
 import 'phone_navigation_editor.dart';
-import 'home_experience_setting.dart';
 
 class AppCustomizer extends StatelessWidget {
   const AppCustomizer({super.key});
@@ -40,7 +39,6 @@ class AppCustomizer extends StatelessWidget {
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(children: [
-                    const HomeExperienceSetting(),
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8.0),
                       child: Text(locals.customizeAppLayoutExplanation,

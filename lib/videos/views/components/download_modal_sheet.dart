@@ -1,3 +1,4 @@
+import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -32,16 +33,21 @@ class DownloadModalSheet extends StatelessWidget {
       this.onDownload});
 
   static void showVideoModalSheet(BuildContext context, Video video,
-      {Function(bool isDownloadStarted)? onDownloadStarted,
+      {bool inPlayer = false,
+      Function(bool isDownloadStarted)? onDownloadStarted,
       Function()? onDownload}) {
     showSafeModalBottomSheet<void>(
         isScrollControlled: true,
         showDragHandle: true,
         context: context,
-        builder: (_) => DownloadModalSheet(
+        builder: (_) {
+          final sheet = DownloadModalSheet(
             video: video,
             onDownload: onDownload,
-            onDownloadStarted: onDownloadStarted));
+            onDownloadStarted: onDownloadStarted,
+          );
+          return inPlayer ? PlayerModalBackHandler(child: sheet) : sheet;
+        });
   }
 
   static Future<PlaylistDownloadOptions?> showPlaylistOptions(

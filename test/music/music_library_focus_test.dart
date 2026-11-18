@@ -48,46 +48,52 @@ void main() {
     app_globals.isTv = previousTv;
   });
 
-  for (final kind in [MusicLibraryKind.artist, MusicLibraryKind.playlist]) {
-    testWidgets(
-        '${kind.name} row keeps focus when an earlier bookmark is removed',
-        (tester) async {
-      await tester.runAsync(() async {
-        if (kind == MusicLibraryKind.playlist) {
-          final local =
-              await service.createPlayList('Local music list', 'local');
-          await library.markLocalPlaylist(local!);
-        }
-        await library.save(MusicLibraryEntry(
-            kind: kind, id: 'focused', title: 'Focused bookmark'));
-        await library.save(MusicLibraryEntry(
-            kind: kind, id: 'earlier', title: 'Earlier bookmark'));
-      });
-      await tester.pumpWidget(BlocProvider<AppCubit>.value(
-          value: app,
-          child: MaterialApp(
-              localizationsDelegates: AppLocalizations.localizationsDelegates,
-              supportedLocales: AppLocalizations.supportedLocales,
-              home: const Scaffold(body: MusicLibraryPage()))));
-      await tester.pumpAndSettle();
-      if (kind == MusicLibraryKind.artist) {
-        await tester.tap(find.text('Channels'));
+  for (final grid in [false, true]) {
+    for (final kind in [MusicLibraryKind.artist, MusicLibraryKind.playlist]) {
+      testWidgets(
+          '${kind.name} keeps focus when an earlier bookmark is removed (grid: $grid)',
+          (tester) async {
+        await tester.runAsync(() async {
+          if (kind == MusicLibraryKind.playlist) {
+            final local =
+                await service.createPlayList('Local music list', 'local');
+            await library.markLocalPlaylist(local!);
+          }
+          await library.save(MusicLibraryEntry(
+              kind: kind, id: 'focused', title: 'Focused bookmark'));
+          await library.save(MusicLibraryEntry(
+              kind: kind, id: 'earlier', title: 'Earlier bookmark'));
+        });
+        await tester.pumpWidget(BlocProvider<AppCubit>.value(
+            value: app,
+            child: MaterialApp(
+                localizationsDelegates: AppLocalizations.localizationsDelegates,
+                supportedLocales: AppLocalizations.supportedLocales,
+                home: const Scaffold(body: MusicLibraryPage()))));
         await tester.pumpAndSettle();
-      }
+        if (kind == MusicLibraryKind.artist) {
+          await tester.tap(find.text('Channels'));
+          await tester.pumpAndSettle();
+        }
+        if (grid) {
+          await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+          await tester.pumpAndSettle();
+        }
 
-      final focusedTitle = find.text('Focused bookmark');
-      final originalFocus = Focus.of(tester.element(focusedTitle));
-      originalFocus.requestFocus();
-      await tester.pumpAndSettle();
-      expect(originalFocus.hasPrimaryFocus, isTrue);
+        final focusedTitle = find.text('Focused bookmark');
+        final originalFocus = Focus.of(tester.element(focusedTitle));
+        originalFocus.requestFocus();
+        await tester.pumpAndSettle();
+        expect(originalFocus.hasPrimaryFocus, isTrue);
 
-      await tester.runAsync(() => library.remove(kind, 'earlier'));
-      await tester.pumpAndSettle();
+        await tester.runAsync(() => library.remove(kind, 'earlier'));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Earlier bookmark'), findsNothing);
-      expect(focusedTitle, findsOneWidget);
-      expect(Focus.of(tester.element(focusedTitle)).hasPrimaryFocus, isTrue,
-          reason: 'Moving a surviving row must preserve its remote focus');
-    });
+        expect(find.text('Earlier bookmark'), findsNothing);
+        expect(focusedTitle, findsOneWidget);
+        expect(Focus.of(tester.element(focusedTitle)).hasPrimaryFocus, isTrue,
+            reason: 'Moving a surviving row must preserve its remote focus');
+      });
+    }
   }
 }

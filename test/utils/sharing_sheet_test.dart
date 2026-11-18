@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/channels/models/channel.dart';
 import 'package:clipious/globals.dart';
@@ -12,6 +13,7 @@ import 'package:clipious/utils.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/models/sharelink.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/video_share_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -58,7 +60,7 @@ class _SharePlayer implements PlayerCubit {
   Stream<PlayerState> get stream => const Stream.empty();
 
   @override
-  final PlayerState state = PlayerState.init(null)
+  PlayerState state = PlayerState.init(null)
       .copyWith(position: const Duration(minutes: 1, seconds: 23));
 
   @override
@@ -84,12 +86,26 @@ void main() {
           'https://selected.example:8443/invidious/watch?v=dQw4w9WgXcQ&t=83');
       expect(item.getInvidiousLink(server, null).queryParameters,
           {'v': 'dQw4w9WgXcQ'});
+      expect(item.getYoutubeLink(83).toString(),
+          'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=83');
+      expect(item.getYoutubeLink(null).toString(),
+          'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
     }
   });
 
   test('channel links retain selected instance and omit video timestamps', () {
     expect(channel.getInvidiousLink(server, 83).toString(),
         'https://selected.example:8443/invidious/channel/UC_kRDKYrUlrbtrSiyu5Tflg');
+    expect(channel.getYoutubeLink(83).toString(),
+        'https://www.youtube.com/channel/UC_kRDKYrUlrbtrSiyu5Tflg');
+  });
+
+  test('public playlists share either origin without video timestamps', () {
+    const playlist = PublicPlaylistShareLinks('PLshare_test');
+    expect(playlist.getInvidiousLink(server, 83).toString(),
+        'https://selected.example:8443/invidious/playlist?list=PLshare_test');
+    expect(playlist.getYoutubeLink(83).toString(),
+        'https://www.youtube.com/playlist?list=PLshare_test');
   });
 
   test('links never carry credentials or request query data', () {
@@ -106,11 +122,16 @@ void main() {
     final link = untrusted.getInvidiousLink(server, null);
     expect(link.origin, 'https://selected.example:8443');
     expect(link.queryParameters, {'v': untrusted.videoId});
+    final youtube = untrusted.getYoutubeLink(null);
+    expect(youtube.origin, 'https://www.youtube.com');
+    expect(youtube.queryParameters, {'v': untrusted.videoId});
     final untrustedChannel = Channel.fromJson({
       ...channel.toJson(),
       'authorId': '../redirect?url=https://youtube.com',
     });
     expect(untrustedChannel.getInvidiousLink(server, null).pathSegments.last,
+        untrustedChannel.authorId);
+    expect(untrustedChannel.getYoutubeLink(null).pathSegments.last,
         untrustedChannel.authorId);
   });
 
@@ -133,6 +154,7 @@ void main() {
     const shareChannel = MethodChannel('dev.fluttercommunity.plus/share');
     late _ShareDb database;
     late _ShareApp app;
+    late _SharePlayer player;
     late List<Map<Object?, Object?>> shared;
     late List<MethodCall> launched;
     Completer<String>? shareResult;
@@ -141,6 +163,7 @@ void main() {
       database = _ShareDb(server);
       db = database;
       app = _ShareApp(server);
+      player = _SharePlayer();
       shared = [];
       launched = [];
       shareResult = null;
@@ -168,16 +191,29 @@ void main() {
     });
 
     Future<AppLocalizations> open(WidgetTester tester,
-        {ShareLinks item = video, bool timestamp = false}) async {
+        {ShareLinks item = video,
+        bool timestamp = false,
+        double textScale = 1,
+        bool inPlayer = false}) async {
       await tester.pumpWidget(MultiBlocProvider(
         providers: [
           BlocProvider<AppCubit>.value(value: app),
-          BlocProvider<PlayerCubit>.value(value: _SharePlayer()),
+          BlocProvider<PlayerCubit>.value(value: player),
         ],
         child: MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
+          builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!),
           home: Scaffold(body: Builder(builder: (context) {
+            if (inPlayer) {
+              return VideoShareButton(
+                  video: item as Video,
+                  showTimestampOption: timestamp,
+                  inPlayer: true);
+            }
             return TextButton(
                 onPressed: () => showSharingSheet(context, item,
                     showTimestampOption: timestamp),
@@ -185,17 +221,20 @@ void main() {
           })),
         ),
       ));
-      await tester.tap(find.text('Open sharing'));
+      await tester
+          .tap(inPlayer ? find.byIcon(Icons.share) : find.text('Open sharing'));
       await tester.pumpAndSettle();
       return AppLocalizations.of(tester.element(find.byType(BottomSheet)))!;
     }
 
-    testWidgets('only offers selected Invidious instance sharing',
+    testWidgets('offers Invidious first and a separate YouTube share choice',
         (tester) async {
       final locals = await open(tester);
-      expect(find.text(locals.shareYoutubeLink), findsNothing);
+      expect(find.text(locals.shareYoutubeLink), findsOneWidget);
       expect(find.text(locals.redirectInvidiousLink), findsNothing);
       expect(find.text(locals.shareInvidiousLink), findsOneWidget);
+      expect(tester.getTopLeft(find.text(locals.shareInvidiousLink)).dy,
+          lessThan(tester.getTopLeft(find.text(locals.shareYoutubeLink)).dy));
       await tester.tap(find.text(locals.shareInvidiousLink));
       await tester.pumpAndSettle();
       expect(shared.single, {
@@ -204,16 +243,130 @@ void main() {
       expect(launched, isEmpty);
     });
 
-    testWidgets('timestamp share retains the current playback position',
+    testWidgets(
+        'Android Back dismisses the player share before player controls',
+        (tester) async {
+      var playerBackEvents = 0;
+      bool playerBack(bool stop, RouteInfo info) {
+        playerBackEvents++;
+        return true;
+      }
+
+      BackButtonInterceptor.add(playerBack,
+          zIndex: 2, ifNotYetIntercepted: true);
+      addTearDown(() => BackButtonInterceptor.remove(playerBack));
+      await open(tester, timestamp: true, inPlayer: true);
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/navigation',
+          const JSONMethodCodec()
+              .encodeMethodCall(const MethodCall('popRoute')),
+          (_) {});
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(playerBackEvents, 0);
+      expect(shared, isEmpty);
+    });
+
+    for (final music in [false, true]) {
+      for (final youtube in [false, true]) {
+        for (final withTimestamp in [false, true]) {
+          testWidgets(
+              '${music ? 'Music' : 'Video'} shares ${youtube ? 'YouTube' : 'Invidious'} ${withTimestamp ? 'with' : 'without'} a timestamp',
+              (tester) async {
+            final item = music
+                ? const MusicTrack(
+                    videoId: 'dQw4w9WgXcQ',
+                    title: 'Song',
+                    artists: ['Artist']).toVideo()
+                : video;
+            final locals = await open(tester, item: item, timestamp: true);
+            if (withTimestamp) {
+              await tester.tap(find.byType(Checkbox));
+              await tester.pump();
+            }
+            await tester.tap(find.text(
+                youtube ? locals.shareYoutubeLink : locals.shareInvidiousLink));
+            await tester.pumpAndSettle();
+            final origin = youtube
+                ? 'https://www.youtube.com'
+                : 'https://selected.example:8443/invidious';
+            expect(shared.single['text'],
+                '$origin/watch?v=dQw4w9WgXcQ${withTimestamp ? '&t=83' : ''}');
+            expect(launched, isEmpty);
+          });
+        }
+      }
+    }
+
+    testWidgets('removing the timestamp applies to the YouTube share',
         (tester) async {
       final locals = await open(tester, timestamp: true);
       await tester.tap(find.byType(Checkbox));
       await tester.pump();
-      await tester.tap(find.text(locals.shareInvidiousLink));
+      await tester.tap(find.byType(Checkbox));
+      await tester.pump();
+      await tester.tap(find.text(locals.shareYoutubeLink));
+      await tester.pumpAndSettle();
+      expect(
+          shared.single['text'], 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    });
+
+    for (final youtube in [false, true]) {
+      testWidgets(
+          '${youtube ? 'YouTube' : 'Invidious'} timestamp retains the shared occurrence when the queue advances',
+          (tester) async {
+        final locals = await open(tester, timestamp: true);
+        player.state = player.state.copyWith(
+            currentlyPlaying: const Video(videoId: 'TW2IkSjGgjY'),
+            position: const Duration(seconds: 5));
+        await tester.tap(find.byType(Checkbox));
+        await tester.pump();
+        await tester.tap(find.text(
+            youtube ? locals.shareYoutubeLink : locals.shareInvidiousLink));
+        await tester.pumpAndSettle();
+        final link = Uri.parse(shared.single['text'] as String);
+        expect(link.queryParameters, {'v': 'dQw4w9WgXcQ', 't': '83'});
+      });
+    }
+
+    testWidgets('short landscape can scroll enlarged sharing controls',
+        (tester) async {
+      await tester.binding.setSurfaceSize(const Size(640, 240));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final locals = await open(tester, timestamp: true, textScale: 2);
+      await tester.ensureVisible(find.byType(Checkbox));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(Checkbox));
+      await tester.pump();
+      await tester.ensureVisible(find.text(locals.shareYoutubeLink));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(locals.shareYoutubeLink));
       await tester.pumpAndSettle();
       expect(shared.single['text'],
-          'https://selected.example:8443/invidious/watch?v=dQw4w9WgXcQ&t=83');
+          'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=83');
+      expect(tester.takeException(), isNull);
     });
+
+    for (final youtube in [false, true]) {
+      for (final item in <ShareLinks>[
+        channel,
+        const PublicPlaylistShareLinks('PLshare_test')
+      ]) {
+        testWidgets(
+            '${item is Channel ? 'channel' : 'playlist'} shares ${youtube ? 'YouTube' : 'Invidious'} without timestamp control',
+            (tester) async {
+          final locals = await open(tester, item: item);
+          expect(find.byType(Checkbox), findsNothing);
+          await tester.tap(find.text(
+              youtube ? locals.shareYoutubeLink : locals.shareInvidiousLink));
+          await tester.pumpAndSettle();
+          final link = Uri.parse(shared.single['text'] as String);
+          expect(link.host, youtube ? 'www.youtube.com' : 'selected.example');
+          expect(link.queryParameters.containsKey('t'), isFalse);
+          expect(launched, isEmpty);
+        });
+      }
+    }
 
     testWidgets('onion instance is shared as text without launching a browser',
         (tester) async {
@@ -245,28 +398,49 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    for (final change in ['profile', 'account', 'loading', 'dismissed']) {
-      testWidgets('pending share stops after $change changes', (tester) async {
-        database.lookup = Completer<Server>();
-        final locals = await open(tester);
-        await tester.tap(find.text(locals.shareInvidiousLink));
-        await tester.pump();
-        switch (change) {
-          case 'profile':
-            database.profileId = 'another-profile';
-          case 'account':
-            database.selected = server.copyWith(url: 'https://other.example');
-          case 'loading':
-            app.setGlobalLoading(true);
-          case 'dismissed':
-            Navigator.of(tester.element(find.byType(BottomSheet))).pop();
-            await tester.pumpAndSettle();
-        }
-        database.lookup!.complete(server);
-        await tester.pumpAndSettle();
-        expect(shared, isEmpty);
-        expect(tester.takeException(), isNull);
-      });
+    testWidgets('pending sharing disables both destinations and timestamp',
+        (tester) async {
+      database.lookup = Completer<Server>();
+      final locals = await open(tester, timestamp: true);
+      await tester.tap(find.text(locals.shareYoutubeLink));
+      await tester.pump();
+      for (final button
+          in tester.widgetList<FilledButton>(find.byType(FilledButton))) {
+        expect(button.onPressed, isNull);
+      }
+      expect(tester.widget<Checkbox>(find.byType(Checkbox)).onChanged, isNull);
+      database.lookup!.complete(server);
+      await tester.pumpAndSettle();
+      expect(shared, hasLength(1));
+    });
+
+    for (final youtube in [false, true]) {
+      for (final change in ['profile', 'account', 'loading', 'dismissed']) {
+        testWidgets(
+            'pending ${youtube ? 'YouTube' : 'Invidious'} share stops after $change changes',
+            (tester) async {
+          database.lookup = Completer<Server>();
+          final locals = await open(tester);
+          await tester.tap(find.text(
+              youtube ? locals.shareYoutubeLink : locals.shareInvidiousLink));
+          await tester.pump();
+          switch (change) {
+            case 'profile':
+              database.profileId = 'another-profile';
+            case 'account':
+              database.selected = server.copyWith(url: 'https://other.example');
+            case 'loading':
+              app.setGlobalLoading(true);
+            case 'dismissed':
+              Navigator.of(tester.element(find.byType(BottomSheet))).pop();
+              await tester.pumpAndSettle();
+          }
+          database.lookup!.complete(server);
+          await tester.pumpAndSettle();
+          expect(shared, isEmpty);
+          expect(tester.takeException(), isNull);
+        });
+      }
     }
   });
 }

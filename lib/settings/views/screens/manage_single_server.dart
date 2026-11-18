@@ -42,18 +42,22 @@ class ManageSingleServerScreen extends StatelessWidget {
         ],
         field2AutofillHints: const [AutofillHints.password],
         field2Secret: true,
-        okText: locals.ok, onOk: (username, password) async {
+        okText: locals.ok, onOk: (dialogContext, username, password) async {
       var cubit = context.read<ServerSettingsCubit>();
       if (cubit.state.authenticating) return;
       try {
         await cubit.logInWithCookie(username, password);
-        if (dialogOpen && context.mounted) {
-          Navigator.of(context).pop();
+        if (dialogOpen &&
+            dialogContext.mounted &&
+            ModalRoute.of(dialogContext)?.isCurrent == true) {
+          Navigator.of(dialogContext).pop();
         }
       } catch (_) {
-        if (dialogOpen && context.mounted) {
-          showAlertDialog(
-              context, locals.error, [Text(locals.accountActionFailed)]);
+        if (dialogOpen &&
+            dialogContext.mounted &&
+            ModalRoute.of(dialogContext)?.isCurrent == true) {
+          await showAlertDialog(
+              dialogContext, locals.error, [Text(locals.accountActionFailed)]);
         }
       }
     }).whenComplete(() => dialogOpen = false);

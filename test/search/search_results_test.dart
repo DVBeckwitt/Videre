@@ -17,11 +17,14 @@ import 'package:clipious/search/states/search.dart';
 import 'package:clipious/search/views/screens/channel_tab.dart';
 import 'package:clipious/search/views/screens/playlist_tab.dart';
 import 'package:clipious/search/views/screens/video_tab.dart';
+import 'package:clipious/search/views/components/search_channel_hero_card.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/compact_video.dart';
+import 'package:clipious/subscription_management/view/components/subscribe_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -123,6 +126,39 @@ void main() {
     await tester.pump();
   }
 
+  testWidgets('switching Search layouts keeps the loaded results controller',
+      (tester) async {
+    await showTab(tester, SearchType.video);
+    await tester.pumpAndSettle();
+    final controller =
+        tester.widget<GridView>(find.byType(GridView)).controller;
+    expect(find.byType(CompactVideo), findsNothing);
+
+    await tester.runAsync(search.toggleResultLayout);
+    await tester.pumpAndSettle();
+    expect(find.byType(CompactVideo), findsOneWidget);
+    expect(find.text('cats-relevance-any-any'), findsOneWidget);
+    expect(fakeService.requests, hasLength(1));
+    expect(
+        tester.widget<GridView>(find.byType(GridView)).controller, controller);
+
+    final reopened = SearchCubit(SearchState.init(), settings);
+    expect(reopened.compactResults.value, isTrue);
+    await reopened.close();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('creator search renders an actionable card without eager follows',
+      (tester) async {
+    await showTab(tester, SearchType.channel);
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchChannelHeroCard), findsOneWidget);
+    expect(find.text('Go to channel'), findsOneWidget);
+    expect(find.byType(SubscribeButton), findsNothing);
+    expect(fakeService.requests, hasLength(1));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final type in [
     SearchType.video,
     SearchType.channel,
@@ -162,6 +198,12 @@ void main() {
 
       search.state.queryController.text = 'dogs';
       await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+      expect(fakeService.requests, hasLength(4),
+          reason: 'Editing keeps the submitted results and scroll state');
+      expect(find.text('cats-views-week-long'), findsOneWidget);
+
+      await tester.runAsync(() => search.search('dogs'));
       await tester.pumpAndSettle();
       expect(fakeService.requests, hasLength(5));
       expect(find.text('dogs-views-week-long'), findsOneWidget);

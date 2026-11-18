@@ -18,6 +18,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -538,6 +539,102 @@ void main() {
     expect(await catalog.getDiscoverySongs(), isEmpty);
     expect(requests, hasLength(1));
     expect(requests.single.url.path, '/api/v1/search');
+  });
+
+  test('subscription music verification refuses a different selected account',
+      () async {
+    final earlier = (await db.getCurrentlySelectedServer()).copyWith(id: 'old');
+    final current = earlier.copyWith(id: 'new');
+    await db.upsertServer(earlier);
+    await db.useServer(earlier);
+    await db.upsertServer(current);
+    await db.useServer(current);
+    final uploads = [Video.fromJson(_song())];
+    await expectLater(
+        catalog.getSubscriptionSongs(uploads, expectedServer: earlier),
+        throwsA(isA<MusicCatalogException>()));
+    expect(requests, isEmpty);
+  });
+
+  test('related music shares the verification budget across learned seeds',
+      () async {
+    final lanes = [
+      [0, 1, 2, 10, 10, 11, 12, 13, 14, 15, 16, 17],
+      [18, 10, 19, 20],
+      [21, 22, 23],
+    ];
+    respond = (request) async {
+      final index =
+          int.parse(request.url.pathSegments.last.replaceAll('v', ''));
+      return _json({
+        ..._discoveryVideo(index,
+            genre: index == 10 || index == 18 ? 'Sports' : 'Music'),
+        if (index < lanes.length)
+          'recommendedVideos': [
+            for (final id in lanes[index]) _discoveryVideo(id)
+          ],
+      }, request);
+    };
+
+    final songs = await catalog.getRelatedSongs([
+      _discoveryId(0),
+      'invalid',
+      _discoveryId(0),
+      _discoveryId(1),
+      _discoveryId(2),
+      _discoveryId(3),
+    ]);
+
+    expect(songs.map((song) => song.videoId), [
+      for (final id in [21, 11, 22, 12, 19, 23]) _discoveryId(id)
+    ]);
+    expect(requests.map((request) => request.url.host).toSet(),
+        {'invidious.example'});
+    expect(requests.map((request) => request.url.path), [
+      for (final id in [0, 1, 2, 10, 18, 21, 11, 22, 12, 19, 23])
+        '/api/v1/videos/${_discoveryId(id)}',
+    ]);
+  });
+
+  test('related music ignores lanes returned for another recording', () async {
+    respond = (request) async => _json({
+          ..._discoveryVideo(1),
+          'recommendedVideos': [_discoveryVideo(2)],
+        }, request);
+
+    await expectLater(catalog.getRelatedSongs([_discoveryId(0)]),
+        throwsA(isA<MusicCatalogException>()));
+    expect(requests.single.url.path, '/api/v1/videos/${_discoveryId(0)}');
+  });
+
+  test('related music cancellation stops the remaining lanes and details',
+      () async {
+    var current = true;
+    respond = (request) async {
+      current = false;
+      return _json({
+        ..._discoveryVideo(0),
+        'recommendedVideos': [_discoveryVideo(2)],
+      }, request);
+    };
+
+    await expectLater(
+        catalog.getRelatedSongs([_discoveryId(0), _discoveryId(1)],
+            isCurrent: () => current),
+        throwsA(isA<MusicCatalogException>()));
+    expect(requests.single.url.path, '/api/v1/videos/${_discoveryId(0)}');
+  });
+
+  test('related music stops when the instance rate-limits a seed request',
+      () async {
+    respond =
+        (request) async => http.Response('Rate limited', 429, request: request);
+
+    await expectLater(
+        catalog.getRelatedSongs([_discoveryId(0), _discoveryId(1)]),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.isRateLimited, 'isRateLimited', isTrue)));
+    expect(requests.single.url.path, '/api/v1/videos/${_discoveryId(0)}');
   });
 
   test('discovery preserves user content filters before fetching details',

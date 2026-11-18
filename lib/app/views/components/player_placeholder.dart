@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/flow_floating_mini.dart';
 
 class PlayerPlaceHolder extends StatelessWidget {
   const PlayerPlaceHolder({super.key});
@@ -13,7 +14,9 @@ class PlayerPlaceHolder extends StatelessWidget {
     return Material(child: Builder(
       builder: (context) {
         var showPlaceHolder = context.select((PlayerCubit value) =>
-            value.state.showMiniPlaceholder && value.state.isMini);
+            value.state.showMiniPlaceholder &&
+            value.state.isMini &&
+            !usesFlowFloatingVideo(value.state));
         return AnimatedOpacity(
           opacity: showPlaceHolder ? 1 : 0,
           duration: AppMotion.fadeDuration(context),

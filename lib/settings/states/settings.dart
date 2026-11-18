@@ -21,8 +21,10 @@ import '../../downloads/states/download_manager.dart';
 import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
+import '../../home/models/home_tabs_layout.dart';
 import '../../player/models/video_display_mode.dart';
 import '../../player/states/player.dart';
+import '../../recommendations/recommendation_service.dart';
 import '../../utils.dart';
 import '../../utils/motion.dart';
 import '../../utils/backup.dart';
@@ -348,7 +350,13 @@ class SettingsCubit extends Cubit<SettingsState> {
       final downloads = backup.subscriptionsOnly
           ? null
           : context.read<DownloadManagerCubit>();
-      await db.restoreBackup(backup, replace: replace);
+      final database = db.forProfile(db.profileId);
+      if (backup.subscriptionsOnly) {
+        await database.restoreBackup(backup, replace: replace);
+      } else {
+        await RecommendationService.forCurrentProfile().restoreBackup(
+            () => database.restoreBackup(backup, replace: replace));
+      }
       if (!backup.subscriptionsOnly) {
         unawaited(communityFilters.reloadForProfile());
       }
@@ -506,8 +514,50 @@ class SettingsCubit extends Cubit<SettingsState> {
         isTv ? tvAppLayoutSettingName : appLayoutSettingName, layoutToString);
   }
 
+  Future<void> setAppLayoutAndStartup(
+      List<HomeDataSource> layout, int startupIndex) async {
+    if (isClosed) return;
+    final owner = db.forProfile(db.profileId);
+    final session = appCubit.state.sessionRevision;
+    final layoutSetting = SettingsValue(
+        isTv ? tvAppLayoutSettingName : appLayoutSettingName,
+        layout.map((source) => source.name).join(','));
+    final startupSetting =
+        SettingsValue(onOpenSettingName, startupIndex.toString());
+    // Both values belong to the original editor, even if it closes or the
+    // active profile/interface changes while the first write is pending.
+    await owner.saveSetting(layoutSetting);
+    await owner.saveSetting(startupSetting);
+    if (isClosed ||
+        db.profileId != owner.profileId ||
+        appCubit.state.sessionRevision != session) {
+      return;
+    }
+    emit(state.copyWith(settings: {
+      ...state.settings,
+      layoutSetting.name: layoutSetting,
+      startupSetting.name: startupSetting,
+    }));
+  }
+
   Future<void> setPhoneNavigation(PhoneNavigation layout) =>
       _set(phoneNavigationSettingName, layout.encode());
+
+  Future<void> setHomeTabsLayout(HomeTabsLayout layout) async {
+    final owner = db.forProfile(db.profileId);
+    final session = appCubit.state.sessionRevision;
+    final setting = SettingsValue(homeTabsLayoutSettingName, layout.encode());
+    await owner.saveSetting(setting);
+    if (isClosed ||
+        db.profileId != owner.profileId ||
+        appCubit.state.sessionRevision != session) {
+      return;
+    }
+    emit(state.copyWith(settings: {
+      ...state.settings,
+      homeTabsLayoutSettingName: setting,
+    }));
+  }
 
   Future<void> setHomeContentMode(HomeContentMode mode) async {
     final owner = db.forProfile(db.profileId);
@@ -523,22 +573,6 @@ class SettingsCubit extends Cubit<SettingsState> {
       ...state.settings,
       homeContentModeSettingName:
           SettingsValue(homeContentModeSettingName, mode.name),
-    }));
-  }
-
-  Future<void> setHomeExperience(HomeExperience experience) async {
-    final owner = db.forProfile(db.profileId);
-    final session = appCubit.state.sessionRevision;
-    final setting = SettingsValue(homeExperienceSettingName, experience.name);
-    await owner.saveSetting(setting);
-    if (isClosed ||
-        db.profileId != owner.profileId ||
-        appCubit.state.sessionRevision != session) {
-      return;
-    }
-    emit(state.copyWith(settings: {
-      ...state.settings,
-      homeExperienceSettingName: setting,
     }));
   }
 
@@ -748,23 +782,13 @@ sealed class SettingsState with _$SettingsState {
   PhoneNavigation get phoneNavigation =>
       savedPhoneNavigation ?? PhoneNavigation.fromLegacy(appLayout, onOpen);
 
+  HomeTabsLayout get homeTabsLayout =>
+      HomeTabsLayout.decode(_get(homeTabsLayoutSettingName)?.value);
+
   HomeContentMode get homeContentMode =>
       _get(homeContentModeSettingName)?.value == HomeContentMode.music.name
           ? HomeContentMode.music
           : HomeContentMode.videos;
-
-  HomeExperience get homeExperience => HomeExperience.values.firstWhere(
-      (experience) => experience.name == _get(homeExperienceSettingName)?.value,
-      orElse: () => HomeExperience.videosAndMusic);
-
-  HomeContentMode get effectiveHomeContentMode => switch (homeExperience) {
-        HomeExperience.videosAndMusic => homeContentMode,
-        HomeExperience.videosOnly => HomeContentMode.videos,
-        HomeExperience.musicOnly => HomeContentMode.music,
-      };
-
-  bool get showContentModeSelector =>
-      homeExperience == HomeExperience.videosAndMusic;
 
   NavigationDestinationLabelBehavior get navigationBarLabelBehavior =>
       NavigationDestinationLabelBehavior.values.firstWhere((e) =>

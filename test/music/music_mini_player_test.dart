@@ -28,6 +28,7 @@ class _Player extends TestPlayerCubit {
   _Player(super.initialState, super.settings);
 
   int nextCalls = 0;
+  int previousCalls = 0;
   int expandCalls = 0;
   int closeCalls = 0;
   Duration? sought;
@@ -37,7 +38,10 @@ class _Player extends TestPlayerCubit {
   }
 
   @override
-  void playNext() => nextCalls++;
+  void playNext({bool userInitiated = true}) => nextCalls++;
+
+  @override
+  void playPrevious() => previousCalls++;
 
   @override
   void showBigPlayer() => expandCalls++;
@@ -172,6 +176,45 @@ void main() {
     expect(player.expandCalls, 0);
     await tester.tap(key('music-mini-expand'));
     expect(player.expandCalls, 1);
+  });
+
+  testWidgets('mini player swipes change tracks without expanding or seeking',
+      (tester) async {
+    await pump(tester);
+    await tester.drag(key('music-mini-expand'), const Offset(-140, 0));
+    await tester.pump();
+    expect(player.nextCalls, 1);
+    await tester.drag(key('music-mini-expand'), const Offset(140, 0));
+    await tester.pump();
+    expect(player.previousCalls, 1);
+    expect(player.expandCalls, 0);
+    expect(player.sought, isNull);
+  });
+
+  testWidgets('a mini swipe cannot carry into a replacement track',
+      (tester) async {
+    await pump(tester);
+    final gesture =
+        await tester.startGesture(tester.getCenter(key('music-mini-expand')));
+    await gesture.moveBy(const Offset(-100, 0));
+    await tester.pump();
+    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(player.nextCalls, 0);
+    expect(player.previousCalls, 0);
+    expect(player.expandCalls, 0);
+  });
+
+  testWidgets('single-song mini swipes do not send queue commands',
+      (tester) async {
+    await player.seed(player.state.copyWith(videos: [song]));
+    await pump(tester);
+    await tester.drag(key('music-mini-expand'), const Offset(-140, 0));
+    await tester.pump();
+    expect(player.nextCalls, 0);
+    expect(player.previousCalls, 0);
   });
 
   testWidgets('finished songs forward Play to the shared decoder',

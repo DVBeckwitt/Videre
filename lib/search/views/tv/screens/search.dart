@@ -26,7 +26,10 @@ import '../../screens/search.dart';
 
 @RoutePage()
 class TvSearchScreen extends StatelessWidget {
-  const TvSearchScreen({super.key});
+  final String? query;
+  final bool? searchNow;
+
+  const TvSearchScreen({super.key, this.query, this.searchNow});
 
   Widget buildSuggestion(
       BuildContext context, bool isHistory, String suggestion) {
@@ -75,7 +78,10 @@ class TvSearchScreen extends StatelessWidget {
                 create: (context) => TvSearchCubit(const TvSearchState()),
               ),
               BlocProvider(
-                create: (context) => SearchCubit(SearchState.init(), settings),
+                create: (context) => SearchCubit(
+                    SearchState.init(query: query, searchNow: searchNow),
+                    settings,
+                    showSuggestionsWithResults: true),
               )
             ],
             child: BlocBuilder<SearchCubit, SearchState>(

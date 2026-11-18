@@ -1,0 +1,21 @@
+name: videre_recommendations
+description: Local Flow-derived video and music recommendations for Videre.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+  flutter: '>=3.24.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  assets:
+    - assets/NOTICE.txt
+  plugin:
+    platforms:
+      android:
+        package: com.github.dvbeckwitt.videre.recommendations
+        pluginClass: VidereRecommendationsPlugin

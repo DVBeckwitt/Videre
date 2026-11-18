@@ -5,24 +5,25 @@ import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:flutter_swipe_action_cell/core/cell.dart';
-import 'package:clipious/playlists/views/components/playlist_thumbnail.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 
 import '../../../globals.dart';
 import '../../states/playlist.dart';
+import 'flow_playlist_header.dart';
 import 'playlist_playback_actions.dart';
 
 class PlaylistInnerView extends StatelessWidget {
   final bool canDeleteVideos;
   final Function(BuildContext context, Video video) removeVideoFromPlaylist;
   final Function(BuildContext context, Video video) openVideo;
+  final List<Widget> headerActions;
   const PlaylistInnerView(
       {super.key,
       required this.canDeleteVideos,
       required this.removeVideoFromPlaylist,
-      required this.openVideo});
+      required this.openVideo,
+      this.headerActions = const []});
 
   @override
   Widget build(BuildContext context) {
@@ -43,60 +44,38 @@ class PlaylistInnerView extends StatelessWidget {
           itemCount: videos.length + 1 + (state.loading ? 3 : 0),
           itemBuilder: (context, index) {
             if (index == 0) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  PlaylistThumbnails(videos: state.playlist.videos),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8),
-                    child: PlaylistPlaybackActions(),
-                  ),
-                ],
-              );
+              return FlowPlaylistHeader(secondaryActions: headerActions);
             }
             if (index > videos.length) return const CompactVideoPlaceHolder();
             final video = videos[index - 1];
             final entryId = playbackQueueId(video);
             final playing =
                 current.$1 == cubit.reference && current.$2 == entryId;
-            return SwipeActionCell(
-              key: ValueKey('swipe-$entryId'),
-              trailingActions: canDeleteVideos
-                  ? [
-                      SwipeAction(
-                        icon: const Icon(Icons.delete, color: Colors.white),
-                        performsFirstActionWithFullSwipe: false,
-                        onTap: (handler) async {
-                          // Keep the row visible until the server confirms removal.
-                          await handler(false);
-                          if (context.mounted) {
-                            await removeVideoFromPlaylist(context, video);
-                          }
-                        },
-                      ),
-                    ]
-                  : null,
-              child: Semantics(
-                selected: playing,
-                label: playing ? locals.musicNowPlaying : null,
-                child: CompactVideo(
-                  key: ValueKey(entryId),
-                  video: video,
-                  highlighted: playing,
-                  onTap: !cubit.canPlayEntries ||
-                          video.filtered ||
-                          video.isUpcoming == true
-                      ? null
-                      : () => openVideo(context, video),
-                  trailing: [
-                    PlaylistEntryMenu(
-                      video: video,
-                      onRemove: canDeleteVideos
-                          ? () async => removeVideoFromPlaylist(context, video)
-                          : null,
-                    ),
-                  ],
-                ),
+            return Semantics(
+              key: ValueKey('playlist-entry-$entryId'),
+              selected: playing,
+              label: playing ? locals.musicNowPlaying : null,
+              child: CompactVideo(
+                key: ValueKey(entryId),
+                video: video,
+                highlighted: playing,
+                onTap: !cubit.canPlayEntries ||
+                        video.filtered ||
+                        video.isUpcoming == true
+                    ? null
+                    : () => openVideo(context, video),
+                onLongPress: () => showPlaylistEntryActions(context, video,
+                    onRemove: canDeleteVideos
+                        ? () async => removeVideoFromPlaylist(context, video)
+                        : null),
+                trailing: [
+                  PlaylistEntryMenu(
+                    video: video,
+                    onRemove: canDeleteVideos
+                        ? () async => removeVideoFromPlaylist(context, video)
+                        : null,
+                  ),
+                ],
               ),
             );
           },

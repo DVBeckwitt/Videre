@@ -5,7 +5,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../home/models/phone_navigation.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../states/settings.dart';
-import 'home_experience_setting.dart';
 
 enum _ItemAction { bottom, top, hidden, earlier, later, startup }
 
@@ -240,7 +239,6 @@ class _PhoneNavigationEditorState extends State<PhoneNavigationEditor> {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const HomeExperienceSetting(),
                     const SizedBox(height: 12),
                     Text(locals.phoneNavigationHelp),
                     if (_saving)

@@ -34,6 +34,7 @@ class _AudioPlatform extends JustAudioPlatform {
 
 class _Player extends AudioPlayerPlatform {
   final PlatformException? loadError;
+  Map<dynamic, dynamic>? loadPayload;
   final events = StreamController<PlaybackEventMessage>.broadcast();
 
   _Player(super.id, this.loadError);
@@ -63,6 +64,7 @@ class _Player extends AudioPlayerPlatform {
 
   @override
   Future<LoadResponse> load(LoadRequest request) async {
+    loadPayload = request.audioSourceMessage.toMap();
     if (loadError != null) throw loadError!;
     events.add(event());
     return LoadResponse(duration: const Duration(seconds: 30));
@@ -116,6 +118,25 @@ void main() {
   test('existing exception constructor defaults to no backend retry', () {
     expect(PlayerException(0, 'Source error', 0).backendRetryable, isFalse);
   });
+
+  for (final extension in ['webm', 'mpd', 'm3u8']) {
+    test(
+        'cache source metadata survives $extension serialization without headers',
+        () async {
+      const identity = <String, Object?>{
+        'version': 1,
+        'profileId': 'person',
+        'sessionId': 'occurrence'
+      };
+      await player.setAudioSource(AudioSource.uri(
+          Uri.parse('https://instance.example/media.$extension'),
+          playbackCache: identity));
+      final children = platform.player!.loadPayload!['children'] as List;
+      expect(children.single['playbackCache'], identity);
+      expect(children.single['headers'], isNull);
+      expect(children.single.containsKey('podcast'), isFalse);
+    });
+  }
 
   for (final detail in [true, false, 'true', null]) {
     test('load exception preserves retry detail $detail', () async {

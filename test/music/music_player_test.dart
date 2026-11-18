@@ -1,13 +1,22 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
 
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/music/views/components/music_mini_player.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -19,11 +28,17 @@ import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/views/tablet/expanded_player.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/components/selected_server.dart';
+import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/info.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -46,7 +61,7 @@ class _Player extends TestPlayerCubit {
   }
 
   @override
-  void playNext() => nextCalls++;
+  void playNext({bool userInitiated = true}) => nextCalls++;
 
   @override
   void playPrevious() => previousCalls++;
@@ -107,6 +122,7 @@ void main() {
     player = _Player(
         PlayerState.init([song, next]).copyWith(
             currentlyPlaying: song,
+            playQueue: ListQueue.of([next.videoId]),
             isAudio: true,
             isMini: false,
             isHidden: false,
@@ -157,6 +173,16 @@ void main() {
     await tester.pump();
   }
 
+  Future<void> pressAndroidBack(WidgetTester tester) async {
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      SystemChannels.navigation.name,
+      SystemChannels.navigation.codec
+          .encodeMethodCall(const MethodCall('popRoute')),
+      null,
+    );
+    await tester.pumpAndSettle();
+  }
+
   Future<void> skipSponsor(WidgetTester tester) async {
     player.setEvent(const MediaEvent(
         type: MediaEventType.sponsorSkipped, state: MediaState.playing));
@@ -187,7 +213,7 @@ void main() {
 
   testWidgets('short landscape keeps artwork beside reachable transport',
       (tester) async {
-    await pump(tester, size: const Size(680, 256));
+    await pump(tester, size: const Size(568, 256));
     final art = find.byKey(const ValueKey('music-player-artwork'));
     final before = tester.getRect(art);
     final play =
@@ -198,6 +224,151 @@ void main() {
     expect(find.byType(MusicQueue), findsOneWidget);
     await tap(tester, 'music-player-close-queue');
     expect(tester.getRect(art), before);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final (admitted, present) in [
+    (true, true),
+    (true, false),
+    (false, true)
+  ]) {
+    testWidgets('saved Music poster (admitted: $admitted, present: $present)',
+        (tester) async {
+      const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+      final messenger = tester.binding.defaultBinaryMessenger;
+      final documents = (await tester.runAsync(
+          () => Directory.systemTemp.createTemp('videre-music-poster-')))!;
+      messenger.setMockMethodCallHandler(
+          pathProvider, (_) async => documents.path);
+      addTearDown(() async {
+        messenger.setMockMethodCallHandler(pathProvider, null);
+        await documents.delete(recursive: true);
+      });
+      late String poster;
+      late Server server;
+      await tester.runAsync(() async {
+        await db.upsertServer(
+            const Server(url: 'https://inv.example', inUse: true));
+        await app.initState();
+        server = app.state.server!;
+        final audio = AdaptiveFormat(
+            null,
+            '128000',
+            null,
+            'https://inv.example/audio?itag=251',
+            '251',
+            'audio/webm; codecs="opus"',
+            '12345',
+            '1700000000000',
+            'RECTANGULAR',
+            'webm',
+            'opus',
+            null,
+            null);
+        final proof = DownloadPlaybackProvenance.create(
+            video: song.copyWith(adaptiveFormats: [audio]),
+            server: server,
+            audioOnly: true,
+            container: DownloadContainer.webm,
+            audio: audio,
+            videoFormat: null,
+            byteLength: 12345,
+            sha256: 'a' * 64)!;
+        final saved = DownloadedVideo(
+            videoId: song.videoId,
+            title: 'Saved song',
+            accountId: server.accountId,
+            downloadComplete: true,
+            audioOnly: true,
+            container: DownloadContainer.webm,
+            quality: 'audio',
+            lengthSeconds: 180,
+            playbackProvenance: proof);
+        await db.upsertDownload(saved);
+        poster = await saved.thumbnailPath;
+        if (present) {
+          await File(poster).writeAsBytes(base64Decode(
+              'iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAKklEQVR4nGP4z8BAEiJNNRlo1IJRC4ajBaTq+P+fgSQ0asGoBaMW/GcAAMouzU/PxmgLAAAAAElFTkSuQmCC'));
+        }
+      });
+
+      const remote = 'https://i.ytimg.com/vi/song/mqdefault.jpg';
+      final queued = song
+          .copyWith(videoThumbnails: [ImageObject('medium', remote, 320, 180)]);
+      await player.seed(player.state.copyWith(
+          videos: [queued, next],
+          currentlyPlaying: queued.copyWith(
+              playbackConnection: BackendPlayback(server),
+              downloadPlaybackOnly: admitted)));
+      // Exercise fallback selection without starting the image cache client.
+      await pump(tester,
+          size: const Size(1024, 720),
+          child: const ServerScope(server: null, child: MusicPlayer()));
+
+      final image = find.byWidgetPredicate((widget) =>
+          widget is Image &&
+          widget.image is FileImage &&
+          (widget.image as FileImage).file.path == poster);
+      final proxy = find.byType(Thumbnail);
+      final queue = find.byKey(const ValueKey('music-queue-song'));
+      final local = admitted && present;
+      Future<void> verifyArtwork(String artworkKey) async {
+        final artwork = find.byKey(ValueKey(artworkKey));
+        Finder inArtwork(Finder matching) =>
+            find.descendant(of: artwork, matching: matching);
+        final expected = local
+            ? inArtwork(find.byWidgetPredicate(
+                (widget) => widget is RawImage && widget.image != null))
+            : inArtwork(proxy);
+        for (var i = 0; i < 60 && expected.evaluate().isEmpty; i++) {
+          await tester.runAsync(
+              () => Future<void>.delayed(const Duration(milliseconds: 10)));
+          await tester.pump();
+        }
+        expect(expected, findsOneWidget);
+        if (local) {
+          expect(inArtwork(image), findsOneWidget);
+          expect(proxy, findsNothing);
+        } else {
+          final thumbnail = tester.widget<Thumbnail>(inArtwork(proxy));
+          expect(thumbnail.useInvidiousProxy, isTrue);
+          expect(thumbnail.images!.single.url, remote);
+        }
+      }
+
+      await verifyArtwork('music-player-artwork');
+      expect(find.descendant(of: queue, matching: local ? image : proxy),
+          findsOneWidget);
+      await pump(tester,
+          child: const ServerScope(server: null, child: MusicMiniPlayer()));
+      await verifyArtwork('music-mini-artwork');
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('portrait controls fit below a long song title', (tester) async {
+    final longSong = song.copyWith(
+      musicMetadata: const MusicMetadata(
+        title: 'James Brown - People Get Up And Drive That Funky Soul',
+        artist: 'Uttkarsh Narayan',
+      ),
+    );
+    await player.seed(player.state.copyWith(currentlyPlaying: longSong));
+    await pump(tester,
+        size: const Size(360, 720),
+        child: const Padding(
+          padding: EdgeInsets.only(top: 70, bottom: 24),
+          child: MusicPlayer(),
+        ));
+
+    // The real player shares the viewport with Android bars and a toolbar.
+    // All primary and secondary controls should be reachable without a scroll.
+    final rail = find.byKey(const ValueKey('music-player-actions'));
+    expect(tester.getRect(rail).bottom, lessThanOrEqualTo(696));
+    for (final control in ['play', 'queue', 'sleep', 'sound']) {
+      expect(find.byKey(ValueKey('music-player-$control')).hitTestable(),
+          findsOneWidget);
+    }
     expect(tester.takeException(), isNull);
   });
 
@@ -219,6 +390,150 @@ void main() {
     await tap(tester, 'music-player-queue');
     expect(find.byType(MusicQueue), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Android Back unwinds Music queue popup, selection and player',
+      (tester) async {
+    await pump(tester);
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    final originalInterceptors = BackButtonInterceptor.describe();
+
+    final songMenu = find.byTooltip('Music actions');
+    await tester.ensureVisible(songMenu);
+    await tester.tap(songMenu);
+    await tester.pumpAndSettle();
+    expect(find.text('Save song'), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.text('Save song'), findsNothing);
+    expect(player.state.isMini, isFalse);
+
+    await tap(tester, 'music-player-queue');
+    expect(find.byType(MusicQueue), findsOneWidget);
+
+    await tap(tester, 'music-queue-menu-${next.videoId}');
+    await tester.pumpAndSettle();
+    expect(find.text('Delete'), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.text('Delete'), findsNothing);
+    expect(find.byType(MusicQueue), findsOneWidget);
+    expect(player.state.isMini, isFalse);
+
+    await tap(tester, 'music-queue-select-mode');
+    await tester.tap(find.byTooltip('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 selected'), findsOneWidget);
+    await tap(tester, 'music-queue-selection-menu');
+    await tester.pumpAndSettle();
+    expect(find.text('Play next'), findsOneWidget);
+
+    await pressAndroidBack(tester);
+    expect(find.text('Play next'), findsNothing);
+    expect(find.text('2 selected'), findsOneWidget);
+    expect(player.state.isMini, isFalse);
+
+    await pressAndroidBack(tester);
+    expect(find.text('2 selected'), findsNothing);
+    expect(find.byType(MusicQueue), findsOneWidget);
+    expect(player.state.isMini, isFalse);
+
+    await pressAndroidBack(tester);
+    expect(find.byType(MusicQueue), findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(BackButtonInterceptor.describe(), originalInterceptors);
+    await pressAndroidBack(tester);
+    expect(player.state.isMini, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('phone queue contains keyboard focus above the browsing page',
+      (tester) async {
+    final browsingFocus = FocusNode(debugLabel: 'Covered Music search');
+    addTearDown(browsingFocus.dispose);
+    await pump(tester,
+        child: Stack(children: [
+          Center(child: TextField(focusNode: browsingFocus)),
+          const MusicPlayer(),
+        ]));
+    await tap(tester, 'music-player-queue');
+    await tester.pumpAndSettle();
+    for (final key in [
+      ...List.filled(32, LogicalKeyboardKey.tab),
+      ...List.filled(12, LogicalKeyboardKey.arrowDown),
+      ...List.filled(12, LogicalKeyboardKey.arrowUp),
+    ]) {
+      await tester.sendKeyEvent(key);
+      await tester.pumpAndSettle();
+      expect(browsingFocus.hasFocus, isFalse,
+          reason: 'Queue traversal must not focus the covered search field');
+    }
+    await pressAndroidBack(tester);
+    expect(find.byType(MusicQueue), findsNothing);
+    final queueButton = tester
+        .widget<TextButton>(find.byKey(const ValueKey('music-player-queue')));
+    expect(queueButton.focusNode!.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('music-sound-scroll')), findsOneWidget,
+        reason: 'Closing the queue restores access to the Sound modal');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('queue lock and selection keep duplicate occurrences independent',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, song, next]);
+    await player.seed(player.state.copyWith(
+      videos: songs,
+      currentlyPlaying: songs.first,
+      playQueue: ListQueue.of(songs.skip(1).map(playbackQueueId)),
+    ));
+    await pump(tester);
+    await tap(tester, 'music-player-queue');
+    final duplicateId = playbackQueueId(songs[1]);
+    final activeId = playbackQueueId(songs.first);
+    final drag = find.byKey(ValueKey('music-queue-drag-$duplicateId'));
+    expect(drag, findsOneWidget);
+    await tap(tester, 'music-queue-lock');
+    expect(drag, findsNothing);
+    await tap(tester, 'music-queue-lock');
+    expect(drag, findsOneWidget);
+
+    final duplicateRow = find.byKey(ValueKey('music-queue-$duplicateId'));
+    await tester.drag(duplicateRow, const Offset(340, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(duplicateRow, const Offset(-340, 0));
+    await tester.pumpAndSettle();
+    expect(
+        player.state.videos.map(playbackQueueId), songs.map(playbackQueueId));
+    expect(
+        find.byKey(ValueKey('music-queue-select-$duplicateId')), findsNothing);
+
+    await tester.longPress(find.byKey(ValueKey('music-queue-$duplicateId')));
+    await tester.pumpAndSettle();
+    bool checked(String id) => tester
+        .widget<Checkbox>(find.byKey(ValueKey('music-queue-select-$id')))
+        .value!;
+    expect(checked(duplicateId), isTrue);
+    expect(checked(activeId), isFalse);
+    await tap(tester, 'music-queue-selection-menu');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Remove selected from queue'));
+    await tester.pumpAndSettle();
+    expect(player.state.videos.map(playbackQueueId), [activeId, next.videoId]);
+    expect(player.state.currentQueueId, activeId);
+  });
+
+  testWidgets('long-pressing next seeks without changing tracks',
+      (tester) async {
+    await pump(tester);
+    final nextButton = find.byKey(const ValueKey('music-player-next'));
+    await tester.ensureVisible(nextButton);
+    await tester.longPress(nextButton);
+    expect(player.sought, Duration(seconds: 30 + settings.state.skipStep));
+    expect(player.nextCalls, 0);
+    expect(player.state.currentQueueId, playbackQueueId(song));
   });
 
   testWidgets(
@@ -277,6 +592,155 @@ void main() {
       expect(slider.value.isFinite, isTrue);
       expect(tester.takeException(), isNull);
     }
+  });
+
+  testWidgets('artwork swipes use the queue without seeking the current song',
+      (tester) async {
+    await pump(tester);
+    final artwork = find.byKey(const ValueKey('music-player-artwork'));
+    await tester.drag(artwork, const Offset(-150, 0));
+    await tester.pump();
+    expect(player.nextCalls, 1);
+    await tester.drag(artwork, const Offset(150, 0));
+    await tester.pump();
+    expect(player.previousCalls, 1);
+    expect(player.sought, isNull);
+  });
+
+  testWidgets('held artwork swipe retires when a duplicate occurrence changes',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, song]);
+    await player.seed(
+        player.state.copyWith(videos: songs, currentlyPlaying: songs.first));
+    await pump(tester);
+    final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('music-player-artwork'))));
+    await gesture.moveBy(const Offset(-140, 0));
+    await tester.pump();
+    await player.seed(player.state.copyWith(currentlyPlaying: songs.last));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(player.nextCalls, 0);
+    expect(player.previousCalls, 0);
+  });
+
+  testWidgets('queue menu moves an occurrence without changing the active song',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, next, song]);
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of(songs.skip(1).map(playbackQueueId))));
+    await pump(tester, size: const Size(1024, 720));
+    await tester.tap(find
+        .byKey(ValueKey('music-queue-menu-${playbackQueueId(songs.last)}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Move up'));
+    await tester.pumpAndSettle();
+    expect(player.state.videos.map(playbackQueueId), [
+      playbackQueueId(songs.first),
+      playbackQueueId(songs.last),
+      playbackQueueId(songs[1]),
+    ]);
+    expect(player.state.currentQueueId, playbackQueueId(songs.first));
+    expect(player.state.currentlyPlaying, songs.first);
+    expect(player.state.playQueue.toList(),
+        [playbackQueueId(songs.last), playbackQueueId(songs[1])]);
+    expect(player.sought, isNull);
+  });
+
+  testWidgets('wide queue shows the real upcoming order and can collapse',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, next, song]);
+    final repeat = playbackQueueId(songs.last);
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of([repeat, next.videoId])));
+    await pump(tester, size: const Size(1024, 720));
+    final repeatedRow = find.byKey(ValueKey('music-queue-$repeat'));
+    final nextRow = find.byKey(ValueKey('music-queue-${next.videoId}'));
+    expect(tester.getTopLeft(repeatedRow).dy,
+        lessThan(tester.getTopLeft(nextRow).dy));
+    final indicator = find.byKey(const ValueKey('music-queue-active'));
+    expect(tester.widget<Icon>(indicator).icon, Icons.play_arrow_rounded);
+    await player.seed(player.state.copyWith(
+        isPlaying: true,
+        mediaEvent: const MediaEvent(state: MediaState.playing)));
+    await tester.pump();
+    expect(tester.widget<Icon>(indicator).icon, Icons.equalizer);
+    await tap(tester, 'music-player-close-queue');
+    expect(find.byType(MusicQueue), findsNothing);
+    await tap(tester, 'music-player-queue');
+    expect(find.byType(MusicQueue), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-queue-shuffle')).hitTestable(),
+        findsOneWidget);
+    expect(player.state.currentlyPlaying, songs.first);
+  });
+
+  testWidgets('opening a long queue scrolls to its active occurrence',
+      (tester) async {
+    final history =
+        List.generate(30, (index) => next.copyWith(videoId: 'earlier-$index'));
+    await player.seed(player.state.copyWith(
+      videos: [song, next, ...history],
+      playedVideos: history.map(playbackQueueId).toList(),
+      playQueue: ListQueue.of([next.videoId]),
+    ));
+    await pump(tester);
+    await tap(tester, 'music-player-queue');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('music-queue-active')).hitTestable(),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('music-queue-earlier-0')).hitTestable(),
+        findsNothing);
+  });
+
+  testWidgets('remote focus keeps the selected Music queue row visible',
+      (tester) async {
+    final upcoming = List.generate(
+        30,
+        (index) => next.copyWith(
+            videoId: 'upcoming-$index',
+            musicMetadata:
+                MusicMetadata(title: 'Upcoming $index', artist: 'Singer')));
+    await player.seed(player.state.copyWith(
+      videos: [song, ...upcoming],
+      playQueue: ListQueue.of(upcoming.map(playbackQueueId)),
+    ));
+    await pump(tester,
+        size: const Size(1024, 720), child: const MusicQueue(television: true));
+    await tester.pumpAndSettle();
+    final row = find.byKey(const ValueKey('music-queue-upcoming-6'));
+    expect(row.hitTestable(), findsOneWidget);
+    Focus.of(tester.element(find.text('Upcoming 6'))).requestFocus();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(row.hitTestable(), findsOneWidget,
+        reason: 'Focusing a row must reveal that row, not the whole sliver');
+    final viewport = tester.getRect(find.byType(Scrollable));
+    expect(tester.getRect(row).center.dy, closeTo(viewport.center.dy, 1));
+  });
+
+  testWidgets('a queue order change retires a pending indexed drag',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, next, song]);
+    final initialOrder = songs.skip(1).map(playbackQueueId).toList();
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of(initialOrder)));
+    await pump(tester, size: const Size(1024, 720));
+    ReorderableListView list() =>
+        tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+    list().onReorderStart!(1);
+    final newOrder = initialOrder.reversed.toList();
+    await player.seed(player.state.copyWith(playQueue: ListQueue.of(newOrder)));
+    await tester.pump();
+    list().onReorder(1, 3);
+    expect(player.state.playQueue.toList(), newOrder);
+    expect(player.state.currentlyPlaying, songs.first);
   });
 
   testWidgets('completed song forwards Play to the shared audio decoder',
@@ -358,7 +822,9 @@ void main() {
           find.byWidgetPredicate((widget) =>
               widget is Semantics && widget.properties.liveRegion == true),
           findsOneWidget);
-      await tap(tester, 'music-player-queue');
+      if (find.byType(MusicQueue).evaluate().isEmpty) {
+        await tap(tester, 'music-player-queue');
+      }
       expect(find.byType(MusicQueue), findsOneWidget);
       final notice = tester.getRect(find.text('Sponsor skipped'));
       expect(notice.top, greaterThanOrEqualTo(0));
@@ -442,6 +908,36 @@ void main() {
     expect(find.text('Cancel sleep timer'), findsNothing);
   });
 
+  testWidgets(
+      'sleep dialog Back preserves playback and End of song stops autoplay',
+      (tester) async {
+    await pump(tester);
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    await tap(tester, 'music-player-sleep');
+    await tester.pumpAndSettle();
+    final slider = tester
+        .widget<Slider>(find.byKey(const ValueKey('music-sleep-duration')));
+    expect((slider.min, slider.max, slider.divisions, slider.value),
+        (5.0, 120.0, 23, 30.0));
+    await pressAndroidBack(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(player.state.hasTimer, isFalse);
+
+    await tap(tester, 'music-player-sleep');
+    await tester.pumpAndSettle();
+    await tap(tester, 'music-sleep-end-of-song');
+    await tester.pumpAndSettle();
+    expect(player.state.hasTimer, isTrue);
+    player.setEvent(const MediaEvent(state: MediaState.completed));
+    await tester.pump();
+    expect(player.state.hasTimer, isFalse);
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+    expect(player.nextCalls, 0);
+    expect(player.state.currentQueueId, playbackQueueId(song));
+  });
+
   testWidgets('minimizing and expanding music keeps the mounted audio decoder',
       (tester) async {
     await tester.runAsync(
@@ -467,29 +963,136 @@ void main() {
     expect(decoder.isClosed, isTrue);
   });
 
+  testWidgets('expanded Music keeps keyboard focus across viewport changes',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(
+          const Server(url: 'https://instance.example', inUse: true));
+      await app.initState();
+    });
+    final browsingFocus = FocusNode(debugLabel: 'Covered browsing search');
+    addTearDown(browsingFocus.dispose);
+    final surface = LayoutBuilder(
+        builder: (context, constraints) => Stack(children: [
+              Center(child: TextField(focusNode: browsingFocus)),
+              Player(constraints.maxHeight),
+            ]));
+    await tester.runAsync(() => pump(tester, child: surface));
+    final audioBuilder = find.byType(
+        BlocBuilder<AudioPlayerCubit, AudioPlayerState>,
+        skipOffstage: false);
+    final decoder = tester.element(audioBuilder).read<AudioPlayerCubit>();
+    try {
+      for (final size in [
+        const Size(390, 844),
+        const Size(1280, 720),
+        const Size(390, 844),
+      ]) {
+        await pump(tester, size: size, child: surface);
+        await tester.pumpAndSettle();
+        expect(tester.element(audioBuilder).read<AudioPlayerCubit>(),
+            same(decoder));
+        // A wide player may show its side queue by default. Exercise the full
+        // surface after closing it as well as the focused narrow overlay.
+        final closeQueue =
+            find.byKey(const ValueKey('music-player-close-queue'));
+        if (closeQueue.evaluate().isNotEmpty) {
+          await tester.tap(closeQueue);
+          await tester.pumpAndSettle();
+        }
+        for (var index = 0; index < 32; index++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+          await tester.pumpAndSettle();
+          expect(browsingFocus.hasFocus, isFalse,
+              reason: 'Expanded playback covers the browsing field at $size');
+        }
+        final shareIcon = find.byIcon(Icons.share);
+        expect(shareIcon, findsOneWidget);
+        Focus.of(tester.element(shareIcon)).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(find.text('Share Invidious link'), findsOneWidget);
+        await pressAndroidBack(tester);
+        await tap(tester, 'music-player-queue');
+        await tester.pumpAndSettle();
+        for (var index = 0; index < 12; index++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pumpAndSettle();
+          expect(browsingFocus.hasFocus, isFalse);
+        }
+        await pressAndroidBack(tester);
+        expect(find.byType(MusicQueue), findsNothing);
+      }
+      final minimize = find.byIcon(Icons.expand_more);
+      Focus.of(tester.element(minimize)).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isTrue);
+      browsingFocus.requestFocus();
+      await tester.pump();
+      expect(browsingFocus.hasFocus, isTrue,
+          reason: 'Mini playback must release the browsing page');
+      expect(
+          tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.runAsync(() async {
+        final closed = decoder.stream.drain<void>();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await closed.timeout(const Duration(seconds: 2));
+      });
+    }
+  });
+
   testWidgets(
-      'TV audio can retry playlist loading without replacing its decoder',
+      'TV Music handles Select and queue Back without replacing its decoder',
       (tester) async {
     player.playlistError = StateError('next playlist page unavailable');
     // The parent supplies the displayed track. Leave the initial decoder input
     // empty so this UI test does not attempt to open a native media source.
     await tester.runAsync(() => pump(tester,
-        size: const Size(1280, 720), child: MusicScreen.tvAudio()));
+        size: const Size(1280, 720),
+        child: Shortcuts(
+          shortcuts: {
+            LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+          },
+          child: MusicScreen.tvAudio(),
+        )));
+    await tester.pump();
     final audioBuilder =
         find.byType(BlocBuilder<AudioPlayerCubit, AudioPlayerState>);
     final decoder = tester.element(audioBuilder).read<AudioPlayerCubit>();
     final native = decoder.audioPlayer;
+    expect(tester.widget<MusicPlayer>(find.byType(MusicPlayer)).television,
+        isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    expect(player.state.mediaCommand?.type, MediaCommandType.play);
+
+    await tap(tester, 'music-player-queue');
+    await tester.pumpAndSettle();
     expect(
         find.text('Could not load the rest of this playlist.'), findsOneWidget);
     final retry = find.text('Retry');
     expect(retry, findsOneWidget);
+    await tester.ensureVisible(retry);
+    await tester.pump();
     expect(tester.getRect(retry).bottom, lessThan(720));
-    expect(find.byTooltip('Next song'), findsOneWidget);
 
     await tester.tap(retry);
     await tester.pump();
     expect(player.playlistRetries, 1);
     expect(retry, findsNothing);
+    await pressAndroidBack(tester);
+    expect(find.byType(MusicQueue), findsNothing);
+    expect(find.byTooltip('Next song'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicQueue), findsOneWidget,
+        reason: 'Back returns remote focus to the queue button');
+    await pressAndroidBack(tester);
     expect(
         tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
     expect(decoder.audioPlayer, same(native));

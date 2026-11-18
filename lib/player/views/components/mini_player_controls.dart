@@ -1,4 +1,5 @@
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
 import 'package:clipious/videos/views/components/video_transcript_button.dart';
@@ -9,12 +10,17 @@ import 'package:clipious/utils/views/components/multi_value_switch.dart';
 
 import '../../../settings/states/settings.dart';
 import '../../states/player.dart';
+import 'watch_playback_actions.dart';
 
 const ButtonStyle buttonStyle =
     ButtonStyle(visualDensity: VisualDensity.compact);
 
 class MiniPlayerControls extends StatelessWidget {
-  const MiniPlayerControls({super.key});
+  final bool inSheet;
+  final bool directActions;
+
+  const MiniPlayerControls(
+      {super.key, this.inSheet = false, this.directActions = false});
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +31,15 @@ class MiniPlayerControls extends StatelessWidget {
     bool hasQueue = context.select((PlayerCubit value) => value.state.hasQueue);
     bool isPlaying =
         context.select((PlayerCubit value) => value.state.isPlaying);
+    final video =
+        context.select((PlayerCubit value) => value.state.currentlyPlaying);
+
+    if (directActions && !isMini && !isTv && video != null) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: WatchPlaybackActions(video: video),
+      );
+    }
 
     bool isPausedAndDone = context
                 .select((PlayerCubit value) => value.state.position)
@@ -105,6 +120,7 @@ class MiniPlayerControls extends StatelessWidget {
                   !(value.state.currentlyPlaying?.liveNow ?? false));
 
               return Row(
+                mainAxisSize: inSheet ? MainAxisSize.min : MainAxisSize.max,
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   Visibility(
@@ -120,7 +136,7 @@ class MiniPlayerControls extends StatelessWidget {
                           : MultiValueSwitchPosition.left,
                     ),
                   ),
-                  Expanded(child: Container()),
+                  if (!inSheet) const Spacer(),
                   if (context.select((PlayerCubit player) =>
                       canChoosePlayerBackend(player.state)))
                     IconButton(

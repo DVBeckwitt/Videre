@@ -1,0 +1,490 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+
+import '../../../l10n/generated/app_localizations.dart';
+import '../../../main.dart' show isTv;
+import '../../models/flow_mini_geometry.dart';
+import '../../models/media_event.dart';
+import '../../states/player.dart';
+
+// Motion and controls translated from Flow 565d1f7a (GPL-3.0); see
+// docs/flow-video-ui-sources.md for the exact upstream source ledger.
+bool usesFlowFloatingVideo(PlayerState state) =>
+    !isTv && !state.isAudio && state.hasVideo;
+
+/// The settled corner, wide size and tucked edge from Flow's
+/// PlayerDraggableState and MiniPlayerResnap. The decoder stays in Player.
+class FlowFloatingMiniMotion {
+  FlowMiniCorner _corner = FlowMiniCorner.bottomRight;
+  bool _wide = false;
+  Offset? _wideOrigin;
+  FlowMiniTuckSide? tuckedSide;
+  double? _tuckedY;
+  Rect? _preview;
+  Object? _viewport;
+
+  bool get interacting => _preview != null;
+  double scale(FlowMiniGeometry geometry) => _wide ? geometry.maxScale : 1;
+
+  /// A resize or inset change leaves the saved corner in control again.
+  Rect bounds(FlowMiniGeometry geometry, Object viewport) {
+    if (_viewport != viewport) {
+      _viewport = viewport;
+      _preview = null;
+      _wideOrigin = null;
+    }
+    final currentScale = scale(geometry);
+    final rest =
+        geometry.rest(_corner, scale: currentScale, wideOrigin: _wideOrigin);
+    if (tuckedSide case final side?) {
+      return geometry.tucked(side,
+          y: _tuckedY ?? rest.top, scale: currentScale);
+    }
+    return _preview ?? rest;
+  }
+
+  void reset() {
+    _corner = FlowMiniCorner.bottomRight;
+    _wide = false;
+    _wideOrigin = null;
+    _preview = null;
+    untuck();
+  }
+
+  void cancel() => _preview = null;
+
+  void toggleWide(FlowMiniGeometry geometry) {
+    if (geometry.maxScale <= 1) return;
+    _wide = !_wide;
+    _wideOrigin = null;
+    _preview = null;
+  }
+
+  void untuck() {
+    tuckedSide = null;
+    _tuckedY = null;
+  }
+
+  void drag(FlowMiniGeometry geometry, Offset origin) {
+    _preview = geometry.drag(origin, scale: scale(geometry));
+  }
+
+  void pinch(FlowMiniGeometry geometry,
+      {required Offset origin,
+      required double startScale,
+      required double size}) {
+    _preview = geometry.pinch(
+      corner: _corner,
+      startOrigin: origin,
+      startScale: startScale,
+      scale: size,
+    );
+  }
+
+  void settlePinch(FlowMiniGeometry geometry,
+      {required Offset origin,
+      required double startScale,
+      required double size}) {
+    final target = geometry.settledScale(size);
+    _wide = geometry.isWide(target);
+    _wideOrigin = _wide
+        ? geometry
+            .pinch(
+                corner: _corner,
+                startOrigin: origin,
+                startScale: startScale,
+                scale: target)
+            .topLeft
+        : null;
+    _preview = null;
+  }
+
+  bool settleDrag(FlowMiniGeometry geometry, Offset origin, Offset velocity) {
+    final drop = geometry.release(
+        corner: _corner,
+        rawOrigin: origin,
+        velocity: velocity,
+        scale: scale(geometry));
+    _preview = null;
+    _corner = drop.corner;
+    tuckedSide = drop.tuckSide;
+    _tuckedY = drop.tuckSide == null ? null : drop.rect.top;
+    _wideOrigin = null;
+    return drop.dismiss;
+  }
+}
+
+/// Ports Flow's two-pointer pinch and mini tap decisions onto Flutter's
+/// scale recognizer. Its focal point and span already use global coordinates.
+class FlowFloatingMiniSurface extends StatefulWidget {
+  final FlowMiniGeometry geometry;
+  final Object viewport;
+  final Rect bounds;
+  final FlowFloatingMiniMotion motion;
+  final VoidCallback onChanged;
+  final VoidCallback onExpand;
+  final VoidCallback onDismiss;
+  final Widget child;
+
+  const FlowFloatingMiniSurface({
+    super.key,
+    required this.geometry,
+    required this.viewport,
+    required this.bounds,
+    required this.motion,
+    required this.onChanged,
+    required this.onExpand,
+    required this.onDismiss,
+    required this.child,
+  });
+
+  @override
+  State<FlowFloatingMiniSurface> createState() =>
+      _FlowFloatingMiniSurfaceState();
+}
+
+class _FlowFloatingMiniSurfaceState extends State<FlowFloatingMiniSurface> {
+  final _pointers = <int>{};
+  bool _ignoreRemainder = false;
+  bool _multitouch = false;
+  Offset? _origin;
+  Offset? _focal;
+  Offset? _rawOrigin;
+  double? _startScale;
+  double? _pinchScale;
+  Timer? _pendingTap;
+
+  @override
+  void didUpdateWidget(covariant FlowFloatingMiniSurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.viewport != widget.viewport && _pointers.isNotEmpty) {
+      _ignoreRemainder = true;
+      _resetMotion();
+    }
+  }
+
+  void _resetMotion() {
+    _origin = null;
+    _focal = null;
+    _rawOrigin = null;
+    _startScale = null;
+    _pinchScale = null;
+  }
+
+  void _pointerDown(PointerDownEvent event) {
+    if (_pointers.isEmpty) {
+      _ignoreRemainder = false;
+      _multitouch = false;
+      _resetMotion();
+    }
+    _pointers.add(event.pointer);
+    _multitouch |= _pointers.length > 1;
+    if (_multitouch) _pendingTap?.cancel();
+  }
+
+  void _pointerCancel(PointerCancelEvent event) {
+    _pointers.remove(event.pointer);
+    _ignoreRemainder = true;
+    _pendingTap?.cancel();
+    _resetMotion();
+    widget.motion.cancel();
+    widget.onChanged();
+  }
+
+  void _start(ScaleStartDetails details) {
+    if (_ignoreRemainder) return;
+    _pendingTap?.cancel();
+    _origin = widget.bounds.topLeft;
+    _focal = details.focalPoint;
+    _rawOrigin = null;
+    _startScale = details.pointerCount > 1
+        ? _pinchScale ?? widget.motion.scale(widget.geometry)
+        : null;
+  }
+
+  void _update(ScaleUpdateDetails details) {
+    final origin = _origin;
+    final focal = _focal;
+    if (_ignoreRemainder || origin == null || focal == null) return;
+    final geometry = widget.geometry;
+    if (details.pointerCount > 1) {
+      final start = _startScale ?? widget.motion.scale(geometry);
+      final size =
+          geometry.pinchScale(startScale: start, distanceRatio: details.scale);
+      _pinchScale = size;
+      widget.motion
+          .pinch(geometry, origin: origin, startScale: start, size: size);
+    } else if (!_multitouch) {
+      final rawOrigin = origin + details.focalPoint - focal;
+      _rawOrigin = rawOrigin;
+      widget.motion.drag(geometry, rawOrigin);
+    } else {
+      return;
+    }
+    widget.onChanged();
+  }
+
+  void _end(ScaleEndDetails details) {
+    if (_ignoreRemainder || details.pointerCount > 1) return;
+    final geometry = widget.geometry;
+    var dismiss = false;
+    if (_pinchScale case final size?) {
+      widget.motion.settlePinch(geometry,
+          origin: _origin ?? widget.bounds.topLeft,
+          startScale: _startScale ?? widget.motion.scale(geometry),
+          size: size);
+      // Lifting either pinch finger commits the size. The remaining finger
+      // must not drag or open the player while it is still on the screen.
+      _ignoreRemainder = true;
+    } else if (!_multitouch &&
+        details.pointerCount == 0 &&
+        _rawOrigin != null) {
+      dismiss = widget.motion
+          .settleDrag(geometry, _rawOrigin!, details.velocity.pixelsPerSecond);
+    } else {
+      widget.motion.cancel();
+    }
+    _resetMotion();
+    widget.onChanged();
+    if (dismiss) widget.onDismiss();
+  }
+
+  void _tap() {
+    if (_multitouch || _ignoreRemainder) return;
+    // Flow's timeout applies only to the video surface. A parent double-tap
+    // recognizer would also delay the child controls in Flutter's gesture arena.
+    if (_pendingTap case final tap? when tap.isActive) {
+      tap.cancel();
+      widget.motion.toggleWide(widget.geometry);
+      widget.onChanged();
+    } else {
+      _pendingTap = Timer(kDoubleTapTimeout, widget.onExpand);
+    }
+  }
+
+  @override
+  void dispose() {
+    _pendingTap?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: _pointerDown,
+      onPointerUp: (event) => _pointers.remove(event.pointer),
+      onPointerCancel: _pointerCancel,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        dragStartBehavior: DragStartBehavior.down,
+        onScaleStart: _start,
+        onScaleUpdate: _update,
+        onScaleEnd: _end,
+        onTap: _tap,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// The controls in Flow's MiniPlayerSlot and MiniPlayerControls, backed by
+/// the current PlayerCubit and painted over its existing video surface.
+class FlowFloatingMiniControls extends StatelessWidget {
+  final bool largeWindow;
+  final double scale;
+
+  const FlowFloatingMiniControls(
+      {super.key, required this.largeWindow, required this.scale});
+
+  @override
+  Widget build(BuildContext context) {
+    final player = context.read<PlayerCubit>();
+    final state = context.select((PlayerCubit p) => (
+          playing: p.state.isPlaying,
+          buffering: p.state.mediaEvent.state == MediaState.buffering ||
+              p.state.mediaEvent.state == MediaState.loading,
+          ended: p.state.mediaEvent.state == MediaState.completed,
+          previous: p.state.playedVideos.isNotEmpty,
+          next: p.state.playQueue.isNotEmpty,
+          duration: p.duration,
+          position: p.state.position,
+        ));
+    final locals = AppLocalizations.of(context)!;
+    final progress = state.duration > Duration.zero
+        ? (state.position.inMilliseconds / state.duration.inMilliseconds)
+            .clamp(0.0, 1.0)
+            .toDouble()
+        : 0.0;
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = constraints.biggest;
+      final inset = size.width >= 110 ? 4.0 : 0.0;
+      final touch =
+          math.min(largeWindow ? 50.0 : 42.0, (size.width - 2 * inset) / 2);
+      final smallTouch = math.min(
+          (largeWindow ? 44.0 : 36.0) * scale.clamp(1, 1.6),
+          size.height - touch - 8);
+      return Stack(children: [
+        Positioned(
+          left: inset,
+          top: 4,
+          child: _roundControl(
+            context,
+            key: const ValueKey('watch-mini-play'),
+            size: touch,
+            label: state.playing ? locals.musicPause : locals.musicPlay,
+            icon: state.playing
+                ? Icons.pause_rounded
+                : state.ended
+                    ? Icons.replay_rounded
+                    : Icons.play_arrow_rounded,
+            buffering: state.buffering,
+            onPressed: () {
+              if (state.ended) {
+                player.seek(Duration.zero);
+                player.play();
+              } else {
+                player.togglePlaying();
+              }
+            },
+          ),
+        ),
+        Positioned(
+          right: inset,
+          top: 4,
+          child: _roundControl(
+            context,
+            key: const ValueKey('flow-mini-close'),
+            size: touch,
+            label: MaterialLocalizations.of(context).closeButtonLabel,
+            icon: Icons.close_rounded,
+            onPressed: player.hide,
+          ),
+        ),
+        if (smallTouch >= 34 && (state.previous || state.next))
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 4,
+            child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  if (state.previous)
+                    _roundControl(
+                      context,
+                      size: smallTouch,
+                      label: locals.musicPrevious,
+                      icon: Icons.skip_previous_rounded,
+                      onPressed: player.playPrevious,
+                    ),
+                  if (state.next)
+                    _roundControl(
+                      context,
+                      size: smallTouch,
+                      label: locals.musicNext,
+                      icon: Icons.skip_next_rounded,
+                      onPressed: player.playNext,
+                    ),
+                ]),
+          ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: IgnorePointer(
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 2,
+              backgroundColor: Colors.transparent,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+      ]);
+    });
+  }
+
+  Widget _roundControl(BuildContext context,
+      {Key? key,
+      required double size,
+      required String label,
+      required IconData icon,
+      required VoidCallback onPressed,
+      bool buffering = false}) {
+    return SizedBox.square(
+      dimension: size,
+      child: IconButton(
+        key: key,
+        tooltip: label,
+        onPressed: onPressed,
+        padding: EdgeInsets.zero,
+        style: IconButton.styleFrom(
+          backgroundColor: Colors.black54,
+          foregroundColor: Colors.white,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: buffering
+            ? SizedBox.square(
+                dimension: math.min(20, size / 2),
+                child: const CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              )
+            : Icon(icon, size: math.min(24, size * .60)),
+      ),
+    );
+  }
+}
+
+/// Flow's 28 by 64 dp MiniPlayerTuckHandle. The larger invisible hit margin
+/// helps keyboard and touch accessibility without growing the tab itself.
+class FlowMiniTuckHandle extends StatelessWidget {
+  final FlowMiniTuckSide side;
+  final VoidCallback onUntuck;
+
+  const FlowMiniTuckHandle(
+      {super.key, required this.side, required this.onUntuck});
+
+  @override
+  Widget build(BuildContext context) {
+    final left = side == FlowMiniTuckSide.left;
+    final colors = Theme.of(context).colorScheme;
+    final label = AppLocalizations.of(context)!.videoPlayer;
+    return Tooltip(
+      message: label,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) => onUntuck(),
+        child: Align(
+          alignment: left ? Alignment.centerLeft : Alignment.centerRight,
+          child: Material(
+            color: colors.surfaceContainerHighest,
+            elevation: 3,
+            shape: RoundedRectangleBorder(
+              borderRadius: left
+                  ? const BorderRadius.horizontal(right: Radius.circular(16))
+                  : const BorderRadius.horizontal(left: Radius.circular(16)),
+            ),
+            child: Semantics(
+              label: label,
+              button: true,
+              child: InkWell(
+                onTap: onUntuck,
+                child: SizedBox(
+                  width: 28,
+                  height: 64,
+                  child: Icon(left
+                      ? Icons.chevron_right_rounded
+                      : Icons.chevron_left_rounded),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

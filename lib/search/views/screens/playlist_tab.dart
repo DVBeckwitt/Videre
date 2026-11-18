@@ -16,8 +16,7 @@ class SearchPlaylistTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Builder(builder: (context) {
-      final query =
-          context.select((SearchCubit s) => s.state.queryController.value.text);
+      final query = context.select((SearchCubit s) => s.submittedQuery);
       final sortBy = context.select((SearchCubit s) => s.state.filters.sortBy);
       final date = context.select((SearchCubit s) => s.state.filters.date);
       final duration =

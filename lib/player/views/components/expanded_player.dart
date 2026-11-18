@@ -14,12 +14,22 @@ import '../../../settings/states/settings.dart';
 import '../../../utils.dart';
 import '../../../videos/models/video.dart';
 import '../../../videos/views/components/info.dart';
+import '../../../videos/views/components/flow_watch_body.dart';
 import '../../../videos/views/components/recommended_videos.dart';
+import '../../models/flow_watch_layout.dart';
+import 'flow_watch_queue_dock.dart';
 import 'mini_player_controls.dart';
 import 'minimize_on_swipe_down.dart';
 
 class ExpandedPlayer extends StatefulWidget {
-  const ExpandedPlayer({super.key});
+  final FlowWatchLayout watchLayout;
+  final FlowWatchPanelPresenter? onOpenPanel;
+
+  const ExpandedPlayer({
+    super.key,
+    this.watchLayout = FlowWatchLayout.compact,
+    this.onOpenPanel,
+  });
 
   @override
   State<ExpandedPlayer> createState() => _ExpandedPlayerState();
@@ -87,6 +97,53 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
         (video?.musicMetadata ?? offlineVid?.musicMetadata) != null) {
       return const MusicPlayer();
     }
+    if (!isFullScreen &&
+        !controller.isMini &&
+        !controller.isAudio &&
+        video != null &&
+        !controller.isPip) {
+      final wide = widget.watchLayout == FlowWatchLayout.wide;
+      return FlowWatchQueue(
+        builder: (context, visible, next) => Stack(
+          fit: StackFit.expand,
+          children: [
+            MinimizeOnSwipeDown(
+              key: ValueKey('flow-watch-${video.videoId}'),
+              enabled: widget.watchLayout == FlowWatchLayout.compact,
+              scrollable: true,
+              onSwipeDown: player.showMiniPlayer,
+              child: Padding(
+                padding: EdgeInsets.only(bottom: visible && !wide ? 96 : 0),
+                child: FlowWatchBody(
+                  video: video,
+                  inPlayer: true,
+                  queueDockVisible: visible,
+                  showRelated: !wide,
+                  relatedGrid: widget.watchLayout == FlowWatchLayout.medium,
+                  onOpenPanel: widget.onOpenPanel,
+                ),
+              ),
+            ),
+            if (visible && !wide)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: 16,
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 600),
+                    child: FlowWatchQueueDock(
+                      key: const ValueKey('watch-open-queue'),
+                      next: next,
+                      onOpen: () => FlowWatchBody.showQueue(context),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
     bool distractionFree = settings.distractionFreeMode;
     final tabs = _tabOrder(distractionFree);
     final selectedIndex = context
@@ -101,7 +158,14 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
             !controller.isMini &&
             (video != null || offlineVid != null)
         ? Column(children: [
-            const MiniPlayerControls(),
+            if (video != null)
+              const Flexible(
+                child: SingleChildScrollView(
+                  child: MiniPlayerControls(directActions: true),
+                ),
+              )
+            else
+              const MiniPlayerControls(),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -155,14 +219,11 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
                 child: NavigationBar(
                     animationDuration: AppMotion.duration(
                         context, const Duration(milliseconds: 500)),
-                    selectedIndex:
-                        video != null ? selectedVisibleIndex : selectedIndex,
-                    onDestinationSelected: video != null
-                        ? (index) {
-                            _tabController.jumpToPage(index);
-                            player.selectTab(tabs[index]);
-                          }
-                        : player.selectTab,
+                    selectedIndex: selectedVisibleIndex,
+                    onDestinationSelected: (index) {
+                      if (video != null) _tabController.jumpToPage(index);
+                      player.selectTab(tabs[index]);
+                    },
                     destinations: [
                       NavigationDestination(
                           icon: const Icon(Icons.info), label: locals.info),

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -11,9 +13,11 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -25,7 +29,11 @@ import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -124,6 +132,17 @@ class _Player extends TestPlayerCubit {
 
   int resumes = 0;
   int shows = 0;
+  bool? sponsorFailureIsAsync;
+
+  @override
+  Future<List<SponsorSegment>> prepareSponsorSegments(String videoId) {
+    final error = StateError('SponsorBlock unavailable');
+    return switch (sponsorFailureIsAsync) {
+      true => Future.error(error),
+      false => throw error,
+      null => Future.value([]),
+    };
+  }
 
   @override
   Future<void> resumeSession() async {
@@ -137,7 +156,7 @@ class _Player extends TestPlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing}) async {
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
     calls.add(
         (videos: videos, audio: audio, startAt: startAt, startIndex: null));
   }
@@ -168,6 +187,9 @@ void main() {
   late _Player player;
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (_) async => throw MissingPluginException());
     isTv = false;
     db = await SembastSqfDb.createInMemory();
     previousCatalog = musicCatalogService;
@@ -181,6 +203,9 @@ void main() {
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('videre/recommendations'), null);
     musicCatalogService = previousCatalog;
     await player.close();
     await settings.close();
@@ -210,6 +235,34 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
   }
+
+  testWidgets('only explicit music search submissions produce learning signals',
+      (tester) async {
+    final events = <Map>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (call) async {
+      final args = call.arguments as Map;
+      events.addAll((args['events'] as List).cast<Map>());
+      return {
+        'state': <String, Object?>{},
+        'ranked': <Object?>[],
+        'summary': <String, Object?>{}
+      };
+    });
+    await show(tester, screen: const MusicScreen(initialQuery: 'jazz music'));
+    catalog.responses.single.complete([]);
+    await tester.pumpAndSettle();
+    expect(events, isEmpty);
+    await search(tester, 'explicit jazz');
+    catalog.responses.last.complete([]);
+    await tester.pumpAndSettle();
+    expect(
+        events
+            .where((event) => event['type'] == 'search')
+            .map((event) => event['query']),
+        ['explicit jazz']);
+  });
 
   testWidgets(
       'Music search hides listed uploaders, labels warnings and can reveal the same results',
@@ -476,9 +529,95 @@ void main() {
     expect(find.text('Retrying video details…'), findsNothing);
   });
 
+  for (final isAsync in [false, true]) {
+    testWidgets(
+        'song details load if optional SponsorBlock fails (async: $isAsync)',
+        (tester) async {
+      player.sponsorFailureIsAsync = isAsync;
+      await show(tester, screen: MusicScreen(videoId: first.videoId));
+      catalog.song.complete(first);
+      await tester.pumpAndSettle();
+      expect(player.calls.single.videos.single.videoId, first.videoId);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('a saved song link retains the artwork available in Quick Picks',
+      (tester) async {
+    const selected = Server(url: 'https://instance.example', inUse: true);
+    const cover = 'https://instance.example/vi/firstsong01/mqdefault.jpg';
+    final audio = AdaptiveFormat(
+        null,
+        '128000',
+        null,
+        'https://instance.example/audio?itag=251',
+        '251',
+        'audio/webm; codecs="opus"',
+        '12345',
+        '1700000000000',
+        'RECTANGULAR',
+        'webm',
+        'opus',
+        null,
+        null);
+    await tester.runAsync(() async {
+      await db.upsertServer(selected);
+      final server = await db.getCurrentlySelectedServer();
+      await app.initState();
+      await MusicLibraryService.forProfile(db, db.profileId)
+          .save(MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: first.videoId,
+        title: 'Bookmarked song',
+        subtitle: 'Bookmarked artist',
+        thumbnails: [ImageObject('medium', cover, 320, 180)],
+      ));
+      final provenance = DownloadPlaybackProvenance.create(
+          video: Video(videoId: first.videoId, adaptiveFormats: [audio]),
+          server: server,
+          audioOnly: true,
+          container: DownloadContainer.webm,
+          audio: audio,
+          videoFormat: null,
+          byteLength: 10000,
+          sha256: 'a' * 64)!;
+      await db.upsertDownload(DownloadedVideo(
+          videoId: first.videoId,
+          title: 'Saved song',
+          author: 'Saved artist',
+          accountId: server.accountId,
+          storageUri: 'content://music/saved-song',
+          lengthSeconds: 180,
+          quality: 'audio',
+          container: DownloadContainer.webm,
+          audioOnly: true,
+          downloadComplete: true,
+          playbackProvenance: provenance,
+          musicMetadata: const MusicMetadata(
+              title: 'Saved song',
+              artist: 'Saved artist',
+              album: 'Saved album')));
+    });
+    player.sponsorFailureIsAsync = true;
+    await show(tester, screen: MusicScreen(videoId: first.videoId));
+    // The remote cover can keep its loading indicator animated in this test.
+    // The song and its artwork metadata are published before image decoding.
+    await tester.pump();
+    expect(catalog.songObserver, isNull);
+    final played = player.calls.single.videos.single;
+    expect(played.downloadPlaybackOnly, isTrue);
+    expect(played.musicMetadata?.artist, 'Saved artist');
+    expect(played.musicMetadata?.album, 'Saved album');
+    expect(played.musicMetadata?.thumbnails.single.url, cover);
+    expect(played.videoThumbnails.single.url, cover);
+    expect(find.text('Saved song'), findsOneWidget);
+  });
+
   testWidgets('song links show retry feedback and clear it before playback',
       (tester) async {
-    await show(tester, screen: const MusicScreen(videoId: 'firstsong01'));
+    await show(tester,
+        screen: const MusicScreen(
+            videoId: 'firstsong01', startAt: Duration(seconds: 42)));
     catalog.songObserver!.onRetry();
     await tester.pump();
     expect(find.text('Retrying video details…'), findsOneWidget);
@@ -502,6 +641,24 @@ void main() {
     expect(player.calls.single.videos.single.backendPlayback, same(route));
     expect(player.calls.single.videos.single.adaptiveFormats, isNotNull);
     expect(player.calls.single.videos.single.musicMetadata?.title, first.title);
+    expect(player.calls.single.startAt, const Duration(seconds: 42));
+  });
+
+  testWidgets(
+      'a new timestamp on the same Music link starts at the new position',
+      (tester) async {
+    await show(tester,
+        screen: const MusicScreen(
+            videoId: 'firstsong01', startAt: Duration(seconds: 42)));
+    catalog.song.complete(first);
+    await tester.pumpAndSettle();
+    expect(player.calls.single.startAt, const Duration(seconds: 42));
+    await show(tester,
+        screen:
+            const MusicScreen(videoId: 'firstsong01', startAt: Duration.zero));
+    await tester.pumpAndSettle();
+    expect(player.calls, hasLength(2));
+    expect(player.calls.last.startAt, Duration.zero);
   });
 
   for (final tv in [false, true]) {

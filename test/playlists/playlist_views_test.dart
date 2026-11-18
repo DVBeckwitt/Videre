@@ -340,8 +340,38 @@ void main() {
     await tester.tap(find.text('Second occurrence'));
     await tester.pump();
     expect(selected, ['occurrence-2']);
-    expect(find.byKey(const ValueKey('swipe-occurrence-1')), findsOneWidget);
-    expect(find.byKey(const ValueKey('swipe-occurrence-2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('playlist-entry-occurrence-1')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('playlist-entry-occurrence-2')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('playlist row holds expose removal without destructive swipes',
+      (tester) async {
+    final removed = <String?>[];
+    await pump(
+        tester,
+        PlaylistInnerView(
+          canDeleteVideos: true,
+          openVideo: (_, __) {},
+          removeVideoFromPlaylist: (_, video) =>
+              removed.add(video.queueEntryId),
+        ));
+    final row = find.byKey(const ValueKey('playlist-entry-occurrence-2'));
+    await tester.scrollUntilVisible(row, 100);
+    await tester.drag(row, const Offset(-340, 0));
+    await tester.pumpAndSettle();
+    await tester.drag(row, const Offset(340, 0));
+    await tester.pumpAndSettle();
+    expect(removed, isEmpty);
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+    expect(find.text('Remove from playlist'), findsOneWidget);
+    expect(removed, isEmpty);
+    await tester.tap(find.text('Remove from playlist'));
+    await tester.pumpAndSettle();
+    expect(removed, ['occurrence-2']);
     expect(tester.takeException(), isNull);
   });
 

@@ -205,19 +205,19 @@ void main() {
     expect(channelOpens, 1);
   });
 
-  for (final (label, widget) in [
-    ('phone', const ExpandedPlayer()),
-    ('tablet', const TabletExpandedPlayer()),
+  for (final (label, widget, dislikeIcon) in [
+    ('phone', const ExpandedPlayer(), Icons.thumb_down_outlined),
+    ('tablet', const TabletExpandedPlayer(), Icons.thumb_down),
   ]) {
     testWidgets('$label expanded player displays delayed dislikes once',
         (tester) async {
       await show(tester, widget);
       expect(dislikes.requests, ['first']);
-      expect(find.byIcon(Icons.thumb_down), findsNothing);
+      expect(find.byIcon(dislikeIcon), findsNothing);
 
       dislikes.responses.single.complete(Dislike(71));
       await tester.pumpAndSettle();
-      expect(find.byIcon(Icons.thumb_down), findsOneWidget);
+      expect(find.byIcon(dislikeIcon), findsOneWidget);
       expect(find.text('71'), findsOneWidget);
 
       await show(tester, widget);

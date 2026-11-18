@@ -67,7 +67,7 @@ jobs:
       - run: ./submodules/flutter/bin/flutter build apk --profile --split-per-abi
       - name: Test native transport and local file imports
         working-directory: android
-        run: ./gradlew :videre_proxy:testDebugUnitTest :app:testDebugUnitTest
+        run: ./gradlew :videre_proxy:testDebugUnitTest :videre_recommendations:testDebugUnitTest :app:testDebugUnitTest
       - name: Archive build artifacts
         uses: actions/upload-artifact@v4
         with:

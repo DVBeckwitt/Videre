@@ -41,7 +41,10 @@ class HistoryItemCubit extends Cubit<HistoryItemState> {
   getVideo() async {
     emit(state.copyWith(loading: true));
 
-    var cachedVid = await HistoryVideoCache.fromVideoIdToVideo(state.videoId);
+    // Rendering server history must not create a local watch entry, especially
+    // if its metadata finishes after the row has been removed.
+    var cachedVid = await HistoryVideoCache.fromVideoIdToVideo(state.videoId,
+        cacheFetched: false);
 
     if (!isClosed) {
       emit(state.copyWith(cachedVid: cachedVid, loading: false));

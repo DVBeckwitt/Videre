@@ -22,13 +22,15 @@ class PlaylistList extends StatelessWidget {
   final bool canDeleteVideos;
   final bool small;
   final bool includeSavedPlaylists;
+  final bool nestedScroll;
 
   const PlaylistList(
       {super.key,
       required this.paginatedList,
       required this.canDeleteVideos,
       this.small = false,
-      this.includeSavedPlaylists = false});
+      this.includeSavedPlaylists = false,
+      this.nestedScroll = false});
 
   @override
   Widget build(BuildContext context) {
@@ -60,88 +62,106 @@ class PlaylistList extends StatelessWidget {
                   canDeleteVideos &&
                   !item.saved &&
                   item.reference?.kind != PlaylistSourceKind.public;
-              return Stack(
-                children: [
-                  state.error.isNotEmpty && items.isEmpty
-                      ? Container(
-                          alignment: Alignment.center,
-                          color: colorScheme.surface,
-                          child: Visibility(
-                              visible: state.error.isNotEmpty,
-                              child: InkWell(
-                                  onTap: () => cubit.getPlaylists(),
-                                  child: Text(state.error == couldNotGetPlaylits
-                                      ? locals.couldntFetchVideos
-                                      : state.error))),
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: MotionAnimation.fadeIn(
-                            child: RefreshIndicator(
-                              onRefresh: () async {
-                                if (!small &&
-                                    state.paginatedList.hasRefresh()) {
-                                  await cubit.refreshPlaylists();
-                                }
-                              },
-                              child: DeviceWidget(
-                                forcedTyped: small ? DeviceType.phone : null,
-                                phone: ListView.builder(
-                                    scrollDirection:
-                                        small ? Axis.horizontal : Axis.vertical,
-                                    controller: cubit.scrollController,
-                                    itemBuilder: (context, index) => index >=
-                                            items.length
-                                        ? PlaylistPlaceHolder(small: small)
-                                        : PlaylistInList(
-                                            key: ValueKey(items[index].key),
-                                            playlist: items[index].playlist,
-                                            reference: items[index].reference,
-                                            bookmarkOwner:
-                                                items[index].bookmarkOwner,
-                                            saved: items[index].saved,
-                                            canDeleteVideos:
-                                                editable(items[index]),
-                                            small: small),
-                                    // separatorBuilder: (context, index) => const Divider(),
-                                    itemCount:
-                                        items.length + (state.loading ? 7 : 0)),
-                                tablet: GridView.builder(
-                                    controller: cubit.scrollController,
-                                    itemCount: items.length,
-                                    gridDelegate:
-                                        SliverGridDelegateWithFixedCrossAxisCount(
-                                      childAspectRatio: 16 / 12,
-                                      crossAxisCount: getGridCount(context),
-                                    ),
-                                    itemBuilder: (context, index) => index >=
-                                            items.length
-                                        ? const TvPlaylistPlaceHolder()
-                                        : PlaylistInList(
-                                            isTablet:
-                                                deviceType == DeviceType.tablet,
-                                            thumbnailsHeight: 160,
-                                            key: ValueKey(items[index].key),
-                                            playlist: items[index].playlist,
-                                            reference: items[index].reference,
-                                            bookmarkOwner:
-                                                items[index].bookmarkOwner,
-                                            saved: items[index].saved,
-                                            canDeleteVideos:
-                                                editable(items[index]),
-                                            small: false)),
+              return NotificationListener<ScrollNotification>(
+                onNotification: (notice) {
+                  if (nestedScroll &&
+                      notice.depth == 0 &&
+                      notice is ScrollUpdateNotification) {
+                    cubit.onScrollEvent(notice.metrics);
+                  }
+                  return false;
+                },
+                child: Stack(
+                  children: [
+                    state.error.isNotEmpty && items.isEmpty
+                        ? Container(
+                            alignment: Alignment.center,
+                            color: colorScheme.surface,
+                            child: Visibility(
+                                visible: state.error.isNotEmpty,
+                                child: InkWell(
+                                    onTap: () => cubit.getPlaylists(),
+                                    child: Text(
+                                        state.error == couldNotGetPlaylits
+                                            ? locals.couldntFetchVideos
+                                            : state.error))),
+                          )
+                        : Padding(
+                            padding: const EdgeInsets.all(8.0),
+                            child: MotionAnimation.fadeIn(
+                              child: RefreshIndicator(
+                                onRefresh: () async {
+                                  if (!small &&
+                                      state.paginatedList.hasRefresh()) {
+                                    await cubit.refreshPlaylists();
+                                  }
+                                },
+                                child: DeviceWidget(
+                                  forcedTyped: small ? DeviceType.phone : null,
+                                  phone: ListView.builder(
+                                      scrollDirection: small
+                                          ? Axis.horizontal
+                                          : Axis.vertical,
+                                      controller: nestedScroll
+                                          ? null
+                                          : cubit.scrollController,
+                                      primary: nestedScroll ? true : null,
+                                      itemBuilder: (context, index) => index >=
+                                              items.length
+                                          ? PlaylistPlaceHolder(small: small)
+                                          : PlaylistInList(
+                                              key: ValueKey(items[index].key),
+                                              playlist: items[index].playlist,
+                                              reference: items[index].reference,
+                                              bookmarkOwner:
+                                                  items[index].bookmarkOwner,
+                                              saved: items[index].saved,
+                                              canDeleteVideos:
+                                                  editable(items[index]),
+                                              small: small),
+                                      // separatorBuilder: (context, index) => const Divider(),
+                                      itemCount: items.length +
+                                          (state.loading ? 7 : 0)),
+                                  tablet: GridView.builder(
+                                      controller: nestedScroll
+                                          ? null
+                                          : cubit.scrollController,
+                                      primary: nestedScroll ? true : null,
+                                      itemCount: items.length,
+                                      gridDelegate:
+                                          SliverGridDelegateWithFixedCrossAxisCount(
+                                        childAspectRatio: 16 / 12,
+                                        crossAxisCount: getGridCount(context),
+                                      ),
+                                      itemBuilder: (context, index) => index >=
+                                              items.length
+                                          ? const TvPlaylistPlaceHolder()
+                                          : PlaylistInList(
+                                              isTablet: deviceType ==
+                                                  DeviceType.tablet,
+                                              thumbnailsHeight: 160,
+                                              key: ValueKey(items[index].key),
+                                              playlist: items[index].playlist,
+                                              reference: items[index].reference,
+                                              bookmarkOwner:
+                                                  items[index].bookmarkOwner,
+                                              saved: items[index].saved,
+                                              canDeleteVideos:
+                                                  editable(items[index]),
+                                              small: false)),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                  Visibility(
-                      visible: state.loading && !small,
-                      child: const TopListLoading()),
-                  Visibility(
-                      visible: !small && canDeleteVideos,
-                      child: const Positioned(
-                          bottom: 15, right: 15, child: AddPlayListButton()))
-                ],
+                    Visibility(
+                        visible: state.loading && !small,
+                        child: const TopListLoading()),
+                    Visibility(
+                        visible: !small && canDeleteVideos,
+                        child: const Positioned(
+                            bottom: 15, right: 15, child: AddPlayListButton()))
+                  ],
+                ),
               );
             },
           );

@@ -33,15 +33,16 @@ import '../../components/watch_status_button.dart';
 @RoutePage()
 class TvVideoScreen extends StatelessWidget {
   final String videoId;
+  final Duration? startAt;
 
-  const TvVideoScreen({super.key, required this.videoId});
+  const TvVideoScreen({super.key, required this.videoId, this.startAt});
 
   playVideo(BuildContext context, Video video) {
     AutoRouter.of(context).push(TvPlayerRoute(videos: [
       video,
       ...video.recommendedVideos.where(
           (element) => !element.filterHide && !hideCommunityVideo(element))
-    ]));
+    ], startAt: startAt));
   }
 
   showChannel(BuildContext context, String channelId) {
@@ -61,7 +62,8 @@ class TvVideoScreen extends StatelessWidget {
       providers: [
         BlocProvider(
             create: (context) => VideoCubit(VideoState.init(videoId: videoId),
-                downloadManager, player, settings)),
+                downloadManager, player, settings,
+                startAt: startAt)),
         BlocProvider(
           create: (context) => TvVideoCubit(const TvVideoState()),
         )

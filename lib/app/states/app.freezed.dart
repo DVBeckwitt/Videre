@@ -13,7 +13,7 @@ part of 'app.dart';
 T _$identity<T>(T value) => value;
 
 /// @nodoc
-mixin _$AppState {
+mixin _$AppState implements DiagnosticableTreeMixin {
   int get firstIndex;
   Server? get server;
   HomeLayout get homeLayout;
@@ -28,6 +28,20 @@ mixin _$AppState {
   @pragma('vm:prefer-inline')
   $AppStateCopyWith<AppState> get copyWith =>
       _$AppStateCopyWithImpl<AppState>(this as AppState, _$identity);
+
+  @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    properties
+      ..add(DiagnosticsProperty('type', 'AppState'))
+      ..add(DiagnosticsProperty('firstIndex', firstIndex))
+      ..add(DiagnosticsProperty('server', server))
+      ..add(DiagnosticsProperty('homeLayout', homeLayout))
+      ..add(DiagnosticsProperty('globalLoading', globalLoading))
+      ..add(DiagnosticsProperty('profileId', profileId))
+      ..add(DiagnosticsProperty('sessionRevision', sessionRevision))
+      ..add(DiagnosticsProperty(
+          'sessionRecoveryRequired', sessionRecoveryRequired));
+  }
 
   @override
   bool operator ==(Object other) {
@@ -55,7 +69,7 @@ mixin _$AppState {
       globalLoading, profileId, sessionRevision, sessionRecoveryRequired);
 
   @override
-  String toString() {
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
     return 'AppState(firstIndex: $firstIndex, server: $server, homeLayout: $homeLayout, globalLoading: $globalLoading, profileId: $profileId, sessionRevision: $sessionRevision, sessionRecoveryRequired: $sessionRecoveryRequired)';
   }
 }
@@ -344,7 +358,7 @@ extension AppStatePatterns on AppState {
 
 /// @nodoc
 
-class _AppState implements AppState {
+class _AppState with DiagnosticableTreeMixin implements AppState {
   const _AppState(this.firstIndex, this.server, this.homeLayout,
       {this.globalLoading = false,
       this.profileId = 'default',
@@ -379,6 +393,20 @@ class _AppState implements AppState {
       __$AppStateCopyWithImpl<_AppState>(this, _$identity);
 
   @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    properties
+      ..add(DiagnosticsProperty('type', 'AppState'))
+      ..add(DiagnosticsProperty('firstIndex', firstIndex))
+      ..add(DiagnosticsProperty('server', server))
+      ..add(DiagnosticsProperty('homeLayout', homeLayout))
+      ..add(DiagnosticsProperty('globalLoading', globalLoading))
+      ..add(DiagnosticsProperty('profileId', profileId))
+      ..add(DiagnosticsProperty('sessionRevision', sessionRevision))
+      ..add(DiagnosticsProperty(
+          'sessionRecoveryRequired', sessionRecoveryRequired));
+  }
+
+  @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         (other.runtimeType == runtimeType &&
@@ -404,7 +432,7 @@ class _AppState implements AppState {
       globalLoading, profileId, sessionRevision, sessionRecoveryRequired);
 
   @override
-  String toString() {
+  String toString({DiagnosticLevel minLevel = DiagnosticLevel.info}) {
     return 'AppState(firstIndex: $firstIndex, server: $server, homeLayout: $homeLayout, globalLoading: $globalLoading, profileId: $profileId, sessionRevision: $sessionRevision, sessionRecoveryRequired: $sessionRecoveryRequired)';
   }
 }

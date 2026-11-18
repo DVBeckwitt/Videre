@@ -32,10 +32,6 @@ class InvidiousLinkifier extends Linkifier {
             '[Link unavailable]');
   }
 
-  static final _address = RegExp(
-      r'(?<![\w@.:/-])(?:https?:\/\/|\/\/)?(?:[\w-]+\.)+[\w-]+\.?[^\s<>"\x27]*',
-      caseSensitive: false);
-
   @override
   List<LinkifyElement> parse(
       List<LinkifyElement> elements, LinkifyOptions options) {
@@ -69,20 +65,13 @@ class InvidiousLinkifier extends Linkifier {
 
   Iterable<LinkifyElement> _extractOfficialLinks(TextElement element) sync* {
     var start = 0;
-    for (final match in _address.allMatches(element.text)) {
-      final original = match.group(0)!;
-      final address = original.replaceFirst(RegExp(r'[.,!?;:)\]]+$'), '');
-      final uri = Uri.tryParse(address.contains('://')
-          ? address
-          : address.startsWith('//')
-              ? 'https:$address'
-              : 'https://$address');
-      if (uri == null || !isOfficialYoutubeUrl(uri)) continue;
-      if (match.start > start) {
-        yield TextElement(element.text.substring(start, match.start));
+    for (final address in ContentLink.webAddressesIn(element.text)) {
+      if (!isOfficialYoutubeUrl(address.uri)) continue;
+      if (address.start > start) {
+        yield TextElement(element.text.substring(start, address.start));
       }
-      yield UrlElement(uri.toString());
-      start = match.start + address.length;
+      yield UrlElement(address.uri.toString());
+      start = address.end;
     }
     if (start < element.text.length) {
       yield TextElement(element.text.substring(start));

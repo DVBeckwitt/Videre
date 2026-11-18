@@ -1,9 +1,9 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
-import 'package:clipious/home/models/content_mode.dart';
-import 'package:clipious/settings/views/components/home_experience_setting.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/globals.dart';
+import 'package:clipious/home/views/screens/home_tabs_editor.dart';
 import 'package:clipious/extensions.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/utils.dart';
@@ -16,13 +16,14 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:locale_names/locale_names.dart';
 import 'package:logging/logging.dart';
 
-import '../../../../globals.dart';
 import '../../../../feedback/views/open_feedback.dart';
 import '../../../../downloads/views/components/download_folder.dart';
 import '../../../states/settings.dart';
 import '../../screens/community_filter_settings.dart';
 import '../../screens/network_proxy.dart';
 import '../../../../utils/motion.dart';
+import '../../../../recommendations/views/recommendation_settings.dart';
+import '../../components/playback_cache_settings.dart';
 
 var log = Logger('TvSettings');
 
@@ -71,32 +72,6 @@ class TVSettingsScreen extends StatelessWidget {
 
   openAppLayout(BuildContext context) {
     AutoRouter.of(context).push(const TvAppLayoutSettingsRoute());
-  }
-
-  void selectHomeExperience(BuildContext context) {
-    final locals = AppLocalizations.of(context)!;
-    final cubit = context.read<SettingsCubit>();
-    final app = context.read<AppCubit>();
-    final profileId = db.profileId;
-    final revision = app.state.sessionRevision;
-    AutoRouter.of(context).push(TvSelectFromListRoute(
-      title: locals.homeExperience,
-      options: HomeExperience.values
-          .map((value) => homeExperienceLabel(value, locals))
-          .toList(),
-      selected: homeExperienceLabel(cubit.state.homeExperience, locals),
-      onSelect: (String selected) {
-        if (cubit.isClosed ||
-            db.profileId != profileId ||
-            app.state.sessionRevision != revision ||
-            app.state.globalLoading ||
-            app.state.sessionRecoveryRequired) {
-          return;
-        }
-        cubit.setHomeExperience(HomeExperience.values.firstWhere(
-            (value) => homeExperienceLabel(value, locals) == selected));
-      },
-    ));
   }
 
   showSelectLanguage(BuildContext context) {
@@ -247,17 +222,30 @@ class TVSettingsScreen extends StatelessWidget {
               children: [
                 SettingsTitle(title: locals.browsing),
                 SettingsTile(
-                  autofocus: true,
-                  title: locals.homeExperience,
-                  description:
-                      homeExperienceLabel(state.homeExperience, locals),
-                  onSelected: selectHomeExperience,
+                  title: locals.localRecommendations,
+                  description: locals.recommendationLearningHint,
+                  onSelected: showRecommendationSettings,
                 ),
                 SettingsTile(
+                  title: locals.playbackCache,
+                  description: locals.playbackCacheHint,
+                  onSelected: showPlaybackCacheSettings,
+                ),
+                SettingsTile(
+                  autofocus: true,
                   title: locals.customizeAppLayout,
                   description:
                       state.appLayout.map((e) => e.getLabel(locals)).join(", "),
                   onSelected: (context) => openAppLayout(context),
+                ),
+                SettingsTile(
+                  title: locals.homeTabs,
+                  onSelected: (context) => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          const HomeTabsEditorScreen(includeYourFeeds: false),
+                    ),
+                  ),
                 ),
                 SettingsTile(
                   title: locals.country,
@@ -452,6 +440,14 @@ class TVSettingsScreen extends StatelessWidget {
                       Switch(onChanged: (value) {}, value: state.forceTvUi),
                 ),
                 SettingsTitle(title: locals.about),
+                SettingsTile(
+                  title: MaterialLocalizations.of(context).licensesPageTitle,
+                  onSelected: (context) => showLicensePage(
+                    context: context,
+                    applicationName: state.packageInfo.appName,
+                    applicationVersion: state.packageInfo.version,
+                  ),
+                ),
                 SettingsTile(
                   title: locals.feedbackFormTitle,
                   description: locals.feedbackFormSummary,

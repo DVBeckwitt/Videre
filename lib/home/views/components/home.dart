@@ -10,18 +10,54 @@ import 'package:clipious/home/states/home.dart';
 import 'package:clipious/router.dart';
 
 import '../../../utils/views/components/app_icon.dart';
+import '../../../recommendations/recommendation_service.dart';
+import '../screens/home_tabs_editor.dart';
+import 'flow_video_home.dart';
 
-class HomeView extends StatelessWidget {
+class HomeView extends StatefulWidget {
   const HomeView({super.key});
 
-  static openSearch(BuildContext context, String search) {
+  @override
+  State<HomeView> createState() => _HomeViewState();
+
+  static void openSearch(BuildContext context, String search) {
     AutoRouter.of(context)
         .push(SearchRoute(
-          query: search,
-          searchNow: true,
-        ))
-        .then((value) => context.read<AppCubit>().updateLayout());
+      query: search,
+      searchNow: true,
+    ))
+        .then((value) {
+      if (context.mounted) context.read<AppCubit>().updateLayout();
+    });
   }
+}
+
+class _HomeViewState extends State<HomeView> {
+  Future<void> _editLayout(
+      BuildContext context, List<RecommendationInterest> interests) async {
+    final app = context.read<AppCubit>();
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => HomeTabsEditorScreen(interests: interests)));
+    if (mounted) app.updateLayout();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = context.watch<AppCubit>().state;
+    final tabs = TabsRouterScope.of(context, watch: true)?.controller;
+    final visible = TickerMode.of(context) &&
+        (tabs == null || tabs.current.name == HomeRoute.name);
+    return FlowVideoHome(
+      key: ValueKey((session.profileId, session.sessionRevision)),
+      active: visible,
+      configuredFeed: const _ConfiguredHomeView(),
+      onEdit: (interests) => _editLayout(context, interests),
+    );
+  }
+}
+
+class _ConfiguredHomeView extends StatelessWidget {
+  const _ConfiguredHomeView();
 
   List<Widget> getSmallSources(
       BuildContext context, HomeLayout layout, bool isLoggedIn) {

@@ -4,13 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:flutter_swipe_action_cell/core/cell.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/utils/states/item_list.dart';
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/components/top_loading.dart';
 import 'package:clipious/videos/views/components/history_video.dart';
 
-import '../../../utils.dart';
 import '../../../utils/models/paginated_list.dart';
 import '../../../utils/views/components/placeholders.dart';
 import '../../states/history.dart';
@@ -24,6 +23,54 @@ class HistoryView extends StatefulWidget {
 
 class _HistoryViewState extends State<HistoryView> {
   bool local = true;
+
+  Future<void> _confirmRemoval(
+      BuildContext context, HistoryCubit history, String? videoId) async {
+    final locals = AppLocalizations.of(context)!;
+    final profile = db.profileId;
+    final app = context.read<AppCubit>();
+    final session = app.state.sessionRevision;
+    final server = app.state.server;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (context) => AlertDialog(
+        title:
+            Text(videoId == null ? locals.clearHistoryQuestion : locals.delete),
+        content: Text(videoId == null
+            ? history.local
+                ? locals.localHistoryClearDescription
+                : locals.clearHistoryQuestionExplanation
+            : db.getHistoryVideoByVideoId(videoId)?.title ?? videoId),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(locals.cancel)),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(videoId == null ? locals.ok : locals.delete)),
+        ],
+      ),
+    );
+    // Both row and bulk deletion belong to the original source and person,
+    // even if that list or session changes while its confirmation is open.
+    if (confirmed == true &&
+        context.mounted &&
+        !history.isClosed &&
+        !app.isClosed &&
+        db.profileId == profile &&
+        app.state.sessionRevision == session &&
+        app.state.server == server &&
+        !app.state.globalLoading &&
+        !app.state.sessionRecoveryRequired) {
+      if (videoId == null) {
+        await history.clearHistory();
+      } else {
+        await history.removeFromHistory(videoId);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -102,25 +149,13 @@ class _HistoryViewState extends State<HistoryView> {
                                         : 0),
                                 child: index >= state.items.length
                                     ? const CompactVideoPlaceHolder()
-                                    : SwipeActionCell(
+                                    : HistoryVideoView(
                                         key: ValueKey(state.items[index]),
-                                        trailingActions: [
-                                          SwipeAction(
-                                            performsFirstActionWithFullSwipe:
-                                                true,
-                                            icon: const Icon(Icons.delete,
-                                                color: Colors.white),
-                                            onTap: (handler) async {
-                                              await handler(true);
-                                              historyCubit.removeFromHistory(
-                                                  state.items[index]);
-                                            },
-                                          )
-                                        ],
-                                        child: HistoryVideoView(
-                                          key: ValueKey(state.items[index]),
-                                          videoId: state.items[index],
-                                        )),
+                                        videoId: state.items[index],
+                                        onLongPress: () => _confirmRemoval(
+                                            context,
+                                            historyCubit,
+                                            state.items[index])),
                               ),
                             ),
                           ),
@@ -130,15 +165,8 @@ class _HistoryViewState extends State<HistoryView> {
                   bottom: 15,
                   right: 15,
                   child: FloatingActionButton(
-                    onPressed: () {
-                      okCancelDialog(
-                          context,
-                          locals.clearHistoryQuestion,
-                          showLocal
-                              ? locals.localHistoryClearDescription
-                              : locals.clearHistoryQuestionExplanation,
-                          () => historyCubit.clearHistory());
-                    },
+                    onPressed: () =>
+                        _confirmRemoval(context, historyCubit, null),
                     child: const Icon(Icons.delete),
                   ))
             ],

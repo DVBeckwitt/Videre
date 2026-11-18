@@ -37,6 +37,9 @@ import androidx.work.WorkInfo
 import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
+import com.github.dvbeckwitt.videre.proxy.PlaybackMediaCache
+import com.github.dvbeckwitt.videre.proxy.PlaybackCacheRequest
+import androidx.media3.exoplayer.hls.HlsDataSourceFactory
 
 //import com.google.android.exoplayer2.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
@@ -214,7 +217,8 @@ internal class RiverPlayer(
         initialPositionMs: Long? = null,
         fastDashStartupFallback: Boolean = false,
         initialDashHeight: Int? = null,
-        retryDashTrackFromLoadId: Long? = null
+        retryDashTrackFromLoadId: Long? = null,
+        playbackCache: Map<*, *>? = null
     ) {
         val uri = Uri.parse(dataSource)
         var dataSourceFactory: DataSource.Factory?
@@ -267,7 +271,7 @@ internal class RiverPlayer(
         }
         if (isHTTP(uri)) {
             dataSourceFactory = getDataSourceFactory(userAgent, headers, dataSource)
-            if (useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
+            if (playbackCache == null && useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
                 dataSourceFactory = CacheDataSourceFactory(
                     context,
                     maxCacheSize,
@@ -283,7 +287,7 @@ internal class RiverPlayer(
             DashStartupLoadErrorPolicy(uri)
         } else null
         val mediaSource = try {
-            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest, startupRetry)
+            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest, startupRetry, playbackCache)
         } catch (error: Exception) {
             if (inlineDashManifest == null) throw error
             // Parser errors can contain signed media URLs from the manifest.
@@ -496,7 +500,8 @@ internal class RiverPlayer(
         cacheKey: String?,
         context: Context,
         inlineDashManifest: String?,
-        startupRetry: DashStartupLoadErrorPolicy?
+        startupRetry: DashStartupLoadErrorPolicy?,
+        playbackCache: Map<*, *>?
     ): MediaSource {
         val type: Int
         if (formatHint == null) {
@@ -521,21 +526,33 @@ internal class RiverPlayer(
         }
 
 
+        val admittedCache = if (isHTTP(uri) || playbackCache?.get("download") is Map<*, *>) playbackCache else null
+        fun sourceFactory(request: PlaybackCacheRequest): DataSource.Factory =
+            PlaybackMediaCache.factory(context, mediaDataSourceFactory, uri.toString(), admittedCache, request)
         val mediaFactory = when (type) {
             C.TYPE_SS -> SsMediaSource.Factory(
-                DefaultSsChunkSource.Factory(mediaDataSourceFactory),
-                ProxyDataSource.withLocalSources(context, mediaDataSourceFactory)
+                DefaultSsChunkSource.Factory(sourceFactory(PlaybackCacheRequest.ADAPTIVE_MEDIA)),
+                ProxyDataSource.withLocalSources(context, sourceFactory(PlaybackCacheRequest.BYPASS))
             )
 
             C.TYPE_DASH -> DashMediaSource.Factory(
-                DefaultDashChunkSource.Factory(mediaDataSourceFactory),
-                ProxyDataSource.withLocalSources(context, mediaDataSourceFactory)
+                DefaultDashChunkSource.Factory(sourceFactory(PlaybackCacheRequest.ADAPTIVE_MEDIA)),
+                ProxyDataSource.withLocalSources(context, sourceFactory(PlaybackCacheRequest.BYPASS))
             ).apply { startupRetry?.let { setLoadErrorHandlingPolicy(it) } }
 
-            C.TYPE_HLS -> HlsMediaSource.Factory(mediaDataSourceFactory)
+            C.TYPE_HLS -> {
+                // Keep the source's admission epochs even when a later playlist
+                // creates a new chunk reader after an account/proxy transition.
+                val media = sourceFactory(PlaybackCacheRequest.ADAPTIVE_MEDIA)
+                val other = sourceFactory(PlaybackCacheRequest.BYPASS)
+                HlsMediaSource.Factory(HlsDataSourceFactory { dataType ->
+                    if (PlaybackMediaCache.requestForMedia3DataType(dataType) == PlaybackCacheRequest.ADAPTIVE_MEDIA)
+                        media.createDataSource() else other.createDataSource()
+                })
+            }
 
             C.TYPE_OTHER -> ProgressiveMediaSource.Factory(
-                mediaDataSourceFactory,
+                sourceFactory(PlaybackCacheRequest.PROGRESSIVE),
                 DefaultExtractorsFactory()
             )
 

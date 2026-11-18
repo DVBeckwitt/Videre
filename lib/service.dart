@@ -43,6 +43,7 @@ import 'channels/models/channel_playlists.dart';
 import 'channels/models/channel_videos.dart';
 import 'comments/models/video_comments.dart';
 import 'notifications/models/db/subscription_notifications.dart';
+import 'network/content_link.dart';
 import 'network/native_proxy_http_client.dart';
 import 'network/network_proxy.dart';
 import 'network/origin_scoped_http_client.dart';
@@ -50,6 +51,7 @@ import 'network/gateway_context.dart';
 import 'network/gateway_session_bridge.dart';
 import 'network/nerdvpn_access.dart';
 import 'network/youtube_privacy.dart';
+import 'recommendations/subscription_revision.dart';
 import 'settings/services/gateway_auth.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
@@ -67,12 +69,14 @@ const urlGetPopular = '/api/v1/popular';
 const urlGetUserFeed = '/api/v1/auth/feed';
 const urlSearchSuggestions = '/api/v1/search/suggestions';
 const urlSearch = '/api/v1/search';
+const urlResolveContent = '/api/v1/resolveurl';
 const urlStats = '/api/v1/stats';
 const urlGetSubscriptions = '/api/v1/auth/subscriptions';
 const urlAddDeleteSubscriptions = '/api/v1/auth/subscriptions/:ucid';
 const urlGetComments = '/api/v1/comments/:id';
 const urlGetChannel = '/api/v1/channels/:id';
 const urlGetChannelVideos = '/api/v1/channels/:id/videos';
+const urlGetChannelSearch = '/api/v1/channels/:id/search';
 const urlGetChannelStreams = '/api/v1/channels/:id/streams';
 const urlGetChannelShorts = '/api/v1/channels/:id/shorts';
 const urlGetSponsorSegments =
@@ -431,7 +435,12 @@ class Service {
       if (queryParameters.isNotEmpty) {
         uri = uri.replace(queryParameters: queryParameters);
       }
-      log.info('calling ${urlFormatForLog(uri)}');
+      final logUri = baseUrl == urlSearch ||
+              baseUrl == urlGetChannelSearch ||
+              baseUrl == urlResolveContent
+          ? uri.replace(query: '')
+          : uri;
+      log.info('calling ${urlFormatForLog(logUri)}');
 
       var headers = Map<String, String>.from(server.customHeaders);
       if (!headers.keys.any((name) => name.toLowerCase() == 'accept')) {
@@ -464,6 +473,62 @@ class Service {
     } catch (err) {
       log.severe('Couldn\'t build url', err);
       rethrow;
+    }
+  }
+
+  /// Resolve opaque YouTube identifiers through the captured instance only.
+  /// The original address is a query value, never a network destination.
+  Future<ContentLink?> resolveContentLink(ContentLink link,
+      {required Server server, bool Function()? isCurrent}) async {
+    final owner = db;
+    final profileId = owner.profileId;
+    final revision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
+    bool current() =>
+        isCurrent?.call() != false &&
+        identical(owner, db) &&
+        owner.profileId == profileId &&
+        revision == _sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(proxy, NetworkProxy.instance.config);
+    if (!current()) return null;
+    final source = Uri.tryParse(link.id);
+    final instance = Uri.tryParse(server.url);
+    if (link.kind != ContentLinkKind.unresolved ||
+        source == null ||
+        source.scheme != 'https' ||
+        !youtubeHosts.contains(source.host) ||
+        source.userInfo.isNotEmpty ||
+        source.port != 443 ||
+        ContentLink.parse(source)?.kind != ContentLinkKind.unresolved ||
+        instance == null ||
+        !const {'http', 'https'}.contains(instance.scheme) ||
+        instance.host.isEmpty ||
+        instance.userInfo.isNotEmpty ||
+        isOfficialYoutubeUrl(instance)) {
+      return null;
+    }
+    try {
+      final request = await buildRequest(urlResolveContent,
+          query: {'url': link.id},
+          authenticated: hasHistoryAccount(server),
+          serverOverride: server);
+      if (!current()) return null;
+      final get = http.Request('GET', request.uri)..followRedirects = false;
+      get.headers.addAll(request.headers);
+      final response = await _instanceHttpClient
+          .send(get)
+          .then(Response.fromStream)
+          .timeout(const Duration(seconds: 15));
+      if (!current() || response.statusCode != 200) return null;
+      // Do not log a resolver response: its URL and error body may echo a
+      // person's original address. Only validated identifiers leave here.
+      return ContentLink.fromResolution(
+          link, jsonDecode(utf8.decode(response.bodyBytes)));
+    } on Exception {
+      // Not every instance implements resolution or can resolve every page.
+      // Let the caller keep the user inside Videre with its landing fallback.
+      return null;
     }
   }
 
@@ -995,6 +1060,7 @@ class Service {
       throw const FormatException('The server returned another video.');
     }
     return video.copyWith(
+        downloadPlaybackOnly: false,
         formatStreams: loaded.formatStreams,
         adaptiveFormats: loaded.adaptiveFormats,
         dashUrl: loaded.dashUrl,
@@ -1018,8 +1084,15 @@ class Service {
     String videoId,
     Caption caption, {
     Server? serverOverride,
-  }) =>
-      _getTranscript(videoId, caption, serverOverride: serverOverride);
+  }) async {
+    final server = serverOverride ?? await db.getCurrentlySelectedServer();
+    try {
+      return await _getTranscript(videoId, caption, serverOverride: server);
+    } catch (error) {
+      if (_captionAccessFailure(error)) rethrow;
+      return _getWatchCaptionTranscript(videoId, caption, server);
+    }
+  }
 
   ///Loads the selected track through the same account and extraction backend
   ///as the playing video. The structured endpoint avoids instances whose
@@ -1035,13 +1108,17 @@ class Service {
           .toWebVtt();
     } catch (error) {
       if (_captionAccessFailure(error)) rethrow;
-      return _getWatchPlaybackCaptions(videoId, caption, server);
+      return (await _getWatchCaptionTranscript(videoId, caption, server,
+              forPlayback: true))
+          .toWebVtt();
     }
   }
 
   bool _captionAccessFailure(Object error) =>
       error is NerdVpnAccessRequired ||
       error is GatewayAuthenticationRequired ||
+      error is GatewayTransportUnavailable ||
+      error is StateError ||
       error is HandshakeException ||
       (error is SocketException && error.osError == null) ||
       (error is InvidiousServiceError &&
@@ -1114,8 +1191,9 @@ class Service {
     });
   }
 
-  Future<String> _getWatchPlaybackCaptions(
-      String videoId, Caption caption, Server server) async {
+  Future<VideoTranscript> _getWatchCaptionTranscript(
+      String videoId, Caption caption, Server server,
+      {bool forPlayback = false}) async {
     try {
       final watch = await buildRequest('/watch',
           query: {'v': videoId}, accept: 'text/html', serverOverride: server);
@@ -1132,11 +1210,21 @@ class Service {
       };
       final candidates = <Uri>{};
       final document = html.parse(utf8.decode(page.bodyBytes));
-      for (final track in document.querySelectorAll('video#player track')) {
-        if (!const {'captions', 'subtitles'}
-                .contains(track.attributes['kind']) ||
-            track.attributes['label'] != caption.label ||
-            track.attributes['srclang'] != caption.languageCode) {
+      final tracks = document
+          .querySelectorAll('video#player track')
+          .where((track) =>
+              const {'captions', 'subtitles'}
+                  .contains(track.attributes['kind']) &&
+              track.attributes['label'] == caption.label)
+          .toList();
+      for (final track in tracks) {
+        final language = track.attributes['srclang'];
+        // Some instance player pages omit srclang. Infer it from the exact
+        // selected label only when no other same-label track can conflict,
+        // including tracks whose URL will fail admission below.
+        if (language == null
+            ? tracks.length != 1
+            : language.isEmpty || language != caption.languageCode) {
           continue;
         }
         final src = track.attributes['src'];
@@ -1162,8 +1250,13 @@ class Service {
       // signed query intact, never log/cache it, and never follow redirects.
       final response = await _captionResponse(ServerRequest(
           uri: candidates.single, headers: headers, server: watch.server));
-      return _webVttTranscript(response, caption, preserveRepeatedLines: true)
-          .toWebVtt();
+      final transcript = _webVttTranscript(response, caption,
+          preserveRepeatedLines: forPlayback);
+      if (transcript.lines.isEmpty) {
+        throw const FormatException('Transcript has no usable lines');
+      }
+      if (forPlayback) transcript.toWebVtt();
+      return transcript;
     } catch (error) {
       if (_captionAccessFailure(error) || error is InvidiousServiceError) {
         rethrow;
@@ -1199,13 +1292,11 @@ class Service {
         query: query,
         serverOverride: server,
       );
-      final response = forPlayback
-          ? await _captionResponse(request)
-          : await _get(request).timeout(const Duration(seconds: 15));
+      final response = await _captionResponse(request);
       return validate(VideoTranscript.fromJson(handleResponse(response),
           preserveRepeatedLines: forPlayback));
     } catch (error) {
-      if (forPlayback && _captionAccessFailure(error)) rethrow;
+      if (_captionAccessFailure(error)) rethrow;
       log.warning(
         'Structured transcript unavailable; trying caption fallback '
         '(${error.runtimeType})',
@@ -1220,18 +1311,15 @@ class Service {
         accept: 'text/vtt',
         serverOverride: server,
       );
-      final request = forPlayback
-          ? _playbackCaptionRequest(canonicalRequest, caption)
-          : canonicalRequest;
-      final response = forPlayback
-          ? await _captionResponse(request)
-          : await _get(request).timeout(const Duration(seconds: 15));
+      final request = _playbackCaptionRequest(canonicalRequest, caption,
+          requireMatchingTrack: !forPlayback);
+      final response = await _captionResponse(request);
       return validate(_webVttTranscript(response, caption,
           preserveRepeatedLines: forPlayback));
     } on InvidiousServiceError {
       rethrow;
     } catch (error) {
-      if (forPlayback && _captionAccessFailure(error)) rethrow;
+      if (_captionAccessFailure(error)) rethrow;
       throw InvidiousServiceError(
         'Could not load transcript (${error.runtimeType})',
       );
@@ -1261,7 +1349,8 @@ class Service {
   }
 
   ServerRequest _playbackCaptionRequest(
-      ServerRequest canonical, Caption caption) {
+      ServerRequest canonical, Caption caption,
+      {bool requireMatchingTrack = false}) {
     try {
       final origin = Uri.parse(canonical.server!.url);
       final base =
@@ -1272,6 +1361,28 @@ class Service {
           !const {'http', 'https'}.contains(advertised.scheme) ||
           advertised.origin != origin.origin) {
         return canonical;
+      }
+      if (requireMatchingTrack) {
+        final prefix = origin.path.replaceFirst(RegExp(r'/$'), '');
+        final companionPath = canonical.uri.path.replaceFirst(
+            '$prefix/api/v1/captions/', '$prefix/companion/api/v1/captions/');
+        final query = advertised.queryParametersAll;
+        final labels = query['label'];
+        if (!{canonical.uri.path, companionPath}.contains(advertised.path) ||
+            labels == null ||
+            labels.length != 1 ||
+            labels.single != caption.label) {
+          return canonical;
+        }
+        for (final key in ['lang', 'tlang']) {
+          final languages = query[key];
+          if (languages != null &&
+              (languages.length != 1 ||
+                  caption.languageCode?.isNotEmpty != true ||
+                  languages.single != caption.languageCode)) {
+            return canonical;
+          }
+        }
       }
       // Some instances supply a companion path or signed query. Preserve it
       // only on this video's instance; captions never fall back to Google or
@@ -1600,6 +1711,63 @@ class Service {
     return results;
   }
 
+  /// One admitted Invidious request for a recommendation pool. The guard runs
+  /// immediately before dispatch, including on an HTTP 429 retry.
+  Future<List<Video>> getVideoRecommendationCandidates({
+    required Server server,
+    required Future<void> Function() beforeRequest,
+    String? query,
+    String? channelId,
+  }) async {
+    assert(query == null || channelId == null);
+    var expired = false;
+    Future<void> check() async {
+      await beforeRequest();
+      if (expired) throw TimeoutException('Discovery request expired.');
+    }
+
+    Future<List<Video>> load() async {
+      final request = query != null
+          ? await buildRequest(urlSearch, serverOverride: server, query: {
+              'q': query,
+              'type': SearchType.video.name,
+              'page': '1',
+              'region': db.getSettings(browsingCountry)?.value ?? 'US',
+            })
+          : channelId != null
+              ? await buildRequest(urlGetChannelVideos,
+                  pathParams: {':id': channelId}, serverOverride: server)
+              : await buildRequest(urlGetUserFeed,
+                  authenticated: true,
+                  serverOverride: server,
+                  query: {'max_results': '20', 'page': '1'});
+      final response = await _get(request, beforeRequest: check);
+      await check();
+      final data = handleResponse(response);
+      if (query != null) {
+        if (data is! List) {
+          throw const FormatException('Invalid search results.');
+        }
+        return [
+          for (final row in data)
+            if (row is Map<String, dynamic> && row['type'] == 'video')
+              Video.fromJson(row),
+        ];
+      }
+      if (channelId != null) {
+        return VideosWithContinuation.fromJson(data).videos.take(20).toList();
+      }
+      final feed = UserFeed.fromJson(data);
+      return [...?feed.notifications, ...?feed.videos];
+    }
+
+    await check();
+    return load().timeout(const Duration(seconds: 6), onTimeout: () {
+      expired = true;
+      throw TimeoutException('Discovery request expired.');
+    });
+  }
+
   Future<UserFeed> getUserFeed(
       {int? maxResults,
       int? page,
@@ -1903,6 +2071,7 @@ class Service {
     final response =
         await _instanceHttpClient.post(req.uri, headers: req.headers);
     handleResponse(response);
+    await _subscriptionsCommitted(owner);
     return true;
   }
 
@@ -1919,8 +2088,12 @@ class Service {
     final response =
         await _instanceHttpClient.delete(req.uri, headers: req.headers);
     handleResponse(response);
+    await _subscriptionsCommitted(owner);
     return true;
   }
+
+  Future<void> _subscriptionsCommitted(IDbClient owner) =>
+      invalidateStoredSubscriptionRecommendations(owner);
 
   Future<bool> isSubscribedToChannel(String channelId) async {
     return (await getSubscriptions())
@@ -1940,6 +2113,44 @@ class Service {
     Iterable i = handleResponse(response);
 
     return List<Subscription>.from(i.map((e) => Subscription.fromJson(e)));
+  }
+
+  /// Reads the follows of one already-admitted Invidious account. The caller
+  /// checks ownership before dispatch, on a retry, and before using the reply.
+  Future<List<Subscription>> getRecommendationSubscriptions({
+    required Server server,
+    required Future<void> Function() beforeRequest,
+  }) async {
+    if (!hasHistoryAccount(server)) return const [];
+    var expired = false;
+    Future<void> check() async {
+      await beforeRequest();
+      if (expired) throw TimeoutException('Subscription request expired.');
+    }
+
+    Future<List<Subscription>> load() async {
+      await check();
+      final request = await buildRequest(urlGetSubscriptions,
+          authenticated: true, serverOverride: server);
+      final response = await _get(request, beforeRequest: check);
+      await check();
+      final data = handleResponse(response);
+      if (data is! List) {
+        throw const FormatException('Invalid Invidious subscriptions.');
+      }
+      return [
+        for (final entry in data)
+          if (entry is Map<String, dynamic> &&
+              entry['authorId'] is String &&
+              entry['author'] is String)
+            Subscription.fromJson(entry),
+      ];
+    }
+
+    return load().timeout(const Duration(seconds: 6), onTimeout: () {
+      expired = true;
+      throw TimeoutException('Subscription request expired.');
+    });
   }
 
   Future<VideoComments> getComments(String videoId,
@@ -2005,6 +2216,61 @@ class Service {
               channelId, videosWithContinuation.videos.first.videoId);
     }
     return videosWithContinuation;
+  }
+
+  static const channelSearchMaximumPage = 20;
+  static final _channelSearchId = RegExp(r'^UC[A-Za-z0-9_-]{22}$');
+
+  static bool canSearchChannel(String channelId) =>
+      _channelSearchId.hasMatch(channelId);
+
+  /// The channel endpoint can return a mixed page containing playlist rows.
+  /// Count the raw page so skipping those rows or hiding videos keeps paging.
+  Future<({List<Video> videos, int rawCount})> searchChannelVideos(
+    String channelId,
+    String query, {
+    required Server server,
+    required int page,
+    required Future<void> Function() beforeRequest,
+  }) async {
+    if (!canSearchChannel(channelId) ||
+        query.trim().isEmpty ||
+        query.runes.length > 200 ||
+        page < 1 ||
+        page > channelSearchMaximumPage) {
+      throw ArgumentError('Invalid channel search parameters.');
+    }
+    final revision = _sessionRevision;
+    Future<void> check() async {
+      await beforeRequest();
+      if (revision != _sessionRevision) {
+        throw StateError('The channel search connection changed.');
+      }
+    }
+
+    await check();
+    final request = await buildRequest(urlGetChannelSearch,
+        pathParams: {':id': channelId},
+        serverOverride: server,
+        query: {'q': query.trim(), 'page': page.toString()});
+    final response = await _get(request, beforeRequest: check);
+    await check();
+    final data = handleResponse(response);
+    if (data is! List) {
+      throw const FormatException('Invalid channel search results.');
+    }
+    final videoId = RegExp(r'^[A-Za-z0-9_-]{11}$');
+    final videos = <Video>[
+      for (final row in data)
+        if (row is Map<String, dynamic> &&
+            row['videoId'] is String &&
+            videoId.hasMatch(row['videoId'] as String) &&
+            row['title'] != privateVideoString)
+          Video.fromJson(row),
+    ];
+    final filtered = await VideoFilter.filterVideos(videos);
+    await check();
+    return (videos: filtered, rawCount: data.length);
   }
 
   Future<VideosWithContinuation> getChannelStreams(

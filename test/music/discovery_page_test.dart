@@ -13,11 +13,16 @@ import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
+import 'package:clipious/player/states/player.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -54,6 +59,15 @@ class _Catalog extends MusicCatalogService {
   final discoveries = <Completer<List<MusicTrack>>>[];
   final discoveryGuards = <bool Function()?>[];
   final discoveryArtists = <String?>[];
+  final relatedSeeds = <List<String>>[];
+  List<MusicTrack> relatedTracks = const [];
+
+  @override
+  Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
+      {bool Function()? isCurrent}) async {
+    relatedSeeds.add(seedIds.toList());
+    return relatedTracks;
+  }
 
   @override
   Future<List<MusicTrack>> getDiscoverySongs(
@@ -80,6 +94,25 @@ class _Catalog extends MusicCatalogService {
   }
 }
 
+class _Player extends Cubit<PlayerState> implements PlayerCubit {
+  _Player() : super(PlayerState.init(null));
+
+  final plays = <({List<String> ids, int? startIndex, bool? audio})>[];
+
+  @override
+  Future<void> playVideo(List<Video> videos,
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+    plays.add((
+      ids: videos.map((video) => video.videoId).toList(),
+      startIndex: startIndex,
+      audio: audio,
+    ));
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
+
 class _Router extends AppRouter {
   PageRouteInfo? pushed;
 
@@ -99,34 +132,48 @@ void main() {
   late _Catalog catalog;
   late MusicLibraryService library;
   late _App app;
+  late _Player player;
   late _Router router;
   late int searches;
   late int libraryVisits;
 
   setUp(() async {
+    // Widget tests have no native recommendation plugin. Model its explicit
+    // unavailable response instead of leaving an unanswered platform message.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (_) async => throw MissingPluginException());
     db = await SembastSqfDb.createInMemory();
     await NetworkProxy.instance.initialize(saved: '{}', configureNative: false);
     library = MusicLibraryService.forProfile(db, db.profileId);
     previousCatalog = musicCatalogService;
     musicCatalogService = catalog = _Catalog();
     app = _App();
+    player = _Player();
     router = _Router();
     searches = 0;
     libraryVisits = 0;
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('videre/recommendations'), null);
     musicCatalogService = previousCatalog;
     await NetworkProxy.instance.initialize(saved: '{}', configureNative: false);
     await app.close();
+    await player.close();
     await db.close();
     router.dispose();
   });
 
   Future<void> show(WidgetTester tester,
       {double textScale = 1, bool active = true, bool settle = true}) async {
-    await tester.pumpWidget(BlocProvider<AppCubit>.value(
-      value: app,
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<AppCubit>.value(value: app),
+        BlocProvider<PlayerCubit>.value(value: player),
+      ],
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
@@ -166,12 +213,219 @@ void main() {
     await tester.pump();
   }
 
+  testWidgets(
+      'Quick Picks use native ranking and explain it without a catalog call',
+      (tester) async {
+    final requests = <Map>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (call) async {
+      final args = call.arguments as Map;
+      requests.add(args);
+      return {
+        'state': <String, Object?>{},
+        'ranked': [
+          for (final item in (args['candidates'] as List).reversed)
+            {
+              'id': (item as Map)['id'],
+              'score': 1.0,
+              'reason': 'From your local listening preferences'
+            },
+        ],
+        'summary': <String, Object?>{},
+      };
+    });
+    await tester.runAsync(() async {
+      await library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: 'quickpick01',
+          title: 'First pick',
+          subtitle: 'Artist'));
+      await library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: 'quickpick02',
+          title: 'Second pick',
+          subtitle: 'Artist'));
+    });
+    await show(tester);
+    expect(find.text('Quick picks'), findsOneWidget);
+    final first = find.byKey(const ValueKey('music-quick-pick-quickpick01'));
+    final second = find.byKey(const ValueKey('music-quick-pick-quickpick02'));
+    expect(tester.getRect(first).top, lessThan(tester.getRect(second).top));
+    expect(requests.first['domain'], 'music');
+    expect(requests.first['surface'], 'quick_picks');
+    await tester.tap(find.descendant(
+        of: first, matching: find.byType(PopupMenuButton<int>)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Why this?'));
+    await tester.pumpAndSettle();
+    expect(find.text('From your local listening preferences'), findsOneWidget);
+    expect(catalog.searchCalls, 0);
+    expect(catalog.discoveryCalls, 0);
+    expect(catalog.trendingCalls, 0);
+  });
+
+  testWidgets('Keep Listening uses music history and retires across profiles',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertHistoryVideo(HistoryVideoCache(
+          'listenagain', 'Listened song', 'Artist', '',
+          musicMetadata:
+              const MusicMetadata(title: 'Listened song', artist: 'Artist')));
+      await db.upsertHistoryVideo(
+          HistoryVideoCache('videohist01', 'Video history', 'Creator', ''));
+    });
+    await show(tester);
+    expect(find.text('Keep listening'), findsOneWidget);
+    expect(find.text('Listened song'), findsOneWidget);
+    expect(find.text('Video history'), findsNothing);
+    final card = find.byKey(const ValueKey('music-keep-listening-listenagain'));
+    await tester.ensureVisible(card);
+    await tester.pumpAndSettle();
+    await tester.tap(card);
+    expect((router.pushed!.args as MusicRouteArgs).videoId, 'listenagain');
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.change(app.state.copyWith(profileId: next.id));
+    await tester.pumpAndSettle();
+    expect(find.text('Listened song'), findsNothing);
+    expect(find.text('Keep listening'), findsNothing);
+    expect(catalog.searchCalls, 0);
+    expect(catalog.discoveryCalls, 0);
+  });
+
+  Future<void> saveLearnedTracks(WidgetTester tester) =>
+      tester.runAsync(() async {
+        for (var i = 1; i <= 7; i++) {
+          await library.save(MusicLibraryEntry(
+              kind: MusicLibraryKind.song,
+              id: 'learnmusic$i',
+              title: 'Learned track $i',
+              subtitle: 'Artist $i'));
+        }
+      });
+
+  testWidgets('Flow local shelves respect rank, thresholds and queue position',
+      (tester) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('videre/recommendations'),
+        (_) async => {
+              'ranked': <Object?>[],
+              'summary': {
+                'onRepeat': ['learnmusic2', 'learnmusic1', 'unknown0001'],
+                'rediscover': ['learnmusic1', 'learnmusic3', 'learnmusic4'],
+                'timeBucket': 'WeekendEvening',
+                'timeOfDay': [
+                  'learnmusic2',
+                  'learnmusic5',
+                  'learnmusic6',
+                  'learnmusic7'
+                ],
+              },
+            });
+    await saveLearnedTracks(tester);
+    await show(tester);
+    expect(find.text('On repeat'), findsOneWidget);
+    expect(find.text('Rediscover'), findsNothing);
+    expect(find.text('Your evening rotation'), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('music-rotation-learnmusic2')), findsNothing);
+    final first = find.byKey(const ValueKey('music-on-repeat-learnmusic2'));
+    final second = find.byKey(const ValueKey('music-on-repeat-learnmusic1'));
+    expect(tester.getTopLeft(first).dx, lessThan(tester.getTopLeft(second).dx));
+    await tester.ensureVisible(second);
+    await tester.pumpAndSettle();
+    await tester.tap(second);
+    expect(player.plays.single.ids, ['learnmusic2', 'learnmusic1']);
+    expect(player.plays.single.startIndex, 1);
+    expect(player.plays.single.audio, isTrue);
+    expect(catalog.relatedSeeds, isEmpty);
+    expect(catalog.discoveryCalls, 0);
+  });
+
+  testWidgets(
+      'daily mix recalls only on request and queues ranked related songs',
+      (tester) async {
+    final requests = <String>[];
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('videre/recommendations'), (call) async {
+      final args = call.arguments as Map;
+      final surface = args['surface'] as String;
+      requests.add(surface);
+      return {
+        'ranked': [
+          if (surface == 'discover')
+            for (final track in (args['candidates'] as List).reversed)
+              {'id': (track as Map)['id'], 'score': 1, 'reason': 'Learned'},
+        ],
+        'summary': {
+          'dailyMixes': [
+            {
+              'label': 'Artist',
+              'seedTrackIds': [
+                'learnmusic1',
+                'learnmusic2',
+                'learnmusic3',
+                'learnmusic4',
+              ]
+            },
+          ],
+        },
+      };
+    });
+    catalog.relatedTracks = [
+      for (var index = 1; index <= 4; index++)
+        MusicTrack(videoId: 'related000$index', title: 'Related song $index'),
+    ];
+    await saveLearnedTracks(tester);
+    await show(tester);
+    final mix = find.byKey(const ValueKey('music-daily-mix-0'));
+    expect(mix, findsOneWidget);
+    expect(catalog.relatedSeeds, isEmpty);
+    await tester.ensureVisible(mix);
+    await tester.tap(mix);
+    await tester.pumpAndSettle();
+    expect(find.text('Artist Mix'), findsOneWidget);
+    expect(catalog.relatedSeeds, isEmpty);
+    await tester.tap(find.byKey(const ValueKey('music-collection-load')));
+    await tester.pumpAndSettle();
+    expect(catalog.relatedSeeds.single,
+        ['learnmusic1', 'learnmusic2', 'learnmusic3']);
+    expect(requests.last, 'discover');
+    await tester.tap(find.byKey(const ValueKey('music-collection-play')));
+    expect(player.plays.single.ids,
+        ['related0004', 'related0003', 'related0002', 'related0001']);
+  });
+
+  testWidgets('retained Keep Listening updates while learning is paused',
+      (tester) async {
+    await tester.runAsync(() =>
+        RecommendationService.forProfile(db, db.profileId)
+            .setLearningEnabled(RecommendationDomain.music, false));
+    await show(tester);
+    expect(find.text('Keep listening'), findsNothing);
+    await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
+        'listenagain', 'Newly listened song', 'Artist', '',
+        musicMetadata: const MusicMetadata(
+            title: 'Newly listened song', artist: 'Artist'))));
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
+    expect(find.text('Keep listening'), findsOneWidget);
+    expect(find.text('Newly listened song'), findsOneWidget);
+    expect(catalog.discoveryCalls, 0);
+    expect(catalog.searchCalls, 0);
+  });
+
   testWidgets('Home uses local music without loading a trending feed',
       (tester) async {
     await show(tester);
-    expect(find.text('Music'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-home-shortcuts')), findsOneWidget);
     expect(find.text('Saved songs'), findsOneWidget);
-    expect(find.text('Search suggestions'), findsOneWidget);
+    expect(find.text('Search suggestions'), findsNothing);
     expect(find.text('Save songs to build your music home.'), findsOneWidget);
     expect(find.text('Trending music'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -199,6 +453,87 @@ void main() {
     expect(
         (router.pushed!.args as MusicRouteArgs).videoId, _discovered.videoId);
     expect(catalog.trendingCalls, 0);
+  });
+
+  testWidgets(
+      'discovery exclusions survive native unavailability without refetch',
+      (tester) async {
+    var nativeAvailable = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (call) async {
+      if (!nativeAvailable) throw MissingPluginException();
+      final args = call.arguments as Map;
+      return {
+        'ranked': [
+          for (final item in args['candidates'] as List)
+            {'id': (item as Map)['id'], 'score': 1.0, 'reason': 'Local choice'},
+        ],
+        'state': <String, Object?>{},
+        'summary': <String, Object?>{},
+      };
+    });
+    catalog.holdDiscovery = true;
+    await show(tester);
+    await loadDiscovery(tester);
+    catalog.discoveries.single.complete([_discovered]);
+    await tester.pumpAndSettle();
+    final card = find.byKey(const ValueKey('music-discovery-discover001'));
+    await tester.ensureVisible(card);
+    await tester.pumpAndSettle();
+    await tester.tap(
+        find.descendant(of: card, matching: find.byType(PopupMenuButton<int>)));
+    await tester.pumpAndSettle();
+    nativeAvailable = false;
+    await tester.runAsync(() async {
+      final recommendations =
+          RecommendationService.forProfile(db, db.profileId);
+      final excluded = Completer<void>();
+      void changed() {
+        if (recommendations.eligibleMusic([_discovered]).isEmpty &&
+            !excluded.isCompleted) {
+          excluded.complete();
+        }
+      }
+
+      recommendations.changes.addListener(changed);
+      try {
+        await tester.tap(find.text('Not interested'));
+        await tester.pumpAndSettle();
+        await excluded.future.timeout(const Duration(seconds: 5));
+      } finally {
+        recommendations.changes.removeListener(changed);
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(card, findsNothing);
+    expect(
+        RecommendationService.forProfile(db, db.profileId)
+            .eligibleMusic([_discovered]),
+        isEmpty);
+    expect(catalog.discoveryCalls, 1);
+    expect(catalog.searchCalls, 0);
+  });
+
+  testWidgets('external exclusions update retained discovery and stale cards',
+      (tester) async {
+    catalog.holdDiscovery = true;
+    await show(tester);
+    await loadDiscovery(tester);
+    catalog.discoveries.single.complete([_discovered]);
+    await tester.pumpAndSettle();
+    final card = find.byKey(const ValueKey('music-discovery-discover001'));
+    final stale = tester.widget<MusicCatalogCard>(card);
+    await tester.runAsync(() =>
+        RecommendationService.forProfile(db, db.profileId).feedback(
+            _discovered.toVideo(),
+            RecommendationDomain.music,
+            RecommendationFeedback.notInterested));
+    stale.onOpen();
+    expect(router.pushed, isNull);
+    await tester.pumpAndSettle();
+    expect(card, findsNothing);
+    expect(catalog.discoveryCalls, 1);
   });
 
   testWidgets('saved artist discovery loads on tap and retries the same artist',

@@ -38,6 +38,7 @@ const videoDisplayModeSettingName = 'video-display-mode';
 const appLayoutSettingName = 'app-layout';
 const tvAppLayoutSettingName = 'tv-app-layout';
 const phoneNavigationSettingName = 'phone-navigation';
+const homeTabsLayoutSettingName = 'home-tabs-layout';
 const homeContentModeSettingName = 'home-content-mode';
 const homeExperienceSettingName = 'home-experience';
 const navigationBarLabelBehaviorSettingName = 'navigation-bar-label-behavior';

@@ -31,6 +31,28 @@ void main() {
         'See https://notyoutube.com/ for details.');
   });
 
+  test('Shorts use the instance watch route and keep only the timestamp', () {
+    expect(
+        links.rewriteText(
+            'Short: (https://m.youtube.com/shorts/dQw4w9WgXcQ?si=tracking&t=28).'),
+        'Short: (https://instance.example:8443/iv/watch?v=dQw4w9WgXcQ&t=28).');
+  });
+
+  test('live, embedded, music browse and searches retain only instance URLs',
+      () {
+    const origin = 'https://instance.example:8443/iv';
+    expect(
+        links.rewriteText(
+            'https://youtube.com/live/dQw4w9WgXcQ?start=12 https://youtube.com/embed/dQw4w9WgXcQ#t=30'),
+        '$origin/watch?v=dQw4w9WgXcQ&t=12 $origin/watch?v=dQw4w9WgXcQ&t=30');
+    expect(
+        links.rewriteText(
+            'https://music.youtube.com/browse/VLPLmusic https://youtube.com/results?search_query=quiet%20piano'),
+        '$origin/playlist?list=PLmusic $origin/search?q=quiet+piano');
+    expect(links.rewriteText('https://youtube.com/@example?si=private'),
+        '[Unavailable]');
+  });
+
   test('a missing or invalid instance cannot put a direct URL into the text',
       () {
     for (final server in [null, const Server(url: 'https://youtube.com')]) {

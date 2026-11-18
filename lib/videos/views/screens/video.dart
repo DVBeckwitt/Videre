@@ -11,6 +11,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/views/components/device_widget.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
+import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/states/video.dart';
 import 'package:clipious/videos/views/components/add_to_playlist_button.dart';
 import 'package:clipious/videos/views/components/download_modal_sheet.dart';
@@ -19,16 +20,23 @@ import 'package:clipious/videos/views/components/inner_view_tablet.dart';
 import 'package:clipious/videos/views/components/video_share_button.dart';
 
 import '../../../player/states/player.dart';
+import '../../../player/views/components/minimize_on_swipe_down.dart';
 import '../../../player/views/components/video_retry_notice.dart';
 import '../../../utils.dart';
 import '../components/backend_status.dart';
+import '../components/add_to_queue_button.dart';
+import '../components/flow_watch_body.dart';
+import '../components/play_button.dart';
+import '../components/video_thumbnail.dart';
 
 @RoutePage()
 class VideoScreen extends StatelessWidget {
   final String videoId;
   final bool? playNow;
+  final Duration? startAt;
 
-  const VideoScreen({super.key, required this.videoId, this.playNow});
+  const VideoScreen(
+      {super.key, required this.videoId, this.playNow, this.startAt});
 
   void downloadVideo(BuildContext context, VideoState state) {
     var cubit = context.read<VideoCubit>();
@@ -72,19 +80,130 @@ class VideoScreen extends StatelessWidget {
                 VideoState.init(videoId: videoId),
                 downloadManager,
                 player,
-                settings)),
+                settings,
+                startAt: startAt)),
       ],
       child: BlocConsumer<VideoCubit, VideoState>(
         listenWhen: (previous, current) =>
             (playNow ?? settings.state.autoplayVideoOnLoad) &&
             current.video != null &&
-            previous.video != current.video,
+            previous.video == null,
         listener: (context, state) {
           AutoRouter.of(context).maybePop();
-          context.read<VideoCubit>().playVideo(false);
+          context
+              .read<VideoCubit>()
+              .playVideo(false, selectedByUser: playNow == true);
         },
         builder: (context, videoState) {
           return OrientationBuilder(builder: (context, orientation) {
+            final video = videoState.video;
+            if (deviceType == DeviceType.phone &&
+                orientation == Orientation.portrait &&
+                video != null &&
+                !videoState.loadingVideo &&
+                videoState.error.isEmpty) {
+              final cubit = context.read<VideoCubit>();
+              final restart = context.select((PlayerCubit p) =>
+                  p.state.currentlyPlaying?.videoId == video.videoId);
+              final downloadInLibrary = videoState.isDownloaded ||
+                  videoState.downloading ||
+                  videoState.downloadFailed;
+              return Scaffold(
+                backgroundColor: colorScheme.surface,
+                body: SafeArea(
+                  child: MinimizeOnSwipeDown(
+                    key: const ValueKey('flow-watch-details'),
+                    enabled: true,
+                    scrollable: true,
+                    onSwipeDown: () => AutoRouter.of(context).maybePop(),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        VideoThumbnailView(
+                          videoId: video.videoId,
+                          images: video.deArrowThumbnailUrl == null
+                              ? video.videoThumbnails
+                              : null,
+                          thumbnails: video.deArrowThumbnailUrl == null
+                              ? ImageObject.getThumbnailUrlsByPreferredOrder(
+                                  video.videoThumbnails)
+                              : [video.deArrowThumbnailUrl!],
+                          musicThumbnails: video.musicMetadata?.thumbnails,
+                          decoration: const BoxDecoration(color: Colors.black),
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              PlayButton(
+                                watchStyle: true,
+                                icon: restart ? Icons.refresh : null,
+                                hasAudio: video.liveNow != true,
+                                onPressed: restart
+                                    ? cubit.restartVideo
+                                    : cubit.playVideo,
+                              ),
+                              Positioned(
+                                left: 6,
+                                top: 6,
+                                child: IconButton(
+                                  tooltip: MaterialLocalizations.of(context)
+                                      .backButtonTooltip,
+                                  onPressed: () =>
+                                      AutoRouter.of(context).maybePop(),
+                                  style: IconButton.styleFrom(
+                                      backgroundColor: Colors.black54,
+                                      foregroundColor: Colors.white),
+                                  icon: const Icon(Icons.arrow_back_rounded),
+                                ),
+                              ),
+                              Positioned(
+                                right: 5,
+                                bottom: 3,
+                                child: AddToQueueButton(videos: [video]),
+                              ),
+                            ],
+                          ),
+                        ),
+                        VideoBackendStatus(state: videoState),
+                        FlowWatchBody(
+                          key: ValueKey(video.videoId),
+                          video: video,
+                          dislikes: videoState.dislikes,
+                          onDownload: downloadInLibrary
+                              ? () => openDownloadManager(context)
+                              : () => downloadVideo(context, videoState),
+                          downloadIcon:
+                              videoState.downloadedVideo?.downloadComplete ==
+                                          true &&
+                                      !videoState.downloadFailed
+                                  ? Icons.download_done_rounded
+                                  : videoState.downloadFailed
+                                      ? Icons.error_outline_rounded
+                                      : videoState.downloading
+                                          ? Icons.downloading_rounded
+                                          : Icons.download_rounded,
+                          extraAction: distractionFreeMode
+                              ? null
+                              : Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: BlocSelector<SettingsCubit,
+                                      SettingsState, bool>(
+                                    selector: (state) =>
+                                        state.playRecommendedNext,
+                                    builder: (context, enabled) => FilterChip(
+                                      label: Text(locals.addRecommendedToQueue),
+                                      selected: enabled,
+                                      onSelected:
+                                          cubit.togglePlayRecommendedNext,
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
             // we only show the tablet specific view for landscape tablets, phone portrait view is fine here
             var showTabletView = deviceType == DeviceType.tablet &&
                 getOrientation() == Orientation.landscape;

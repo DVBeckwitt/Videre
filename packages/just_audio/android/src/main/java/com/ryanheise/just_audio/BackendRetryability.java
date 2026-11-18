@@ -5,6 +5,7 @@ import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.ExoPlaybackException;
 import com.github.dvbeckwitt.videre.proxy.NerdVpnAccessRequired;
 import com.github.dvbeckwitt.videre.proxy.NativeHttpRetryPolicy;
+import com.github.dvbeckwitt.videre.proxy.LocalDownloadUnavailable;
 import java.io.InterruptedIOException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -38,6 +39,7 @@ final class BackendRetryability {
 
         Integer status = null;
         boolean networkFailure = false;
+        boolean localDownloadUnavailable = false;
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause()) {
             // Inspect the full chain before accepting an outer network wrapper.
@@ -72,9 +74,11 @@ final class BackendRetryability {
                     || cause instanceof UnknownHostException) {
                 networkFailure = true;
             }
+            if (cause instanceof LocalDownloadUnavailable) localDownloadUnavailable = true;
         }
         return status != null
                 || networkFailure
+                || localDownloadUnavailable
                 || error.errorCode == PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT;
     }
 }

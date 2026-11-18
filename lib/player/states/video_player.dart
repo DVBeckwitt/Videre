@@ -14,8 +14,10 @@ import 'package:river_player/river_player.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../globals.dart';
+import '../../downloads/services/download_playback_source.dart';
 import '../../main.dart';
 import '../../network/nerdvpn_access.dart';
+import '../../network/network_proxy.dart';
 import '../../network/tor_browser.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
@@ -26,6 +28,7 @@ import '../media_source.dart';
 import '../models/backend_playback.dart';
 import '../models/media_command.dart';
 import '../models/playback_pitch.dart';
+import '../models/playback_cache_identity.dart';
 import '../models/video_quality.dart';
 import '../views/components/player_controls.dart';
 import '../views/components/subtitle_failure_notice.dart';
@@ -84,6 +87,8 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   String? lastSubtitle,
 }) {
   final sources = <BetterPlayerDataSource>[];
+  final cacheSession =
+      '${DateTime.now().microsecondsSinceEpoch}:${identityHashCode(video)}';
   final seen = <String>{};
   late final subtitles = video.captions.map((caption) {
     return BetterPlayerSubtitlesSource(
@@ -112,6 +117,11 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
       subtitles: subtitles,
       resolutions: _compatibleResolutions(server, resolutions, headers),
       headers: headers,
+      playbackCache: playbackCacheIdentity(
+          video: video,
+          server: server,
+          sourceUrl: url,
+          sessionId: cacheSession),
       useAsmsSubtitles: false,
     ));
   }
@@ -220,6 +230,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   BetterPlayerController? videoController;
   final SettingsCubit settings;
   List<BetterPlayerDataSource> _playbackSources = const [];
+  bool _downloadReuseFailed = false;
   Server? _playbackServer;
   String? _playbackVideoId;
   int _playbackSourceIndex = 0;
@@ -233,6 +244,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   ({int generation, int sourceIndex})? _controllerSetupAttempt;
   Completer<void> _setupCancellation = Completer<void>();
   Function(BetterPlayerEvent)? _videoListener;
+  StreamSubscription<Duration>? _nativePositionSubscription;
   Duration _playbackStartAt = Duration.zero;
   Duration? _pendingSeek;
   int _seekRevision = 0;
@@ -247,6 +259,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   int _playbackPitchSemitones = 0;
   String? _qualityVideoId;
   int? _videoQuality;
+  Video? _qualityMetadata;
+  Future<bool>? _qualityPreparation;
+  Map<String, BetterPlayerDataSource> _onlineQualitySources = const {};
+  BetterPlayerDataSource? _qualityDashSource;
+  BetterPlayerDataSource? _savedQualitySource;
+  VoidCallback? _qualityFailureFeedback;
+  bool _qualityRollbackRefusedNetwork = false;
   BetterPlayerSubtitlesSource? _failedSubtitle;
   late final StreamSubscription<double> _subtitleSizeSubscription;
 
@@ -291,6 +310,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   Future<void> stopForProxyChange() async {
     dismissSubtitleFailure();
     _playbackGeneration++;
+    _clearQualityPreparation();
     _playbackSources = const [];
     _playbackServer = null;
     _playbackVideoId = null;
@@ -311,6 +331,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
 
   @override
   void disposeControllers() {
+    unawaited(_nativePositionSubscription?.cancel());
+    _nativePositionSubscription = null;
     _endSpeedBoost?.call();
     WakelockPlus.disable();
     log.fine("Disposing video controller");
@@ -455,9 +477,26 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (event.betterPlayerEventType == BetterPlayerEventType.exception) {
       if (_backendRecoveryPending || _terminalErrorSent) return;
       final retryable = event.parameters?['backendRetryable'] == true;
+      if (_playbackSourceIndex < _playbackSources.length &&
+          _playbackSources[_playbackSourceIndex].playbackCache?['download']
+              is Map) {
+        _downloadReuseFailed = true;
+        if (_qualityRollbackRefusedNetwork) {
+          _emitTerminalPlaybackError();
+          return;
+        }
+      }
       _sourceBackendRetryable = _playbackInitialized
           ? retryable
           : _sourceBackendRetryable || retryable;
+      if (_playbackInitialized &&
+          !_usingSavedRendition &&
+          _savedQualitySource != null &&
+          !_downloadReuseFailed) {
+        unawaited(_restoreSavedQualitySource(
+            _playbackGeneration, _playbackSourceIndex));
+        return;
+      }
       if (_playbackInitialized && (_playbackOffline || !retryable)) {
         _emitTerminalPlaybackError();
       } else if (_playbackInitialized) {
@@ -647,19 +686,37 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       return;
     }
     _sourceFailurePending = false;
+    if (_playbackSources[sourceIndex].playbackCache?['download'] is Map) {
+      _downloadReuseFailed = true;
+      _savedQualitySource = null;
+      if (_qualityRollbackRefusedNetwork) {
+        _emitTerminalPlaybackError();
+        return;
+      }
+    }
     final server = _playbackServer;
     if (server != null) {
       service.dashManifestResolver
           .invalidate(_playbackSources[sourceIndex].url, server);
     }
     if (_playbackSourceIndex + 1 >= _playbackSources.length) {
-      final recovered = _recoveringInitializedPlayback
+      final recovered = _recoveringInitializedPlayback ||
+              state.video?.downloadPlaybackOnly == true
           ? await _recoverPlayback(generation, sourceIndex)
           : await _recoverBackend(generation, sourceIndex);
       if (!recovered && _isCurrentAttempt(generation, sourceIndex)) {
         _emitTerminalPlaybackError();
       }
       return;
+    }
+    if (_playbackSources[sourceIndex + 1].playbackCache?['download'] is Map) {
+      final admitted = await _qualityRouteIsCurrent();
+      if (!_isCurrentAttempt(generation, sourceIndex)) return;
+      if (!admitted) {
+        _emitTerminalPlaybackError();
+        return;
+      }
+      _reportQualityFailure();
     }
     _playbackSourceIndex++;
     await _setupPlaybackSource();
@@ -754,6 +811,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   Future<void> _setupPlaybackSource({bool seekAfterSetup = true}) async {
+    unawaited(_nativePositionSubscription?.cancel());
+    _nativePositionSubscription = null;
     if (!_isCurrentAttempt(_playbackGeneration, _playbackSourceIndex)) return;
     _sourceBackendRetryable = false;
     final generation = _playbackGeneration;
@@ -780,7 +839,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           defaultTargetPlatform == TargetPlatform.android &&
           state.video?.liveNow != true;
       String? generateManifest() {
-        final video = state.video;
+        final video = _qualityMetadata ?? state.video;
         if (!canUseInlineManifest || video == null) return null;
         final manifestUri = Uri.parse(source.url);
         return buildAdaptiveDashManifest(
@@ -830,7 +889,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             rethrow;
           }
           if (_isCurrentAttempt(generation, sourceIndex)) {
-            _emitTerminalPlaybackError();
+            if (_savedQualitySource != null && !_downloadReuseFailed) {
+              // A manifest refusal does not authorize another remote request.
+              // The already verified local rendition still needs current
+              // session admission, and remains subject to native read guards.
+              await _restoreSavedQualitySource(generation, sourceIndex,
+                  refuseNetwork: true);
+            } else {
+              _emitTerminalPlaybackError();
+            }
           }
           return;
         }
@@ -851,6 +918,15 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       }
       source = source.copyWith(
         url: resolved,
+        playbackCache: (_qualityMetadata ?? state.video) == null
+            ? null
+            : playbackCacheIdentity(
+                video: (_qualityMetadata ?? state.video)!,
+                server: server,
+                sourceUrl: resolved ?? source.url,
+                sessionId: source.playbackCache?['sessionId'] as String? ??
+                    '$generation',
+              ),
         inlineDashManifest: inlineManifest,
         // Generated audio groups lack language labels. Media3 selects audio.
         useAsmsAudioTracks: generatedManifest ? false : null,
@@ -928,6 +1004,27 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _sourceFailurePending = true;
       await _handleSourceFailure(generation, sourceIndex);
     } else {
+      final native = videoController?.videoPlayerController;
+      _nativePositionSubscription =
+          native?.nativePositionStream.listen((position) {
+        if (!_isCurrentAttempt(generation, sourceIndex) ||
+            !_playbackInitialized ||
+            _waitingForInitialSeek ||
+            _terminalErrorSent ||
+            _backendRecoveryPending) {
+          return;
+        }
+        final value = native.value;
+        player.setEvent(MediaEvent<Duration>(
+          type: MediaEventType.playbackSample,
+          value: position,
+          state: value.isBuffering
+              ? MediaState.buffering
+              : value.isPlaying && !value.hasError
+                  ? MediaState.playing
+                  : MediaState.pause,
+        ));
+      });
       if (initialDashHeight == null &&
           !_playbackOffline &&
           (source.videoFormat == BetterPlayerVideoFormat.dash ||
@@ -978,8 +1075,34 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   @override
-  toggleDash() async {
+  Future<void> toggleDash({VoidCallback? onQualityFailure}) async {
     log.fine('toggle dash');
+    if (_usingSavedRendition || _qualityMetadata != null) {
+      if (!await prepareVideoTracks()) return;
+      final useDash = !isUsingDash();
+      final progressive = _onlineQualitySources.values
+          .where(
+              (source) => source.videoFormat == BetterPlayerVideoFormat.other)
+          .toList();
+      final preferred = preferredVideoQualityIndex(
+          progressive
+              .map((source) =>
+                  videoQualityHeight(_selectedResolution(source) ?? ''))
+              .toList(),
+          _videoQuality);
+      final source = useDash
+          ? _qualityDashSource
+          : progressive.elementAtOrNull(preferred ?? 0);
+      if (source == null || !await _qualityRouteIsCurrent()) return;
+      final generation = _playbackGeneration;
+      await settings.toggleDash(useDash);
+      if (generation != _playbackGeneration ||
+          !await _qualityRouteIsCurrent()) {
+        return;
+      }
+      _selectPreparedQualitySource(source, onQualityFailure: onQualityFailure);
+      return;
+    }
     final newState = state.copyWith();
     final useDash = !isUsingDash();
     await player.saveProgress(position().inSeconds);
@@ -1024,11 +1147,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _pendingSeek = null;
     _playbackOffline = offline;
     if (!preservePlaybackIntent) {
+      _downloadReuseFailed = false;
       _requestedPlaying = player.shouldStartPlayback;
     }
     _cancelSetup();
     _setupCancellation = Completer<void>();
     final generation = ++_playbackGeneration;
+    _clearQualityPreparation();
     _parentPlaybackGeneration = player.backendPlaybackGeneration;
     if (_controllerSetup != null) {
       _controllerSetup = null;
@@ -1122,8 +1247,60 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
               ? settings.state.lastSubtitles
               : null,
         );
+        final local = _downloadReuseFailed
+            ? null
+            : await resolveDownloadPlaybackSource(
+                database: db,
+                video: newState.video!,
+                server: server,
+                audioOnly: false,
+                sessionId:
+                    '$generation:${DateTime.now().microsecondsSinceEpoch}',
+                preferredQuality: _videoQuality,
+                isCurrent: () =>
+                    _isCurrentAttempt(generation, 0) && !player.state.isAudio);
+        if (!_isCurrentAttempt(generation, 0) || player.state.isAudio) return;
+        if (local != null) {
+          final resolutions = <String, String>{
+            for (final source in sources) ...?source.resolutions,
+            if (local.videoQuality != null) local.videoQuality!: local.uri,
+          };
+          sources.insert(
+              0,
+              BetterPlayerDataSource(
+                // The platform source DTO accepts content/file URIs here and
+                // carries the same initial-seek and guarded admission metadata.
+                BetterPlayerDataSourceType.network,
+                local.uri,
+                videoFormat: BetterPlayerVideoFormat.other,
+                liveStream: false,
+                playbackCache: local.playbackCache,
+                resolutions: resolutions.isEmpty ? null : resolutions,
+                subtitles: sources.firstOrNull?.subtitles ??
+                    [
+                      if (local.download.captionLabel != null)
+                        BetterPlayerSubtitlesSource(
+                          type: BetterPlayerSubtitlesSourceType.memory,
+                          name: local.download.captionLabel,
+                          contentLoader: () async =>
+                              File(await local.download.subtitlePath)
+                                  .readAsString(),
+                          selectedByDefault: settings.state.rememberSubtitles &&
+                              settings.state.lastSubtitles ==
+                                  local.download.captionLabel,
+                        ),
+                    ],
+                useAsmsSubtitles: false,
+              ));
+        }
         if (sources.isEmpty) {
           _playbackSources = const [];
+          if (newState.video?.downloadPlaybackOnly == true) {
+            _downloadReuseFailed = true;
+            emit(newState);
+            _sourceBackendRetryable = true;
+            if (await _recoverPlayback(generation, 0)) return;
+          }
           _emitTerminalPlaybackError();
           return;
         }
@@ -1329,9 +1506,192 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     return '${source?.name}';
   }
 
+  bool get _usingSavedRendition =>
+      _playbackSourceIndex < _playbackSources.length &&
+      _playbackSources[_playbackSourceIndex].playbackCache?['download'] is Map;
+
+  void _clearQualityPreparation() {
+    _qualityPreparation = null;
+    _qualityMetadata = null;
+    _onlineQualitySources = const {};
+    _qualityDashSource = null;
+    _savedQualitySource = null;
+    _qualityFailureFeedback = null;
+    _qualityRollbackRefusedNetwork = false;
+  }
+
+  Future<bool> _qualityRouteIsCurrent() async {
+    final generation = _playbackGeneration;
+    final index = _playbackSourceIndex;
+    final database = db;
+    final route =
+        state.video?.playbackConnection ?? state.video?.backendPlayback;
+    if (route == null || NetworkProxy.instance.isChanging) return false;
+    try {
+      final selected = await database.getCurrentlySelectedServer();
+      return identical(database, db) &&
+          database.profileId == route.preferredServer.profileId &&
+          !NetworkProxy.instance.isChanging &&
+          _isCurrentAttempt(generation, index) &&
+          route.matches(selected);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Quality is optional metadata: opening this menu must leave the admitted
+  /// saved rendition playing, including when the instance is unavailable.
+  Future<bool> prepareVideoTracks() {
+    if (!_usingSavedRendition) return Future.value(true);
+    final pending = _qualityPreparation;
+    if (pending != null) return pending;
+    final generation = _playbackGeneration;
+    final index = _playbackSourceIndex;
+    final video = state.video!;
+    bool active() =>
+        _isCurrentAttempt(generation, index) && _usingSavedRendition;
+    Future<bool> prepare() async {
+      try {
+        if (!await _qualityRouteIsCurrent() || !active()) return false;
+        if (_qualityMetadata != null) return true;
+        final refreshed =
+            await service.refreshPlaybackVideo(video, isCurrent: active);
+        if (!active() || !await _qualityRouteIsCurrent() || !active()) {
+          return false;
+        }
+        final route = refreshed.playbackConnection ?? refreshed.backendPlayback;
+        if (refreshed.videoId != video.videoId ||
+            route == null ||
+            route.server != _playbackServer) {
+          return false;
+        }
+        final sources = _buildPlaybackDataSources(refreshed, _playbackServer!,
+            preferDash: false,
+            preferProgressiveStartup: false,
+            lastSubtitle: settings.state.rememberSubtitles
+                ? settings.state.lastSubtitles
+                : null);
+        final choices = <String, BetterPlayerDataSource>{};
+        for (final source in sources) {
+          final height = videoQualityHeight(_selectedResolution(source) ?? '');
+          if (height != null && height > 0) {
+            choices.putIfAbsent('${height}p', () => source);
+          }
+        }
+        final dash = sources
+            .where(
+                (source) => source.videoFormat == BetterPlayerVideoFormat.dash)
+            .firstOrNull;
+        if (dash != null) {
+          for (final format in refreshed.adaptiveFormats ?? const []) {
+            final height = videoQualityHeight(
+                format.qualityLabel ?? format.resolution ?? '');
+            final url = parseMediaUrl(format.url);
+            if (format.type.toLowerCase().startsWith('video/') &&
+                height != null &&
+                height > 0 &&
+                url != null &&
+                validatedMediaUrl(proxyMediaUrl(url, _playbackServer!),
+                        _playbackServer!) !=
+                    null) {
+              choices.putIfAbsent('${height}p', () => dash);
+            }
+          }
+        }
+        if (choices.isEmpty && dash == null) return false;
+        _qualityMetadata = refreshed;
+        _onlineQualitySources = choices;
+        _qualityDashSource = dash;
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    late final Future<bool> result;
+    result = prepare().whenComplete(() {
+      if (identical(_qualityPreparation, result)) _qualityPreparation = null;
+    });
+    _qualityPreparation = result;
+    return result;
+  }
+
+  void _selectPreparedQualitySource(BetterPlayerDataSource source,
+      {VoidCallback? onQualityFailure}) {
+    // Keep the parent's source/queue occurrence intact. Fresh URLs are decoder
+    // metadata only; recovery still refreshes that same admitted occurrence.
+    _playbackStartAt =
+        _pendingSeek ?? (_playbackInitialized ? position() : _playbackStartAt);
+    _waitingForInitialSeek = _playbackStartAt > Duration.zero;
+    if (_usingSavedRendition) {
+      _savedQualitySource = _playbackSources[_playbackSourceIndex];
+    }
+    _qualityFailureFeedback = onQualityFailure;
+    _qualityRollbackRefusedNetwork = false;
+    _playbackSources = [
+      source,
+      if (!_downloadReuseFailed && _savedQualitySource != null)
+        _savedQualitySource!,
+      ..._onlineQualitySources.values
+          .toSet()
+          .where((other) => other.url != source.url)
+    ];
+    _playbackGeneration++;
+    _playbackSourceIndex = 0;
+    _playbackInitialized = false;
+    _terminalErrorSent = false;
+    _sourceFailurePending = false;
+    _backendRecoveryPending = false;
+    WakelockPlus.enable();
+    unawaited(_setupPlaybackSource());
+  }
+
+  void _reportQualityFailure() {
+    final feedback = _qualityFailureFeedback;
+    _qualityFailureFeedback = null;
+    try {
+      feedback?.call();
+    } catch (_) {
+      // Feedback is optional; it cannot prevent restoring admitted playback.
+    }
+  }
+
+  Future<void> _restoreSavedQualitySource(int generation, int index,
+      {bool refuseNetwork = false}) async {
+    final saved = _savedQualitySource;
+    if (saved == null || !_isCurrentAttempt(generation, index)) return;
+    _backendRecoveryPending = true;
+    final resumeAt = position();
+    final admitted = await _qualityRouteIsCurrent();
+    if (!_isCurrentAttempt(generation, index)) return;
+    _backendRecoveryPending = false;
+    if (!admitted || _downloadReuseFailed) {
+      _emitTerminalPlaybackError();
+      return;
+    }
+    _playbackStartAt = _pendingSeek ?? resumeAt;
+    _waitingForInitialSeek = _playbackStartAt > Duration.zero;
+    _qualityRollbackRefusedNetwork = refuseNetwork;
+    // The chosen online source has already failed. Do not revisit it after a
+    // failed rollback; a real local failure follows normal bounded recovery.
+    _playbackSources = [saved];
+    _playbackGeneration++;
+    _playbackSourceIndex = 0;
+    _playbackInitialized = false;
+    _sourceFailurePending = false;
+    _reportQualityFailure();
+    await _setupPlaybackSource();
+  }
+
   @override
   List<String> getVideoTracks() {
     if (state.video == null) return [];
+    if (_usingSavedRendition && _qualityMetadata != null) {
+      final local = _selectedResolution(_playbackSources[_playbackSourceIndex]);
+      return {if (local != null) local, ..._onlineQualitySources.keys}.toList()
+        ..sort((a, b) =>
+            (videoQualityHeight(b) ?? 0).compareTo(videoQualityHeight(a) ?? 0));
+    }
     if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
       return videoController?.betterPlayerAsmsTracks
               .map(_videoTrackToString)
@@ -1446,9 +1806,27 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   }
 
   @override
-  Future<void> selectVideoTrack(int index) async {
+  Future<void> selectVideoTrack(int index,
+      {VoidCallback? onQualityFailure}) async {
     final tracks = getVideoTracks();
     if (index < 0 || index >= tracks.length) return;
+    if (_usingSavedRendition && _qualityMetadata != null) {
+      final track = tracks[index];
+      final local = _selectedResolution(_playbackSources[_playbackSourceIndex]);
+      if (videoQualityHeight(track) == videoQualityHeight(local ?? '')) return;
+      final source = _onlineQualitySources[track];
+      final generation = _playbackGeneration;
+      if (source == null ||
+          !await _qualityRouteIsCurrent() ||
+          generation != _playbackGeneration) {
+        return;
+      }
+      final height = videoQualityHeight(track);
+      _videoQuality = height;
+      _selectPreparedQualitySource(source, onQualityFailure: onQualityFailure);
+      await _rememberVideoQuality(height);
+      return;
+    }
     if (videoController?.betterPlayerAsmsTracks.isNotEmpty ?? false) {
       final betterPlayerAsmsTrack =
           videoController?.betterPlayerAsmsTracks[index];

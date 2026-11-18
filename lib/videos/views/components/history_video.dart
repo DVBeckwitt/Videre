@@ -12,8 +12,9 @@ import '../../states/history.dart';
 
 class HistoryVideoView extends StatelessWidget {
   final String videoId;
+  final VoidCallback? onLongPress;
 
-  const HistoryVideoView({super.key, required this.videoId});
+  const HistoryVideoView({super.key, required this.videoId, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
@@ -21,34 +22,38 @@ class HistoryVideoView extends StatelessWidget {
       create: (context) => HistoryItemCubit(HistoryItemState(videoId: videoId)),
       child: BlocBuilder<HistoryItemCubit, HistoryItemState>(
           builder: (context, state) {
-        return AnimatedCrossFade(
-          firstChild: const CompactVideoPlaceHolder(),
-          secondChild: state.cachedVid != null
-              ? CompactVideo(
-                  onTap: () async {
-                    final video = state.cachedVid!.toVideo();
-                    if (video.musicMetadata == null) {
-                      AutoRouter.of(context)
-                          .push(VideoRoute(videoId: video.videoId));
-                      return;
-                    }
-                    try {
-                      await MusicScreen.playTracks(context, [video]);
-                    } catch (_) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: Text(AppLocalizations.of(context)!
-                                .musicPlaybackError)));
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: onLongPress,
+          child: AnimatedCrossFade(
+            firstChild: const CompactVideoPlaceHolder(),
+            secondChild: state.cachedVid != null
+                ? CompactVideo(
+                    onTap: () async {
+                      final video = state.cachedVid!.toVideo();
+                      if (video.musicMetadata == null) {
+                        AutoRouter.of(context)
+                            .push(VideoRoute(videoId: video.videoId));
+                        return;
                       }
-                    }
-                  },
-                  video: state.cachedVid?.toVideo(),
-                )
-              : const CompactVideoPlaceHolder(),
-          crossFadeState: state.loading
-              ? CrossFadeState.showFirst
-              : CrossFadeState.showSecond,
-          duration: AppMotion.duration(context),
+                      try {
+                        await MusicScreen.playTracks(context, [video]);
+                      } catch (_) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(AppLocalizations.of(context)!
+                                  .musicPlaybackError)));
+                        }
+                      }
+                    },
+                    video: state.cachedVid?.toVideo(),
+                  )
+                : const CompactVideoPlaceHolder(),
+            crossFadeState: state.loading
+                ? CrossFadeState.showFirst
+                : CrossFadeState.showSecond,
+            duration: AppMotion.duration(context),
+          ),
         );
       }),
     );

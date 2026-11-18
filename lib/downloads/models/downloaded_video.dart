@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
@@ -13,6 +14,18 @@ part 'downloaded_video.freezed.dart';
 part 'downloaded_video.g.dart';
 
 const String _downloadFolder = 'downloads';
+
+class _PlaybackProvenanceConverter
+    implements JsonConverter<DownloadPlaybackProvenance?, Object?> {
+  const _PlaybackProvenanceConverter();
+
+  @override
+  DownloadPlaybackProvenance? fromJson(Object? json) =>
+      DownloadPlaybackProvenance.tryFromJson(json);
+
+  @override
+  Object? toJson(DownloadPlaybackProvenance? value) => value?.toJson();
+}
 
 class _MusicMetadataConverter
     implements JsonConverter<MusicMetadata?, Map<String, dynamic>?> {
@@ -58,6 +71,8 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       @Default(false) bool storageFailed,
       String? folderUri,
       String? storageUri,
+      @_PlaybackProvenanceConverter()
+      DownloadPlaybackProvenance? playbackProvenance,
       @Default(false) bool audioOnly,
       DownloadContainer? container,
       String? audioTrackId,

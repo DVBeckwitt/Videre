@@ -9,17 +9,21 @@ class MusicCatalogCard extends StatefulWidget {
   final String? subtitle;
   final List<ImageObject> thumbnails;
   final VoidCallback onOpen;
+  final VoidCallback? onLongPress;
   final bool artist;
   final Widget? badge;
+  final bool showPlayIndicator;
 
   const MusicCatalogCard({
     super.key,
     required this.title,
     required this.thumbnails,
     required this.onOpen,
+    this.onLongPress,
     this.subtitle,
     this.artist = false,
     this.badge,
+    this.showPlayIndicator = false,
   });
 
   @override
@@ -33,30 +37,44 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final radius = BorderRadius.circular(widget.artist ? 1000 : 12);
+    final radius = BorderRadius.circular(widget.artist ? 1000 : 6);
+    final artwork = widget.artist
+        ? ChannelAvatar(name: widget.title, images: widget.thumbnails)
+        : widget.thumbnails.isEmpty
+            ? DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHigh,
+                  borderRadius: radius,
+                ),
+                child: Icon(Icons.album_outlined,
+                    size: 40, color: colors.onSurfaceVariant),
+              )
+            : Thumbnail(
+                images: widget.thumbnails,
+                decoration: BoxDecoration(borderRadius: radius),
+              );
     final card = Semantics(
       button: true,
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(6),
         child: InkWell(
           onTap: widget.onOpen,
+          onLongPress: widget.onLongPress,
           onFocusChange: (focused) {
             setState(() => _focused = focused);
             if (focused) {
               Scrollable.ensureVisible(context, alignment: 0.5);
             }
           },
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(6),
           child: Container(
-            padding: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: _focused ? colors.primary : Colors.transparent,
-                width: 2,
-              ),
-            ),
+            foregroundDecoration: _focused
+                ? BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: colors.primary, width: 2),
+                  )
+                : null,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,41 +82,35 @@ class _MusicCatalogCardState extends State<MusicCatalogCard> {
                 AspectRatio(
                   aspectRatio: 1,
                   child: ExcludeSemantics(
-                    child: widget.artist
-                        ? ChannelAvatar(
-                            name: widget.title, images: widget.thumbnails)
-                        : widget.thumbnails.isEmpty
-                            ? DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: colors.surfaceContainerHighest,
-                                  borderRadius: radius,
-                                ),
-                                child: Icon(
-                                  widget.artist
-                                      ? Icons.person_outline_rounded
-                                      : Icons.album_outlined,
-                                  size: 40,
-                                  color: colors.onSurfaceVariant,
-                                ),
-                              )
-                            : Thumbnail(
-                                images: widget.thumbnails,
-                                decoration: BoxDecoration(borderRadius: radius),
-                              ),
+                    child: Stack(fit: StackFit.expand, children: [
+                      artwork,
+                      if (widget.showPlayIndicator)
+                        const PositionedDirectional(
+                          end: 8,
+                          bottom: 8,
+                          child: CircleAvatar(
+                            radius: 18,
+                            backgroundColor: Colors.black54,
+                            foregroundColor: Colors.white,
+                            child: Icon(Icons.play_arrow_rounded, size: 22),
+                          ),
+                        ),
+                    ]),
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 6),
                 Text(
                   widget.title,
-                  style: theme.textTheme.titleSmall?.copyWith(height: 1.3),
+                  style: theme.textTheme.bodyLarge
+                      ?.copyWith(height: 1.3, fontWeight: FontWeight.w700),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (widget.subtitle?.isNotEmpty == true) ...[
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
                     widget.subtitle!,
-                    style: theme.textTheme.bodySmall
+                    style: theme.textTheme.bodyMedium
                         ?.copyWith(color: colors.onSurfaceVariant, height: 1.3),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -137,10 +149,13 @@ class MusicCatalogShelf extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
-      final width = constraints.maxWidth < 500 ? 154.0 : 184.0;
+      final width = constraints.maxWidth < 600 ? 128.0 : 160.0;
       final scaler = MediaQuery.textScalerOf(context);
-      final height =
-          width + 30 + scaler.scale(14) * 1.3 * 2 + scaler.scale(12) * 1.3 * 2;
+      final text = Theme.of(context).textTheme;
+      final height = width +
+          16 +
+          scaler.scale(text.bodyLarge!.fontSize!) * 1.3 * 2 +
+          scaler.scale(text.bodyMedium!.fontSize!) * 1.3 * 2;
       // A real nested horizontal scrollable owns shelf drags, including at its
       // ends, so a gesture on artwork cannot switch the enclosing app page.
       return SizedBox(
@@ -150,7 +165,7 @@ class MusicCatalogShelf extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           physics: const AlwaysScrollableScrollPhysics(),
           itemCount: itemCount,
-          separatorBuilder: (_, __) => const SizedBox(width: 10),
+          separatorBuilder: (_, __) => const SizedBox(width: 24),
           itemBuilder: (context, index) => SizedBox(
             width: width,
             child: itemBuilder(context, index),

@@ -434,6 +434,9 @@ void main() {
       expect(gesturePlayer.state.isHidden, isFalse);
       expect(gesturePlayer.state.isPlaying, isTrue);
       expect(tester.element(find.byType(PlayerControls)), same(controls));
+      // Expanding mounts the Watch chrome. Run its zero-delay animation
+      // callbacks after checking the first frame and before tearing it down.
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     });

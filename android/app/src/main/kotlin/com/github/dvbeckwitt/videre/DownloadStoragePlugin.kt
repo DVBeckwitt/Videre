@@ -20,6 +20,7 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import com.github.dvbeckwitt.videre.proxy.DownloadDocumentIntegrity
 
 /** The engine owns storage work; opening the picker is the only Activity operation. */
 class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityResultListener {
@@ -81,6 +82,10 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
                 }
             }
             "checkFolder" -> run(result) { folder(call.argument<String>("uri")!!); null }
+            "inspectDocument" -> run(result) {
+                DownloadDocumentIntegrity.inspect(context, call.argument<String>("uri")!!,
+                    call.argument<String>("folderUri")!!)
+            }
             "prepareDocument" -> run(result) {
                 val tree = Uri.parse(call.argument<String>("folder")!!)
                 val parent = folder(tree.toString())
@@ -94,7 +99,7 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
                 val name = call.argument<String>("name")!!
                 val mime = call.argument<String>("mime")!!
                 require(name.isNotBlank() && name.length <= 240 && !name.contains('/') && !name.contains('\\'))
-                require(mime == "video/webm" || mime == "audio/webm")
+                require(mime in setOf("video/webm", "audio/webm", "video/mp4", "audio/mp4"))
                 (DocumentsContract.createDocument(context.contentResolver, parent, mime, name)
                     ?: throw IOException()).toString()
             }

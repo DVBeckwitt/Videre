@@ -2,12 +2,40 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/states/server_settings.dart';
 import 'package:clipious/settings/views/components/server_account_dialogs.dart';
+import 'package:clipious/settings/views/tv/screens/manage_single_server.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
 import 'package:clipious/utils/views/tv/components/tv_text_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _PendingCookieSettings extends Cubit<ServerSettingsState>
+    implements ServerSettingsCubit {
+  final Future<void> pending;
+  var saves = 0;
+
+  _PendingCookieSettings(this.pending)
+      : super(const ServerSettingsState(
+            server: Server(url: 'https://instance.example')));
+
+  @override
+  Future<void> logInWithCookie(String username, String password) async {
+    saves++;
+    emit(state.copyWith(authenticating: true));
+    try {
+      await pending;
+    } finally {
+      emit(state.copyWith(authenticating: false));
+    }
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+}
 
 void main() {
   Future<void> selectAction(
@@ -91,6 +119,74 @@ void main() {
     }
   }
 
+  for (final fails in [false, true]) {
+    testWidgets(
+        'TV cookie completion preserves a newer keyboard route (failure: $fails)',
+        (tester) async {
+      final saving = Completer<void>();
+      final settings = _PendingCookieSettings(saving.future);
+      addTearDown(settings.close);
+      const screen = TvManageSingleServerScreen(
+          server: Server(url: 'https://instance.example'));
+      await tester.pumpWidget(MaterialApp(
+        locale: const Locale('en'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: BlocProvider<ServerSettingsCubit>.value(
+          value: settings,
+          child: Builder(
+              builder: (context) => Scaffold(
+                    body: TextButton(
+                      onPressed: () =>
+                          screen.showLogInWithCookiesDialog(context),
+                      child: const Text('Open cookie login'),
+                    ),
+                  )),
+        ),
+      ));
+      await tester.tap(find.text('Open cookie login'));
+      await tester.pumpAndSettle();
+      final fields =
+          tester.widgetList<TvTextField>(find.byType(TvTextField)).toList();
+      expect(fields, hasLength(2));
+      fields[0].controller.text = 'test-person';
+      fields[1].controller.text = 'test-password';
+      final field = find.byType(TvTextField).last;
+      final keyboard = TvTextFieldScreen(
+          controller: tester.widget<TvTextField>(field).controller,
+          obscureText: true);
+      final locals = AppLocalizations.of(tester.element(field))!;
+      await selectAction(tester, locals.ok, true);
+      await tester.pump();
+      expect(settings.saves, 1);
+
+      // TvTextField opens this same keyboard screen above the pending form.
+      final navigator = Navigator.of(tester.element(field));
+      unawaited(
+          navigator.push(MaterialPageRoute<void>(builder: (_) => keyboard)));
+      await tester.pumpAndSettle();
+      expect(find.byType(TvTextFieldScreen), findsOneWidget);
+      if (fails) {
+        saving.completeError(StateError('raw backend failure detail'));
+      } else {
+        saving.complete();
+      }
+      await tester.pumpAndSettle();
+      expect(find.byType(TvTextFieldScreen), findsOneWidget);
+      expect(find.byType(TextField), findsOneWidget);
+      expect(find.text(locals.accountActionFailed), findsNothing);
+      expect(settings.state.authenticating, isFalse);
+      expect(tester.takeException(), isNull);
+
+      navigator.pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(TvTextField), findsNWidgets(2));
+      await selectAction(tester, locals.cancel, true);
+      await tester.pumpAndSettle();
+      expect(find.text('Open cookie login'), findsOneWidget);
+    });
+  }
+
   for (final television in [false, true]) {
     final platform = television ? 'TV' : 'phone';
 
@@ -148,6 +244,154 @@ void main() {
       expect(closed, isTrue);
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.text('Outer settings route'), findsOneWidget);
+      expect(find.text('Server settings route'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        '$platform cancelled pending Basic save cannot close a replacement dialog',
+        (tester) async {
+      final saving = Completer<void>();
+      var saves = 0;
+      var closed = 0;
+      await showHost(tester,
+          television: television,
+          save: (name, value) {
+            saves++;
+            return saving.future;
+          },
+          onDialogClosed: () => closed++);
+      await enterCredentials(tester, television);
+      await selectAction(tester, 'Add', television);
+      await tester.pump();
+      expect(saves, 1);
+
+      await selectAction(tester, 'Cancel', television);
+      await tester.pumpAndSettle();
+      expect(closed, 1);
+      await tester.tap(find.text('Open Basic authentication'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      saving.complete();
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(closed, 1);
+      expect(find.text('Outer settings route'), findsOneWidget);
+      expect(find.text('Server settings route'), findsOneWidget);
+      expect(saves, 1);
+      expect(tester.takeException(), isNull);
+
+      await selectAction(tester, 'Cancel', television);
+      await tester.pumpAndSettle();
+      expect(closed, 2);
+    });
+
+    testWidgets(
+        '$platform failed Basic save shows a sanitized error and retains its form',
+        (tester) async {
+      final saving = Completer<void>();
+      var saves = 0;
+      var closed = false;
+      await showHost(tester,
+          television: television,
+          save: (name, value) {
+            saves++;
+            return saves == 1 ? saving.future : Future<void>.value();
+          },
+          onDialogClosed: () => closed = true);
+      final locals = AppLocalizations.of(
+          tester.element(find.text('Server settings route')))!;
+      await enterCredentials(tester, television);
+      await selectAction(tester, locals.add, television);
+      await tester.pump();
+
+      saving.completeError(StateError('raw backend failure detail'));
+      await tester.pumpAndSettle();
+      expect(find.text(locals.accountActionFailed), findsOneWidget);
+      expect(find.textContaining('raw backend failure detail'), findsNothing);
+      expect(closed, isFalse);
+      expect(tester.takeException(), isNull);
+
+      await selectAction(tester, locals.ok, television);
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      final fields = television
+          ? tester
+              .widgetList<TvTextField>(find.byType(TvTextField))
+              .map((field) => field.controller.text)
+          : tester
+              .widgetList<TextField>(find.byType(TextField))
+              .map((field) => field.controller!.text);
+      expect(fields, ['test-person', 'test-päss:word']);
+      expect(find.text('Server settings route'), findsOneWidget);
+      await selectAction(tester, locals.add, television);
+      await tester.pumpAndSettle();
+      expect(saves, 2);
+      expect(closed, isTrue);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('Server settings route'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('$platform pending Basic save cannot close a newer overlay',
+        (tester) async {
+      final saving = Completer<void>();
+      await showHost(tester,
+          television: television,
+          save: (name, value) => saving.future,
+          onDialogClosed: () {});
+      await enterCredentials(tester, television);
+      await selectAction(tester, 'Add', television);
+      await tester.pump();
+      final host = tester.element(find.text('Server settings route'));
+      unawaited(showDialog<void>(
+        context: host,
+        useRootNavigator: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Newer settings overlay'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Dismiss overlay'),
+            ),
+          ],
+        ),
+      ));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Newer settings overlay'), findsOneWidget);
+
+      saving.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Newer settings overlay'), findsOneWidget);
+      expect(find.text('Server settings route'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.text('Dismiss overlay'));
+      await tester.pumpAndSettle();
+      expect(find.text('Newer settings overlay'), findsNothing);
+      expect(find.text('Server settings route'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('$platform pending Basic save ignores repeated submit',
+        (tester) async {
+      final saving = Completer<void>();
+      var saves = 0;
+      await showHost(tester, television: television, save: (name, value) {
+        saves++;
+        return saving.future;
+      }, onDialogClosed: () {});
+      await enterCredentials(tester, television);
+      await selectAction(tester, 'Add', television);
+      await tester.pump();
+      await selectAction(tester, 'Add', television);
+      await tester.pump();
+      expect(saves, 1);
+      saving.complete();
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
       expect(find.text('Server settings route'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });

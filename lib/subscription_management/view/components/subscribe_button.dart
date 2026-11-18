@@ -10,9 +10,13 @@ import '../../../notifications/views/components/bell_icon.dart';
 class SubscribeButton extends StatelessWidget {
   final String channelId;
   final String subCount;
+  final bool watchStyle;
 
   const SubscribeButton(
-      {super.key, required this.channelId, required this.subCount});
+      {super.key,
+      required this.channelId,
+      required this.subCount,
+      this.watchStyle = false});
 
   static showSubscriptionSheet(BuildContext context) {
     final cubit = context.read<SubscribeButtonCubit>();
@@ -77,9 +81,21 @@ class SubscribeButton extends StatelessWidget {
           child: BlocBuilder<SubscribeButtonCubit, SubscribeButtonState>(
             builder: (context, state) {
               var cubit = context.read<SubscribeButtonCubit>();
+              final label =
+                  state.isSubscribed ? locals.subscribed : locals.subscribe;
               return SizedBox(
-                  height: 25,
+                  height: watchStyle ? null : 25,
                   child: FilledButton.tonal(
+                    style: watchStyle
+                        ? FilledButton.styleFrom(
+                            backgroundColor: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                            foregroundColor:
+                                Theme.of(context).colorScheme.onSurface,
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                          )
+                        : null,
                     onPressed: () {
                       if (state.isSubscribed) {
                         cubit.unsubscribe();
@@ -97,11 +113,12 @@ class SubscribeButton extends StatelessWidget {
                                     child: CircularProgressIndicator(
                                   strokeWidth: 1,
                                 )))
-                            : Icon(state.isSubscribed ? Icons.done : Icons.add),
+                            : Icon(state.isSubscribed ? Icons.done : Icons.add,
+                                size: watchStyle ? 18 : 24),
                         Padding(
                           padding: const EdgeInsets.only(left: 8.0),
                           child: Text(
-                              '${(state.isSubscribed ? locals.subscribed : locals.subscribe)} | $subCount'),
+                              subCount.isEmpty ? label : '$label | $subCount'),
                         ),
                       ],
                     ),

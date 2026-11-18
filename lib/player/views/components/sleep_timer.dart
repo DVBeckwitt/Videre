@@ -6,6 +6,8 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:gap/gap.dart';
 
+import 'player_modal_back_handler.dart';
+
 const sleepTimerMinDuration = Duration(minutes: 1);
 const sleepTimerMaxDuration = Duration(hours: 6);
 
@@ -16,7 +18,9 @@ class SleepTimerSheet extends StatelessWidget {
     return showSafeModalBottomSheet<SleepTimer?>(
         showDragHandle: true,
         context: context,
-        builder: (context) => const SleepTimerSheet());
+        builder: (context) => const PlayerModalBackHandler(
+              child: SleepTimerSheet(),
+            ));
   }
 
   @override

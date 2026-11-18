@@ -23,10 +23,27 @@ class TvButton extends StatelessWidget {
       this.onFocusChanged,
       this.builder});
 
+  Color? _focusedForeground(Color background, ColorScheme colors) {
+    if (background.a == 0) return null;
+    if (background == colors.primary) return colors.onPrimary;
+    if (background == colors.primaryContainer) return colors.onPrimaryContainer;
+    if (background == colors.secondaryContainer) {
+      return colors.onSecondaryContainer;
+    }
+
+    final luminance =
+        Color.alphaBlend(background, colors.surface).computeLuminance();
+    final contrastWithBlack = (luminance + 0.05) / 0.05;
+    final contrastWithWhite = 1.05 / (luminance + 0.05);
+    return contrastWithBlack >= contrastWithWhite ? Colors.black : Colors.white;
+  }
+
   @override
   Widget build(BuildContext context) {
-    Brightness brightness = Theme.of(context).brightness;
-    ColorScheme colors = Theme.of(context).colorScheme;
+    final colors = Theme.of(context).colorScheme;
+    final defaultFocusColor = colors.brightness == Brightness.dark
+        ? colors.primaryContainer
+        : colors.primary;
     return Focus(
       autofocus: autofocus ?? false,
       onFocusChange: onFocusChanged,
@@ -35,22 +52,34 @@ class TvButton extends StatelessWidget {
           : KeyEventResult.ignored,
       child: Builder(
         builder: (ctx) {
-          bool hasFocus = Focus.of(ctx).hasFocus;
+          final hasFocus = Focus.of(ctx).hasFocus;
+          final background = hasFocus
+              ? focusedColor ?? defaultFocusColor
+              : unfocusedColor ?? colors.secondaryContainer;
+          final foreground =
+              hasFocus ? _focusedForeground(background, colors) : null;
+          final buildChild = builder;
+          final content = buildChild == null
+              ? child
+              : Builder(builder: (context) => buildChild(context, hasFocus));
 
           return Align(
             alignment: Alignment.centerLeft,
             child: AnimatedContainer(
               duration: AppMotion.duration(context),
               decoration: BoxDecoration(
-                color: hasFocus
-                    ? focusedColor ??
-                        (brightness == Brightness.dark
-                            ? colors.primaryContainer
-                            : colors.primary)
-                    : unfocusedColor ?? colors.secondaryContainer,
+                color: background,
                 borderRadius: BorderRadius.circular(borderRadius ?? 2000),
               ),
-              child: builder != null ? builder!(ctx, hasFocus) : child,
+              child: content == null
+                  ? null
+                  : DefaultTextStyle.merge(
+                      style: TextStyle(color: foreground),
+                      child: IconTheme.merge(
+                        data: IconThemeData(color: foreground),
+                        child: content,
+                      ),
+                    ),
             ),
           );
         },

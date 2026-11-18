@@ -13,6 +13,7 @@ import 'package:clipious/search/models/search_sort_by.dart';
 import 'package:clipious/search/models/search_suggestion.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/search/states/search.dart';
+import 'package:clipious/search/views/components/search_history_matching.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -87,6 +88,13 @@ void main() {
     expect(db.getSearchHistory(), ['cats']);
   });
 
+  test('typed history keeps prefix matches ahead of substring matches', () {
+    final history = ['wild horses', 'Horse care', 'A horse', 'horses', 'cats'];
+    expect(recentOrMatchingSearches(history, ' HORSE '),
+        ['Horse care', 'horses', 'wild horses', 'A horse']);
+    expect(recentOrMatchingSearches(history, ' '), history);
+  });
+
   testWidgets('moving the caret keeps submitted results visible',
       (tester) async {
     await tester.runAsync(() => search.search('cats'));
@@ -108,6 +116,19 @@ void main() {
     suggestions.complete(0);
     await tester.pump();
     expect(search.state.suggestions, ['birds suggestion']);
+  });
+
+  testWidgets('selected instance links do not become suggestion queries',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(
+          const Server(url: 'https://instance.example/iv', inUse: true));
+      await app.initState();
+    });
+    search.state.queryController.text =
+        'https://instance.example/iv/watch?v=dQw4w9WgXcQ&t=42';
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(suggestions.requests, isEmpty);
   });
 
   testWidgets('suggestion errors leave typing and submitting usable',
@@ -205,6 +226,22 @@ void main() {
     final field = tester.widget<EditableText>(find.byType(EditableText));
     expect(field.controller.text, isEmpty);
     expect(field.focusNode.hasFocus, isTrue);
+
+    await tester.enterText(find.byType(TextField), 'birds');
+    await tester.pump(const Duration(milliseconds: 500));
+    suggestions.complete(1);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Fill search field'));
+    await tester.pumpAndSettle();
+    expect(field.controller.text, 'birds suggestion');
+    expect(field.focusNode.hasFocus, isTrue);
+    expect(find.text('Videos'), findsNothing);
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(field.controller.text, 'dogs suggestion');
+    expect(field.focusNode.hasFocus, isFalse);
+    expect(find.text('Videos'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

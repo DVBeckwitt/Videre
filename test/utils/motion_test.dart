@@ -38,6 +38,13 @@ void main() {
                       MotionScope(preference: value, child: child!)))),
       home: home);
 
+  Color? renderedColor(WidgetTester tester, Finder widget) => tester
+      .widget<RichText>(
+          find.descendant(of: widget, matching: find.byType(RichText)))
+      .text
+      .style
+      ?.color;
+
   for (final mode in MotionPreference.values) {
     testWidgets('${mode.name}: fade finishes and preserves child state',
         (tester) async {
@@ -286,8 +293,72 @@ void main() {
         of: find.byType(TvButton), matching: find.byType(AnimatedContainer)));
     expect(button.duration, Duration.zero);
     expect((button.decoration! as BoxDecoration).color, Colors.red);
+    expect(renderedColor(tester, find.text('Play')), Colors.black);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     expect(activated, 1);
     expect(tester.takeException(), isNull);
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('TV focus contrasts inherited content in ${brightness.name}',
+        (tester) async {
+      final dark = brightness == Brightness.dark;
+      final idle = dark ? Colors.white : Colors.black;
+      final focused = dark ? Colors.black : Colors.white;
+      final colors = ColorScheme.fromSeed(
+        seedColor: Colors.blue,
+        brightness: brightness,
+      ).copyWith(
+        primary: Colors.black,
+        onPrimary: Colors.white,
+        primaryContainer: Colors.white,
+        onPrimaryContainer: Colors.black,
+      );
+      await tester.pumpWidget(app(Theme(
+        data: ThemeData(colorScheme: colors),
+        child: Scaffold(
+          body: DefaultTextStyle(
+            style: TextStyle(color: idle),
+            child: IconTheme(
+              data: IconThemeData(color: idle),
+              child: Column(children: [
+                const TvButton(
+                  child: Row(children: [Text('Music'), Icon(Icons.music_note)]),
+                ),
+                TvButton(builder: (context, _) {
+                  return Row(children: [
+                    Text('Search', style: DefaultTextStyle.of(context).style),
+                    const Icon(Icons.search),
+                    const Text('Styled',
+                        style: TextStyle(color: Colors.purple)),
+                    const Icon(Icons.library_music, color: Colors.purple),
+                  ]);
+                }),
+              ]),
+            ),
+          ),
+        ),
+      )));
+
+      final music = find.text('Music');
+      final search = find.text('Search');
+      expect(renderedColor(tester, music), idle);
+      expect(renderedColor(tester, search), idle);
+
+      Focus.of(tester.element(music)).requestFocus();
+      await tester.pumpAndSettle();
+      expect(renderedColor(tester, music), focused);
+      expect(renderedColor(tester, find.byIcon(Icons.music_note)), focused);
+
+      Focus.of(tester.element(search)).requestFocus();
+      await tester.pumpAndSettle();
+      expect(renderedColor(tester, music), idle);
+      expect(renderedColor(tester, find.byIcon(Icons.music_note)), idle);
+      expect(renderedColor(tester, search), focused);
+      expect(renderedColor(tester, find.byIcon(Icons.search)), focused);
+      expect(renderedColor(tester, find.text('Styled')), Colors.purple);
+      expect(renderedColor(tester, find.byIcon(Icons.library_music)),
+          Colors.purple);
+    });
+  }
 }

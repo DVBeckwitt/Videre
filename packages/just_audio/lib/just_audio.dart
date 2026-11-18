@@ -2858,16 +2858,21 @@ abstract class AudioSource {
   /// for background audio purposes, consider using the plugin audio_service
   /// instead of just_audio_background.
   static UriAudioSource uri(Uri uri,
-      {Map<String, String>? headers, dynamic tag}) {
+      {Map<String, String>? headers,
+      dynamic tag,
+      Map<String, Object?>? playbackCache}) {
     bool hasExtension(Uri uri, String extension) =>
         uri.path.toLowerCase().endsWith('.$extension') ||
         uri.fragment.toLowerCase().endsWith('.$extension');
     if (hasExtension(uri, 'mpd')) {
-      return DashAudioSource(uri, headers: headers, tag: tag);
+      return DashAudioSource(uri,
+          headers: headers, tag: tag, playbackCache: playbackCache);
     } else if (hasExtension(uri, 'm3u8')) {
-      return HlsAudioSource(uri, headers: headers, tag: tag);
+      return HlsAudioSource(uri,
+          headers: headers, tag: tag, playbackCache: playbackCache);
     } else {
-      return ProgressiveAudioSource(uri, headers: headers, tag: tag);
+      return ProgressiveAudioSource(uri,
+          headers: headers, tag: tag, playbackCache: playbackCache);
     }
   }
 
@@ -3054,22 +3059,42 @@ abstract class UriAudioSource extends IndexedAudioSource {
 class ProgressiveAudioSource extends UriAudioSource {
   final ProgressiveAudioSourceOptions? options;
 
+  /// Transient Videre source admission and representation identity, never headers.
+  final Map<String, Object?>? playbackCache;
+
   ProgressiveAudioSource(
     super.uri, {
     super.headers,
     super.tag,
     super.duration,
     this.options,
+    this.playbackCache,
   });
 
   @override
-  AudioSourceMessage _toMessage() => ProgressiveAudioSourceMessage(
+  AudioSourceMessage _toMessage() => _CachedProgressiveAudioSourceMessage(
         id: _id,
         uri: _effectiveUri.toString(),
         headers: _mergedHeaders,
         tag: tag,
         options: options?._toMessage(),
+        playbackCache: playbackCache,
       );
+}
+
+class _CachedProgressiveAudioSourceMessage
+    extends ProgressiveAudioSourceMessage {
+  final Map<String, Object?>? playbackCache;
+  _CachedProgressiveAudioSourceMessage(
+      {required super.id,
+      required super.uri,
+      super.headers,
+      super.tag,
+      super.options,
+      this.playbackCache});
+  @override
+  Map<dynamic, dynamic> toMap() => super.toMap()
+    ..addAll({if (playbackCache != null) 'playbackCache': playbackCache});
 }
 
 /// A publisher-hosted podcast file. Android permits publisher/CDN redirects
@@ -3109,17 +3134,35 @@ class _PodcastAudioSourceMessage extends ProgressiveAudioSourceMessage {
 /// If headers are set, just_audio will create a cleartext local HTTP proxy on
 /// your device to forward HTTP requests with headers included.
 class DashAudioSource extends UriAudioSource {
+  final Map<String, Object?>? playbackCache;
   DashAudioSource(Uri uri,
-      {Map<String, String>? headers, dynamic tag, Duration? duration})
+      {Map<String, String>? headers,
+      dynamic tag,
+      Duration? duration,
+      this.playbackCache})
       : super(uri, headers: headers, tag: tag, duration: duration);
 
   @override
-  AudioSourceMessage _toMessage() => DashAudioSourceMessage(
+  AudioSourceMessage _toMessage() => _CachedDashAudioSourceMessage(
         id: _id,
         uri: _effectiveUri.toString(),
         headers: _mergedHeaders,
         tag: tag,
+        playbackCache: playbackCache,
       );
+}
+
+class _CachedDashAudioSourceMessage extends DashAudioSourceMessage {
+  final Map<String, Object?>? playbackCache;
+  _CachedDashAudioSourceMessage(
+      {required super.id,
+      required super.uri,
+      super.headers,
+      super.tag,
+      this.playbackCache});
+  @override
+  Map<dynamic, dynamic> toMap() => super.toMap()
+    ..addAll({if (playbackCache != null) 'playbackCache': playbackCache});
 }
 
 /// An [AudioSource] representing an HLS stream. The following URI schemes are
@@ -3136,17 +3179,35 @@ class DashAudioSource extends UriAudioSource {
 /// If headers are set, just_audio will create a cleartext local HTTP proxy on
 /// your device to forward HTTP requests with headers included.
 class HlsAudioSource extends UriAudioSource {
+  final Map<String, Object?>? playbackCache;
   HlsAudioSource(Uri uri,
-      {Map<String, String>? headers, dynamic tag, Duration? duration})
+      {Map<String, String>? headers,
+      dynamic tag,
+      Duration? duration,
+      this.playbackCache})
       : super(uri, headers: headers, tag: tag, duration: duration);
 
   @override
-  AudioSourceMessage _toMessage() => HlsAudioSourceMessage(
+  AudioSourceMessage _toMessage() => _CachedHlsAudioSourceMessage(
         id: _id,
         uri: _effectiveUri.toString(),
         headers: _mergedHeaders,
         tag: tag,
+        playbackCache: playbackCache,
       );
+}
+
+class _CachedHlsAudioSourceMessage extends HlsAudioSourceMessage {
+  final Map<String, Object?>? playbackCache;
+  _CachedHlsAudioSourceMessage(
+      {required super.id,
+      required super.uri,
+      super.headers,
+      super.tag,
+      this.playbackCache});
+  @override
+  Map<dynamic, dynamic> toMap() => super.toMap()
+    ..addAll({if (playbackCache != null) 'playbackCache': playbackCache});
 }
 
 /// An [AudioSource] for a period of silence.

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/videos/views/components/add_to_playlist_button.dart';
 import 'package:clipious/videos/views/components/download_modal_sheet.dart';
@@ -16,16 +17,28 @@ class VideoModalSheet extends StatelessWidget {
 
   const VideoModalSheet({super.key, required this.video});
 
-  static void showVideoModalSheet(BuildContext context, Video video) {
+  static void showVideoModalSheet(BuildContext context, Video video,
+      {WidgetBuilder? recommendationActions, bool inPlayer = false}) {
     showSafeModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         builder: (BuildContext context) {
-          return SafeArea(
-            child: VideoModalSheet(
-              video: video,
-            ),
-          );
+          final actions = VideoModalSheet(video: video);
+          final sheet = recommendationActions == null
+              ? SafeArea(child: actions)
+              : SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                        child: recommendationActions(context),
+                      ),
+                      actions,
+                    ],
+                  ),
+                );
+          return inPlayer ? PlayerModalBackHandler(child: sheet) : sheet;
         });
   }
 

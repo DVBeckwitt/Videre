@@ -1,6 +1,7 @@
 import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/community_video_filter.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/globals.dart' show innerHorizontalPadding;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -13,6 +14,7 @@ import 'package:clipious/videos/views/components/video_in_list.dart';
 import '../../../downloads/models/downloaded_video.dart';
 import '../../../utils/models/paginated_list.dart';
 import 'community_browse.dart';
+import 'compact_video.dart';
 
 const smallVideoAspectRatio = 0.76;
 const smallVideoViewHeight = 140.0;
@@ -35,6 +37,9 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
   final bool showMetrics;
   final bool allowModalSheet;
   final bool communityBrowse;
+  final bool nestedScroll;
+  final VideoCardLayout layout;
+  final bool showChannel;
   final Function(BuildContext context, Video video)? showVideoModalSheet;
   final Function(BuildContext context, Video video)? openVideoOverride;
 
@@ -47,6 +52,9 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
       this.showMetrics = true,
       this.allowModalSheet = true,
       this.communityBrowse = false,
+      this.nestedScroll = false,
+      this.layout = VideoCardLayout.standard,
+      this.showChannel = true,
       this.showVideoModalSheet,
       this.openVideoOverride,
       this.small = false});
@@ -68,7 +76,10 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
             items = filteredVideos(state.items.cast()).cast<T>();
           }
 
-          var gridCount = small ? 1 : getGridCount(context);
+          final gridCount = small || layout == VideoCardLayout.flowRow
+              ? 1
+              : getGridCount(context);
+          final gap = small ? 8.0 : 5.0;
           return CommunityBrowse<T>(
             items: items,
             match: communityBrowse
@@ -78,116 +89,156 @@ class VideoList<T extends IdedVideo> extends StatelessWidget {
             builder: (context, items, hiddenNotice) {
               final canLoadMore = (subscriptionFeed || hiddenNotice != null) &&
                   state.itemList.getHasMore();
-              return Stack(
-                alignment: Alignment.topCenter,
-                children: [
-                  if (!small && state.loading) const TopListLoading(),
-                  state.error != ItemListErrors.none &&
-                          items.isEmpty &&
-                          hiddenNotice == null
-                      ? Container(
-                          alignment: Alignment.center,
-                          color: colorScheme.surface,
-                          child: InkWell(
-                              onTap: subscriptionFeed
-                                  ? cubit.retryItems
-                                  : cubit.getItems,
-                              child: Text(
-                                state.error ==
-                                        ItemListErrors.nerdVpnApprovalPending
-                                    ? locals.nerdVpnAccessPendingShort
-                                    : locals.couldntFetchVideos,
-                                style: small
-                                    ? textTheme.labelSmall
-                                    : textTheme.bodyMedium,
-                              )),
-                        )
-                      : items.isEmpty && !state.loading && hiddenNotice == null
-                          ? FilledButton.tonal(
-                              onPressed: canLoadMore
-                                  ? cubit.getMoreItems
-                                  : cubit.refreshItems,
-                              child: Text(canLoadMore
-                                  ? locals.loadMore
-                                  : locals.refresh))
-                          : Padding(
-                              padding: EdgeInsets.only(top: small ? 0.0 : 4.0),
-                              child: RefreshIndicator(
-                                onRefresh: () async =>
-                                    !small && state.itemList.hasRefresh()
-                                        ? await cubit.refreshItems()
-                                        : Future.delayed(Duration.zero),
-                                child: GridView(
-                                  controller: cubit.scrollController,
-                                  scrollDirection: scrollDirection,
-                                  gridDelegate:
-                                      SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: gridCount,
-                                    crossAxisSpacing: small ? 8 : 5,
-                                    mainAxisSpacing: small ? 8 : 5,
-                                    mainAxisExtent: small &&
-                                            scrollDirection == Axis.horizontal
-                                        ? smallVideoViewHeight /
-                                            smallVideoAspectRatio
-                                        : null,
-                                    childAspectRatio: small
-                                        ? smallVideoAspectRatio
-                                        : getGridAspectRatio(context),
-                                  ),
-                                  children: [
-                                    if (hiddenNotice != null)
-                                      Center(child: hiddenNotice),
-                                    ...items.map((v) {
-                                      Video? onlineVideo;
-                                      DownloadedVideo? offlineVideo;
-
-                                      if (v is Video) {
-                                        onlineVideo = v;
-                                      }
-
-                                      if (v is DownloadedVideo) {
-                                        offlineVideo = v;
-                                      }
-
-                                      return VideoListItem(
-                                        small: small,
-                                        showMetrics: showMetrics,
-                                        key: ValueKey(
-                                            '${v.videoId}-${small.toString()}'),
-                                        video: onlineVideo,
-                                        offlineVideo: offlineVideo,
-                                        animateDownload: animateDownload,
-                                        showVideoModalSheet:
-                                            showVideoModalSheet,
-                                        allowModalSheet: allowModalSheet,
-                                        openVideoOverride: openVideoOverride,
-                                        showCommunityLabels: communityBrowse,
-                                      );
-                                    }),
-                                    if (canLoadMore && !state.loading)
-                                      Center(
-                                        child: TextButton.icon(
-                                            onPressed: state.error ==
-                                                    ItemListErrors.none
-                                                ? cubit.getMoreItems
-                                                : cubit.retryItems,
-                                            icon: const Icon(Icons.expand_more),
-                                            label: Text(state.error ==
-                                                    ItemListErrors.none
-                                                ? locals.loadMore
-                                                : locals.retry)),
+              return NotificationListener<ScrollNotification>(
+                onNotification: (notice) {
+                  if (nestedScroll &&
+                      notice.depth == 0 &&
+                      notice is ScrollUpdateNotification) {
+                    cubit.onScrollEvent(notice.metrics);
+                  }
+                  return false;
+                },
+                child: Stack(
+                  alignment: Alignment.topCenter,
+                  children: [
+                    if (!small && state.loading) const TopListLoading(),
+                    state.error != ItemListErrors.none &&
+                            items.isEmpty &&
+                            hiddenNotice == null
+                        ? Container(
+                            alignment: Alignment.center,
+                            color: colorScheme.surface,
+                            child: InkWell(
+                                onTap: subscriptionFeed
+                                    ? cubit.retryItems
+                                    : cubit.getItems,
+                                child: Text(
+                                  state.error ==
+                                          ItemListErrors.nerdVpnApprovalPending
+                                      ? locals.nerdVpnAccessPendingShort
+                                      : locals.couldntFetchVideos,
+                                  style: small
+                                      ? textTheme.labelSmall
+                                      : textTheme.bodyMedium,
+                                )),
+                          )
+                        : items.isEmpty &&
+                                !state.loading &&
+                                hiddenNotice == null
+                            ? FilledButton.tonal(
+                                onPressed: canLoadMore
+                                    ? cubit.getMoreItems
+                                    : cubit.refreshItems,
+                                child: Text(canLoadMore
+                                    ? locals.loadMore
+                                    : locals.refresh))
+                            : Padding(
+                                padding:
+                                    EdgeInsets.only(top: small ? 0.0 : 4.0),
+                                child: RefreshIndicator(
+                                  onRefresh: () async =>
+                                      !small && state.itemList.hasRefresh()
+                                          ? await cubit.refreshItems()
+                                          : Future.delayed(Duration.zero),
+                                  child: LayoutBuilder(
+                                      builder: (context, constraints) {
+                                    final cardWidth = (constraints.maxWidth -
+                                            gap * (gridCount - 1)) /
+                                        gridCount;
+                                    final scale =
+                                        MediaQuery.textScalerOf(context);
+                                    final extent = switch (layout) {
+                                      VideoCardLayout.flowRow =>
+                                        compactVideoRowHeight(context) +
+                                            innerHorizontalPadding,
+                                      VideoCardLayout.flowFeed =>
+                                        cardWidth * 9 / 16 +
+                                            scale.scale(16) * 2.45 +
+                                            scale.scale(12) * 1.5 +
+                                            32,
+                                      _ => small &&
+                                              scrollDirection == Axis.horizontal
+                                          ? smallVideoViewHeight /
+                                              smallVideoAspectRatio
+                                          : null,
+                                    };
+                                    return GridView(
+                                      controller: nestedScroll
+                                          ? null
+                                          : cubit.scrollController,
+                                      primary: nestedScroll ? true : null,
+                                      scrollDirection: scrollDirection,
+                                      gridDelegate:
+                                          SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: gridCount,
+                                        crossAxisSpacing: gap,
+                                        mainAxisSpacing: gap,
+                                        mainAxisExtent: extent,
+                                        childAspectRatio: small
+                                            ? smallVideoAspectRatio
+                                            : getGridAspectRatio(context),
                                       ),
-                                    if (state.loading)
-                                      ...repeatWidget(
-                                          () => VideoListItemPlaceHolder(
-                                                small: small,
-                                              ),
-                                          count: 5 * gridCount)
-                                  ],
+                                      children: [
+                                        if (hiddenNotice != null)
+                                          Center(child: hiddenNotice),
+                                        ...items.map((v) {
+                                          Video? onlineVideo;
+                                          DownloadedVideo? offlineVideo;
+
+                                          if (v is Video) {
+                                            onlineVideo = v;
+                                          }
+
+                                          if (v is DownloadedVideo) {
+                                            offlineVideo = v;
+                                          }
+
+                                          return VideoListItem(
+                                            small: small,
+                                            showMetrics: showMetrics,
+                                            key: ValueKey(
+                                                '${v.videoId}-${small.toString()}'),
+                                            video: onlineVideo,
+                                            offlineVideo: offlineVideo,
+                                            animateDownload: animateDownload,
+                                            showVideoModalSheet:
+                                                showVideoModalSheet,
+                                            allowModalSheet: allowModalSheet,
+                                            openVideoOverride:
+                                                openVideoOverride,
+                                            showCommunityLabels:
+                                                communityBrowse,
+                                            layout: layout,
+                                            showChannel: showChannel,
+                                          );
+                                        }),
+                                        if (canLoadMore && !state.loading)
+                                          Center(
+                                            child: TextButton.icon(
+                                                onPressed: state.error ==
+                                                        ItemListErrors.none
+                                                    ? cubit.getMoreItems
+                                                    : cubit.retryItems,
+                                                icon: const Icon(
+                                                    Icons.expand_more),
+                                                label: Text(state.error ==
+                                                        ItemListErrors.none
+                                                    ? locals.loadMore
+                                                    : locals.retry)),
+                                          ),
+                                        if (state.loading)
+                                          ...repeatWidget(
+                                              () => VideoListItemPlaceHolder(
+                                                    small: small,
+                                                  ),
+                                              count: 5 * gridCount)
+                                      ],
+                                    );
+                                  }),
                                 ),
-                              ),
-                            )
-                ],
+                              )
+                  ],
+                ),
               );
             },
           );

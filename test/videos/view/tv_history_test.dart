@@ -21,6 +21,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video_in_list.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:clipious/videos/views/components/history_video.dart';
+import 'package:clipious/videos/views/components/history.dart';
 import 'package:clipious/videos/views/components/video_thumbnail.dart';
 import 'package:clipious/videos/views/tv/components/video_item.dart';
 import 'package:clipious/videos/views/tv/screens/history.dart';
@@ -52,8 +53,24 @@ class _HistoryService extends Service {
   final metadataRequests = <String>[];
   final failingPages = <int>{};
   final failingVideos = <String>{};
+  final removedVideos = <String>[];
+  int clearCalls = 0;
   Future<List<String>> Function(int page)? historyResponse;
   Future<Video> Function(String videoId)? metadataResponse;
+
+  @override
+  Future<void> clearUserHistory() async {
+    clearCalls++;
+    serverPages.clear();
+  }
+
+  @override
+  Future<void> deleteFromUserHistory(String videoId) async {
+    removedVideos.add(videoId);
+    for (final page in serverPages.values) {
+      page.remove(videoId);
+    }
+  }
 
   @override
   Future<List<String>> getUserHistory(int page, int maxResults) async {
@@ -100,7 +117,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing}) async {
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
     if (failPlayback) throw StateError('Playback unavailable');
     calls.add((videos: videos, audio: audio, startAt: startAt));
   }
@@ -217,6 +234,197 @@ void main() {
   Future<void> focusCard(WidgetTester tester, String id) async {
     Focus.of(cardContext(tester, id)).requestFocus();
     await tester.pump();
+  }
+
+  testWidgets('phone history swipes preserve rows and holding offers deletion',
+      (tester) async {
+    await tester.runAsync(() async {
+      await seed('keep');
+      await seed('held');
+    });
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+      value: app,
+      child: const MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: HistoryView()),
+      ),
+    ));
+    await settle(tester);
+    final row = find.byKey(const ValueKey('held'));
+    await tester.drag(row, const Offset(-700, 0));
+    await settle(tester);
+    await tester.drag(row, const Offset(700, 0));
+    await settle(tester);
+    expect(db.getHistoryVideoByVideoId('held'), isNotNull);
+    expect(find.byType(AlertDialog), findsNothing);
+
+    await tester.longPress(row);
+    await settle(tester);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(db.getHistoryVideoByVideoId('held'), isNotNull);
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await settle(tester);
+    expect(db.getHistoryVideoByVideoId('held'), isNotNull);
+
+    await tester.longPress(row);
+    await settle(tester);
+    // Inserting another item cannot retarget the held row's delete action.
+    await tester.runAsync(() => seed('newest'));
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    await settle(tester);
+    expect(db.getHistoryVideoByVideoId('held'), isNull);
+    expect(db.getHistoryVideoByVideoId('keep'), isNotNull);
+    expect(db.getHistoryVideoByVideoId('newest'), isNotNull);
+    expect(row, findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final changeAccount in [false, true]) {
+    testWidgets(
+        'phone pending history hold guards account change: $changeAccount',
+        (tester) async {
+      const server = Server(
+          url: 'https://instance.example',
+          authToken: 'test-token',
+          inUse: true);
+      await tester.runAsync(() => db.upsertServer(server));
+      app.setServer(server);
+      history.serverPages[1] = ['pending'];
+      final pending = Completer<Video>();
+      history.metadataResponse = (_) => pending.future;
+      await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: const MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(body: HistoryView()),
+        ),
+      ));
+      await settle(tester);
+      await tester.tap(find.byType(DropdownButton<bool>));
+      await settle(tester);
+      await tester.tap(find.text('On your server').last);
+      await settle(tester);
+      await tester.longPress(find.byKey(const ValueKey('pending')));
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('pending'), findsOneWidget);
+      if (changeAccount) {
+        app.setServer(const Server(
+            url: 'https://instance.example', authToken: 'other-test-token'));
+        await settle(tester);
+      }
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await settle(tester);
+      expect(history.removedVideos, changeAccount ? isEmpty : ['pending']);
+      expect(find.byKey(const ValueKey('pending')),
+          changeAccount ? findsOneWidget : findsNothing);
+      pending.complete(const Video(videoId: 'pending', title: 'Late metadata'));
+      await settle(tester);
+      expect(db.getHistoryVideoByVideoId('pending'), isNull);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final changeAccount in [false, true]) {
+    testWidgets(
+        'phone bulk history confirmation guards account change: $changeAccount',
+        (tester) async {
+      const server = Server(
+          url: 'https://instance.example',
+          authToken: 'test-token',
+          inUse: true);
+      await tester.runAsync(() => db.upsertServer(server));
+      app.setServer(server);
+      history.serverPages[1] = ['pending-clear'];
+      await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: const MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(body: HistoryView()),
+        ),
+      ));
+      await settle(tester);
+      await tester.tap(find.byType(DropdownButton<bool>));
+      await settle(tester);
+      await tester.tap(find.text('On your server').last);
+      await settle(tester);
+      await tester.tap(find.byType(FloatingActionButton));
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(history.clearCalls, 0);
+
+      if (changeAccount) {
+        app.setServer(const Server(
+            url: 'https://instance.example', authToken: 'other-test-token'));
+        await settle(tester);
+      }
+      await tester.tap(find.widgetWithText(TextButton, 'OK'));
+      await settle(tester);
+      expect(history.clearCalls, changeAccount ? 0 : 1);
+      expect(history.serverPages.isEmpty, !changeAccount);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final transition in ['unchanged', 'profile', 'disposed']) {
+    testWidgets('phone bulk local history confirmation guards $transition',
+        (tester) async {
+      final originalProfile = db.profileId;
+      final visible = ValueNotifier(true);
+      addTearDown(visible.dispose);
+      await tester.runAsync(() => seed('original-history'));
+      await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: ValueListenableBuilder<bool>(
+              valueListenable: visible,
+              builder: (context, showHistory, _) =>
+                  showHistory ? const HistoryView() : const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ));
+      await settle(tester);
+      await tester.tap(find.byType(FloatingActionButton));
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      if (transition == 'profile') {
+        await tester.runAsync(() async {
+          final next = await db.createProfile('Next person');
+          await db.useProfile(next.id);
+          await seed('next-history');
+        });
+      } else if (transition == 'disposed') {
+        visible.value = false;
+      }
+      await settle(tester);
+      // A dialog can remain on its Navigator after the originating history
+      // list has been removed or the active person's database has changed.
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'OK'));
+      await settle(tester);
+
+      expect(
+          db
+              .forProfile(originalProfile)
+              .getHistoryVideoByVideoId('original-history'),
+          transition == 'unchanged' ? isNull : isNotNull);
+      if (transition == 'profile') {
+        expect(db.getHistoryVideoByVideoId('next-history'), isNotNull);
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   }
 
   for (final tv in [false, true]) {

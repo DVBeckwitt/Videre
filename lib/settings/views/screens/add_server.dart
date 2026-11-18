@@ -204,12 +204,15 @@ class AddServerScreen extends StatelessWidget {
         field1Title: locals.name,
         field2Title: locals.value,
         field2Secret: false,
-        okText: locals.add, onOk: (key, value) async {
+        okText: locals.add, onOk: (dialogContext, key, value) async {
       var cubit = context.read<AddServerCubit>();
-      await cubit.addHeader(key, value);
-      if (context.mounted) {
-        Navigator.of(context).pop();
-      }
+      await runServerAccountAction(dialogContext, () async {
+        await cubit.addHeader(key, value);
+        if (dialogContext.mounted &&
+            ModalRoute.of(dialogContext)?.isCurrent == true) {
+          Navigator.of(dialogContext).pop();
+        }
+      });
     });
   }
 

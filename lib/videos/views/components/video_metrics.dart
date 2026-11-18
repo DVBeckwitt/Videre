@@ -12,12 +12,16 @@ class VideoMetrics extends StatelessWidget {
   final double iconSize;
   final bool showDuration;
 
+  /// Feed cards reserve reactions for details, leaving a quiet views/date row.
+  final bool compact;
+
   const VideoMetrics(
       {super.key,
       this.video,
       this.dislikes,
       this.style,
       this.showDuration = true,
+      this.compact = false,
       this.iconSize = 20});
 
   Widget metric(IconData icon, String label) => Row(
@@ -25,7 +29,11 @@ class VideoMetrics extends StatelessWidget {
         children: [
           Icon(icon, size: iconSize),
           const SizedBox(width: 4),
-          Flexible(child: Text(label, style: style)),
+          Flexible(
+              child: Text(label,
+                  style: style,
+                  maxLines: compact ? 1 : null,
+                  overflow: compact ? TextOverflow.ellipsis : null)),
         ],
       );
 
@@ -47,6 +55,8 @@ class VideoMetrics extends StatelessWidget {
           locals.premieresIn(
               prettyDuration(startsAt.difference(now), maxUnits: 1)),
           style: style,
+          maxLines: compact ? 1 : null,
+          overflow: compact ? TextOverflow.ellipsis : null,
         ),
       ];
     } else {
@@ -62,11 +72,11 @@ class VideoMetrics extends StatelessWidget {
       }
 
       var likes = video?.likeCount ?? 0;
-      if (likes > 0) {
+      if (!compact && likes > 0) {
         metrics.add(metric(Icons.thumb_up, compactCurrency.format(likes)));
       }
 
-      if (dislikes != null && dislikes! >= 0) {
+      if (!compact && dislikes != null && dislikes! >= 0) {
         metrics.add(metric(Icons.thumb_down,
             compactCurrency.format(dislikes).replaceAll(".00", "")));
       }
@@ -101,6 +111,8 @@ class VideoMetrics extends StatelessWidget {
                             child: Text(
                               locals.streamIsLive,
                               style: style,
+                              maxLines: compact ? 1 : null,
+                              overflow: compact ? TextOverflow.ellipsis : null,
                             ),
                           )),
                         ],
@@ -111,18 +123,33 @@ class VideoMetrics extends StatelessWidget {
               : Text(
                   date,
                   style: style,
+                  maxLines: compact ? 1 : null,
+                  overflow: compact ? TextOverflow.ellipsis : null,
                 ),
         );
       }
     }
 
-    return metrics.isNotEmpty
-        ? Wrap(
-            spacing: 16,
-            runSpacing: 4,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: metrics,
-          )
-        : const SizedBox.shrink();
+    if (metrics.isEmpty) return const SizedBox.shrink();
+    // A feed reserves one secondary line below the author. Keep that contract
+    // at large text: secondary metadata may ellipsize, while the two-line title
+    // remains fully sized. Detail metrics continue wrapping below.
+    if (compact) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < metrics.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            Flexible(child: metrics[i]),
+          ],
+        ],
+      );
+    }
+    return Wrap(
+      spacing: 16,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: metrics,
+    );
   }
 }

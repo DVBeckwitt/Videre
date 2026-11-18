@@ -50,16 +50,22 @@ object ProxyDataSource {
         }
     }
 
-    @Synchronized
     internal fun configure(values: Map<*, *>) {
-        val next = ProxyPolicy.fromMap(values)
-        val store = checkNotNull(preferences) { "SOCKS5 transport is not initialized." }
-        if (next == policy) return
-        check(store.edit().putString("configuration", JSONObject(next.toMap()).toString()).commit()) {
-            "Could not save SOCKS5 proxy settings."
+        val changed = synchronized(this) {
+            val next = ProxyPolicy.fromMap(values)
+            val store = checkNotNull(preferences) { "SOCKS5 transport is not initialized." }
+            if (next == policy) false else {
+                check(store.edit().putString("configuration", JSONObject(next.toMap()).toString()).commit()) {
+                    "Could not save SOCKS5 proxy settings."
+                }
+                calls.configure(next)
+                policy = next
+                true
+            }
         }
-        calls.configure(next)
-        policy = next
+        // Cache admission takes the configuration monitor. Never wait for a
+        // reader to close while holding that monitor in the other direction.
+        if (changed) PlaybackMediaCache.invalidate()
     }
 
     @Synchronized
@@ -68,6 +74,8 @@ object ProxyDataSource {
     }.toMap()
 
     internal fun newApiCall(request: Request, options: ApiRedirectOptions): Call = calls.newApiCall(request, options)
+
+    internal fun cancelMediaCalls(accountKey: String? = null) = calls.cancelMediaCalls(accountKey)
 
     /** PKCE requests use the same persisted proxy policy and never follow a redirect. */
     fun newTokenExchangeCall(request: Request): Call =
@@ -121,6 +129,7 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         ProxyDataSource.initialize(binding.applicationContext)
+        PlaybackMediaCache.initialize(binding.applicationContext)
         synchronized(pendingLock) {
             attached = true
             engineEpoch++
@@ -224,6 +233,23 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     result.success(null)
                 }
                 "getConfiguration" -> result.success(ProxyDataSource.configuration())
+                "playbackCacheStatus" -> result.success(PlaybackMediaCache.status())
+                "configurePlaybackCache" -> {
+                    PlaybackMediaCache.configure(call.arguments as? Map<*, *> ?: throw IllegalArgumentException())
+                    result.success(PlaybackMediaCache.status())
+                }
+                "clearPlaybackCache" -> {
+                    PlaybackMediaCache.clear()
+                    result.success(PlaybackMediaCache.status())
+                }
+                "invalidatePlaybackCache" -> {
+                    PlaybackMediaCache.invalidate()
+                    result.success(null)
+                }
+                "removePlaybackCacheProfile" -> {
+                    PlaybackMediaCache.removeProfile(call.argument<String>("profileId") ?: throw IllegalArgumentException())
+                    result.success(null)
+                }
                 "request" -> request(call.arguments, result)
                 else -> result.notImplemented()
             }

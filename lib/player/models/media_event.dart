@@ -16,6 +16,8 @@ enum MediaEventType {
   durationChanged,
   bufferChanged,
   progress,
+  // Actual decoder position; never animated/extrapolated UI progress.
+  playbackSample,
   volumeChanged,
   fullScreenChanged,
   miniDisplayChanged,

@@ -1,4 +1,27 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+
+/// Shares the expanded surface's raw drag with its video, header and scrollable
+/// details. The decoder and playback state stay mounted throughout the gesture.
+class MinimizeDragScope extends InheritedWidget {
+  final Object identity;
+  final ValueChanged<double> onUpdate;
+  final ValueChanged<bool> onEnd;
+
+  const MinimizeDragScope(
+      {super.key,
+      required this.identity,
+      required this.onUpdate,
+      required this.onEnd,
+      required super.child});
+
+  static MinimizeDragScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<MinimizeDragScope>();
+
+  @override
+  bool updateShouldNotify(MinimizeDragScope oldWidget) =>
+      identity != oldWidget.identity;
+}
 
 class MinimizeOnSwipeDown extends StatefulWidget {
   final bool enabled;
@@ -25,6 +48,8 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   final _activePointers = <int>{};
   Offset? _startPosition;
   bool _scrollDragStarted = false;
+  bool _previewing = false;
+  Object? _gestureIdentity;
   final _scrollController = ScrollController();
 
   @override
@@ -36,6 +61,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   void _pointerDown(PointerDownEvent event) {
     _activePointers.add(event.pointer);
     if (_activePointers.length > 1) {
+      _endPreview(false);
       _pointer = null;
       _startPosition = null;
       return;
@@ -48,6 +74,47 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
       _pointer = event.pointer;
       _startPosition = event.position;
       _scrollDragStarted = false;
+      _gestureIdentity = MinimizeDragScope.maybeOf(context)?.identity;
+    }
+  }
+
+  bool get _current =>
+      widget.enabled &&
+      _gestureIdentity == MinimizeDragScope.maybeOf(context)?.identity;
+
+  void _endPreview(bool minimize) {
+    if (!_previewing) return;
+    _previewing = false;
+    MinimizeDragScope.maybeOf(context)?.onEnd(minimize);
+  }
+
+  void _pointerMove(PointerMoveEvent event) {
+    if (event.pointer != _pointer || _startPosition == null) return;
+    if (!_current) {
+      _endPreview(false);
+      _pointer = null;
+      _startPosition = null;
+      return;
+    }
+    final distance = event.position - _startPosition!;
+    // A horizontal seek/track swipe retains ownership for its whole gesture.
+    if (!_previewing &&
+        distance.dx.abs() > kTouchSlop &&
+        distance.dx.abs() > distance.dy.abs()) {
+      _pointer = null;
+      _startPosition = null;
+      return;
+    }
+    if ((!widget.scrollable || _scrollDragStarted) &&
+        (_previewing ||
+            (distance.dy > kTouchSlop && distance.dy > distance.dx.abs()))) {
+      final motion = MinimizeDragScope.maybeOf(context);
+      if (motion != null) {
+        _previewing = true;
+        // Muzza BottomSheet.kt dispatches raw deltas while held, then settles
+        // at an anchor. Do not ease or repeatedly restart a tween under a finger.
+        motion.onUpdate(distance.dy.clamp(0.0, double.infinity));
+      }
     }
   }
 
@@ -69,10 +136,13 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     _pointer = null;
     _startPosition = null;
 
-    if (widget.enabled &&
+    final minimize = _current &&
         (!widget.scrollable || _scrollDragStarted) &&
         distance.dy > _swipeDistance &&
-        distance.dy > distance.dx.abs()) {
+        distance.dy > distance.dx.abs();
+    if (_previewing) {
+      _endPreview(minimize);
+    } else if (minimize) {
       widget.onSwipeDown();
     }
   }
@@ -80,6 +150,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
   void _pointerCancel(PointerCancelEvent event) {
     _activePointers.remove(event.pointer);
     if (event.pointer == _pointer) {
+      _endPreview(false);
       _pointer = null;
       _startPosition = null;
     }
@@ -90,6 +161,7 @@ class _MinimizeOnSwipeDownState extends State<MinimizeOnSwipeDown> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: _pointerDown,
+      onPointerMove: _pointerMove,
       onPointerUp: _pointerUp,
       onPointerCancel: _pointerCancel,
       child: widget.scrollable

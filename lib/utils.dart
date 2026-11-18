@@ -11,6 +11,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/sharelink.dart';
 import 'package:clipious/utils/views/tv/components/tv_button.dart';
@@ -104,18 +105,21 @@ Future<void> showAlertDialog(
 }
 
 void showSharingSheet(BuildContext context, ShareLinks links,
-    {bool showTimestampOption = false}) {
+    {bool showTimestampOption = false, bool inPlayer = false}) {
   var locals = AppLocalizations.of(context)!;
   final profileId = db.profileId;
   final owner = db.forProfile(profileId);
   final app = context.read<AppCubit?>();
   final revision = app?.state.sessionRevision;
   final selected = app?.state.server;
+  // The sheet shares this occurrence's position even if the queue advances
+  // while the user chooses a destination.
+  final sharingPosition =
+      showTimestampOption ? context.read<PlayerCubit>().state.position : null;
   bool shareWithTimestamp = false;
   bool sharing = false;
   bool failed = false;
-  Duration? timestamp() =>
-      shareWithTimestamp ? context.read<PlayerCubit>().state.position : null;
+  Duration? timestamp() => shareWithTimestamp ? sharingPosition : null;
 
   bool currentSession() =>
       context.mounted &&
@@ -132,12 +136,53 @@ void showSharingSheet(BuildContext context, ShareLinks links,
     context: context,
     showDragHandle: true,
     builder: (BuildContext context) {
-      return StatefulBuilder(
+      final sheet = StatefulBuilder(
         builder: (BuildContext context, StateSetter setState) {
           setShowTimeStamp(bool? value) {
             setState(() {
               shareWithTimestamp = value ?? false;
             });
+          }
+
+          Future<void> share({required bool youtube}) async {
+            if (sharing || !currentSession()) return;
+            final position = timestamp();
+            setState(() {
+              sharing = true;
+              failed = false;
+            });
+            try {
+              final server = await owner.getCurrentlySelectedServer();
+              if (!context.mounted ||
+                  !currentSession() ||
+                  ModalRoute.of(context)?.isCurrent != true) {
+                return;
+              }
+              final saved = owner.getAccount(server.accountId);
+              if (saved?.inUse != true ||
+                  saved!.url != server.url ||
+                  server.profileId != profileId) {
+                return;
+              }
+              final link = youtube
+                  ? links.getYoutubeLink(position?.inSeconds)
+                  : links.getInvidiousLink(server, position?.inSeconds);
+              await SharePlus.instance
+                  .share(ShareParams(text: link.toString()));
+              if (context.mounted &&
+                  currentSession() &&
+                  ModalRoute.of(context)?.isCurrent == true) {
+                Navigator.of(context).pop();
+              }
+            } catch (_) {
+              if (context.mounted && currentSession()) {
+                setState(() => failed = true);
+              }
+            } finally {
+              if (context.mounted) {
+                setState(() => sharing = false);
+              }
+            }
           }
 
           return Padding(
@@ -147,62 +192,27 @@ void showSharingSheet(BuildContext context, ShareLinks links,
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 FilledButton.tonal(
-                  onPressed: sharing
-                      ? null
-                      : () async {
-                          if (sharing || !currentSession()) return;
-                          final position = timestamp();
-                          setState(() {
-                            sharing = true;
-                            failed = false;
-                          });
-                          try {
-                            final server =
-                                await owner.getCurrentlySelectedServer();
-                            if (!context.mounted ||
-                                !currentSession() ||
-                                ModalRoute.of(context)?.isCurrent != true) {
-                              return;
-                            }
-                            final saved = owner.getAccount(server.accountId);
-                            if (saved?.inUse != true ||
-                                saved!.url != server.url ||
-                                server.profileId != profileId) {
-                              return;
-                            }
-                            final link = links.getInvidiousLink(
-                                server, position?.inSeconds);
-                            await SharePlus.instance
-                                .share(ShareParams(text: link.toString()));
-                            if (context.mounted &&
-                                currentSession() &&
-                                ModalRoute.of(context)?.isCurrent == true) {
-                              Navigator.of(context).pop();
-                            }
-                          } catch (_) {
-                            if (context.mounted && currentSession()) {
-                              setState(() => failed = true);
-                            }
-                          } finally {
-                            if (context.mounted) {
-                              setState(() => sharing = false);
-                            }
-                          }
-                        },
+                  onPressed: sharing ? null : () => share(youtube: false),
                   child: Text(locals.shareInvidiousLink),
+                ),
+                FilledButton.tonal(
+                  onPressed: sharing ? null : () => share(youtube: true),
+                  child: Text(locals.shareYoutubeLink),
                 ),
                 if (failed) Text(locals.error),
                 if (showTimestampOption)
                   InkWell(
-                    onTap: () => setShowTimeStamp(!shareWithTimestamp),
+                    onTap: sharing
+                        ? null
+                        : () => setShowTimeStamp(!shareWithTimestamp),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
                         Checkbox(
                           value: shareWithTimestamp,
-                          onChanged: setShowTimeStamp,
+                          onChanged: sharing ? null : setShowTimeStamp,
                         ),
-                        Text(locals.shareLinkWithTimestamp),
+                        Flexible(child: Text(locals.shareLinkWithTimestamp)),
                       ],
                     ),
                   )
@@ -211,6 +221,8 @@ void showSharingSheet(BuildContext context, ShareLinks links,
           );
         },
       );
+      final scrollable = SingleChildScrollView(child: sheet);
+      return inPlayer ? PlayerModalBackHandler(child: scrollable) : scrollable;
     },
   );
 }

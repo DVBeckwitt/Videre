@@ -51,11 +51,12 @@ class ItemListCubit<T> extends Cubit<ItemListState<T>> {
     scrollController.addListener(onScrollEvent);
   }
 
-  void onScrollEvent() {
+  void onScrollEvent([ScrollMetrics? metrics]) {
     if (!isClosed && !_loading && state.itemList.getHasMore()) {
-      if (!scrollController.hasClients) return;
-      if (scrollController.position.maxScrollExtent * 0.9 <
-          scrollController.offset) {
+      final position = metrics ??
+          (scrollController.hasClients ? scrollController.position : null);
+      if (position == null) return;
+      if (position.maxScrollExtent * 0.9 < position.pixels) {
         _loadMoreTimer?.cancel();
         _loadMoreTimer = Timer(const Duration(milliseconds: 500), getMoreItems);
       }

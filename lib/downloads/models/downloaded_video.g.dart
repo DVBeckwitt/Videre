@@ -27,6 +27,8 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
       storageFailed: json['storageFailed'] as bool? ?? false,
       folderUri: json['folderUri'] as String?,
       storageUri: json['storageUri'] as String?,
+      playbackProvenance: const _PlaybackProvenanceConverter()
+          .fromJson(json['playbackProvenance']),
       audioOnly: json['audioOnly'] as bool? ?? false,
       container:
           $enumDecodeNullable(_$DownloadContainerEnumMap, json['container']),
@@ -55,6 +57,8 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
       'storageFailed': instance.storageFailed,
       'folderUri': instance.folderUri,
       'storageUri': instance.storageUri,
+      'playbackProvenance': const _PlaybackProvenanceConverter()
+          .toJson(instance.playbackProvenance),
       'audioOnly': instance.audioOnly,
       'container': _$DownloadContainerEnumMap[instance.container],
       'audioTrackId': instance.audioTrackId,

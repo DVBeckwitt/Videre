@@ -5,6 +5,8 @@ import 'dart:async';
 import 'dart:io';
 import 'content_filter/community_filter.dart';
 import 'network/network_proxy.dart';
+import 'package:videre_recommendations/videre_recommendations.dart';
+import 'package:clipious/utils/upstream_licenses.dart';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:feedback/feedback.dart';
@@ -36,7 +38,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'settings/models/db/app_logs.dart';
 import 'feedback/views/feedback_screenshot.dart';
 
-const brandColor = Color(0xFF4f0096);
+const _neutralThemeSeed = Color(0xFF757575);
 
 final scaffoldKey = GlobalKey<ScaffoldMessengerState>();
 bool isTv = false;
@@ -65,6 +67,8 @@ Future<void> main() async {
   HttpOverrides.global = MyHttpOverrides();
 
   VidereWidgetsBinding();
+  VidereRecommendations.registerLicenses();
+  registerUpstreamUiLicenses();
 
   packageInfo = await PackageInfo.fromPlatform();
 
@@ -198,29 +202,18 @@ class MyApp extends StatelessWidget {
             if (useDynamicTheme &&
                 lightDynamic != null &&
                 darkDynamic != null) {
-              // On Android S+ devices, use the provided dynamic color scheme.
-              // (Recommended) Harmonize the dynamic color scheme' built-in semantic colors.
               lightColorScheme = lightDynamic.harmonized();
-              // (Optional) Customize the scheme as desired. For example, one might
-              // want to use a brand color to override the dynamic [ColorScheme.secondary].
-              // lightColorScheme = lightColorScheme.copyWith(secondary: brandColor);
-              // (Optional) If applicable, harmonize custom colors.
-              // lightCustomColors = lightCustomColors.harmonized(lightColorScheme);
-
-              // Repeat for the dark color scheme.
               darkColorScheme = darkDynamic.harmonized();
-              // darkColorScheme = darkColorScheme.copyWith(secondary: brandColor);
-              // darkCustomColors = darkCustomColors.harmonized(darkColorScheme);
-
-              // _isDemoUsingDynamicColors = true; // ignore, only for demo purposes
             } else {
-              // Otherwise, use fallback schemes.
+              // Let media artwork provide the color on the default surfaces.
               lightColorScheme = ColorScheme.fromSeed(
-                seedColor: brandColor,
+                seedColor: _neutralThemeSeed,
+                dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
               );
               darkColorScheme = ColorScheme.fromSeed(
-                seedColor: brandColor,
+                seedColor: _neutralThemeSeed,
                 brightness: Brightness.dark,
+                dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
               );
             }
 

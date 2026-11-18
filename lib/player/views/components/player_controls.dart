@@ -9,11 +9,15 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
 import 'package:clipious/player/views/components/player_backend_picker.dart';
+import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/player/views/components/backend_request_indicator.dart';
 import 'package:clipious/player/views/components/video_retry_notice.dart';
 import 'package:clipious/player/views/components/sleep_timer.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/playback_speed_quick_controls.dart';
+import 'package:clipious/player/views/components/flow_watch_transport.dart';
+import 'package:clipious/player/views/components/flow_video_gestures.dart';
+import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/player/views/components/system_setting_slider.dart';
 import 'package:clipious/player/views/components/seek_preview.dart';
@@ -83,10 +87,12 @@ class PlayerControls extends StatelessWidget {
       isScrollControlled: true,
       context: context,
       builder: (context) {
-        return SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: widgets,
+        return PlayerModalBackHandler(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: widgets,
+            ),
           ),
         );
       },
@@ -105,15 +111,30 @@ class PlayerControls extends StatelessWidget {
     }
     var locals = AppLocalizations.of(context)!;
     var videoTracks = pc.getVideoTracks();
-    var audioTracks = pc.getAudioTracks();
-    var subtitles = pc.getSubtitles();
+    final audioTracks = List<String>.of(pc.getAudioTracks());
+    final subtitles = List<String>.of(pc.getSubtitles());
+    final queueId = player.state.currentQueueId;
+    final generation = player.backendPlaybackGeneration;
+    var preparingQuality = false;
+    bool current() =>
+        !pc.isClosed &&
+        !player.isClosed &&
+        player.state.currentQueueId == queueId &&
+        player.backendPlaybackGeneration == generation;
+    void qualityFailure() {
+      if (context.mounted && current()) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(locals.couldntLoadVideo)));
+      }
+    }
 
     showSafeModalBottomSheet(
       isScrollControlled: true,
       showDragHandle: true,
       context: context,
       builder: (ctx) {
-        return SingleChildScrollView(
+        return PlayerModalBackHandler(
+            child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -146,12 +167,21 @@ class PlayerControls extends StatelessWidget {
                 ListTile(
                   onTap: () {
                     Navigator.of(context).pop();
+                    if (!current() ||
+                        !listEquals(subtitles, pc.getSubtitles())) {
+                      return;
+                    }
                     showPlayerTrackSelection(
                       context,
                       controls,
                       tracks: subtitles,
                       selected: pc.selectedSubtitle(),
-                      onSelected: pc.selectSubtitle,
+                      onSelected: (index) {
+                        if (current() &&
+                            listEquals(subtitles, pc.getSubtitles())) {
+                          pc.selectSubtitle(index);
+                        }
+                      },
                     );
                   },
                   leading: const Icon(Icons.subtitles),
@@ -169,14 +199,36 @@ class PlayerControls extends StatelessWidget {
                 ),
               if (videoTracks.isNotEmpty)
                 ListTile(
-                  onTap: () {
-                    Navigator.of(context).pop();
+                  onTap: () async {
+                    if (preparingQuality) return;
+                    preparingQuality = true;
+                    final ready = pc is! VideoPlayerCubit ||
+                        await pc.prepareVideoTracks();
+                    preparingQuality = false;
+                    if (!context.mounted || !ctx.mounted || !current()) return;
+                    final tracks = pc.getVideoTracks();
+                    Navigator.of(ctx).pop();
+                    if (!ready) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(locals.couldntLoadVideo)));
+                    }
                     showPlayerTrackSelection(
                       context,
                       controls,
-                      tracks: videoTracks,
+                      tracks: tracks,
                       selected: pc.selectedVideoTrack(),
-                      onSelected: pc.selectVideoTrack,
+                      onSelected: (index) {
+                        if (current()) {
+                          final selected =
+                              pc.getVideoTracks().indexOf(tracks[index]);
+                          if (pc is VideoPlayerCubit) {
+                            pc.selectVideoTrack(selected,
+                                onQualityFailure: qualityFailure);
+                          } else {
+                            pc.selectVideoTrack(selected);
+                          }
+                        }
+                      },
                       help: pc is VideoPlayerCubit && pc.isOnionPlayback
                           ? locals.onionVideoQualityHint
                           : null,
@@ -189,12 +241,24 @@ class PlayerControls extends StatelessWidget {
                 ListTile(
                   onTap: () {
                     Navigator.of(context).pop();
+                    if (!current() ||
+                        !listEquals(audioTracks, pc.getAudioTracks())) {
+                      return;
+                    }
                     showPlayerTrackSelection(
                       context,
                       controls,
                       tracks: audioTracks,
                       selected: pc.selectedAudioTrack(),
-                      onSelected: pc.selectAudioTrack,
+                      onSelected: (index) {
+                        // A queued recording can replace this one while the
+                        // picker is open. Its old indexes belong to this exact
+                        // track list, never the replacement recording.
+                        if (current() &&
+                            listEquals(audioTracks, pc.getAudioTracks())) {
+                          pc.selectAudioTrack(index);
+                        }
+                      },
                     );
                   },
                   leading: const Icon(Icons.music_note),
@@ -203,9 +267,24 @@ class PlayerControls extends StatelessWidget {
               if (pc.hasDashToggle() &&
                   !(player.state.currentlyPlaying?.liveNow ?? false))
                 ListTile(
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    pc.toggleDash();
+                  onTap: () async {
+                    if (preparingQuality) return;
+                    preparingQuality = true;
+                    final ready = pc is! VideoPlayerCubit ||
+                        await pc.prepareVideoTracks();
+                    preparingQuality = false;
+                    if (!context.mounted || !ctx.mounted || !current()) return;
+                    Navigator.of(ctx).pop();
+                    if (!ready) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(locals.couldntLoadVideo)));
+                      return;
+                    }
+                    if (pc is VideoPlayerCubit) {
+                      pc.toggleDash(onQualityFailure: qualityFailure);
+                    } else {
+                      pc.toggleDash();
+                    }
                   },
                   leading: Icon(
                     Icons.stream,
@@ -234,7 +313,7 @@ class PlayerControls extends StatelessWidget {
                       })
             ],
           ),
-        );
+        ));
       },
     );
   }
@@ -273,6 +352,10 @@ class PlayerControls extends StatelessWidget {
                 context.select((PlayerCubit cubit) => cubit.state.isPlaying);
             Video? currentlyPlaying = context
                 .select((PlayerCubit cubit) => cubit.state.currentlyPlaying);
+            final flowWatch = !isTv &&
+                currentlyPlaying != null &&
+                !context.select((PlayerCubit cubit) => cubit.state.isAudio) &&
+                playerState.fullScreenState != FullScreenState.fullScreen;
             bool hasQueue =
                 context.select((PlayerCubit cubit) => cubit.state.hasQueue);
             bool isPip =
@@ -312,6 +395,12 @@ class PlayerControls extends StatelessWidget {
 
             var cubit = context.read<PlayerControlsCubit>();
             final videoPlayer = mediaPlayerCubit;
+            final flowGestures = !kIsWeb &&
+                defaultTargetPlatform == TargetPlatform.android &&
+                !isTv &&
+                !isMini &&
+                !isPip &&
+                videoPlayer is VideoPlayerCubit;
             final indicatorStyle = Theme.of(context).textTheme.bodySmall;
             final indicatorLineHeight = MediaQuery.textScalerOf(context)
                     .scale(indicatorStyle?.fontSize ?? 12) *
@@ -333,9 +422,20 @@ class PlayerControls extends StatelessWidget {
             var canDragToAdjustDeviceSettings = screenControlsEnabled &&
                 playerState.fullScreenState == FullScreenState.fullScreen &&
                 !playerState.displayControls;
+            // The expanded surface follows the finger until release. Its
+            // legacy drag changes isMini mid-gesture, so only use its callbacks
+            // for standalone/compact surfaces or a drag that began there and
+            // is already in progress.
+            final scopedMinimize = !isMini &&
+                MinimizeDragScope.maybeOf(context) != null &&
+                (context
+                        .findAncestorWidgetOfExactType<MinimizeOnSwipeDown>()
+                        ?.enabled ??
+                    false);
             final canDragPlayer =
                 playerState.fullScreenState != FullScreenState.fullScreen &&
-                    !playerState.displayControls;
+                    !playerState.displayControls &&
+                    (!scopedMinimize || isDragging);
 
             return BlocListener<PlayerCubit, PlayerState>(
               listenWhen: (previous, current) =>
@@ -344,6 +444,37 @@ class PlayerControls extends StatelessWidget {
                 cubit.onStreamEvent(state.mediaEvent);
               },
               child: _PlayerSurface(
+                wrapVideoGestures: flowGestures
+                    ? (child) => FlowVideoGestures(
+                          key: ValueKey(player.state.currentQueueId),
+                          video: currentlyPlaying,
+                          duration: playerState.duration,
+                          readPosition: () => player.state.position,
+                          canSeek: playerState.duration > Duration.zero &&
+                              currentlyPlaying?.liveNow != true &&
+                              !playerState.errored &&
+                              !playerState.draggingPositionSlider &&
+                              !retryingBackend,
+                          toggleControls: () {
+                            if (cubit.state.displayControls) {
+                              cubit.hideControls();
+                            } else {
+                              cubit.showControls();
+                            }
+                          },
+                          togglePlayback: () {
+                            if (!player.state.isPlaying && isPausedAndDone) {
+                              player.seek(Duration.zero);
+                            }
+                            player.togglePlaying();
+                          },
+                          rewind: cubit.doubleTapRewind,
+                          fastForward: cubit.doubleTapFastForward,
+                          seek: (position) => cubit
+                              .onScrubbed(position.inMilliseconds.toDouble()),
+                          child: child,
+                        )
+                    : null,
                 speedBoostPlayer: !isMini &&
                         !isPip &&
                         isPlaying &&
@@ -358,8 +489,13 @@ class PlayerControls extends StatelessWidget {
                     : isDragging
                         ? (_) => player.videoDragCancelled()
                         : null,
-                onVerticalDragUpdate:
-                    canDragPlayer ? player.videoDragged : null,
+                // Keep vertical arena ownership even when the raw listener
+                // moves the surface, so a vertical pull cannot become a seek.
+                onVerticalDragUpdate: canDragPlayer
+                    ? player.videoDragged
+                    : scopedMinimize
+                        ? (_) {}
+                        : null,
                 onVerticalDragStart:
                     canDragPlayer ? player.videoDragStarted : null,
                 onVerticalDragCancel: canDragPlayer || isDragging
@@ -461,15 +597,17 @@ class PlayerControls extends StatelessWidget {
                                                 ? (_) => cubit
                                                     .stopBrightnessAdjustments()
                                                 : null,
-                                        onTap: playerState.justDoubleTappedSkip
-                                            ? cubit.doubleTapRewind
-                                            : playerState.displayControls
-                                                ? cubit.hideControls
-                                                : cubit.showControls,
-                                        onDoubleTap:
-                                            playerState.justDoubleTappedSkip
-                                                ? null
-                                                : cubit.doubleTapRewind,
+                                        onTap: flowGestures
+                                            ? null
+                                            : playerState.justDoubleTappedSkip
+                                                ? cubit.doubleTapRewind
+                                                : playerState.displayControls
+                                                    ? cubit.hideControls
+                                                    : cubit.showControls,
+                                        onDoubleTap: flowGestures ||
+                                                playerState.justDoubleTappedSkip
+                                            ? null
+                                            : cubit.doubleTapRewind,
                                         child: DoubleTapButton(
                                             stepText:
                                                 '-$totalRewind ${locals.secondsShortForm}',
@@ -499,16 +637,18 @@ class PlayerControls extends StatelessWidget {
                                             ? (_) =>
                                                 cubit.stopVolumeAdjustments()
                                             : null,
-                                        onTap: playerState.justDoubleTappedSkip
-                                            ? cubit.doubleTapFastForward
-                                            : playerState.displayControls
-                                                ? cubit.hideControls
-                                                : cubit.showControls,
+                                        onTap: flowGestures
+                                            ? null
+                                            : playerState.justDoubleTappedSkip
+                                                ? cubit.doubleTapFastForward
+                                                : playerState.displayControls
+                                                    ? cubit.hideControls
+                                                    : cubit.showControls,
                                         behavior: HitTestBehavior.translucent,
-                                        onDoubleTap:
-                                            playerState.justDoubleTappedSkip
-                                                ? null
-                                                : cubit.doubleTapFastForward,
+                                        onDoubleTap: flowGestures ||
+                                                playerState.justDoubleTappedSkip
+                                            ? null
+                                            : cubit.doubleTapFastForward,
                                         child: DoubleTapButton(
                                           stepText:
                                               '+$totalFastForward ${locals.secondsShortForm}',
@@ -527,19 +667,45 @@ class PlayerControls extends StatelessWidget {
                             ? const SizedBox.shrink()
                             : playerState.displayControls
                                 ? GestureDetector(
-                                    onTap: cubit.hideControls,
+                                    onTap: flowGestures
+                                        ? null
+                                        : cubit.hideControls,
                                     child: Container(
-                                      decoration: BoxDecoration(
-                                          borderRadius:
-                                              BorderRadius.circular(0),
-                                          color: Colors.black
-                                              .withValues(alpha: 0.4)),
+                                      decoration: flowWatch
+                                          ? const BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                                colors: [
+                                                  Colors.black54,
+                                                  Colors.black26,
+                                                  Colors.black54
+                                                ],
+                                              ),
+                                            )
+                                          : const BoxDecoration(
+                                              color: Color(0x66000000)),
                                       child: Column(
                                         children: [
                                           Row(
                                             mainAxisAlignment:
                                                 MainAxisAlignment.end,
                                             children: [
+                                              if (flowWatch) ...[
+                                                IconButton(
+                                                  key: const ValueKey(
+                                                      'watch-minimize'),
+                                                  tooltip:
+                                                      MaterialLocalizations.of(
+                                                              context)
+                                                          .backButtonTooltip,
+                                                  onPressed:
+                                                      player.showMiniPlayer,
+                                                  icon: const Icon(Icons
+                                                      .keyboard_arrow_down_rounded),
+                                                ),
+                                                const Spacer(),
+                                              ],
                                               if (playerState.fullScreenState ==
                                                   FullScreenState.fullScreen)
                                                 Expanded(
@@ -576,58 +742,92 @@ class PlayerControls extends StatelessWidget {
                                             ],
                                           ),
                                           Expanded(child: Container()),
-                                          Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.end,
-                                            children: [
-                                              playerState.muted
-                                                  ? IconButton(
-                                                      onPressed: () {
-                                                        player.setMuted(false);
-                                                        cubit
-                                                            .hideControlsDebounce();
-                                                      },
-                                                      icon: const Icon(
-                                                          Icons.volume_off))
-                                                  : IconButton(
-                                                      onPressed: () {
-                                                        player.setMuted(true);
-                                                        cubit
-                                                            .hideControlsDebounce();
-                                                      },
-                                                      icon: const Icon(
-                                                          Icons.volume_up)),
-                                              switch (
-                                                  playerState.fullScreenState) {
-                                                FullScreenState.fullScreen =>
-                                                  IconButton(
-                                                      onPressed: () =>
-                                                          player.setFullScreen(
-                                                              FullScreenState
-                                                                  .notFullScreen),
-                                                      icon: const Icon(Icons
-                                                          .fullscreen_exit)),
-                                                FullScreenState.notFullScreen =>
-                                                  IconButton(
-                                                      onPressed: () =>
-                                                          player.setFullScreen(
-                                                              FullScreenState
-                                                                  .fullScreen),
-                                                      icon: const Icon(
-                                                          Icons.fullscreen)),
-                                              }
-                                            ],
-                                          ),
-                                          const SizedBox(
-                                            height: 15,
-                                          )
+                                          if (!flowWatch) ...[
+                                            Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.end,
+                                              children: [
+                                                playerState.muted
+                                                    ? IconButton(
+                                                        onPressed: () {
+                                                          player
+                                                              .setMuted(false);
+                                                          cubit
+                                                              .hideControlsDebounce();
+                                                        },
+                                                        icon: const Icon(
+                                                            Icons.volume_off))
+                                                    : IconButton(
+                                                        onPressed: () {
+                                                          player.setMuted(true);
+                                                          cubit
+                                                              .hideControlsDebounce();
+                                                        },
+                                                        icon: const Icon(
+                                                            Icons.volume_up)),
+                                                switch (playerState
+                                                    .fullScreenState) {
+                                                  FullScreenState.fullScreen =>
+                                                    IconButton(
+                                                        onPressed: () => player
+                                                            .setFullScreen(
+                                                                FullScreenState
+                                                                    .notFullScreen),
+                                                        icon: const Icon(Icons
+                                                            .fullscreen_exit)),
+                                                  FullScreenState
+                                                        .notFullScreen =>
+                                                    IconButton(
+                                                        onPressed: () => player
+                                                            .setFullScreen(
+                                                                FullScreenState
+                                                                    .fullScreen),
+                                                        icon: const Icon(
+                                                            Icons.fullscreen)),
+                                                }
+                                              ],
+                                            ),
+                                            const SizedBox(
+                                              height: 15,
+                                            )
+                                          ],
                                         ],
                                       ),
                                     ),
                                   )
                                 : const SizedBox.expand(),
                       ),
-                      if ((playerState.displayControls ||
+                      if (flowWatch && !isMini && !isPip)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: FlowWatchTransport(
+                            position: playerState.position,
+                            duration: playerState.duration,
+                            buffer: playerState.buffer,
+                            sponsorIntervals: context.select(
+                              (PlayerCubit cubit) =>
+                                  cubit.state.sponsorSegments,
+                            ),
+                            showActions: playerState.displayControls,
+                            showTime: playerState.justDoubleTappedSkip ||
+                                playerState.draggingPositionSlider,
+                            isLive: currentlyPlaying.liveNow == true,
+                            muted: playerState.muted,
+                            onToggleMute: () {
+                              player.setMuted(!playerState.muted);
+                              cubit.hideControlsDebounce();
+                            },
+                            onFullscreen: () => player
+                                .setFullScreen(FullScreenState.fullScreen),
+                            onInteract: cubit.hideControlsDebounce,
+                            onScrub: cubit.onScrubDrag,
+                            onScrubFinished: cubit.onScrubbed,
+                          ),
+                        ),
+                      if (!flowWatch &&
+                          (playerState.displayControls ||
                               playerState.justDoubleTappedSkip) &&
                           !(currentlyPlaying?.liveNow ?? false))
                         Positioned(
@@ -738,6 +938,13 @@ class PlayerControls extends StatelessWidget {
                                     size: 30,
                                   )),
                               IconButton(
+                                style: flowWatch
+                                    ? IconButton.styleFrom(
+                                        backgroundColor: Colors.black45,
+                                        foregroundColor: Colors.white,
+                                        minimumSize: const Size.square(60),
+                                      )
+                                    : null,
                                 onPressed: () {
                                   if (isPlaying) {
                                     player.pause();
@@ -754,7 +961,7 @@ class PlayerControls extends StatelessWidget {
                                         : isPausedAndDone
                                             ? Icons.refresh
                                             : Icons.play_arrow,
-                                    size: 55),
+                                    size: flowWatch ? 38 : 55),
                               ),
                               IconButton(
                                   onPressed: () => player.fastForward(),
@@ -948,7 +1155,7 @@ class PlayerControls extends StatelessWidget {
                         ),
                       if (showRequestedBackend)
                         Positioned(
-                          left: 8,
+                          left: flowWatch ? 54 : 8,
                           right: 152,
                           top: requestIndicatorTop,
                           // Request details belong to the controls. Recovery
@@ -961,7 +1168,7 @@ class PlayerControls extends StatelessWidget {
                               child: BackendRequestIndicator(
                                 playback: requestedBackend,
                                 overlay: true,
-                                compact: retryingBackend,
+                                compact: flowWatch || retryingBackend,
                               ),
                             ),
                           ),
@@ -980,6 +1187,7 @@ class PlayerControls extends StatelessWidget {
 
 class _PlayerSurface extends StatefulWidget {
   const _PlayerSurface({
+    required this.wrapVideoGestures,
     required this.speedBoostPlayer,
     required this.onVerticalDragStart,
     required this.onVerticalDragUpdate,
@@ -988,6 +1196,7 @@ class _PlayerSurface extends StatefulWidget {
     required this.child,
   });
 
+  final Widget Function(Widget)? wrapVideoGestures;
   final VideoPlayerCubit? speedBoostPlayer;
   final GestureDragStartCallback? onVerticalDragStart;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
@@ -1073,7 +1282,7 @@ class _PlayerSurfaceState extends State<_PlayerSurface> {
         child: Stack(
           fit: StackFit.passthrough,
           children: [
-            widget.child,
+            widget.wrapVideoGestures?.call(widget.child) ?? widget.child,
             if (_restoreSpeed != null)
               const Positioned.fill(
                 child: IgnorePointer(

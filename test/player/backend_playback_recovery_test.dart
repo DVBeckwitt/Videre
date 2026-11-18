@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
+import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/globals.dart';
@@ -22,6 +26,7 @@ import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/format_stream.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
@@ -105,6 +110,20 @@ class _RetryService extends Service {
   Video? metadataResult;
   Object? metadataError;
   int metadataCalls = 0;
+  int qualityMetadataCalls = 0;
+  Completer<void>? heldQualityMetadata;
+  Video? qualityMetadata;
+  Object? qualityMetadataError;
+
+  @override
+  Future<Video> refreshPlaybackVideo(Video video,
+      {required bool Function() isCurrent}) async {
+    qualityMetadataCalls++;
+    if (heldQualityMetadata != null) await heldQualityMetadata!.future;
+    if (!isCurrent()) throw StateError('Playback changed');
+    if (qualityMetadataError != null) throw qualityMetadataError!;
+    return qualityMetadata ?? (throw StateError('No quality metadata set'));
+  }
 
   @override
   Future<Video> getVideo(String videoId,
@@ -325,6 +344,627 @@ void main() {
         player,
         settings);
   }
+
+  Future<({Video current, Video remote, String uri})> savedVideo(
+      {bool metadataFree = false, bool document = false}) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final documents =
+        await Directory.systemTemp.createTemp('videre-video-saved-source-');
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    messenger.setMockMethodCallHandler(
+        pathProvider, (_) async => documents.path);
+    addTearDown(() async {
+      messenger.setMockMethodCallHandler(pathProvider, null);
+      await documents.delete(recursive: true);
+    });
+    final audio = AdaptiveFormat(
+        null,
+        '128000',
+        null,
+        'https://instance.example/videoplayback?itag=251&sig=audio',
+        '251',
+        'audio/webm; codecs="opus"',
+        '12345',
+        '1700000000000',
+        'RECTANGULAR',
+        'webm',
+        'opus',
+        null,
+        null,
+        audioTrack: const AudioTrack(
+            id: 'en.1', displayName: 'English', audioIsDefault: true));
+    final rendition = AdaptiveFormat(
+        null,
+        '1000000',
+        null,
+        'https://instance.example/videoplayback?itag=248&sig=video',
+        '248',
+        'video/webm; codecs="vp9"',
+        '54321',
+        '1700000000000',
+        'RECTANGULAR',
+        'webm',
+        'vp9',
+        '1080p',
+        '1080');
+    final remote = _video('video', BackendPlayback(preferred))
+        .copyWith(adaptiveFormats: [audio, rendition]);
+    final proof = DownloadPlaybackProvenance.create(
+        video: remote,
+        server: preferred,
+        audioOnly: false,
+        container: DownloadContainer.webm,
+        audio: audio,
+        videoFormat: rendition,
+        byteLength: 32100,
+        sha256: 'a' * 64)!;
+    const tree = 'content://documents/tree/primary%3AVidere';
+    final download = DownloadedVideo(
+        videoId: 'video',
+        title: 'Saved video',
+        profileId: preferred.profileId,
+        accountId: preferred.accountId,
+        lengthSeconds: 60,
+        quality: '1080p',
+        downloadComplete: true,
+        container: DownloadContainer.webm,
+        playbackProvenance: proof,
+        storageUri:
+            document ? '$tree/document/primary%3AVidere%2Fvideo.webm' : null,
+        folderUri: document ? tree : null);
+    await db.upsertDownload(download);
+    final path = await download.effectivePath;
+    final uri = document ? path : Uri.file(path).toString();
+    final current = metadataFree
+        ? (await prepareDownloadedPlaybackVideo(
+            database: db,
+            video: const Video(videoId: 'video', queueEntryId: 'saved-entry'),
+            server: preferred,
+            audioOnly: false,
+            isCurrent: () => true))!
+        : remote;
+    return (current: current, remote: remote, uri: uri);
+  }
+
+  _VideoWithoutAutostart savedCubit(Video current) {
+    player.emit(player.state.copyWith(currentlyPlaying: current));
+    return _VideoWithoutAutostart(
+        VideoPlayerState(
+            video: current,
+            colors: ColorScheme.fromSeed(seedColor: Colors.blue),
+            overFlowTextColor: Colors.white,
+            key: GlobalKey()),
+        player,
+        settings);
+  }
+
+  Video onlineQualities(Video remote) => remote.copyWith(
+        dashUrl: 'https://instance.example/manifest.mpd',
+        formatStreams: [
+          for (final height in [360, 720])
+            FormatStream(
+                'https://instance.example/video-$height.mp4',
+                '$height',
+                'video/mp4',
+                'medium',
+                'mp4',
+                'h264',
+                '${height}p',
+                '${height}p',
+                '1280x$height'),
+        ],
+        adaptiveFormats: [
+          ...remote.adaptiveFormats!,
+          AdaptiveFormat.fromJson({
+            ...remote.adaptiveFormats!.last.toJson(),
+            'qualityLabel': '1440p',
+            'resolution': '1440',
+            'itag': '271',
+            'url':
+                'https://instance.example/videoplayback?itag=271&sig=fixture',
+          }),
+        ],
+      );
+
+  test(
+      'saved quality metadata is optional and never replaces the local decoder',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    final held = retryService.heldQualityMetadata = Completer<void>();
+    retryService.qualityMetadata = onlineQualities(saved.remote);
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 12));
+      await _flush();
+      expect(video.getVideoTracks(), ['1080p']);
+      expect(retryService.qualityMetadataCalls, 0);
+      final preparing = video.prepareVideoTracks();
+      final duplicate = video.prepareVideoTracks();
+      await _flush();
+      expect(retryService.qualityMetadataCalls, 1);
+      expect(sources.single['uri'], saved.uri);
+      expect(nativePlaying, isTrue);
+      held.complete();
+      expect(await preparing, isTrue);
+      expect(await duplicate, isTrue);
+      expect(video.getVideoTracks(), ['1440p', '1080p', '720p', '360p']);
+      expect(sources, hasLength(1));
+      expect(player.refreshRequests, isEmpty);
+      expect(video.state.video, same(saved.current));
+      expect(player.state.currentlyPlaying, same(saved.current));
+      await video.selectVideoTrack(video.getVideoTracks().indexOf('1080p'));
+      expect(sources, hasLength(1),
+          reason: 'Choosing the current saved rendition is a no-op');
+    } finally {
+      if (!held.isCompleted) held.complete();
+      await video.close();
+    }
+  });
+
+  test(
+      'saved quality selection uses admitted network sources with latest paused seek',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    retryService.qualityMetadata = onlineQualities(saved.remote);
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 12));
+      await _flush();
+      expect(await video.prepareVideoTracks(), isTrue);
+      video.pause();
+      await video.seek(const Duration(seconds: 23));
+      final previousPlays = playCalls;
+      await video.selectVideoTrack(video.getVideoTracks().indexOf('720p'));
+      await _flush();
+      expect(sources.map((source) => source['uri']),
+          [saved.uri, 'https://instance.example/video-720.mp4']);
+      expect(sources.last['initialPositionMs'], 23000);
+      expect((sources.last['playbackCache'] as Map?)?['download'], isNull);
+      expect(nativePlaying, isFalse);
+      expect(playCalls, previousPlays);
+      expect(player.refreshRequests, isEmpty);
+      expect(player.state.currentlyPlaying, same(saved.current));
+    } finally {
+      await video.close();
+    }
+  });
+
+  test(
+      'failed online quality restores the healthy saved rendition without a refresh loop',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    retryService.qualityMetadata = onlineQualities(saved.remote);
+    failedUrls['https://instance.example/video-720.mp4'] = false;
+    var failures = 0;
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 12));
+      await _flush();
+      expect(await video.prepareVideoTracks(), isTrue);
+      video.pause();
+      await video.seek(const Duration(seconds: 23));
+      await video.selectVideoTrack(video.getVideoTracks().indexOf('720p'),
+          onQualityFailure: () => failures++);
+      await _flush();
+      expect(sources.map((source) => source['uri']),
+          [saved.uri, 'https://instance.example/video-720.mp4', saved.uri]);
+      expect(sources.last['initialPositionMs'], 23000);
+      expect((sources.last['playbackCache'] as Map)['download'], isNotNull);
+      expect(nativePlaying, isFalse);
+      expect(failures, 1);
+      expect(player.state.mediaEvent.state, isNot(MediaState.error));
+      expect(player.refreshRequests, isEmpty);
+      expect(retryService.qualityMetadataCalls, 1);
+    } finally {
+      await video.close();
+    }
+  });
+
+  for (final admitted in [true, false]) {
+    test(
+        'online quality playback failure ${admitted ? 'restores saved playback' : 'cannot restore across changed credentials'}',
+        () async {
+      final saved = await savedVideo(metadataFree: true);
+      final video = savedCubit(saved.current);
+      retryService.qualityMetadata = onlineQualities(saved.remote);
+      var failures = 0;
+      try {
+        await video.playVideo(false, startAt: const Duration(seconds: 12));
+        await _flush();
+        expect(await video.prepareVideoTracks(), isTrue);
+        await video.selectVideoTrack(video.getVideoTracks().indexOf('720p'),
+            onQualityFailure: () => failures++);
+        await _flush();
+        expect(sources, hasLength(2));
+        video.pause();
+        await video.seek(const Duration(seconds: 31));
+        if (!admitted) {
+          await db.upsertServer(preferred
+              .copyWith(customHeaders: {'X-Account': 'changed'}, inUse: true));
+        }
+        await error(retryable: false);
+        await _flush();
+        expect(sources, hasLength(admitted ? 3 : 2));
+        if (admitted) {
+          expect(sources.last['uri'], saved.uri);
+          expect(sources.last['initialPositionMs'], 31000);
+          expect(nativePlaying, isFalse);
+          expect(failures, 1);
+          expect(player.state.mediaEvent.state, isNot(MediaState.error));
+        } else {
+          expect(failures, 0);
+          expect(player.state.mediaEvent.state, MediaState.error);
+        }
+        expect(player.refreshRequests, isEmpty);
+        expect(retryService.qualityMetadataCalls, 1);
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
+  test(
+      'saved quality metadata failure keeps the local source playable and can retry',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    retryService.qualityMetadataError = const SocketException('Offline');
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 12));
+      await _flush();
+      expect(await video.prepareVideoTracks(), isFalse);
+      expect(sources.single['uri'], saved.uri);
+      expect(video.getVideoTracks(), ['1080p']);
+      expect(nativePlaying, isTrue);
+      expect(player.state.mediaEvent.state, isNot(MediaState.error));
+      retryService.qualityMetadataError = null;
+      retryService.qualityMetadata = onlineQualities(saved.remote);
+      expect(await video.prepareVideoTracks(), isTrue);
+      expect(retryService.qualityMetadataCalls, 2);
+    } finally {
+      await video.close();
+    }
+  });
+
+  for (final change in ['credentials', 'proxy', 'playback']) {
+    test('late saved quality metadata cannot outlive $change changes',
+        () async {
+      final saved = await savedVideo(metadataFree: true);
+      final video = savedCubit(saved.current);
+      final held = retryService.heldQualityMetadata = Completer<void>();
+      retryService.qualityMetadata = onlineQualities(saved.remote);
+      try {
+        await video.playVideo(false);
+        await _flush();
+        final preparing = video.prepareVideoTracks();
+        await _flush();
+        if (change == 'credentials') {
+          await db.upsertServer(preferred
+              .copyWith(customHeaders: {'X-Account': 'changed'}, inUse: true));
+        } else if (change == 'proxy') {
+          await NetworkProxy.instance
+              .initialize(saved: '{}', configureNative: false);
+        } else {
+          await video.stopForProxyChange();
+        }
+        held.complete();
+        expect(await preparing, isFalse);
+        expect(video.getVideoTracks(), isNot(contains('1440p')));
+        expect(sources, hasLength(1));
+      } finally {
+        if (!held.isCompleted) held.complete();
+        await video.close();
+      }
+    });
+  }
+
+  test(
+      'prepared saved quality cannot select a source after account admission changes',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    retryService.qualityMetadata = onlineQualities(saved.remote);
+    try {
+      await video.playVideo(false);
+      await _flush();
+      expect(await video.prepareVideoTracks(), isTrue);
+      await db.upsertServer(preferred
+          .copyWith(customHeaders: {'X-Account': 'changed'}, inUse: true));
+      await video.selectVideoTrack(video.getVideoTracks().indexOf('720p'));
+      await _flush();
+      expect(sources.single['uri'], saved.uri);
+    } finally {
+      await video.close();
+    }
+  });
+
+  for (final toggle in [false, true]) {
+    test(
+        'saved video can ${toggle ? 'enable DASH' : 'select an adaptive quality'} without losing paused position',
+        () async {
+      final saved = await savedVideo(metadataFree: true);
+      final video = savedCubit(saved.current);
+      retryService.httpClient.close();
+      service = retryService = _RetryService(
+          httpClient:
+              MockClient((_) async => http.Response(_staticDashManifest, 200)))
+        ..qualityMetadata = onlineQualities(saved.remote);
+      try {
+        await video.playVideo(false, startAt: const Duration(seconds: 12));
+        await _flush();
+        expect(await video.prepareVideoTracks(), isTrue);
+        video.pause();
+        await video.seek(const Duration(seconds: 26));
+        if (toggle) {
+          await video.toggleDash();
+        } else {
+          await video.selectVideoTrack(video.getVideoTracks().indexOf('1440p'));
+        }
+        await _flush();
+        expect(sources, hasLength(2));
+        expect(sources.last['formatHint'], 'dash');
+        expect(sources.last['initialPositionMs'], 26000);
+        if (!toggle) expect(sources.last['initialDashHeight'], 1440);
+        expect(nativePlaying, isFalse);
+        expect(player.refreshRequests, isEmpty);
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
+  for (final status in [401, 403, 429]) {
+    test('DASH $status refusal restores only the admitted saved rendition',
+        () async {
+      final saved = await savedVideo(metadataFree: true);
+      final video = savedCubit(saved.current);
+      var requests = 0;
+      retryService.httpClient.close();
+      service = retryService = _RetryService(httpClient: MockClient((_) async {
+        requests++;
+        return http.Response('Refused', status);
+      }))
+        ..qualityMetadata = onlineQualities(saved.remote);
+      var failures = 0;
+      try {
+        await video.playVideo(false, startAt: const Duration(seconds: 12));
+        await _flush();
+        expect(await video.prepareVideoTracks(), isTrue);
+        video.pause();
+        await video.seek(const Duration(seconds: 27));
+        await video.selectVideoTrack(video.getVideoTracks().indexOf('1440p'),
+            onQualityFailure: () => failures++);
+        await _flush();
+        expect(sources.map((source) => source['uri']), [saved.uri, saved.uri]);
+        expect(sources.last['initialPositionMs'], 27000);
+        expect(nativePlaying, isFalse);
+        expect(failures, 1);
+        expect(requests, 1);
+        expect(player.refreshRequests, isEmpty);
+        expect(retryService.retriedVideos, isEmpty);
+        expect(player.state.mediaEvent.state, isNot(MediaState.error));
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
+  test(
+      'failed saved rollback after a DASH refusal cannot make another network request',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    var requests = 0;
+    retryService.httpClient.close();
+    service = retryService = _RetryService(httpClient: MockClient((_) async {
+      requests++;
+      return http.Response('Refused', 403);
+    }))
+      ..qualityMetadata = onlineQualities(saved.remote);
+    try {
+      await video.playVideo(false);
+      await _flush();
+      expect(await video.prepareVideoTracks(), isTrue);
+      failedUrls[saved.uri] = true;
+      await video.selectVideoTrack(video.getVideoTracks().indexOf('1440p'));
+      await _flush();
+      expect(sources.map((source) => source['uri']), [saved.uri, saved.uri]);
+      expect(requests, 1);
+      expect(player.refreshRequests, isEmpty);
+      expect(retryService.retriedVideos, isEmpty);
+      expect(player.state.mediaEvent.state, MediaState.error);
+    } finally {
+      await video.close();
+    }
+  });
+
+  for (final change in ['generation', 'credentials']) {
+    test(
+        'late DASH refusal cannot restore saved playback after $change changes',
+        () async {
+      final saved = await savedVideo(metadataFree: true);
+      final video = savedCubit(saved.current);
+      final response = Completer<http.Response>();
+      var requests = 0;
+      retryService.httpClient.close();
+      service = retryService = _RetryService(httpClient: MockClient((_) {
+        requests++;
+        return response.future;
+      }))
+        ..qualityMetadata = onlineQualities(saved.remote);
+      var failures = 0;
+      try {
+        await video.playVideo(false);
+        await _flush();
+        expect(await video.prepareVideoTracks(), isTrue);
+        await video.selectVideoTrack(video.getVideoTracks().indexOf('1440p'),
+            onQualityFailure: () => failures++);
+        await _flush();
+        expect(requests, 1);
+        if (change == 'generation') {
+          await video.stopForProxyChange();
+        } else {
+          await db.upsertServer(preferred
+              .copyWith(customHeaders: {'X-Account': 'changed'}, inUse: true));
+        }
+        response.complete(http.Response('Refused', 403));
+        await _flush();
+        expect(sources.single['uri'], saved.uri);
+        expect(requests, 1);
+        expect(failures, 0);
+        expect(player.refreshRequests, isEmpty);
+        expect(retryService.retriedVideos, isEmpty);
+        expect(
+            player.state.mediaEvent.state,
+            change == 'generation'
+                ? isNot(MediaState.error)
+                : MediaState.error);
+      } finally {
+        if (!response.isCompleted) {
+          response.complete(http.Response('Refused', 403));
+        }
+        await video.close();
+      }
+    });
+  }
+
+  for (final document in [false, true]) {
+    test(
+        'saved ${document ? 'SAF' : 'private'} video plays the whole local mux first',
+        () async {
+      final saved = await savedVideo(document: document);
+      final video = savedCubit(saved.current);
+      try {
+        await video.playVideo(false, startAt: const Duration(seconds: 12));
+        await _flush();
+        expect(sources, hasLength(1));
+        expect(sources.single['uri'], saved.uri);
+        expect(sources.single['formatHint'], 'other');
+        expect(sources.single['initialPositionMs'], 12000);
+        final cache = sources.single['playbackCache'] as Map;
+        final descriptor = cache['download'] as Map;
+        expect(descriptor['uri'], saved.uri);
+        expect(descriptor['remoteUri'], saved.remote.adaptiveFormats!.last.url);
+        expect(descriptor['byteLength'], 32100);
+        expect(descriptor['sha256'], 'a' * 64);
+        expect(saved.uri, startsWith(document ? 'content:' : 'file:'));
+        expect(nativePosition, 12000);
+        expect(nativePlaying, isTrue);
+        expect(retryService.metadataCalls, 0);
+        expect(player.refreshRequests, isEmpty);
+        expect(retryService.retriedVideos, isEmpty);
+      } finally {
+        await video.close();
+      }
+    });
+  }
+
+  test('saved-only video needs no remote metadata when its local mux opens',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    final video = savedCubit(saved.current);
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 16));
+      await _flush();
+      expect(sources, hasLength(1));
+      expect(sources.single['uri'], saved.uri);
+      expect(sources.single['formatHint'], 'other');
+      expect(sources.single['initialPositionMs'], 16000);
+      final cache = sources.single['playbackCache'] as Map;
+      expect(cache['resources'], isEmpty);
+      expect((cache['download'] as Map).containsKey('remoteUri'), isFalse);
+      expect(saved.current.adaptiveFormats, isNull);
+      expect(saved.current.formatStreams, isNull);
+      expect(retryService.metadataCalls, 0);
+      expect(player.refreshRequests, isEmpty);
+      expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('unavailable saved mux falls back to the existing remote source',
+      () async {
+    final saved = await savedVideo();
+    failedUrls[saved.uri] = true;
+    final video = savedCubit(saved.current);
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 12));
+      await _flush();
+      expect(sources.map((source) => source['uri']),
+          [saved.uri, saved.remote.formatStreams!.first.url]);
+      expect(sources.every((source) => source['initialPositionMs'] == 12000),
+          isTrue);
+      expect((sources.first['playbackCache'] as Map)['download'], isNotNull);
+      expect((sources.last['playbackCache'] as Map?)?['download'], isNull);
+      expect(retryService.metadataCalls, 0);
+      expect(player.refreshRequests, isEmpty);
+      expect(retryService.retriedVideos, isEmpty);
+      expect(nativePosition, 12000);
+      expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test(
+      'unavailable saved-only video lazily refreshes an admitted online source',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    failedUrls[saved.uri] = true;
+    final refreshed = saved.remote;
+    player.refreshResults.add(refreshed);
+    final video = savedCubit(saved.current);
+    try {
+      await video.playVideo(false, startAt: const Duration(seconds: 18));
+      await _flush();
+      expect(player.refreshRequests, [saved.current]);
+      expect(sources.map((source) => source['uri']),
+          [saved.uri, refreshed.formatStreams!.first.url]);
+      expect(sources.every((source) => source['initialPositionMs'] == 18000),
+          isTrue);
+      expect(video.state.video, same(refreshed));
+      expect(player.state.currentlyPlaying, same(refreshed));
+      expect(retryService.retriedVideos, isEmpty);
+      expect(nativePosition, 18000);
+      expect(nativePlaying, isTrue);
+    } finally {
+      await video.close();
+    }
+  });
+
+  test('pause during saved-only fallback preserves the latest seek and intent',
+      () async {
+    final saved = await savedVideo(metadataFree: true);
+    failedUrls[saved.uri] = true;
+    final refreshed = saved.remote;
+    player.refreshResults.add(refreshed);
+    final held = player.heldRefresh = Completer<void>();
+    final video = savedCubit(saved.current);
+    final loading =
+        video.playVideo(false, startAt: const Duration(seconds: 12));
+    try {
+      await _flush();
+      expect(player.refreshRequests, [saved.current]);
+      video.pause();
+      await video.seek(const Duration(seconds: 21));
+      held.complete();
+      await loading;
+      await _flush();
+      expect(sources.map((source) => source['uri']),
+          [saved.uri, refreshed.formatStreams!.first.url]);
+      expect(sources.last['initialPositionMs'], 21000);
+      expect(nativePosition, 21000);
+      expect(nativePlaying, isFalse);
+      expect(playCalls, 0);
+      expect(retryService.retriedVideos, isEmpty);
+    } finally {
+      if (!held.isCompleted) held.complete();
+      await loading;
+      await video.close();
+    }
+  });
 
   for (final change in ['headers', 'instance', 'proxy']) {
     test('direct video admission rejects a stale $change snapshot', () async {

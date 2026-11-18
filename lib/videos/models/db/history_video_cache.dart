@@ -40,7 +40,8 @@ class HistoryVideoCache {
         videoThumbnails: [ImageObject("high", thumbnail, 1280, 720)]);
   }
 
-  static Future<HistoryVideoCache> fromVideoIdToVideo(String e) async {
+  static Future<HistoryVideoCache> fromVideoIdToVideo(String e,
+      {bool cacheFetched = true}) async {
     final owner = db.forProfile(db.profileId);
     var cachedVideo = owner.getHistoryVideoByVideoId(e);
     if (cachedVideo == null) {
@@ -51,7 +52,7 @@ class HistoryVideoCache {
           authorId: vid.authorId,
           lengthSeconds: vid.lengthSeconds,
           musicMetadata: vid.musicMetadata);
-      await owner.upsertHistoryVideo(cachedVideo);
+      if (cacheFetched) await owner.upsertHistoryVideo(cachedVideo);
     }
     return cachedVideo;
   }

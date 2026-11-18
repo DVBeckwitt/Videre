@@ -137,6 +137,11 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       // Copies retain this token; fresh metadata creates a new native source.
       @JsonKey(includeFromJson: false, includeToJson: false)
       Object? playbackSourceId,
+      // A verified saved rendition can start before online metadata exists.
+      // The source cubit fetches real metadata lazily if local opening fails.
+      @JsonKey(includeFromJson: false, includeToJson: false)
+      @Default(false)
+      bool downloadPlaybackOnly,
       String? viewCountText}) = _Video;
 
   const Video._();
@@ -200,6 +205,12 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
       if (timestamp != null) 't': timestamp.toString(),
     });
   }
+
+  @override
+  Uri getYoutubeLink(int? timestamp) => Uri.https('www.youtube.com', '/watch', {
+        'v': videoId,
+        if (timestamp != null) 't': timestamp.toString(),
+      });
 
   List<String> get thumbnails {
     return deArrowThumbnailUrl != null

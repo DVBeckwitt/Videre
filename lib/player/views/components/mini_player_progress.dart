@@ -20,7 +20,7 @@ class MiniPlayerProgress extends StatelessWidget {
         Duration position =
             context.select((PlayerCubit cubit) => cubit.state.position);
 
-        return !(currentlyPlaying?.liveNow ?? false)
+        return !(currentlyPlaying?.liveNow ?? false) && duration > Duration.zero
             ? Container(
                 alignment: Alignment.centerLeft,
                 constraints: const BoxConstraints(maxWidth: 300),
@@ -31,7 +31,9 @@ class MiniPlayerProgress extends StatelessWidget {
                 ),
                 child: AnimatedFractionallySizedBox(
                     widthFactor:
-                        position.inMilliseconds / duration.inMilliseconds,
+                        (position.inMilliseconds / duration.inMilliseconds)
+                            .clamp(0.0, 1.0)
+                            .toDouble(),
                     heightFactor: 1,
                     duration: AppMotion.duration(
                         context, const Duration(milliseconds: 750)),

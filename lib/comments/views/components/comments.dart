@@ -5,29 +5,44 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/comments/states/comments.dart';
 import 'package:clipious/comments/views/components/comment.dart';
+import 'package:clipious/comments/models/video_comments.dart';
 
 class CommentsView extends StatelessWidget {
   final Video video;
   final String? continuation;
   final String? source;
   final String? sortBy;
+  final VideoComments? initialPage;
 
   const CommentsView(
       {super.key,
       required this.video,
       this.continuation,
       this.source,
-      this.sortBy});
+      this.sortBy,
+      this.initialPage});
 
   @override
   Widget build(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
+    final page = initialPage;
+    final initial = CommentsState.init(
+      video: video,
+      sortBy: sortBy,
+      source: source,
+      continuation: continuation,
+    );
     return BlocProvider(
-      create: (context) => CommentsCubit(CommentsState.init(
-          video: video,
-          sortBy: sortBy,
-          source: source,
-          continuation: continuation)),
+      create: (context) => CommentsCubit(
+        page == null
+            ? initial
+            : initial.copyWith(
+                comments: page,
+                continuation: page.continuation,
+                loadingComments: false,
+              ),
+        loadInitial: page == null,
+      ),
       child:
           BlocBuilder<CommentsCubit, CommentsState>(builder: (context, state) {
         var cubit = context.read<CommentsCubit>();

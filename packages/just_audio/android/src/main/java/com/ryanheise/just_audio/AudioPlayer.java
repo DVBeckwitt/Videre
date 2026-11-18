@@ -46,11 +46,15 @@ import androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder;
 import androidx.media3.exoplayer.source.SilenceMediaSource; // Deprecated
 import androidx.media3.common.TrackGroup;
 import androidx.media3.exoplayer.dash.DashMediaSource; // Deprecated
+import androidx.media3.exoplayer.dash.DefaultDashChunkSource;
 import androidx.media3.exoplayer.hls.HlsMediaSource; // Deprecated
+import androidx.media3.exoplayer.hls.HlsDataSourceFactory;
 import androidx.media3.exoplayer.trackselection.TrackSelectionArray;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.HttpDataSource;
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource;
+import com.github.dvbeckwitt.videre.proxy.PlaybackMediaCache;
+import com.github.dvbeckwitt.videre.proxy.PlaybackCacheRequest;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.Util;
 import io.flutter.Log;
@@ -648,20 +652,22 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         String id = (String)map.get("id");
         switch ((String)map.get("type")) {
         case "progressive":
-            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri"), Boolean.TRUE.equals(map.get("podcast"))), buildExtractorsFactory(mapGet(map, "options")))
+            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri"), Boolean.TRUE.equals(map.get("podcast")), mapGet(map, "playbackCache"), PlaybackCacheRequest.PROGRESSIVE), buildExtractorsFactory(mapGet(map, "options")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setTag(id)
                             .build());
         case "dash":
-            return new DashMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri")))
+            return new DashMediaSource.Factory(
+                    new DefaultDashChunkSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri"), false, mapGet(map, "playbackCache"), PlaybackCacheRequest.ADAPTIVE_MEDIA)),
+                    buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri"), false, mapGet(map, "playbackCache"), PlaybackCacheRequest.BYPASS))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_MPD)
                             .setTag(id)
                             .build());
         case "hls":
-            return new HlsMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri")))
+            return new HlsMediaSource.Factory(buildHlsDataSourceFactory(mapGet(map, "headers"), (String)map.get("uri"), mapGet(map, "playbackCache")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -742,10 +748,19 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     private DataSource.Factory buildDataSourceFactory(Map<?, ?> headers, String sourceUri) {
-        return buildDataSourceFactory(headers, sourceUri, false);
+        return buildDataSourceFactory(headers, sourceUri, false, null, PlaybackCacheRequest.PROGRESSIVE);
     }
 
-    private DataSource.Factory buildDataSourceFactory(Map<?, ?> headers, String sourceUri, boolean podcast) {
+    private HlsDataSourceFactory buildHlsDataSourceFactory(Map<?, ?> headers, String sourceUri, Map<?, ?> playbackCache) {
+        // Capture both admission epochs at source creation. Creating factories
+        // lazily for each chunk could admit an obsolete source after a switch.
+        final DataSource.Factory media = buildDataSourceFactory(headers, sourceUri, false, playbackCache, PlaybackCacheRequest.ADAPTIVE_MEDIA);
+        final DataSource.Factory other = buildDataSourceFactory(headers, sourceUri, false, playbackCache, PlaybackCacheRequest.BYPASS);
+        return dataType -> (PlaybackMediaCache.requestForMedia3DataType(dataType) == PlaybackCacheRequest.ADAPTIVE_MEDIA
+                ? media : other).createDataSource();
+    }
+
+    private DataSource.Factory buildDataSourceFactory(Map<?, ?> headers, String sourceUri, boolean podcast, Map<?, ?> playbackCache, PlaybackCacheRequest request) {
         if (podcast) {
             // Podcast mode is a source DTO property, never an HTTP header or
             // a mutable player flag. Instance credentials cannot opt into it.
@@ -764,7 +779,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             userAgent = Util.getUserAgent(context, "just_audio");
         }
         HttpDataSource.Factory httpDataSourceFactory = ProxyDataSource.factory(userAgent, stringHeaders, sourceUri);
-        return ProxyDataSource.withLocalSources(context, httpDataSourceFactory);
+        return PlaybackMediaCache.factory(context,
+                ProxyDataSource.withLocalSources(context, httpDataSourceFactory), sourceUri, playbackCache, request);
     }
 
     private void load(final List<MediaSource> mediaSources, ShuffleOrder shuffleOrder, final long initialPosition, final Integer initialIndex, final Result result) {

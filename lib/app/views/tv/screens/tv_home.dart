@@ -8,7 +8,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/tv_home.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
-import 'package:clipious/home/views/components/content_mode_selector.dart';
+import 'package:clipious/home/views/components/flow_video_home.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
@@ -57,9 +57,20 @@ class _TvHomeContentState extends State<_TvHomeContent> {
   final trendingTitle = GlobalKey(debugLabel: 'trending title');
   final _visitedMusicPages = <int>{};
   final _musicMenuKeys = List.generate(3, (_) => GlobalKey());
+  final _musicDestination = GlobalKey();
   final _pageStorage = PageStorageBucket();
   int _musicPage = 0;
   bool _videosVisited = false;
+  bool _switchingMode = false;
+
+  void _focusMenuItem(GlobalKey key) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = key.currentContext;
+      if (!mounted || target == null) return;
+      Focus.of(target).requestFocus();
+      Scrollable.ensureVisible(target);
+    });
+  }
 
   void _openMusicPage(int index) {
     setState(() {
@@ -67,12 +78,95 @@ class _TvHomeContentState extends State<_TvHomeContent> {
       _visitedMusicPages.add(index);
     });
     // Home shortcuts also leave focus on a visible control in the new page.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final menuContext = _musicMenuKeys[index].currentContext;
-      if (mounted && menuContext != null) {
-        Focus.of(menuContext).requestFocus();
+    _focusMenuItem(_musicMenuKeys[index]);
+  }
+
+  Future<void> _openMode(HomeContentMode mode) async {
+    if (_switchingMode) return;
+    final settings = context.read<SettingsCubit>();
+    _switchingMode = true;
+    try {
+      await settings.setHomeContentMode(mode);
+      if (mounted && settings.state.homeContentMode == mode) {
+        _focusMenuItem(mode == HomeContentMode.music
+            ? _musicMenuKeys[_musicPage]
+            : _musicDestination);
       }
-    });
+    } catch (_) {
+      if (mounted) {
+        final locals = AppLocalizations.of(context)!;
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(locals.phoneNavigationSaveError)));
+      }
+    } finally {
+      _switchingMode = false;
+    }
+  }
+
+  Widget _modeDestination(
+      TvHomeCubit home, bool expanded, HomeContentMode mode, String label,
+      {bool autofocus = false}) {
+    final opensMusic = mode == HomeContentMode.music;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Semantics(
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        child: TvButton(
+          key: ValueKey('tv-home-${mode.name}'),
+          autofocus: autofocus,
+          onFocusChanged: home.menuItemFocusChanged,
+          onPressed: (_) => _openMode(mode),
+          unfocusedColor: Colors.transparent,
+          child: Padding(
+            key: opensMusic ? _musicDestination : null,
+            padding: const EdgeInsets.all(8),
+            child: Row(children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child:
+                    Icon(opensMusic ? Icons.music_note : Icons.ondemand_video),
+              ),
+              if (expanded) Expanded(child: MenuItemText(label)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _videoDestination(
+      TvHomeCubit home, bool expanded, HomeDataSource source, String label,
+      {required bool autofocus}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: TvButton(
+        key: ValueKey('tv-home-page-${source.name}'),
+        autofocus: autofocus,
+        onFocusChanged: home.menuItemFocusChanged,
+        onPressed: (context) => switch (source) {
+          HomeDataSource.search => openSearch(context),
+          HomeDataSource.subscription => openSubscriptions(context),
+          HomeDataSource.history => openHistory(context),
+          HomeDataSource.playlist => openPlaylists(context),
+          HomeDataSource.trending => openTrending(context),
+          HomeDataSource.popular => openPopular(context),
+          _ => null,
+        },
+        unfocusedColor: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Icon(source.getIcon()),
+            ),
+            if (expanded) Expanded(child: MenuItemText(label)),
+          ]),
+        ),
+      ),
+    );
   }
 
   void openSettings(BuildContext context) {
@@ -101,13 +195,33 @@ class _TvHomeContentState extends State<_TvHomeContent> {
   }
 
   void openSearch(BuildContext context) {
-    AutoRouter.of(context).push(const TvSearchRoute());
+    AutoRouter.of(context).push(TvSearchRoute());
   }
 
   void openPlaylists(BuildContext context) {
     AutoRouter.of(context).push(TvPlaylistGridRoute(
         playlistList: SingleEndpointList(service.getUserPlaylists),
         includeSavedPlaylists: true));
+  }
+
+  void openForYou(BuildContext context) {
+    final title = AppLocalizations.of(context)!.flowForYou;
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (context) => Shortcuts(
+        shortcuts: <LogicalKeySet, Intent>{
+          LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+        },
+        child: Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: const Padding(
+            padding: EdgeInsets.symmetric(
+                horizontal: TvOverscan.horizontal,
+                vertical: TvOverscan.vertical),
+            child: FlowVideoHome(television: true),
+          ),
+        ),
+      ),
+    ));
   }
 
   void openHistory(BuildContext context) {
@@ -135,11 +249,8 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                     vertical: TvOverscan.vertical)),
             body: BlocBuilder<TvHomeCubit, bool>(builder: (context, homeState) {
               var homeCubit = context.read<TvHomeCubit>();
-              final (mode, showModeSelector) =
-                  context.select((SettingsCubit value) => (
-                        value.state.effectiveHomeContentMode,
-                        value.state.showContentModeSelector,
-                      ));
+              final mode = context
+                  .select((SettingsCubit value) => value.state.homeContentMode);
               final music = mode == HomeContentMode.music;
               if (music) _visitedMusicPages.add(_musicPage);
               if (!music) _videosVisited = true;
@@ -186,7 +297,10 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                         right: homeState
                                             ? TvOverscan.horizontal
                                             : 8),
-                                    child: ListView(children: [
+                                    // Keep the small menu's focus nodes mounted
+                                    // as Videos/Music changes its length.
+                                    child: SingleChildScrollView(
+                                        child: Column(children: [
                                       Padding(
                                         padding:
                                             const EdgeInsets.only(bottom: 30.0),
@@ -216,7 +330,12 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                               ],
                                             )),
                                       ),
-                                      if (music)
+                                      if (music) ...[
+                                        _modeDestination(
+                                            homeCubit,
+                                            homeState,
+                                            HomeContentMode.videos,
+                                            locals.videos),
                                         ...[
                                           (locals.home, Icons.home_outlined),
                                           (locals.search, Icons.search),
@@ -267,76 +386,59 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                                 ),
                                               ),
                                             ))
-                                      else
-                                        Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: allowedPages
-                                                .map(
-                                                  (e) => Padding(
-                                                    padding:
-                                                        const EdgeInsets.only(
-                                                            bottom: 8.0),
-                                                    child: TvButton(
-                                                      autofocus: e ==
-                                                          allowedPages.first,
-                                                      onFocusChanged: homeCubit
-                                                          .menuItemFocusChanged,
-                                                      onPressed: (context) =>
-                                                          switch (e) {
-                                                        (HomeDataSource
-                                                              .search) =>
-                                                          openSearch(context),
-                                                        (HomeDataSource
-                                                              .subscription) =>
-                                                          openSubscriptions(
-                                                              context),
-                                                        (HomeDataSource
-                                                              .history) =>
-                                                          openHistory(context),
-                                                        (HomeDataSource
-                                                              .playlist) =>
-                                                          openPlaylists(
-                                                              context),
-                                                        (HomeDataSource
-                                                              .trending) =>
-                                                          openTrending(context),
-                                                        (HomeDataSource
-                                                              .popular) =>
-                                                          openPopular(context),
-                                                        (_) => const SizedBox
-                                                            .shrink()
-                                                      },
-                                                      unfocusedColor: colors
-                                                          .secondaryContainer
-                                                          .withValues(
-                                                              alpha: 0.0),
-                                                      child: Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .all(8),
-                                                        child: Row(
-                                                          children: [
-                                                            Padding(
-                                                              padding:
-                                                                  const EdgeInsets
-                                                                      .only(
-                                                                      right:
-                                                                          8.0),
-                                                              child: Icon(
-                                                                  e.getIcon()),
-                                                            ),
-                                                            if (homeState)
-                                                              Expanded(
-                                                                  child: MenuItemText(
-                                                                      e.getLabel(
-                                                                          locals)))
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                )
-                                                .toList()),
+                                      ] else ...[
+                                        for (final page in allowedPages) ...[
+                                          if (page == HomeDataSource.search)
+                                            _modeDestination(
+                                                homeCubit,
+                                                homeState,
+                                                HomeContentMode.music,
+                                                locals.music),
+                                          _videoDestination(
+                                              homeCubit,
+                                              homeState,
+                                              page,
+                                              page.getLabel(locals),
+                                              autofocus:
+                                                  page == allowedPages.first),
+                                        ],
+                                        if (!allowedPages
+                                            .contains(HomeDataSource.search))
+                                          _modeDestination(
+                                              homeCubit,
+                                              homeState,
+                                              HomeContentMode.music,
+                                              locals.music,
+                                              autofocus: allowedPages.isEmpty),
+                                      ],
+                                      if (!music)
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 8),
+                                          child: TvButton(
+                                            key: const ValueKey(
+                                                'tv-home-for-you'),
+                                            onFocusChanged:
+                                                homeCubit.menuItemFocusChanged,
+                                            onPressed: openForYou,
+                                            unfocusedColor: Colors.transparent,
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(8),
+                                              child: Row(children: [
+                                                const Padding(
+                                                  padding:
+                                                      EdgeInsets.only(right: 8),
+                                                  child: Icon(Icons
+                                                      .auto_awesome_outlined),
+                                                ),
+                                                if (homeState)
+                                                  Expanded(
+                                                      child: MenuItemText(
+                                                          locals.flowForYou)),
+                                              ]),
+                                            ),
+                                          ),
+                                        ),
                                       TvButton(
                                         key: const ValueKey('tv-home-profiles'),
                                         onFocusChanged:
@@ -413,7 +515,7 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                           ),
                                         ),
                                       )
-                                    ])),
+                                    ]))),
                               ),
                             ),
                           ),
@@ -436,26 +538,18 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                       Expanded(
                                         child: Align(
                                           alignment: Alignment.centerLeft,
-                                          child: showModeSelector
-                                              ? ContentModeSelector(
-                                                  value: mode,
-                                                  onChanged: context
-                                                      .read<SettingsCubit>()
-                                                      .setHomeContentMode,
-                                                )
-                                              : SizedBox(
-                                                  height: 48,
-                                                  child: Align(
-                                                    alignment:
-                                                        Alignment.centerLeft,
-                                                    child: Text(
-                                                        music
-                                                            ? locals.music
-                                                            : locals.videos,
-                                                        style: textTheme
-                                                            .titleLarge),
-                                                  ),
-                                                ),
+                                          child: SizedBox(
+                                            height: 48,
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                music
+                                                    ? locals.music
+                                                    : locals.videos,
+                                                style: textTheme.titleLarge,
+                                              ),
+                                            ),
+                                          ),
                                         ),
                                       ),
                                       if (music)

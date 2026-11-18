@@ -76,4 +76,20 @@ class DownloadStorage {
 
   Future<void> deleteDocument(String uri) =>
       _channel.invokeMethod<void>('deleteDocument', {'uri': uri});
+
+  /// Fingerprints the completed owned document, never a path supplied by media.
+  Future<({int byteLength, String sha256})?> inspectDocument(
+      String uri, String folderUri) async {
+    final value = await _channel.invokeMapMethod<String, dynamic>(
+        'inspectDocument', {'uri': uri, 'folderUri': folderUri});
+    if (value == null ||
+        value['byteLength'] is! int ||
+        value['sha256'] is! String) {
+      return null;
+    }
+    return (
+      byteLength: value['byteLength'] as int,
+      sha256: value['sha256'] as String
+    );
+  }
 }

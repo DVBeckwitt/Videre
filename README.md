@@ -53,7 +53,7 @@ To run your own instance, follow the [Invidious installation guide](https://docs
 
 ## Your connection and privacy
 
-Your instance operator affects privacy and reliability. YouTube video, audio, downloads, and artwork use the selected Invidious proxy. Music browsing uses that instance too. If it cannot proxy a stream, playback fails. Shared links use your selected instance.
+Your instance operator affects privacy and reliability. YouTube video, audio, downloads, and artwork use the selected Invidious proxy. Music browsing uses that instance too. If it cannot proxy a stream, playback fails. Sharing offers your selected instance link or a YouTube link, with an optional playback timestamp. Choosing a YouTube share link only constructs the address; Videre does not connect to YouTube.
 
 SponsorBlock, Return YouTube Dislike, and DeArrow contact their own services. Podcast feeds and audio come from publishers through your configured proxy. Local and server libraries remain separate. [Privacy policy](./docs/privacy.html)
 
@@ -63,6 +63,7 @@ Protected HTTPS servers support gateway sign-in with Android WebView isolated-pr
 
 ## Useful tips
 
+- **YouTube link defaults.** In Android's **Settings → Apps → Videre → Open by default**, enable opening supported links and select the YouTube domains, including `youtu.be` and `music.youtube.com`. This is an Android app default; there is no separate Videre toggle. Android 12 and later require this choice for automatic opening from other apps. If an address is unavailable, turn off supported-link handling for the app that currently owns it first. Another app's **Share → Videre** action also accepts links. Incoming links and timestamps are interpreted locally; content and playback requests use your selected Invidious instance. Shared or pasted content links from that instance also open inside Videre.
 - **Player.** Pull down from the description or comments to minimize. Press Home for picture-in-picture where supported. Closing that window keeps audio playing, which you can stop from the notification.
 - **Quality and queue.** Set remembered quality and **Autoplay next in queue** in **Settings → Video player**. Adaptive quality sets a maximum and may drop with bandwidth.
 - **Downloads.** Choose **Settings → Download folder** for new files. Reopen Videre to recover interrupted transfers. Deleting a download deletes its saved file. Reconnect removable storage before retrying.
@@ -89,5 +90,13 @@ In-app submission requires a configured feedback relay. Builds without one can s
 Videre is an independently maintained Clipious fork. The name means “to watch,” a nod to Invidious’s Latin roots. [Clipious](https://github.com/lamarios/clipious)
 
 Original Clipious code © 2023 Paul Fauchon and contributors. Videre modifications © 2026 DVBeckwitt and Videre contributors.
+
+Video interactions and local recommendation algorithms include code ported from
+[Flow](https://github.com/Flow-Tube/Flow). Music interactions include code translated
+from [Muzza](https://github.com/Maloy-Android/Muzza). Pinned revisions, source files
+and adaptations are recorded in the [Flow source ledger](./docs/flow-video-ui-sources.md),
+[Music source ledger](./docs/music-ui-sources.md) and
+[algorithm attribution](./packages/videre_recommendations/ATTRIBUTION.md).
+Their GPL v3 notices are included in **Settings → About → Licenses**.
 
 Licensed under the GNU Affero General Public License v3.0 or later, without warranty. Videre is unaffiliated with Google, YouTube, Invidious, or the original Clipious maintainers. Users are responsible for applicable laws and terms. [License](./LICENSE)

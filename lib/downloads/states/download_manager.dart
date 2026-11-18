@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:bloc/bloc.dart';
 import 'package:dio/dio.dart';
+import 'package:crypto/crypto.dart';
 import 'package:downloadsfolder/downloadsfolder.dart';
 import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit_config.dart';
 import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_session.dart';
@@ -11,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -41,6 +44,22 @@ part 'download_manager.freezed.dart';
 final Logger log = Logger('DownloadState');
 const _wifiSetting = 'downloads-wifi-only';
 const _pausedSetting = 'downloads-paused';
+
+Future<({int byteLength, String sha256})> _privateDownloadIntegrity(
+        String path) =>
+    Isolate.run(() async {
+      final file = File(path);
+      final before = await file.stat();
+      final digest = await sha256.bind(file.openRead()).first;
+      final after = await file.stat();
+      if (before.type != FileSystemEntityType.file ||
+          before.size <= 0 ||
+          before.size != after.size ||
+          before.modified != after.modified) {
+        throw const FileSystemException('The downloaded file changed');
+      }
+      return (byteLength: after.size, sha256: digest.toString());
+    });
 
 class DownloadProgress {
   final CancelToken cancelToken;
@@ -444,6 +463,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final music = (video.musicMetadata ?? vid.musicMetadata)
               ?.withoutVideoThumbnailFallbacks(vid.videoThumbnails);
           video = video.copyWith(
+              // Interrupted/replaced output must never inherit old proof.
+              playbackProvenance: null,
               container: container,
               title: music?.title ?? vid.title ?? video.title,
               author: music?.artist ?? vid.author,
@@ -596,7 +617,35 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             if (token.isCancelled) throw token.cancelError!;
             await storage.writeDocument(output, uri, token);
           }
+          if (token.isCancelled) throw token.cancelError!;
+          // Muzza reads saved media before its evictable playback cache. Our
+          // files need owner/rendition proof and a fingerprint of final bytes,
+          // including remuxed video and externally stored documents.
+          DownloadPlaybackProvenance? provenance;
+          try {
+            final integrity = video.storageUri == null
+                ? await _privateDownloadIntegrity(mediaPath)
+                : await storage.inspectDocument(
+                    video.storageUri!, video.folderUri!);
+            if (integrity != null) {
+              provenance = DownloadPlaybackProvenance.create(
+                  video: vid,
+                  server: server,
+                  audioOnly: video.audioOnly,
+                  container: container!,
+                  audio: audio,
+                  videoFormat: selectedVideo,
+                  byteLength: integrity.byteLength,
+                  sha256: integrity.sha256);
+            }
+          } catch (_) {
+            // Failure of optional automatic reuse does not delete a completed
+            // download or change its existing explicit-offline behavior.
+            provenance = null;
+          }
+          if (token.isCancelled) throw token.cancelError!;
           await library.upsertDownload(video.copyWith(
+              playbackProvenance: provenance,
               downloadComplete: true,
               downloadFailed: false,
               authenticationRequired: false,

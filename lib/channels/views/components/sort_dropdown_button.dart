@@ -15,17 +15,24 @@ class SortDropdownButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
-    return DropdownButton<ChannelSortBy>(
-      value: selectedSortingOption,
-      items: ChannelSortBy.values
-          .map((value) => DropdownMenuItem<ChannelSortBy>(
+    // Flow ChannelFilterBar.kt represents a sort group as one menu chip.
+    return PopupMenuButton<ChannelSortBy>(
+      tooltip: locals.searchSortBy,
+      initialValue: selectedSortingOption,
+      itemBuilder: (_) => ChannelSortBy.values
+          .map((value) => PopupMenuItem<ChannelSortBy>(
                 value: value,
                 child: Text(value.getLabel(locals)),
               ))
           .toList(),
-      onChanged: (ChannelSortBy? newValue) {
-        onChanged(newValue ?? ChannelSortBy.newest);
-      },
+      onSelected: onChanged,
+      child: Chip(
+        label: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(selectedSortingOption.getLabel(locals)),
+          const SizedBox(width: 4),
+          const Icon(Icons.expand_more, size: 18),
+        ]),
+      ),
     );
   }
 }

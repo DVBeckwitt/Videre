@@ -11,12 +11,14 @@ class VideoDislikeMetrics extends StatefulWidget {
   final Video video;
   final TextStyle? style;
   final double iconSize;
+  final Widget Function(BuildContext, int?)? builder;
 
   const VideoDislikeMetrics({
     super.key,
     required this.video,
     this.style,
     this.iconSize = 15,
+    this.builder,
   });
 
   @override
@@ -59,12 +61,16 @@ class _VideoDislikeMetricsState extends State<VideoDislikeMetrics> {
     return FutureBuilder<Dislike>(
       key: ValueKey(_requestKey),
       future: _request,
-      builder: (context, snapshot) => VideoMetrics(
-        video: widget.video,
-        dislikes: snapshot.data?.dislikes,
-        style: widget.style,
-        iconSize: widget.iconSize,
-      ),
+      builder: (context, snapshot) {
+        final count = snapshot.data?.dislikes;
+        return widget.builder?.call(context, count) ??
+            VideoMetrics(
+              video: widget.video,
+              dislikes: count,
+              style: widget.style,
+              iconSize: widget.iconSize,
+            );
+      },
     );
   }
 }

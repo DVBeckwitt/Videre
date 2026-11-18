@@ -206,6 +206,16 @@ class SettingsScreen extends StatelessWidget {
                     description: Text(
                         '${locals.build}: ${state.packageInfo.buildNumber}'),
                   ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.description_outlined),
+                    title: Text(
+                        MaterialLocalizations.of(context).licensesPageTitle),
+                    onPressed: (context) => showLicensePage(
+                      context: context,
+                      applicationName: state.packageInfo.appName,
+                      applicationVersion: state.packageInfo.version,
+                    ),
+                  ),
                   SettingsTile(
                     leading: const Icon(Icons.toc),
                     title: Text(locals.appLogs),

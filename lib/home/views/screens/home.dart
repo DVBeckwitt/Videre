@@ -18,8 +18,6 @@ import 'package:logging/logging.dart';
 
 import '../../../notifications/notifications.dart';
 import '../../models/phone_navigation.dart';
-import '../../models/content_mode.dart';
-import '../components/content_mode_selector.dart';
 import '../../../music/views/screens/music_mode.dart';
 
 enum _HomeUtility { profiles, subscriptions }
@@ -37,6 +35,7 @@ class MainContentScreen extends StatefulWidget {
 class _MainScreenState extends State<MainContentScreen> {
   TabsRouter? _initializedTabsRouter;
   HomeDataSource? _activePage;
+  bool? _musicSelected;
   Object? _sessionKey;
   bool _musicVisited = false;
   bool _videoVisited = false;
@@ -52,7 +51,9 @@ class _MainScreenState extends State<MainContentScreen> {
       case PhoneNavigationItem.queue:
         router.push(const VideoQueueRoute());
       case PhoneNavigationItem.music:
-        context.read<SettingsCubit>().setHomeContentMode(HomeContentMode.music);
+        Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (context) => MusicModeScreen(appBar: _musicAppBar(context)),
+        ));
       case PhoneNavigationItem.playlist:
         router.push(const PlaylistLibraryRoute());
       default:
@@ -61,9 +62,9 @@ class _MainScreenState extends State<MainContentScreen> {
   }
 
   List<Widget> _topActions(BuildContext context, PhoneNavigation navigation,
-      {bool modeSwitch = false, HomeDataSource? selectedPage}) {
+      {bool compact = false, HomeDataSource? selectedPage}) {
     final locals = AppLocalizations.of(context)!;
-    final maxVisible = modeSwitch
+    final maxVisible = compact
         ? (MediaQuery.textScalerOf(context).scale(14) > 23 ? 0 : 1)
         : (navigation.top.length > 3 ? 2 : navigation.top.length);
     final visible = navigation.top.take(maxVisible);
@@ -76,7 +77,7 @@ class _MainScreenState extends State<MainContentScreen> {
                 tooltip: item.label(locals),
                 icon: Icon(item.icon),
                 onPressed: () => _openItem(context, item)),
-      if (hidden.isNotEmpty || modeSwitch)
+      if (hidden.isNotEmpty || compact)
         PopupMenuButton<Object>(
           tooltip: locals.phoneNavigationMore,
           onSelected: (item) {
@@ -97,7 +98,7 @@ class _MainScreenState extends State<MainContentScreen> {
                     const SizedBox(width: 12),
                     Expanded(child: Text(item.label(locals)))
                   ])),
-            if (modeSwitch) ...[
+            if (compact) ...[
               if (hidden.isNotEmpty) const PopupMenuDivider(),
               PopupMenuItem(
                   value: _HomeUtility.profiles, child: Text(locals.profiles)),
@@ -131,8 +132,9 @@ class _MainScreenState extends State<MainContentScreen> {
     final parent = router.parent<RoutingController>();
     if (parent == null) return;
     final attached = parent.childControllers.contains(router);
-    // Offstage widgets still participate in auto_route's Back dispatch. Keep
-    // the video tabs mounted, but only register their router in Videos mode.
+    // TabsRouter handles Back by selecting homeIndex before consulting the
+    // enclosing route's PopScopes. Let Music's detail pages handle Back first,
+    // while retaining the pager and all tab controllers for swiping back out.
     if (active && !attached) {
       parent.attachChildController(router);
     } else if (!active && attached) {
@@ -148,47 +150,70 @@ class _MainScreenState extends State<MainContentScreen> {
     AutoRouter.of(context).push(const ManageSubscriptionsRoute());
   }
 
-  void openLayoutEditor(BuildContext context) {
-    var app = context.read<AppCubit>();
-    AutoRouter.of(context)
-        .push(const EditHomeLayoutRoute())
-        .then((value) => app.updateLayout());
-  }
-
-  Widget _modeSelector(BuildContext context, SettingsState settings) =>
-      ContentModeSelector(
-        value: settings.effectiveHomeContentMode,
-        onChanged: (mode) async {
-          try {
-            await context.read<SettingsCubit>().setHomeContentMode(mode);
-          } catch (_) {
-            if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                  content: Text(
-                      AppLocalizations.of(context)!.phoneNavigationSaveError)));
-            }
-          }
-        },
-      );
-
-  AppBar _musicAppBar(BuildContext context, SettingsState settings) {
+  AppBar _musicAppBar(BuildContext context, {bool showSearch = true}) {
     final locals = AppLocalizations.of(context)!;
     return AppBar(
-      titleSpacing: 8,
-      toolbarHeight: 64,
-      title: settings.showContentModeSelector
-          ? _modeSelector(context, settings)
-          : Text(locals.music),
+      titleSpacing: 16,
+      title: Text(locals.music),
       actions: [
-        IconButton(
-            tooltip: locals.search,
-            onPressed: () => AutoRouter.of(context).push(MusicRoute()),
-            icon: const Icon(Icons.search)),
+        if (showSearch)
+          IconButton(
+              tooltip: locals.search,
+              onPressed: () => AutoRouter.of(context).push(MusicRoute()),
+              icon: const Icon(Icons.search)),
         IconButton(
             tooltip: locals.settings,
             onPressed: () => openSettings(context),
             icon: const Icon(Icons.settings)),
       ],
+    );
+  }
+
+  PhoneNavigationItem _itemFor(HomeDataSource page) =>
+      PhoneNavigationItem.values.firstWhere((item) => item.source == page);
+
+  Widget _phoneBar(
+      BuildContext context,
+      PhoneNavigation navigation,
+      PhoneNavigationItem selected,
+      ValueChanged<PhoneNavigationItem> onSelect) {
+    final locals = AppLocalizations.of(context)!;
+    final colors = Theme.of(context).colorScheme;
+    return NavigationBar(
+      height: MediaQuery.textScalerOf(context).scale(12) <= 16 ? 60 : 76,
+      indicatorColor: colors.surfaceContainerHighest,
+      surfaceTintColor: Colors.transparent,
+      animationDuration:
+          AppMotion.duration(context, const Duration(milliseconds: 500)),
+      onDestinationSelected: (index) => onSelect(navigation.bottom[index]),
+      selectedIndex: navigation.bottom.indexOf(selected),
+      destinations: [
+        for (final item in navigation.bottom)
+          NavigationDestination(
+              key: ValueKey('main-navigation-${item.name}'),
+              icon: Icon(item.icon),
+              label: item.label(locals)),
+      ],
+    );
+  }
+
+  Widget _tabletRail(
+      BuildContext context,
+      List<PhoneNavigationItem> items,
+      PhoneNavigationItem selected,
+      ValueChanged<PhoneNavigationItem> onSelect) {
+    final locals = AppLocalizations.of(context)!;
+    return OrientationBuilder(
+      builder: (context, orientation) => NavigationRail(
+        extended: orientation == Orientation.landscape,
+        selectedIndex: items.indexOf(selected),
+        onDestinationSelected: (index) => onSelect(items[index]),
+        destinations: [
+          for (final item in items)
+            NavigationRailDestination(
+                icon: Icon(item.icon), label: Text(item.label(locals))),
+        ],
+      ),
     );
   }
 
@@ -243,20 +268,18 @@ class _MainScreenState extends State<MainContentScreen> {
       var settings = context.watch<SettingsCubit>().state;
 
       final deviceType = getDeviceType();
+      final phone = deviceType == DeviceType.phone;
+      final tablet = deviceType == DeviceType.tablet;
       final sessionKey =
           (appState.profileId, appState.sessionRevision, appState.server?.url);
       if (_sessionKey != sessionKey) {
         _sessionKey = sessionKey;
         _activePage = null;
+        _initializedTabsRouter = null;
+        _musicSelected = null;
         _musicVisited = false;
         _videoVisited = false;
         _videoStorage = PageStorageBucket();
-      }
-      final music = settings.effectiveHomeContentMode == HomeContentMode.music;
-      if (music) {
-        _musicVisited = true;
-      } else {
-        _videoVisited = true;
       }
       final phoneNavigation = (settings.savedPhoneNavigation ??
               PhoneNavigation.fromLegacy(
@@ -267,33 +290,93 @@ class _MainScreenState extends State<MainContentScreen> {
               element.isPermitted(context, app.isLoggedIn) &&
               element.route != null)
           .toList();
-      final initialPage = deviceType == DeviceType.phone
+      final initialPage = phone
           ? phoneNavigation.startup.source
           : settings.appLayout.elementAtOrNull(appState.firstIndex);
-      final allowedPages = deviceType == DeviceType.phone
+      final allowedPages = phone
           ? phoneNavigation.bottom
-              .where((item) => item.isTab)
+              .where((item) => item.isTab && item.source != null)
               .map((item) => item.source!)
               .toList()
           : configuredPages;
+      final tabletItems = [
+        for (final page in allowedPages) _itemFor(page),
+        if (tablet) PhoneNavigationItem.music,
+      ];
+      final tabItems = phone
+          ? phoneNavigation.bottom.where((item) => item.isTab).toList()
+          : allowedPages.map(_itemFor).toList();
 
-      var selectedIndex = allowedPages
-          .indexOf(_activePage ?? initialPage ?? HomeDataSource.home);
+      final hasMusicTab = phone
+          ? phoneNavigation.bottom.contains(PhoneNavigationItem.music)
+          : tablet && tabletItems.length > 1;
+      if (!hasMusicTab) _musicSelected = false;
+      _musicSelected ??=
+          phone && phoneNavigation.startup == PhoneNavigationItem.music;
+      final phoneMusicTab = phone && hasMusicTab;
+      final musicTabSelected =
+          hasMusicTab && !phoneMusicTab && _musicSelected == true;
+      final music = musicTabSelected;
+      if (music) {
+        _musicVisited = true;
+      } else {
+        _videoVisited = true;
+      }
+
+      final selectedItem = phoneMusicTab && _musicSelected == true
+          ? PhoneNavigationItem.music
+          : _itemFor(_activePage ?? initialPage ?? HomeDataSource.home);
+      var selectedIndex = tabItems.indexOf(selectedItem);
       if (selectedIndex < 0) {
         selectedIndex = 0;
       }
 
+      void select(BuildContext context, PhoneNavigationItem item) {
+        if (phone) {
+          final index = tabItems.indexOf(item);
+          if (index < 0) {
+            _openItem(context, item);
+          } else {
+            _initializedTabsRouter?.setActiveIndex(index);
+          }
+          return;
+        }
+        if (item == PhoneNavigationItem.music) {
+          if (!musicTabSelected) setState(() => _musicSelected = true);
+          return;
+        }
+        final source = item.source;
+        final index = source == null ? -1 : allowedPages.indexOf(source);
+        if (index < 0 || (phone && !item.isTab)) {
+          _openItem(context, item);
+          return;
+        }
+        if (musicTabSelected) {
+          setState(() {
+            _activePage = allowedPages[index];
+            _musicSelected = false;
+          });
+        }
+        final router = _initializedTabsRouter;
+        if (router != null && index < router.pageCount) {
+          router.setActiveIndex(index);
+        }
+      }
+
       final video = !_videoVisited
           ? const SizedBox.shrink()
-          : allowedPages.isEmpty
+          : tabItems.isEmpty
               ? Scaffold(
                   appBar: AppBar(
-                    titleSpacing: 8,
-                    toolbarHeight: 64,
-                    title: settings.showContentModeSelector
-                        ? _modeSelector(context, settings)
-                        : Text(locals.videos),
+                    title: Text(locals.videos),
                     actions: [
+                      if (tablet)
+                        IconButton(
+                          tooltip: locals.music,
+                          onPressed: () =>
+                              _openItem(context, PhoneNavigationItem.music),
+                          icon: const Icon(Icons.music_note),
+                        ),
                       IconButton(
                         tooltip: locals.settings,
                         onPressed: () => openSettings(context),
@@ -305,11 +388,7 @@ class _MainScreenState extends State<MainContentScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Center(
-                          child: AppIcon(
-                        width: 150,
-                        height: 150,
-                      )),
+                      const Center(child: AppIcon(width: 150, height: 150)),
                       FilledButton.tonalIcon(
                           onPressed: () => openSettings(context),
                           icon: const Icon(Icons.settings),
@@ -322,162 +401,99 @@ class _MainScreenState extends State<MainContentScreen> {
                   key: ValueKey((
                     sessionKey,
                     deviceType,
-                    allowedPages.map((page) => page.name).join(',')
+                    tabItems.map((item) => item.name).join(',')
                   )),
                   homeIndex: selectedIndex,
-                  routes: allowedPages.map((e) => e.route!).toList(),
-                  physics: deviceType == DeviceType.phone
+                  routes: tabItems
+                      .map((item) => item == PhoneNavigationItem.music
+                          ? const MainMusicRoute()
+                          : item.source!.route!)
+                      .toList(),
+                  physics: phone
                       ? const BouncingScrollPhysics(
                           parent: AlwaysScrollableScrollPhysics())
                       : const NeverScrollableScrollPhysics(),
                   builder: (context, child, controller) {
                     final tabsRouter = AutoTabsRouter.of(context);
-                    _setVideoRouterActive(tabsRouter, !music);
                     _initializeStartupTab(tabsRouter, selectedIndex);
-                    final selectedPage = allowedPages[tabsRouter.activeIndex];
-                    _activePage = selectedPage;
+                    final selectedItem = tabItems[tabsRouter.activeIndex];
+                    _setVideoRouterActive(tabsRouter,
+                        !music && selectedItem != PhoneNavigationItem.music);
+                    final selectedPage = selectedItem.source;
+                    if (selectedPage != null) _activePage = selectedPage;
+                    if (phone) {
+                      _musicSelected =
+                          selectedItem == PhoneNavigationItem.music;
+                    }
                     return Scaffold(
-                        // so we rebuild the view if the server changes
-                        backgroundColor: colorScheme.surface,
-                        bottomNavigationBar: deviceType == DeviceType.phone
-                            ? NavigationBar(
-                                animationDuration: AppMotion.duration(
-                                    context, const Duration(milliseconds: 500)),
-                                onDestinationSelected: (index) {
-                                  final item = phoneNavigation.bottom[index];
-                                  if (item.isTab) {
-                                    tabsRouter.setActiveIndex(
-                                        allowedPages.indexOf(item.source!));
-                                  } else {
-                                    _openItem(context, item);
-                                  }
-                                },
-                                selectedIndex: phoneNavigation.bottom
-                                    .indexWhere(
-                                        (item) => item.source == selectedPage),
-                                destinations: [
-                                  for (final item in phoneNavigation.bottom)
-                                    NavigationDestination(
-                                        icon: Icon(item.icon),
-                                        label: item.label(locals)),
-                                ],
-                              )
-                            : null,
-                        appBar: AppBar(
-                          titleSpacing:
-                              settings.showContentModeSelector ? 8 : null,
-                          toolbarHeight:
-                              settings.showContentModeSelector ? 64 : null,
-                          title: settings.showContentModeSelector
-                              ? _modeSelector(context, settings)
-                              : Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Flexible(
-                                        child: Text(
-                                      selectedPage.getLabel(locals),
-                                      overflow: TextOverflow.ellipsis,
-                                    )),
-                                    if (selectedPage == HomeDataSource.home)
-                                      IconButton(
-                                          iconSize: 15,
-                                          onPressed: () =>
-                                              openLayoutEditor(context),
-                                          icon: Icon(
-                                            Icons.edit,
-                                            color: colorScheme.secondary,
-                                          ))
-                                  ],
-                                ),
-                          actions: [
-                            if (!settings.showContentModeSelector ||
-                                deviceType != DeviceType.phone)
-                              IconButton(
-                                tooltip: locals.profiles,
-                                onPressed: () => showProfilePicker(context),
-                                icon: const Icon(Icons.account_circle_outlined),
-                              ),
-                            selectedPage == HomeDataSource.subscription &&
-                                    (!settings.showContentModeSelector ||
-                                        deviceType != DeviceType.phone)
-                                ? IconButton(
+                      backgroundColor: colorScheme.surface,
+                      bottomNavigationBar: phone
+                          ? _phoneBar(context, phoneNavigation, selectedItem,
+                              (item) => select(context, item))
+                          : null,
+                      appBar: selectedItem == PhoneNavigationItem.music
+                          ? _musicAppBar(context, showSearch: false)
+                          : AppBar(
+                              title: Text(selectedPage!.getLabel(locals),
+                                  overflow: TextOverflow.ellipsis),
+                              actions: [
+                                if (!phone)
+                                  IconButton(
+                                    tooltip: locals.profiles,
+                                    onPressed: () => showProfilePicker(context),
+                                    icon: const Icon(
+                                        Icons.account_circle_outlined),
+                                  ),
+                                if (selectedPage ==
+                                        HomeDataSource.subscription &&
+                                    !phone)
+                                  IconButton(
+                                    tooltip: locals.manageSubscriptions,
                                     onPressed: () =>
                                         openSubscriptionManagement(context),
-                                    icon: const Icon(Icons.checklist))
-                                : const SizedBox.shrink(),
-                            if (deviceType == DeviceType.phone)
-                              ..._topActions(context, phoneNavigation,
-                                  modeSwitch: settings.showContentModeSelector,
-                                  selectedPage: selectedPage)
-                            else ...[
-                              const AppBarDownloadButton(),
-                              IconButton(
-                                onPressed: () {
-                                  AutoRouter.of(context).push(SearchRoute());
-                                },
-                                icon: const Icon(Icons.search),
-                              ),
-                            ],
-                            IconButton(
-                              tooltip: locals.settings,
-                              onPressed: () => openSettings(context),
-                              icon: const Icon(Icons.settings),
-                            ),
-                          ],
-                        ),
-                        body: Column(children: [
-                          if (settings.showContentModeSelector)
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 16),
-                              child: Row(children: [
-                                Expanded(
-                                    child: Text(selectedPage.getLabel(locals),
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .headlineSmall)),
-                                if (selectedPage == HomeDataSource.home)
-                                  IconButton(
-                                    tooltip: locals.homeLayoutEditor,
-                                    onPressed: () => openLayoutEditor(context),
-                                    icon: const Icon(Icons.edit),
+                                    icon: const Icon(Icons.checklist),
                                   ),
-                              ]),
-                            ),
-                          Expanded(
-                              child: Row(
-                            children: [
-                              if (deviceType == DeviceType.tablet &&
-                                  allowedPages.length > 2)
-                                OrientationBuilder(
-                                  builder: (context, orientation) =>
-                                      NavigationRail(
-                                          extended: getOrientation() ==
-                                              Orientation.landscape,
-                                          onDestinationSelected:
-                                              tabsRouter.setActiveIndex,
-                                          destinations: allowedPages
-                                              .map((e) =>
-                                                  e.getNavigationRailWidget(
-                                                      context))
-                                              .toList(),
-                                          selectedIndex:
-                                              tabsRouter.activeIndex),
+                                if (phone)
+                                  ..._topActions(context, phoneNavigation,
+                                      compact: true, selectedPage: selectedPage)
+                                else ...[
+                                  const AppBarDownloadButton(),
+                                  IconButton(
+                                    tooltip: locals.search,
+                                    onPressed: () => _openItem(
+                                        context, PhoneNavigationItem.search),
+                                    icon: const Icon(Icons.search),
+                                  ),
+                                ],
+                                IconButton(
+                                  tooltip: locals.settings,
+                                  onPressed: () => openSettings(context),
+                                  icon: const Icon(Icons.settings),
                                 ),
-                              Expanded(
-                                child: Container(
-                                    // home handles its own padding because we don't want to cut horizontal scroll lists on the right
-                                    padding: EdgeInsets.symmetric(
-                                        horizontal:
-                                            selectedPage == HomeDataSource.home
-                                                ? 0
-                                                : innerHorizontalPadding),
-                                    child: child),
-                              ),
-                            ],
-                          ))
-                        ]));
+                              ],
+                            ),
+                      body: Row(
+                        children: [
+                          if (tablet && tabletItems.length >= 2)
+                            _tabletRail(context, tabletItems, selectedItem,
+                                (item) => select(context, item)),
+                          Expanded(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal:
+                                      selectedPage == HomeDataSource.home ||
+                                              selectedItem ==
+                                                  PhoneNavigationItem.music
+                                          ? 0
+                                          : innerHorizontalPadding),
+                              child: child,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
                   });
+
       return IndexedStack(index: music ? 1 : 0, children: [
         TickerMode(
             enabled: !music,
@@ -488,10 +504,25 @@ class _MainScreenState extends State<MainContentScreen> {
             enabled: music,
             child: ExcludeFocus(
                 excluding: !music,
-                child: _musicVisited
+                child: _musicVisited && !phoneMusicTab
                     ? MusicModeScreen(
                         key: ValueKey(sessionKey),
-                        appBar: _musicAppBar(context, settings))
+                        appBar: _musicAppBar(context, showSearch: !hasMusicTab),
+                        mainNavigationBar: hasMusicTab && phone
+                            ? _phoneBar(
+                                context,
+                                phoneNavigation,
+                                PhoneNavigationItem.music,
+                                (item) => select(context, item))
+                            : null,
+                        mainNavigationRail: hasMusicTab && tablet
+                            ? _tabletRail(
+                                context,
+                                tabletItems,
+                                PhoneNavigationItem.music,
+                                (item) => select(context, item))
+                            : null,
+                      )
                     : const SizedBox.shrink())),
       ]);
     });

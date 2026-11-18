@@ -2,13 +2,15 @@ import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/globals.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/router.dart';
-import 'package:clipious/search/views/components/search_filters.dart';
 
 import '../../../settings/states/settings.dart';
-import '../../../utils.dart';
+import '../../../home/views/components/flow_video_home.dart';
+import '../../models/search_date.dart';
+import '../components/search_filters.dart';
+import '../components/search_suggestions_panel.dart';
 import '../../states/search.dart';
 
 //Do not change, invidious doesn't allow any specific value, it's to make the paginated lists work as expected
@@ -36,173 +38,200 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   Widget build(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    var settings = context.read<SettingsCubit>();
-    return OrientationBuilder(
-      builder: (context, orientation) {
-        final deviceType = getDeviceType();
-        final deviceOrientation = getOrientation();
-        return BlocProvider(
-          create: (context) => SearchCubit<SearchState>(
-              SearchState.init(
-                  query: widget.query, searchNow: widget.searchNow),
-              settings),
-          child: BlocBuilder<SearchCubit, SearchState>(
-            builder: (context, state) {
-              var cubit = context.read<SearchCubit>();
-              void submitQuery(String query) {
-                _queryFocus.unfocus();
-                cubit.setSearchQuery(query);
-              }
+    final settings = context.read<SettingsCubit>();
+    return BlocProvider(
+      create: (_) => SearchCubit<SearchState>(
+          SearchState.init(query: widget.query, searchNow: widget.searchNow),
+          settings),
+      child: BlocBuilder<SearchCubit, SearchState>(builder: (context, state) {
+        final locals = AppLocalizations.of(context)!;
+        final search = context.read<SearchCubit>();
+        void submit(String query) {
+          if (query.trim().isEmpty) return;
+          _queryFocus.unfocus();
+          search.setSearchQuery(query);
+        }
 
-              return AutoTabsRouter.tabBar(
-                  animatePageTransition: AppMotion.allowsMovement(context),
-                  physics: const NeverScrollableScrollPhysics(),
-                  routes: const [
-                    SearchVideoRoute(),
-                    SearchChannelRoute(),
-                    SearchPlaylistRoute()
-                  ],
-                  builder: (context, child, controller) {
-                    final tabsController = AutoTabsRouter.of(context);
-                    return Scaffold(
-                      bottomNavigationBar: state.showResults &&
-                              deviceType == DeviceType.phone
-                          ? NavigationBar(
-                              animationDuration: AppMotion.duration(
-                                  context, const Duration(milliseconds: 500)),
-                              selectedIndex: tabsController.activeIndex,
-                              onDestinationSelected:
-                                  tabsController.setActiveIndex,
-                              destinations: [
-                                NavigationDestination(
-                                    icon: const Icon(Icons.play_arrow),
-                                    label: locals.videos),
-                                NavigationDestination(
-                                    icon: const Icon(Icons.people),
-                                    label: locals.channels),
-                                NavigationDestination(
-                                    icon: const Icon(Icons.playlist_play),
-                                    label: locals.playlists),
-                              ],
-                            )
-                          : null,
-                      appBar: AppBar(
-                        title: TextField(
-                          autofocus: widget.query == null,
-                          focusNode: _queryFocus,
-                          controller: state.queryController,
-                          textInputAction: TextInputAction.search,
-                          onSubmitted: submitQuery,
-                        ),
-                        actions: [
-                          IconButton(
-                              onPressed: () {
-                                if (cubit.searchCleared()) {
-                                  AutoRouter.of(context).maybePop();
-                                } else {
-                                  _queryFocus.requestFocus();
-                                }
-                              },
-                              icon: const Icon(Icons.clear)),
-                          SearchFiltersButton(
-                            initialFilters: state.filters,
-                            onChanged: (newFilters) {
-                              cubit.onFiltersChanged(newFilters);
-                              if (state.showResults ||
-                                  state.queryController.text.isNotEmpty) {
-                                cubit.search(state.queryController.text);
-                              }
-                            },
-                          ),
-                        ],
+        bool restore() {
+          if (!search.restoreResults()) return false;
+          _queryFocus.unfocus();
+          return true;
+        }
+
+        return AutoTabsRouter.tabBar(
+          animatePageTransition: AppMotion.allowsMovement(context),
+          physics: const NeverScrollableScrollPhysics(),
+          routes: const [
+            SearchVideoRoute(),
+            SearchChannelRoute(),
+            SearchPlaylistRoute(),
+          ],
+          builder: (context, child, controller) {
+            final tabs = AutoTabsRouter.of(context);
+            final hasQuery = search.submittedQuery.isNotEmpty;
+            return PopScope(
+              canPop: !search.canRestoreResults,
+              onPopInvokedWithResult: (didPop, _) {
+                if (!didPop) restore();
+              },
+              child: Scaffold(
+                appBar: AppBar(
+                  leading: BackButton(onPressed: () {
+                    if (!restore()) context.router.maybePop();
+                  }),
+                  titleSpacing: 0,
+                  title: TextField(
+                    decoration: InputDecoration(
+                      hintText: locals.search,
+                      filled: true,
+                      fillColor:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                      isDense: true,
+                      contentPadding:
+                          const EdgeInsetsDirectional.fromSTEB(16, 11, 6, 11),
+                      border: OutlineInputBorder(
+                        borderSide: BorderSide.none,
+                        borderRadius: BorderRadius.circular(28),
                       ),
-                      body: SafeArea(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: innerHorizontalPadding),
-                          child: !state.showResults
-                              ? ListView(
-                                  children: state
-                                          .queryController.value.text.isEmpty
-                                      ? state.searchHistory
-                                          .map((e) => InkWell(
-                                                onTap: () => submitQuery(e),
-                                                child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.all(8.0),
-                                                  child: Row(children: [
-                                                    const Icon(Icons.history),
-                                                    Expanded(
-                                                      child: Padding(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .only(
-                                                                  left: 8),
-                                                          child: Text(e)),
-                                                    ),
-                                                    IconButton(
-                                                        visualDensity:
-                                                            VisualDensity
-                                                                .compact,
-                                                        onPressed: () => cubit
-                                                            .removeFromHistory(
-                                                                e),
-                                                        iconSize: 17,
-                                                        icon: const Icon(
-                                                            Icons.delete))
-                                                  ]),
-                                                ),
-                                              ))
-                                          .toList()
-                                      : state.suggestions
-                                          .map((e) => InkWell(
-                                                onTap: () => submitQuery(e),
-                                                child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.all(8.0),
-                                                  child: Text(e),
-                                                ),
-                                              ))
-                                          .toList(),
-                                )
-                              : Row(
-                                  children: [
-                                    if (deviceType == DeviceType.tablet)
-                                      NavigationRail(
-                                        extended: deviceOrientation ==
-                                            Orientation.landscape,
-                                        destinations: [
-                                          NavigationRailDestination(
-                                              icon:
-                                                  const Icon(Icons.play_arrow),
-                                              label: Text(locals.videos)),
-                                          NavigationRailDestination(
-                                              icon: const Icon(Icons.people),
-                                              label: Text(locals.channels)),
-                                          NavigationRailDestination(
-                                              icon: const Icon(
-                                                  Icons.playlist_play),
-                                              label: Text(locals.playlists)),
-                                        ],
-                                        selectedIndex:
-                                            tabsController.activeIndex,
-                                        onDestinationSelected:
-                                            tabsController.setActiveIndex,
-                                      ),
-                                    Expanded(
+                    ),
+                    autofocus: widget.query == null,
+                    focusNode: _queryFocus,
+                    controller: state.queryController,
+                    textInputAction: TextInputAction.search,
+                    onTap: search.editQuery,
+                    onSubmitted: submit,
+                  ),
+                  actions: [
+                    IconButton(
+                      tooltip:
+                          MaterialLocalizations.of(context).closeButtonTooltip,
+                      onPressed: () {
+                        if (search.searchCleared()) {
+                          if (!restore()) context.router.maybePop();
+                        } else {
+                          _queryFocus.requestFocus();
+                        }
+                      },
+                      icon: const Icon(Icons.clear),
+                    ),
+                    if (state.showResults)
+                      SearchFiltersButton(
+                        initialFilters: state.filters,
+                        onChanged: search.onFiltersChanged,
+                      ),
+                    if (state.showResults && tabs.activeIndex == 0)
+                      // Flow SearchTopBar.kt: change presentation in place.
+                      ValueListenableBuilder<bool>(
+                        valueListenable: search.compactResults,
+                        builder: (context, compact, _) => IconButton(
+                          tooltip: compact
+                              ? locals.searchStackedView
+                              : locals.searchCompactView,
+                          onPressed: search.toggleResultLayout,
+                          icon:
+                              Icon(compact ? Icons.grid_view : Icons.view_list),
+                        ),
+                      ),
+                  ],
+                ),
+                body: SafeArea(
+                  child: IndexedStack(
+                    index: state.showResults ? 0 : 1,
+                    children: [
+                      // Flow SearchScreen.kt retains the result grid while the
+                      // query is edited so Back restores the same scroll position.
+                      ExcludeFocus(
+                        excluding: !state.showResults,
+                        child: TickerMode(
+                          enabled: state.showResults,
+                          child: hasQuery
+                              ? Column(children: [
+                                  _SearchFilterChips(
+                                    selected: tabs.activeIndex,
+                                    onTypeChanged: tabs.setActiveIndex,
+                                    recent:
+                                        state.filters.date == SearchDate.week,
+                                    onRecentChanged: (enabled) =>
+                                        search.onFiltersChanged(
+                                      state.filters.copyWith(
+                                          date: enabled
+                                              ? SearchDate.week
+                                              : SearchDate.any),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: innerHorizontalPadding),
                                       child: child,
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                ])
+                              : const SizedBox.shrink(),
                         ),
                       ),
-                    );
-                  });
-            },
-          ),
+                      ExcludeFocus(
+                        excluding: state.showResults,
+                        child: SearchSuggestionsPanel(
+                          query: state.queryController.text,
+                          history: state.searchHistory,
+                          suggestions: state.suggestions,
+                          onSubmit: submit,
+                          onFill: (value) {
+                            state.queryController.value = TextEditingValue(
+                                text: value,
+                                selection: TextSelection.collapsed(
+                                    offset: value.length));
+                            _queryFocus.requestFocus();
+                          },
+                          onDelete: search.removeFromHistory,
+                          onClearHistory: search.clearHistory,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
         );
-      },
+      }),
     );
+  }
+}
+
+// Flow SearchFilterBar.kt's result-type and recent-upload chip row. Videre
+// exposes the types and server-side date filter its catalog already supports.
+class _SearchFilterChips extends StatelessWidget {
+  final int selected;
+  final ValueChanged<int> onTypeChanged;
+  final bool recent;
+  final ValueChanged<bool> onRecentChanged;
+
+  const _SearchFilterChips({
+    required this.selected,
+    required this.onTypeChanged,
+    required this.recent,
+    required this.onRecentChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final types = [locals.videos, locals.channels, locals.playlists];
+    return FlowHomeChipStrip(chips: [
+      for (var index = 0; index < types.length; index++)
+        ChoiceChip(
+          label: Text(types[index]),
+          selected: selected == index,
+          onSelected: (_) => onTypeChanged(index),
+        ),
+      if (selected == 0)
+        FilterChip(
+          label: Text(locals.searchUploadDateWeek),
+          selected: recent,
+          onSelected: onRecentChanged,
+        ),
+    ]);
   }
 }

@@ -1,6 +1,7 @@
 import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
+import 'package:clipious/recommendations/views/recommendation_settings.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/globals.dart';
@@ -13,7 +14,7 @@ import 'package:settings_ui/settings_ui.dart';
 import '../../../utils/views/components/select_list_dialog.dart';
 import '../../../utils.dart';
 import '../components/app_customizer.dart';
-import '../components/home_experience_setting.dart';
+import '../../../home/views/screens/home_tabs_editor.dart';
 import 'community_filter_settings.dart';
 
 @RoutePage()
@@ -219,18 +220,17 @@ class BrowsingSettingsScreen extends StatelessWidget {
             sections: [
               SettingsSection(
                 tiles: [
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.auto_awesome_outlined),
+                    title: Text(locals.localRecommendations),
+                    description: Text(locals.recommendationLearningHint),
+                    onPressed: showRecommendationSettings,
+                  ),
                   SettingsTile(
                     leading: const Icon(Icons.public),
                     title: Text(locals.country),
                     value: Text(state.country.name),
                     onPressed: (ctx) => searchCountry(ctx, state),
-                  ),
-                  SettingsTile(
-                    leading: const Icon(Icons.home_outlined),
-                    title: Text(locals.homeExperience),
-                    value:
-                        Text(homeExperienceLabel(state.homeExperience, locals)),
-                    onPressed: showHomeExperiencePicker,
                   ),
                   SettingsTile(
                     leading: const Icon(Icons.app_settings_alt),
@@ -243,6 +243,16 @@ class BrowsingSettingsScreen extends StatelessWidget {
                                 .map((e) => e.getLabel(locals)))
                         .join(', ')),
                     onPressed: (ctx) => customizeApp(ctx),
+                  ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.tab_outlined),
+                    title: Text(locals.homeTabs),
+                    description: Text(locals.homeTabsDescription),
+                    onPressed: (ctx) => Navigator.of(ctx).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const HomeTabsEditorScreen(),
+                      ),
+                    ),
                   ),
                   SettingsTile.switchTile(
                     leading: const Icon(Icons.self_improvement_outlined),

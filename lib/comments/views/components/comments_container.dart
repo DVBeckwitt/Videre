@@ -3,13 +3,21 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/comments/states/comments_container.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/comments/models/video_comments.dart';
 
 import 'comments.dart';
 
 class CommentsContainer extends StatelessWidget {
   final Video video;
+  final VideoComments? topPage;
+  final bool watchStyle;
 
-  const CommentsContainer({super.key, required this.video});
+  const CommentsContainer({
+    super.key,
+    required this.video,
+    this.topPage,
+    this.watchStyle = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -26,37 +34,57 @@ class CommentsContainer extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      locals.comments,
-                      style: textTheme.titleMedium
-                          ?.copyWith(color: colorScheme.secondary),
+              if (watchStyle) ...[
+                Text(locals.comments, style: textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ChoiceChip(
+                      label: Text(locals.topSorting),
+                      selected: state.sortBy == 'top',
+                      onSelected: (_) => cubit.changeSorting('top'),
                     ),
-                  ),
-                  DropdownButton<String>(
-                    value: state.sortBy,
-                    onChanged: cubit.changeSorting,
-                    items: [
-                      DropdownMenuItem(
-                        value: 'top',
-                        child: Text(locals.topSorting),
+                    ChoiceChip(
+                      label: Text(locals.newSorting),
+                      selected: state.sortBy == 'new',
+                      onSelected: (_) => cubit.changeSorting('new'),
+                    ),
+                  ],
+                ),
+              ] else
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        locals.comments,
+                        style: textTheme.titleMedium
+                            ?.copyWith(color: colorScheme.secondary),
                       ),
-                      DropdownMenuItem(
-                        value: 'new',
-                        child: Text(locals.newSorting),
-                      ),
-                    ],
-                  )
-                ],
-              ),
+                    ),
+                    DropdownButton<String>(
+                      value: state.sortBy,
+                      onChanged: cubit.changeSorting,
+                      items: [
+                        DropdownMenuItem(
+                          value: 'top',
+                          child: Text(locals.topSorting),
+                        ),
+                        DropdownMenuItem(
+                          value: 'new',
+                          child: Text(locals.newSorting),
+                        ),
+                      ],
+                    )
+                  ],
+                ),
               CommentsView(
                   key: ValueKey<String>(
                       'comments-${state.sortBy}-${state.source}'),
                   video: video,
                   source: state.source,
-                  sortBy: state.sortBy),
+                  sortBy: state.sortBy,
+                  initialPage: state.sortBy == 'top' ? topPage : null),
             ],
           );
         },

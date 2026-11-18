@@ -230,6 +230,7 @@ class DataSource {
     this.maxCacheSize = _maxCacheSize,
     this.maxCacheFileSize = _maxCacheFileSize,
     this.cacheKey,
+    this.playbackCache,
     this.showNotification = false,
     this.title,
     this.author,
@@ -313,6 +314,7 @@ class DataSource {
   final int? maxCacheFileSize;
 
   final String? cacheKey;
+  final Map<String, Object?>? playbackCache;
 
   final bool? showNotification;
 

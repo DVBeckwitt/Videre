@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
@@ -14,6 +17,7 @@ import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
@@ -28,6 +32,8 @@ import 'package:clipious/player/views/components/playlist_loading_notice.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/views/components/playlist_information.dart';
+import 'package:clipious/recommendations/candidate_sources.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -50,6 +56,7 @@ class MusicScreen extends StatefulWidget {
   final String? artistId;
   final String? initialQuery;
   final bool embedded;
+  final Duration startAt;
 
   const MusicScreen(
       {super.key,
@@ -57,6 +64,7 @@ class MusicScreen extends StatefulWidget {
       this.playlistId,
       this.artistId,
       this.initialQuery,
+      this.startAt = Duration.zero,
       this.embedded = false});
 
   static Widget tvAudio({Video? video, DownloadedVideo? offlineVideo}) =>
@@ -64,7 +72,7 @@ class MusicScreen extends StatefulWidget {
 
   static Future<void> playTracks(BuildContext context, List<Video> videos,
       {PlaylistReference? reference,
-      int startIndex = 0,
+      int? startIndex,
       Duration startAt = Duration.zero}) async {
     if (videos.isEmpty) return;
     if (reference != null && reference.profileId != db.profileId) return;
@@ -73,18 +81,17 @@ class MusicScreen extends StatefulWidget {
           builder: (_) => _MusicTvPlayer(
               videos: videos,
               reference: reference,
-              startIndex: startIndex,
+              startIndex: startIndex ?? 0,
               startAt: startAt)));
     } else if (reference != null) {
       await context.read<PlayerCubit>().playPlaylist(videos,
           reference: reference,
-          startIndex: startIndex,
+          startIndex: startIndex ?? 0,
           audio: true,
           startAt: startAt);
     } else {
-      await context
-          .read<PlayerCubit>()
-          .playVideo(videos, audio: true, startAt: startAt);
+      await context.read<PlayerCubit>().playVideo(videos,
+          audio: true, startAt: startAt, startIndex: startIndex);
     }
   }
 
@@ -136,6 +143,7 @@ class _MusicScreenState extends State<MusicScreen> {
     if (oldWidget.videoId != widget.videoId ||
         oldWidget.playlistId != widget.playlistId ||
         oldWidget.artistId != widget.artistId ||
+        oldWidget.startAt != widget.startAt ||
         oldWidget.initialQuery != widget.initialQuery) {
       // Clearing every route argument has no replacement request to invalidate
       // the old one. Revoke it before opening the new destination either way.
@@ -192,7 +200,7 @@ class _MusicScreenState extends State<MusicScreen> {
     if (widget.playlistId != null) {
       await _openCollection(widget.playlistId!);
     } else if (widget.videoId != null) {
-      await _openSong(widget.videoId!);
+      await _openSong(widget.videoId!, startAt: widget.startAt);
     } else if (widget.artistId != null) {
       await _openArtist(widget.artistId!);
     } else if (widget.initialQuery?.trim().isNotEmpty == true) {
@@ -229,10 +237,18 @@ class _MusicScreenState extends State<MusicScreen> {
     }
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit({bool learn = false}) async {
     final query = _search.text.trim();
     if (query.isEmpty) return;
+    final app = context.read<AppCubit>();
+    final session = app.state;
+    if (!_sameSession(session)) return;
     FocusManager.instance.primaryFocus?.unfocus();
+    if (learn && app.tryOpenPastedAppLink(query)) return;
+    // Only an explicit text-field/button submission is a preference signal.
+    // Initial routes, filter changes and retries reuse the query without
+    // treating it as another search by the person.
+    if (learn) unawaited(_learnSearch(query, session));
     final type = _type;
     setState(() {
       _searched = true;
@@ -259,6 +275,19 @@ class _MusicScreenState extends State<MusicScreen> {
         }
       }
     }, _submit);
+  }
+
+  Future<void> _learnSearch(String query, AppState session) async {
+    final recommendations =
+        RecommendationService.forProfile(db, session.profileId);
+    try {
+      await recommendations.recordSearch(query, RecommendationDomain.music);
+    } catch (_) {
+      if (mounted && _sameSession(session)) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(AppLocalizations.of(context)!.recommendationError)));
+      }
+    }
   }
 
   Future<void> _openCollection(String id) async {
@@ -297,17 +326,50 @@ class _MusicScreenState extends State<MusicScreen> {
     }, () => _openArtist(id));
   }
 
-  Future<void> _openSong(String id) async {
+  Future<void> _openSong(String id, {Duration startAt = Duration.zero}) async {
     await _run((generation, session) async {
-      final song = await musicCatalogService.getSong(id,
-          loadObserver: VideoLoadObserver(
-              isCurrent: () => _active(generation, session),
-              onRetry: () {
-                if (_active(generation, session)) {
-                  setState(() => _retryingSong = true);
-                }
-              }));
-      if (!_active(generation, session)) return;
+      final owner = db;
+      bool current() =>
+          identical(owner, db) &&
+          owner.profileId == session.profileId &&
+          _active(generation, session);
+      try {
+        unawaited(context
+            .read<PlayerCubit>()
+            .prepareSponsorSegments(id)
+            .onError((_, stackTrace) => []));
+      } catch (_) {
+        // Optional SponsorBlock work must not delay a song link.
+      }
+      final saved = await prepareDownloadedPlaybackVideo(
+          database: owner,
+          video: Video(videoId: id),
+          server: session.server,
+          audioOnly: true,
+          isCurrent: current);
+      if (!current()) return;
+      final selected =
+          session.server ?? saved?.playbackConnection?.preferredServer;
+      final savedMusic = saved?.musicMetadata;
+      final song = savedMusic != null &&
+              selected != null &&
+              saved?.playbackConnection?.matches(selected) == true
+          ? MusicTrack(
+              videoId: id,
+              title: savedMusic.title,
+              artists: [savedMusic.artist],
+              uploaderChannelUrl: saved?.authorUrl,
+              albumTitle: savedMusic.album,
+              durationSeconds: saved?.lengthSeconds,
+              thumbnails: _savedSongArtwork(saved!, current),
+              playbackVideo: saved)
+          : await musicCatalogService.getSong(id,
+              loadObserver: VideoLoadObserver(
+                  isCurrent: current,
+                  onRetry: () {
+                    if (current()) setState(() => _retryingSong = true);
+                  }));
+      if (!current()) return;
       setState(() {
         _retryingSong = false;
         _songs = [song];
@@ -319,13 +381,27 @@ class _MusicScreenState extends State<MusicScreen> {
         _artistPage = null;
         _browseHistory.clear();
       });
-      await _play([song], loadedVideo: song.playbackVideo);
-    }, () => _openSong(id));
+      await _play([song], loadedVideo: song.playbackVideo, startAt: startAt);
+    }, () => _openSong(id, startAt: startAt));
+  }
+
+  List<ImageObject> _savedSongArtwork(Video saved, bool Function() isCurrent) {
+    final artwork = saved.musicMetadata?.thumbnails ?? const <ImageObject>[];
+    if (artwork.isNotEmpty) return artwork;
+    if (saved.videoThumbnails.isNotEmpty) return saved.videoThumbnails;
+    try {
+      // The ID-only route can recover covers already shown in Quick Picks.
+      final cached = RecommendationCandidates(db, isCurrent: isCurrent)
+          .localMusic(ids: {saved.videoId}, limit: 1).firstOrNull;
+      return cached?.thumbnails ?? const [];
+    } catch (_) {
+      return const [];
+    }
   }
 
   Future<void> _play(List<MusicTrack> tracks,
       {PlaylistReference? reference,
-      int startIndex = 0,
+      int? startIndex,
       Duration startAt = Duration.zero,
       Video? loadedVideo}) async {
     final session = context.read<AppCubit>().state;
@@ -490,7 +566,21 @@ class _MusicScreenState extends State<MusicScreen> {
           if (matches.isNotEmpty) CommunityMatchLabels(matches: matches),
         ],
       ),
-      trailing: MusicLibraryActions(videos: [track.toVideo()]),
+      trailing: MusicLibraryActions(
+          videos: [track.toVideo()],
+          onPlay: () => reference != null && queue != null && index != null
+              ? _play(queue, reference: reference, startIndex: index)
+              : _play(index == null || queue == null
+                  ? [track]
+                  : queue.skip(index).toList())),
+      onLongPress: _starting
+          ? null
+          : () => MusicLibraryActions.showSongMenu(context, track.toVideo(),
+              onPlay: () => reference != null && queue != null && index != null
+                  ? _play(queue, reference: reference, startIndex: index)
+                  : _play(index == null || queue == null
+                      ? [track]
+                      : queue.skip(index).toList())),
       onTap: _starting
           ? null
           : () => reference != null && queue != null && index != null
@@ -717,6 +807,9 @@ class _MusicScreenState extends State<MusicScreen> {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final colors = Theme.of(context).colorScheme;
+    final searchOutline = OutlineInputBorder(
+        borderRadius: BorderRadius.circular(32), borderSide: BorderSide.none);
     return BlocListener<AppCubit, AppState>(
       listenWhen: (before, after) =>
           before.profileId != after.profileId ||
@@ -766,19 +859,25 @@ class _MusicScreenState extends State<MusicScreen> {
                     : EdgeInsets.zero,
                 child: Column(children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                     child: TextField(
                       key: const ValueKey('music-search'),
                       controller: _search,
                       textInputAction: TextInputAction.search,
-                      onSubmitted: (_) => _submit(),
+                      onSubmitted: (_) => _submit(learn: true),
                       decoration: InputDecoration(
-                          labelText: locals.musicInvidiousSearchHint,
-                          border: const OutlineInputBorder(),
+                          hintText: locals.musicInvidiousSearchHint,
+                          filled: true,
+                          fillColor: colors.surfaceContainerHigh,
+                          border: searchOutline,
+                          focusedBorder: searchOutline.copyWith(
+                              borderSide: BorderSide(color: colors.primary)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 14),
                           suffixIcon: IconButton(
                               autofocus: isTv,
                               tooltip: locals.search,
-                              onPressed: _submit,
+                              onPressed: () => _submit(learn: true),
                               icon: const Icon(Icons.search))),
                     ),
                   ),
@@ -795,7 +894,7 @@ class _MusicScreenState extends State<MusicScreen> {
                     SingleChildScrollView(
                       key: const ValueKey('music-search-filters'),
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
                       child: Row(children: [
                         for (final type in _MusicSearch.values)
                           Padding(
@@ -803,6 +902,11 @@ class _MusicScreenState extends State<MusicScreen> {
                             child: ChoiceChip(
                                 label: Text(_searchLabel(type, locals)),
                                 selected: _type == type,
+                                backgroundColor: colors.surfaceContainerHigh,
+                                selectedColor: colors.secondaryContainer,
+                                side: BorderSide.none,
+                                shape: const StadiumBorder(),
+                                showCheckmark: false,
                                 onSelected: (_) {
                                   if (_type == type) return;
                                   setState(() => _type = type);
@@ -868,7 +972,9 @@ class _MusicTvPlayer extends StatelessWidget {
                           ? player.resumeSession
                           : () => reference == null
                               ? player.playVideo(videos,
-                                  audio: true, startAt: startAt)
+                                  audio: true,
+                                  startAt: startAt,
+                                  startIndex: startIndex)
                               : player.playPlaylist(videos,
                                   reference: reference!,
                                   startIndex: startIndex,
@@ -921,7 +1027,7 @@ class _MusicPlaybackFailure extends StatelessWidget {
   }
 }
 
-/// Keep transport buttons visible and focusable while using the shared decoder.
+/// Keep the decoder mounted while Music and its queue change presentation.
 class _MusicTvAudio extends StatelessWidget {
   final Video? video;
   final DownloadedVideo? offlineVideo;
@@ -957,6 +1063,13 @@ class _MusicTvAudio extends StatelessWidget {
                       ? player.resumeSession
                       : player.retryCurrentVideo);
             }
+            if ((state.currentlyPlaying?.musicMetadata ??
+                    state.offlineCurrentlyPlaying?.musicMetadata) !=
+                null) {
+              return const TvOverscan(child: MusicPlayer(television: true));
+            }
+            // The TV video route also hosts Listen mode for ordinary videos.
+            // Its simpler transport works without inventing Music metadata.
             return Padding(
               padding: EdgeInsets.symmetric(
                   horizontal: TvOverscan.horizontal,

@@ -14,45 +14,78 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 class VideoTranscriptButton extends StatelessWidget {
   final Video video;
+  final bool labeled;
+  final bool enabled;
+  final bool Function()? isCurrent;
 
-  const VideoTranscriptButton({super.key, required this.video});
+  const VideoTranscriptButton({
+    super.key,
+    required this.video,
+    this.labeled = false,
+    this.enabled = true,
+    this.isCurrent,
+  });
 
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final available = enabled && video.captions.isNotEmpty;
+    void open() {
+      if (isCurrent?.call() == false) return;
+      final lastSubtitles = context.read<SettingsCubit>().state.lastSubtitles;
+      final localeLanguage = Localizations.localeOf(context).languageCode;
+      var initialIndex = video.captions.indexWhere(
+        (caption) => caption.label == lastSubtitles,
+      );
+      if (initialIndex < 0) {
+        initialIndex = video.captions.indexWhere(
+          (caption) => caption.languageCode == localeLanguage,
+        );
+      }
+      if (initialIndex < 0) initialIndex = 0;
+
+      showSafeModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => FractionallySizedBox(
+          widthFactor: 1,
+          heightFactor: 0.85,
+          child: PlayerModalBackHandler(
+            child: _VideoTranscriptSheet(
+              video: video,
+              initialCaptionIndex: initialIndex,
+              isCurrent: isCurrent,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (labeled) {
+      final colors = Theme.of(context).colorScheme;
+      return Tooltip(
+        message: video.captions.isEmpty
+            ? locals.noTranscriptTextAvailable
+            : locals.transcript,
+        child: FilledButton.tonalIcon(
+          key: const ValueKey('video-transcript-open'),
+          style: FilledButton.styleFrom(
+            backgroundColor: colors.surfaceContainerHighest,
+            foregroundColor: colors.onSurface,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+          onPressed: available ? open : null,
+          icon: const Icon(Icons.article_outlined, size: 20),
+          label: Text(locals.transcript),
+        ),
+      );
+    }
     return IconButton(
       key: const ValueKey('video-transcript-open'),
       tooltip: locals.transcript,
       icon: const Icon(Icons.article_outlined),
-      onPressed: () {
-        final lastSubtitles = context.read<SettingsCubit>().state.lastSubtitles;
-        final localeLanguage = Localizations.localeOf(context).languageCode;
-        var initialIndex = video.captions.indexWhere(
-          (caption) => caption.label == lastSubtitles,
-        );
-        if (initialIndex < 0) {
-          initialIndex = video.captions.indexWhere(
-            (caption) => caption.languageCode == localeLanguage,
-          );
-        }
-        if (initialIndex < 0) initialIndex = 0;
-
-        showSafeModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          showDragHandle: true,
-          builder: (context) => FractionallySizedBox(
-            widthFactor: 1,
-            heightFactor: 0.85,
-            child: PlayerModalBackHandler(
-              child: _VideoTranscriptSheet(
-                video: video,
-                initialCaptionIndex: initialIndex,
-              ),
-            ),
-          ),
-        );
-      },
+      onPressed: available ? open : null,
     );
   }
 }
@@ -60,10 +93,12 @@ class VideoTranscriptButton extends StatelessWidget {
 class _VideoTranscriptSheet extends StatefulWidget {
   final Video video;
   final int initialCaptionIndex;
+  final bool Function()? isCurrent;
 
   const _VideoTranscriptSheet({
     required this.video,
     required this.initialCaptionIndex,
+    this.isCurrent,
   });
 
   @override
@@ -100,6 +135,7 @@ class _VideoTranscriptSheetState extends State<_VideoTranscriptSheet> {
       : '${caption.languageCode ?? ''}\u0000${caption.label}';
 
   Future<void> _loadTranscript() async {
+    if (widget.isCurrent?.call() == false) return;
     final generation = ++_requestGeneration;
     final caption = _selectedCaption;
     final cached = _cache[_cacheKey(caption)];
@@ -119,16 +155,28 @@ class _VideoTranscriptSheetState extends State<_VideoTranscriptSheet> {
     });
 
     try {
-      final transcript =
-          await service.getTranscript(widget.video.videoId, caption);
-      if (!mounted || generation != _requestGeneration) return;
+      final transcript = await service.getTranscript(
+        widget.video.videoId,
+        caption,
+        serverOverride: widget.video.playbackConnection?.server ??
+            widget.video.backendPlayback?.server,
+      );
+      if (!mounted ||
+          generation != _requestGeneration ||
+          widget.isCurrent?.call() == false) {
+        return;
+      }
       _cache[_cacheKey(caption)] = transcript;
       setState(() {
         _transcript = transcript;
         _loading = false;
       });
     } catch (_) {
-      if (!mounted || generation != _requestGeneration) return;
+      if (!mounted ||
+          generation != _requestGeneration ||
+          widget.isCurrent?.call() == false) {
+        return;
+      }
       setState(() {
         _loading = false;
         _hasError = true;
@@ -280,12 +328,16 @@ class _VideoTranscriptSheetState extends State<_VideoTranscriptSheet> {
                                         ),
                                         minimumSize: const Size(48, 36),
                                       ),
-                                      onPressed: () =>
-                                          context.read<PlayerCubit>().seek(
-                                                Duration(
-                                                  milliseconds: line.startMs,
-                                                ),
+                                      onPressed: () {
+                                        if (widget.isCurrent?.call() == false) {
+                                          return;
+                                        }
+                                        context.read<PlayerCubit>().seek(
+                                              Duration(
+                                                milliseconds: line.startMs,
                                               ),
+                                            );
+                                      },
                                       child: Text(
                                         _formatTimestamp(line.startMs),
                                       ),

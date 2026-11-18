@@ -90,10 +90,14 @@ internal object NerdVpnAccess {
 
     fun status(context: GatewayContext) = manager().status(context)
     fun beginAuth(context: GatewayContext) = manager().beginAuth(context)
-    fun authorize(context: GatewayContext, token: String, intent: Long) = manager().authorize(context, token, intent)
+    fun authorize(context: GatewayContext, token: String, intent: Long) = manager().authorize(context, token, intent).also {
+        if (it["superseded"] != true) PlaybackMediaCache.revokeAccount(context.key)
+    }
     fun check(context: GatewayContext) = manager().check(context)
-    fun setKey(context: GatewayContext, key: String, expectedRevision: Long? = null) = manager().setKey(context, key, expectedRevision)
-    fun clear(context: GatewayContext) = manager().clear(context)
+    fun setKey(context: GatewayContext, key: String, expectedRevision: Long? = null) = manager().setKey(context, key, expectedRevision).also {
+        if (expectedRevision == null && it["superseded"] != true) PlaybackMediaCache.revokeAccount(context.key)
+    }
+    fun clear(context: GatewayContext) = manager().clear(context).also { PlaybackMediaCache.revokeAccount(context.key) }
 
     fun resolve(context: GatewayContext, url: HttpUrl, manualKey: String? = null): NerdVpnResolvedAccess {
         if (!isNerdVpnOrigin(context.origin) || !context.allows(url) || isNerdVpnBootstrap(url)) return NerdVpnResolvedAccess()

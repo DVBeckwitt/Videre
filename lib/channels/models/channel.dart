@@ -48,4 +48,10 @@ class Channel implements ShareLinks {
   Uri getInvidiousLink(Server server, int? timestamp) {
     return invidiousShareLink(server, pathSegments: ['channel', authorId]);
   }
+
+  @override
+  Uri getYoutubeLink(int? timestamp) => Uri(
+      scheme: 'https',
+      host: 'www.youtube.com',
+      pathSegments: ['channel', authorId]);
 }

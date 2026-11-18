@@ -22,12 +22,13 @@ Future<void> showServerKeyValueDialog(
   List<String>? field1AutofillHints,
   List<String>? field2AutofillHints,
   required String okText,
-  required FutureOr<void> Function(String, String) onOk,
+  required FutureOr<void> Function(BuildContext, String, String) onOk,
   bool television = false,
 }) {
   final locals = AppLocalizations.of(context)!;
   final field1Controller = TextEditingController();
   final field2Controller = TextEditingController();
+  var submitting = false;
 
   Widget field(TextEditingController controller, String title, bool secret,
       List<String>? hints) {
@@ -47,10 +48,10 @@ Future<void> showServerKeyValueDialog(
             decoration: decoration);
   }
 
-  Widget button(String label, VoidCallback onPressed) => television
+  Widget button(String label, VoidCallback? onPressed) => television
       ? TvButton(
           unfocusedColor: Colors.transparent,
-          onPressed: (_) => onPressed(),
+          onPressed: onPressed == null ? null : (_) => onPressed(),
           child: Padding(
             padding: const EdgeInsets.all(8),
             child: Text(label),
@@ -61,11 +62,22 @@ Future<void> showServerKeyValueDialog(
     animationStyle: AppMotion.dialogStyle(context),
     context: context,
     useRootNavigator: false,
-    builder: (context) {
+    builder: (context) => StatefulBuilder(builder: (context, setDialogState) {
+      Future<void> submit() async {
+        if (submitting || ModalRoute.of(context)?.isCurrent != true) return;
+        setDialogState(() => submitting = true);
+        try {
+          await onOk(context, field1Controller.text, field2Controller.text);
+        } finally {
+          if (context.mounted) {
+            setDialogState(() => submitting = false);
+          }
+        }
+      }
+
       final actions = [
         button(locals.cancel, () => Navigator.of(context).pop()),
-        button(
-            okText, () => onOk(field1Controller.text, field2Controller.text)),
+        button(okText, submitting ? null : submit),
       ];
       return AlertDialog(
         content: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -78,7 +90,7 @@ Future<void> showServerKeyValueDialog(
             ? [Row(mainAxisAlignment: MainAxisAlignment.end, children: actions)]
             : actions,
       );
-    },
+    }),
   );
 }
 
@@ -93,10 +105,15 @@ Future<void> showServerBasicAuthDialog(
       field1AutofillHints: const [AutofillHints.username, AutofillHints.email],
       field2AutofillHints: const [AutofillHints.password],
       field2Secret: true,
-      okText: locals.add, onOk: (username, password) async {
-    final credentials = encodeBase64('$username:$password');
-    await saveHeader('Authorization', 'Basic $credentials');
-    if (context.mounted) Navigator.of(context).pop();
+      okText: locals.add, onOk: (dialogContext, username, password) async {
+    await runServerAccountAction(dialogContext, () async {
+      final credentials = encodeBase64('$username:$password');
+      await saveHeader('Authorization', 'Basic $credentials');
+      if (dialogContext.mounted &&
+          ModalRoute.of(dialogContext)?.isCurrent == true) {
+        Navigator.of(dialogContext).pop();
+      }
+    }, television: television);
   });
 }
 
@@ -106,23 +123,26 @@ void showServerHeaderDialog(BuildContext context, {bool television = false}) {
       television: television,
       field1Title: locals.name,
       field2Title: locals.value,
-      okText: locals.add, onOk: (key, value) async {
+      okText: locals.add, onOk: (dialogContext, key, value) async {
     final cubit = context.read<ServerSettingsCubit>();
     if (NerdVpnAccess.supports(cubit.state.server) &&
         NerdVpnAccess.isKeyHeader(key) &&
         !NerdVpnAccess.isValidKey(value)) {
       if (television) {
         showTvAlertdialog(
-            context, locals.error, [Text(locals.nerdVpnKeyInvalid)]);
+            dialogContext, locals.error, [Text(locals.nerdVpnKeyInvalid)]);
       } else {
         await showAlertDialog(
-            context, locals.error, [Text(locals.nerdVpnKeyInvalid)]);
+            dialogContext, locals.error, [Text(locals.nerdVpnKeyInvalid)]);
       }
       return;
     }
-    await runServerAccountAction(context, () async {
+    await runServerAccountAction(dialogContext, () async {
       await cubit.addHeader(key, value);
-      if (context.mounted) Navigator.of(context).pop();
+      if (dialogContext.mounted &&
+          ModalRoute.of(dialogContext)?.isCurrent == true) {
+        Navigator.of(dialogContext).pop();
+      }
     }, television: television);
   });
 }
@@ -133,7 +153,7 @@ Future<void> runServerAccountAction(
   try {
     await action();
   } catch (error) {
-    if (!context.mounted) return;
+    if (!context.mounted || ModalRoute.of(context)?.isCurrent == false) return;
     final locals = AppLocalizations.of(context)!;
     final approvalPending =
         error is NerdVpnAccessRequired && error.state == 'waiting';

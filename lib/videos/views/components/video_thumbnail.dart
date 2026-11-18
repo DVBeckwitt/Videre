@@ -23,22 +23,27 @@ class VideoThumbnailView extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final hasMusicArtwork = musicThumbnails?.isNotEmpty == true;
+    final shape = decoration ??
+        BoxDecoration(
+          color: colors.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+        );
     return AspectRatio(
       aspectRatio: 16 / 9,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Thumbnail(
-            thumbnails: thumbnails,
-            images: hasMusicArtwork ? musicThumbnails : images,
-            decoration: decoration ??
-                BoxDecoration(
-                  color: colors.secondaryContainer,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-          ),
-          if (child != null) child!,
-        ],
+      child: ClipRRect(
+        borderRadius: shape.borderRadius?.resolve(Directionality.of(context)) ??
+            BorderRadius.zero,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Thumbnail(
+              thumbnails: thumbnails,
+              images: hasMusicArtwork ? musicThumbnails : images,
+              decoration: shape,
+            ),
+            if (child != null) child!,
+          ],
+        ),
       ),
     );
   }

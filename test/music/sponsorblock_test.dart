@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:audio_session/audio_session.dart';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -213,6 +214,47 @@ void main() {
     expect(player.state.currentlyPlaying, song);
     expect(player.state.isPlaying, isTrue);
     expect(player.state.sponsorSegments, isEmpty);
+  });
+
+  test('prepared initial skip is part of source setup and reused from cache',
+      () async {
+    app_main.isTv = true;
+    player.audioSession = await AudioSession.instance;
+    source.segments = [segment(0, 10)];
+    final loaded = song.copyWith(formatStreams: [], adaptiveFormats: []);
+    await player.playVideo([loaded], audio: true);
+
+    expect(player.state.startAt, const Duration(seconds: 10));
+    expect(player.state.position, const Duration(seconds: 10));
+    expect((player.state.mediaCommand?.value as SwitchVideoValue).startAt,
+        const Duration(seconds: 10));
+    expect(source.requests, hasLength(1));
+
+    await player.playVideo([loaded], audio: true);
+    expect(player.state.startAt, const Duration(seconds: 10));
+    expect(source.requests, hasLength(1));
+  });
+
+  test(
+      'late SponsorBlock does not delay the media switch or replace its source',
+      () async {
+    app_main.isTv = true;
+    player.audioSession = await AudioSession.instance;
+    source.pending = Completer<List<SponsorSegment>>();
+    final switched = player.stream.firstWhere(
+        (state) => state.mediaCommand?.type == MediaCommandType.switchVideo);
+    final loading = player.playVideo(
+        [song.copyWith(formatStreams: [], adaptiveFormats: [])],
+        audio: true);
+    final switchedState = await switched;
+    expect(switchedState.startAt, Duration.zero);
+    final initialCommand = switchedState.mediaCommand;
+    source.pending!.complete([segment(0, 10)]);
+    await loading;
+    expect(identical(player.state.mediaCommand, initialCommand), isTrue);
+    await player.onProgress(const Duration(seconds: 1));
+    expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+    expect(player.state.mediaCommand?.value, const Duration(seconds: 10));
   });
 
   test('late lookup cannot overwrite a newer setting choice on the same song',

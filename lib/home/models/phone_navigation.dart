@@ -21,7 +21,8 @@ enum PhoneNavigationItem {
   const PhoneNavigationItem(this.source);
   final HomeDataSource? source;
 
-  bool get isTab => source?.route != null && this != downloads;
+  bool get isTab =>
+      this == music || (source?.route != null && this != downloads);
   IconData get icon =>
       this == music ? Icons.music_note : source?.getIcon() ?? Icons.queue_music;
   String label(AppLocalizations locals) => this == music
@@ -33,6 +34,7 @@ enum NavigationArea { bottom, top, hidden }
 
 /// Phone-only preferences. Tablet/TV sections keep their existing settings.
 class PhoneNavigation {
+  static const _version = 2;
   final List<PhoneNavigationItem> bottom, top;
   final PhoneNavigationItem startup;
 
@@ -49,6 +51,7 @@ class PhoneNavigation {
         PhoneNavigationItem.home,
         PhoneNavigationItem.subscription,
         PhoneNavigationItem.history,
+        PhoneNavigationItem.music,
         PhoneNavigationItem.search,
       ], const [
         PhoneNavigationItem.downloads,
@@ -73,34 +76,30 @@ class PhoneNavigation {
         .toSet()
         .toList();
     return PhoneNavigation(bottom.take(5), top,
-        startup: PhoneNavigationItem.values
-            .where((item) => item.source == sources.elementAtOrNull(first))
-            .firstOrNull);
+            startup: PhoneNavigationItem.values
+                .where((item) => item.source == sources.elementAtOrNull(first))
+                .firstOrNull)
+        ._withLegacyMusic();
   }
 
   List<PhoneNavigationItem> get hidden => PhoneNavigationItem.values
-      .where((item) =>
-          item != PhoneNavigationItem.music &&
-          !bottom.contains(item) &&
-          !top.contains(item))
+      .where((item) => !bottom.contains(item) && !top.contains(item))
       .toList();
 
-  /// Keep old serialized Music shortcuts readable without retaining a duplicate
-  /// entry now that Music is a top-level browsing mode.
-  PhoneNavigation withoutMusicShortcut() {
-    if (!bottom.contains(PhoneNavigationItem.music) &&
-        !top.contains(PhoneNavigationItem.music)) {
+  /// Prior versions exposed Music from the mode selector. Keep explicit places,
+  /// and restore access for layouts that relied on that selector.
+  PhoneNavigation _withLegacyMusic() {
+    if (bottom.contains(PhoneNavigationItem.music) ||
+        top.contains(PhoneNavigationItem.music)) {
       return this;
     }
-    final nextBottom = [...bottom]..remove(PhoneNavigationItem.music);
-    final nextTop = [...top]..remove(PhoneNavigationItem.music);
-    if (nextBottom.length < 2) {
-      final replacement = nextBottom.contains(PhoneNavigationItem.search)
-          ? PhoneNavigationItem.home
-          : PhoneNavigationItem.search;
-      nextBottom.add(replacement);
-      nextTop.remove(replacement);
-    }
+    final nextBottom = [...bottom];
+    final nextTop = [...top];
+    // A full custom bar keeps all five items and gains a top shortcut.
+    final target = nextBottom.length < 5 ? nextBottom : nextTop;
+    final search = target.indexOf(PhoneNavigationItem.search);
+    target.insert(
+        search < 0 ? target.length : search, PhoneNavigationItem.music);
     return PhoneNavigation(nextBottom, nextTop, startup: startup);
   }
 
@@ -120,7 +119,6 @@ class PhoneNavigation {
   /// Insertion is relative to an item, avoiding shifting drag indexes.
   PhoneNavigation? move(PhoneNavigationItem item, NavigationArea area,
       {PhoneNavigationItem? before}) {
-    if (item == PhoneNavigationItem.music) return null;
     if (before == item) return this;
     final nextBottom = [...bottom]..remove(item);
     final nextTop = [...top]..remove(item);
@@ -141,23 +139,27 @@ class PhoneNavigation {
   PhoneNavigation startAt(PhoneNavigationItem item) =>
       PhoneNavigation(bottom, top, startup: item);
 
-  PhoneNavigation available({required bool searchHistory}) {
-    if (searchHistory ||
-        !bottom.contains(PhoneNavigationItem.searchHistory) &&
-            !top.contains(PhoneNavigationItem.searchHistory)) {
+  PhoneNavigation available({required bool searchHistory, bool music = true}) {
+    bool permitted(PhoneNavigationItem item) =>
+        (searchHistory || item != PhoneNavigationItem.searchHistory) &&
+        (music || item != PhoneNavigationItem.music);
+    final nextBottom = bottom.where(permitted).toList();
+    final nextTop = top.where(permitted).toList();
+    if (nextBottom.length == bottom.length && nextTop.length == top.length) {
       return this;
     }
-    final nextBottom = [...bottom]..remove(PhoneNavigationItem.searchHistory);
-    final nextTop = [...top]..remove(PhoneNavigationItem.searchHistory);
     if (!nextBottom.any((item) => item.isTab)) {
       nextBottom.insert(0, PhoneNavigationItem.home);
     }
-    if (nextBottom.length < 2) nextBottom.add(PhoneNavigationItem.search);
+    if (nextBottom.length < 2) {
+      nextBottom.add(PhoneNavigationItem.search);
+    }
     nextTop.removeWhere(nextBottom.contains);
     return PhoneNavigation(nextBottom, nextTop, startup: startup);
   }
 
   String encode() => jsonEncode({
+        'version': _version,
         'bottom': bottom.map((item) => item.name).toList(),
         'top': top.map((item) => item.name).toList(),
         'startup': startup.name,
@@ -167,6 +169,8 @@ class PhoneNavigation {
     if (value == null) return null;
     try {
       final json = jsonDecode(value) as Map<String, dynamic>;
+      final version = json['version'];
+      if (version != null && version != _version) return null;
       List<PhoneNavigationItem> read(String key) => (json[key] as List)
           .map((name) => PhoneNavigationItem.values.byName(name as String))
           .toList();
@@ -175,8 +179,8 @@ class PhoneNavigation {
       final startup =
           PhoneNavigationItem.values.byName(json['startup'] as String);
       if (!bottom.contains(startup) || !startup.isTab) return null;
-      return PhoneNavigation(bottom, top, startup: startup)
-          .withoutMusicShortcut();
+      final layout = PhoneNavigation(bottom, top, startup: startup);
+      return version == null ? layout._withLegacyMusic() : layout;
     } on FormatException {
       return null;
     } on ArgumentError {

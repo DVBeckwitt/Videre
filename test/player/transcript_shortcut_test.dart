@@ -2,12 +2,18 @@ import 'dart:async';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/expanded_player.dart';
 import 'package:clipious/player/views/components/mini_player_controls.dart';
+import 'package:clipious/player/views/tablet/expanded_player.dart';
+import 'package:clipious/player/views/tablet/expanded_side_bar.dart';
+import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -16,6 +22,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
+import 'package:clipious/videos/views/components/flow_watch_body.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -26,9 +33,18 @@ import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
 class _TranscriptService extends Service {
+  final transcriptServers = <Server?>[];
+  Completer<VideoTranscript>? pendingTranscript;
+
+  @override
+  Future<List<Playlist>> getUserPlaylists({bool postProcessing = true}) async =>
+      [];
+
   @override
   Future<VideoTranscript> getTranscript(String videoId, Caption caption,
       {Server? serverOverride}) async {
+    transcriptServers.add(serverOverride);
+    if (pendingTranscript case final pending?) return pending.future;
     return const VideoTranscript(label: 'English', languageCode: 'en', lines: [
       VideoTranscriptLine(
         type: VideoTranscriptLineType.regular,
@@ -55,6 +71,8 @@ void main() {
     app.intentDataStreamSubscription =
         const Stream<void>.empty().listen((_) {});
     settings = TestSettingsCubit(SettingsState.init(), app);
+    await settings.setDistractionFreeMode(true);
+    await settings.setUseReturnYoutubeDislike(false);
     originalService = service;
     service = _TranscriptService();
   });
@@ -120,6 +138,563 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  Future<void> pumpWatch(WidgetTester tester,
+      {double width = 390,
+      double height = 900,
+      double textScale = 1,
+      bool inPlayer = true,
+      bool captions = true,
+      bool live = false,
+      bool closing = false,
+      bool matchingVideo = true,
+      bool withQueueAndBackend = false,
+      bool expandedAudio = false,
+      bool tablet = false,
+      Server? playbackServer,
+      Server? backendServer}) async {
+    tester.view.physicalSize = Size(width, height);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final video = Video(
+      videoId: 'watch-video',
+      title: 'A video with direct playback actions',
+      author: 'Test creator',
+      lengthSeconds: 180,
+      liveNow: live,
+      playbackConnection:
+          playbackServer == null ? null : BackendPlayback(playbackServer),
+      backendPlayback: backendServer != null
+          ? BackendPlayback(backendServer)
+          : withQueueAndBackend
+              ? BackendPlayback(Server(
+                  url: 'https://example.test',
+                  backendSelector: BackendSelector('COMPANION_ID', const [
+                    BackendOption('1', 'One'),
+                    BackendOption('2', 'Two')
+                  ]),
+                ))
+              : null,
+      captions: captions
+          ? [Caption('English', 'en', '/api/v1/captions/watch-video')]
+          : [],
+    );
+    player = TestPlayerCubit(
+        PlayerState.init([
+          video,
+          if (withQueueAndBackend) const Video(videoId: 'second-video')
+        ]).copyWith(
+          isHidden: false,
+          isMini: false,
+          isAudio: expandedAudio,
+          isClosing: closing,
+          position: const Duration(seconds: 42),
+          currentlyPlaying:
+              matchingVideo ? video : const Video(videoId: 'another-video'),
+        ),
+        settings);
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<PlayerCubit>.value(value: player),
+        BlocProvider<SettingsCubit>.value(value: settings),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: expandedAudio
+              ? BlocBuilder<PlayerCubit, PlayerState>(
+                  builder: (context, state) => tablet
+                      ? const TabletExpandedPlayer()
+                      : const ExpandedPlayer())
+              : SingleChildScrollView(
+                  child: FlowWatchBody(
+                      video: video, inPlayer: inPlayer, showRelated: false),
+                ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+  }
+
+  Finder watchAction(String name) => find.byKey(ValueKey('watch-$name'));
+
+  Future<void> openWatchMore(WidgetTester tester) async {
+    await tester.tap(watchAction('more-open'));
+    await tester.pumpAndSettle();
+    expect(watchAction('more-menu'), findsOneWidget);
+  }
+
+  Future<void> pumpLegacyNavigation(WidgetTester tester,
+      {required bool tablet, bool offline = false}) async {
+    const video = Video(videoId: 'watch-video', title: 'Playing video');
+    const saved = DownloadedVideo(
+        videoId: 'saved-video',
+        title: 'Saved video',
+        lengthSeconds: 120,
+        quality: '720p');
+    player = TestPlayerCubit(
+        PlayerState.init(null).copyWith(
+            currentlyPlaying: offline ? null : video,
+            offlineCurrentlyPlaying: offline ? saved : null,
+            isAudio: !offline,
+            isHidden: false,
+            isMini: false,
+            selectedFullScreenIndex: 3),
+        settings);
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<AppCubit>.value(value: app),
+        BlocProvider<PlayerCubit>.value(value: player),
+        BlocProvider<SettingsCubit>.value(value: settings),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: BlocBuilder<PlayerCubit, PlayerState>(
+              builder: (context, state) =>
+                  tablet ? const ExpandedSideBar() : const ExpandedPlayer()),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('offline queue keeps logical selection across filtered tabs',
+      (tester) async {
+    await pumpLegacyNavigation(tester, tablet: false, offline: true);
+    expect(tester.takeException(), isNull);
+    final navigation = find.byType(NavigationBar);
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+
+    await tester.tap(
+        find.descendant(of: navigation, matching: find.byIcon(Icons.info)));
+    await tester.pumpAndSettle();
+    expect(player.state.selectedFullScreenIndex, 0);
+    await tester.tap(find.descendant(
+        of: navigation, matching: find.byIcon(Icons.playlist_play)));
+    await tester.pumpAndSettle();
+    expect(player.state.selectedFullScreenIndex, 3);
+
+    await tester.runAsync(() => settings.setDistractionFreeMode(false));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
+    await tester.runAsync(() => settings.setDistractionFreeMode(true));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'tablet audio queue maps tabs and retains tap and swipe selection',
+      (tester) async {
+    await pumpLegacyNavigation(tester, tablet: true);
+    expect(tester.takeException(), isNull);
+    final tabBar = find.byType(TabBar);
+    TabController tabs() =>
+        tester.widget<TabBar>(tabBar).controller ??
+        DefaultTabController.of(tester.element(tabBar));
+    expect(tabs().index, 1);
+
+    await tester
+        .tap(find.descendant(of: tabBar, matching: find.byIcon(Icons.info)));
+    await tester.pumpAndSettle();
+    expect(player.state.selectedFullScreenIndex, 0);
+    await tester.drag(find.byType(TabBarView), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+    expect(player.state.selectedFullScreenIndex, 3);
+    expect(tabs().index, 1);
+
+    await tester.runAsync(() => settings.setDistractionFreeMode(false));
+    await tester.pumpAndSettle();
+    expect(tabs().index, 3);
+    await tester.runAsync(() => settings.setDistractionFreeMode(true));
+    await tester.pumpAndSettle();
+    expect(tabs().index, 1);
+    expect(player.state.selectedFullScreenIndex, 3);
+
+    // A removed Comments tab falls back to Info. Explicitly selecting that
+    // fallback must remain Info when the full tab set becomes available.
+    player.selectTab(1);
+    await tester.pumpAndSettle();
+    expect(tabs().index, 0);
+    await tester
+        .tap(find.descendant(of: tabBar, matching: find.byIcon(Icons.info)));
+    await tester.pumpAndSettle();
+    expect(player.state.selectedFullScreenIndex, 0);
+    await tester.runAsync(() => settings.setDistractionFreeMode(false));
+    await tester.pumpAndSettle();
+    expect(tabs().index, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final layout in [(320.0, 1.0), (320.0, 2.0), (1024.0, 1.5)]) {
+    testWidgets('watch toolbar stays in one accessible row at $layout',
+        (tester) async {
+      await pumpWatch(tester, width: layout.$1, textScale: layout.$2);
+      expect(find.byType(FlowWatchBody), findsOneWidget);
+      expect(watchAction('pitch-open'), findsNothing);
+      expect(watchAction('repeat'), findsNothing);
+      final bar = tester.getRect(watchAction('playback-actions'));
+      expect(bar.height, closeTo(48, 0.01));
+      for (final action in [
+        shortcut,
+        watchAction('mode-toggle'),
+        watchAction('speed-open'),
+        watchAction('more-open')
+      ]) {
+        expect(action.hitTestable(), findsOneWidget);
+        final rect = tester.getRect(action);
+        expect(rect.left, greaterThanOrEqualTo(bar.left));
+        expect(rect.right, lessThanOrEqualTo(bar.right));
+        expect(rect.center.dy, closeTo(bar.center.dy, 0.01));
+        expect(rect.width, greaterThanOrEqualTo(48));
+        expect(rect.height, greaterThanOrEqualTo(48));
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('More ignores a selection after playback mode changes',
+      (tester) async {
+    await pumpWatch(tester);
+    await openWatchMore(tester);
+    player.switchAudio(true);
+    await tester.pumpAndSettle();
+    await tester.tap(watchAction('repeat'));
+    await tester.pumpAndSettle();
+    expect(settings.state.playerRepeatMode, PlayerRepeat.noRepeat);
+    expect(player.state.isAudio, isTrue);
+    expect(watchAction('more-menu'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final dismissal in ['Back', 'scrim']) {
+    testWidgets('More $dismissal restores Back without minimizing',
+        (tester) async {
+      await pumpWatch(tester);
+      final before = BackButtonInterceptor.describe();
+      await openWatchMore(tester);
+      if (dismissal == 'Back') {
+        await pressAndroidBack(tester);
+      } else {
+        await tester.tapAt(const Offset(10, 10));
+        await tester.pumpAndSettle();
+      }
+      expect(watchAction('more-menu'), findsNothing);
+      expect(player.state.isMini, isFalse);
+      expect(BackButtonInterceptor.describe(), before);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('watch transcript opens in one tap and preserves playback',
+      (tester) async {
+    await pumpWatch(tester);
+    final current = player.state.currentlyPlaying;
+    final interceptorsBefore = BackButtonInterceptor.describe();
+    await tester.tap(shortcut);
+    await tester.pumpAndSettle();
+    expect(transcript, findsOneWidget);
+    expect(find.text('Test transcript'), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(transcript, findsNothing);
+    expect(player.state.currentlyPlaying, same(current));
+    expect(player.state.position, const Duration(seconds: 42));
+    expect(player.state.isMini, isFalse);
+    expect(BackButtonInterceptor.describe(), interceptorsBefore);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final hasConnection in [true, false]) {
+    testWidgets(
+        'watch transcript keeps the playback server (connection: $hasConnection)',
+        (tester) async {
+      const connection = Server(url: 'https://playback.example');
+      const backend = Server(url: 'https://backend.example');
+      const selected = Server(url: 'https://newly-selected.example');
+      await pumpWatch(tester,
+          playbackServer: hasConnection ? connection : null,
+          backendServer: backend);
+      await tester.runAsync(() async {
+        await db.upsertServer(selected);
+        await db.useServer(selected);
+        expect((await db.getCurrentlySelectedServer()).url, selected.url);
+      });
+      await tester.tap(shortcut);
+      await tester.pumpAndSettle();
+      final request = (service as _TranscriptService).transcriptServers.single;
+      expect(request, same(hasConnection ? connection : backend));
+      expect(request?.url, isNot(selected.url));
+      expect(find.text('Test transcript'), findsOneWidget);
+      await pressAndroidBack(tester);
+      expect(player.state.position, const Duration(seconds: 42));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final fails in [false, true]) {
+    testWidgets(
+        'watch ignores a late transcript after changing mode (error: $fails)',
+        (tester) async {
+      await pumpWatch(tester);
+      final pending = Completer<VideoTranscript>();
+      final transcripts = service as _TranscriptService;
+      transcripts.pendingTranscript = pending;
+      await tester.tap(shortcut);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(transcripts.transcriptServers, hasLength(1));
+      player.switchAudio(true);
+      if (fails) {
+        pending.completeError(StateError('old transcript request failed'));
+      } else {
+        pending.complete(
+            const VideoTranscript(label: 'English', languageCode: 'en', lines: [
+          VideoTranscriptLine(
+              type: VideoTranscriptLineType.regular,
+              startMs: 0,
+              endMs: 1000,
+              text: 'Stale transcript')
+        ]));
+      }
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(transcript, findsNothing);
+      expect(find.text('Stale transcript'), findsNothing);
+      expect(
+          find.byKey(const ValueKey('video-transcript-retry')), findsNothing);
+      expect(player.state.isAudio, isTrue);
+      expect(player.state.position, const Duration(seconds: 42));
+      Navigator.of(tester
+              .element(find.byKey(const ValueKey('video-transcript-language'))))
+          .pop();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('watch More opens Pitch and ignores a replaced mode',
+      (tester) async {
+    await pumpWatch(tester);
+    player.setSpeed(1.25);
+    player.setPitchSemitones(2);
+    await tester.pumpAndSettle();
+    await openWatchMore(tester);
+    await tester.tap(watchAction('pitch-open'));
+    await tester.pumpAndSettle();
+    final increase = find.byKey(const ValueKey('playback-pitch-increase'));
+    expect(increase.hitTestable(), findsOneWidget);
+    expect(find.byKey(const ValueKey('playback-speed-slider')), findsNothing);
+    await tester.tap(increase);
+    await tester.pumpAndSettle();
+    expect(player.state.pitchSemitones, 3);
+    expect(player.state.mediaCommand?.type, MediaCommandType.pitch);
+    expect(player.state.speed, 1.25);
+    expect(player.state.position, const Duration(seconds: 42));
+    player.switchAudio(true);
+    await tester.pumpAndSettle();
+    await tester.tap(increase);
+    await tester.pumpAndSettle();
+    expect(player.state.pitchSemitones, 3);
+    await pressAndroidBack(tester);
+    expect(player.state.isMini, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('watch keeps direct Speed and groups shuffle and backend in More',
+      (tester) async {
+    await pumpWatch(tester, withQueueAndBackend: true);
+    await tester.tap(watchAction('speed-open'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('playback-speed-slider')), findsOneWidget);
+    expect(find.byKey(const ValueKey('playback-pitch-slider')), findsNothing);
+    await pressAndroidBack(tester);
+    await openWatchMore(tester);
+    await tester.tap(watchAction('shuffle'));
+    await tester.pumpAndSettle();
+    expect(settings.state.playerShuffleMode, isTrue);
+    await openWatchMore(tester);
+    await tester.tap(find.byKey(const ValueKey('player-backend-shortcut')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('player-backend-cancel')), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(player.state.isMini, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('watch repeat cycles the existing player repeat setting',
+      (tester) async {
+    await pumpWatch(tester);
+    expect(settings.state.playerRepeatMode, PlayerRepeat.noRepeat);
+    for (final repeat in [
+      PlayerRepeat.repeatAll,
+      PlayerRepeat.repeatOne,
+      PlayerRepeat.noRepeat
+    ]) {
+      await openWatchMore(tester);
+      await tester.tap(watchAction('repeat'));
+      await tester.pumpAndSettle();
+      expect(settings.state.playerRepeatMode, repeat);
+      await openWatchMore(tester);
+      expect(
+          find.descendant(
+              of: watchAction('repeat'),
+              matching: find.byIcon(repeat == PlayerRepeat.repeatOne
+                  ? Icons.repeat_one
+                  : Icons.repeat)),
+          findsOneWidget);
+      await pressAndroidBack(tester);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'watch mode toggle retains the current playback in both directions',
+      (tester) async {
+    await pumpWatch(tester);
+    final current = player.state.currentlyPlaying;
+    final queue = player.state.videos;
+    final generation = player.backendPlaybackGeneration;
+    expect(watchAction('mode-toggle'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: watchAction('mode-toggle'), matching: find.text('Video')),
+        findsOneWidget);
+    expect(
+        tester
+            .getSemantics(watchAction('mode-toggle'))
+            .flagsCollection
+            .isToggled,
+        isFalse);
+    await tester.tap(watchAction('mode-toggle'));
+    await tester.pumpAndSettle();
+    expect(player.state.isAudio, isTrue);
+    expect(
+        find.descendant(
+            of: watchAction('mode-toggle'), matching: find.text('Audio')),
+        findsOneWidget);
+    expect(
+        tester
+            .getSemantics(watchAction('mode-toggle'))
+            .flagsCollection
+            .isToggled,
+        isTrue);
+    expect(player.state.startAt, const Duration(seconds: 42));
+    expect(player.state.currentlyPlaying, same(current));
+    expect(player.state.videos, queue);
+    expect(player.backendPlaybackGeneration, generation);
+    await tester.tap(watchAction('mode-toggle'));
+    await tester.pumpAndSettle();
+    expect(player.state.isAudio, isFalse);
+    expect(
+        find.descendant(
+            of: watchAction('mode-toggle'), matching: find.text('Video')),
+        findsOneWidget);
+    expect(
+        tester
+            .getSemantics(watchAction('mode-toggle'))
+            .flagsCollection
+            .isToggled,
+        isFalse);
+    expect(player.state.startAt, const Duration(seconds: 42));
+    expect(player.state.currentlyPlaying, same(current));
+    expect(player.state.videos, queue);
+    expect(player.backendPlaybackGeneration, generation);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('details outside playback do not show playback actions',
+      (tester) async {
+    await pumpWatch(tester, inPlayer: false);
+    expect(watchAction('playback-actions'), findsNothing);
+    expect(shortcut, findsNothing);
+    expect(watchAction('sound-toggle'), findsNothing);
+    expect(watchAction('pitch-open'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final tablet in [false, true]) {
+    testWidgets('expanded audio controls fit a short body (tablet: $tablet)',
+        (tester) async {
+      await pumpWatch(tester,
+          width: 320,
+          height: 260,
+          textScale: 2,
+          expandedAudio: true,
+          tablet: tablet);
+      expect(find.byType(tablet ? TabletExpandedPlayer : ExpandedPlayer),
+          findsOneWidget);
+      expect(watchAction('playback-actions'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      final videoMode = watchAction('mode-toggle');
+      await tester.ensureVisible(videoMode);
+      await tester.pumpAndSettle();
+      expect(videoMode.hitTestable(), findsOneWidget);
+      await tester.tap(videoMode);
+      await tester.pumpAndSettle();
+      expect(player.state.isAudio, isFalse);
+      expect(player.state.currentlyPlaying?.videoId, 'watch-video');
+      expect(player.state.startAt, const Duration(seconds: 42));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('watch keeps an unavailable transcript visible and disabled',
+      (tester) async {
+    await pumpWatch(tester, captions: false);
+    expect(tester.widget<IconButton>(shortcut).tooltip, 'Transcript');
+    expect(tester.widget<IconButton>(shortcut).onPressed, isNull);
+    expect(tester.widget<IconButton>(watchAction('more-open')).onPressed,
+        isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('watch live media cannot switch decoder modes', (tester) async {
+    await pumpWatch(tester, live: true);
+    expect(tester.widget<FilledButton>(watchAction('mode-toggle')).onPressed,
+        isNull);
+    expect(player.state.isAudio, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final closing in [false, true]) {
+    testWidgets(
+        'watch actions cannot target an inactive player (closing: $closing)',
+        (tester) async {
+      await pumpWatch(tester, closing: closing, matchingVideo: closing);
+      expect(tester.widget<FilledButton>(watchAction('mode-toggle')).onPressed,
+          isNull);
+      for (final action in [
+        shortcut,
+        watchAction('speed-open'),
+        watchAction('more-open')
+      ]) {
+        expect(tester.widget<IconButton>(action).onPressed, isNull);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('watch pitch is visibly disabled without Android support',
+      (tester) async {
+    await pumpWatch(tester);
+    expect(tester.widget<IconButton>(watchAction('speed-open')).onPressed,
+        isNotNull);
+    await openWatchMore(tester);
+    expect(find.text('Pitch'), findsOneWidget);
+    expect(tester.widget<ListTile>(watchAction('pitch-open')).onTap, isNull);
+    expect(tester.takeException(), isNull);
+  }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
 
   for (final isAudio in [false, true]) {
     for (final dismissal in ['Back', 'scrim', 'Navigator']) {

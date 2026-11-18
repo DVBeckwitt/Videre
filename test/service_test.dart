@@ -4,9 +4,11 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/network/content_link.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -22,6 +24,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:logging/logging.dart';
+
+class _DeferredLinkRequestService extends Service {
+  _DeferredLinkRequestService(http.Client client) : super(httpClient: client);
+
+  final requestReady = Completer<void>();
+  final releaseRequest = Completer<void>();
+
+  @override
+  Future<ServerRequest> buildRequest(String baseUrl,
+      {Map<String, String>? pathParams,
+      Map<String, String?>? query,
+      bool authenticated = false,
+      String accept = 'application/json',
+      bool forceJson = false,
+      Server? serverOverride}) async {
+    final request = await super.buildRequest(baseUrl,
+        pathParams: pathParams,
+        query: query,
+        authenticated: authenticated,
+        accept: accept,
+        forceJson: forceJson,
+        serverOverride: serverOverride);
+    requestReady.complete();
+    await releaseRequest.future;
+    return request;
+  }
+}
 
 void main() {
   test('cookie login still accepts a valid session response', () async {
@@ -53,6 +82,196 @@ void main() {
         throwsA(isA<InvidiousServiceError>()));
     expect(records.map((record) => '${record.message} ${record.error}').join(),
         isNot(contains('private-session-value')));
+  });
+
+  group('incoming content resolution', () {
+    setUp(() async {
+      db = await SembastSqfDb.createInMemory();
+      await db.upsertServer(const Server(url: 'https://inv.example'));
+    });
+    tearDown(() => db.close());
+
+    test('keeps the captured account and does not log the source address',
+        () async {
+      final records = <LogRecord>[];
+      final subscription = Logger('Service').onRecord.listen(records.add);
+      addTearDown(subscription.cancel);
+      const captured = Server(
+        url: 'https://private-instance.example/iv',
+        id: 'source-account',
+        authToken: 'captured-account-token',
+        customHeaders: {'Cookie': 'COMPANION_ID=7'},
+      );
+      final original = ContentLink.parseAddress(
+          'https://www.youtube.com/@private-handle?si=private-tracking')!;
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        const replacement = Server(url: 'https://new-selection.example');
+        await db.upsertServer(replacement);
+        await db.useServer(replacement);
+        return http.Response(
+            '{"browseId":"UC_kRDKYrUlrbtrSiyu5Tflg","pageType":"WEB_PAGE_TYPE_CHANNEL"}',
+            200,
+            request: request,
+            headers: {'content-type': 'application/json'});
+      });
+      addTearDown(client.close);
+
+      final result = await Service(httpClient: client)
+          .resolveContentLink(original, server: captured);
+
+      expect(result?.kind, ContentLinkKind.channel);
+      expect(result?.id, 'UC_kRDKYrUlrbtrSiyu5Tflg');
+      expect(requests, hasLength(1));
+      final request = requests.single;
+      expect(request.url.origin, 'https://private-instance.example');
+      expect(request.url.path, '/iv/api/v1/resolveurl');
+      expect(request.url.queryParameters['url'],
+          'https://www.youtube.com/@private-handle');
+      expect(request.url.queryParameters['local'], 'true');
+      expect(request.followRedirects, isFalse);
+      expect(request.headers['Authorization'], 'Bearer captured-account-token');
+      expect(request.headers['Cookie'], 'COMPANION_ID=7');
+      expect(request.headers[gatewayContextHeader],
+          captured.headersForUrl(captured.url)![gatewayContextHeader]);
+      final logText =
+          records.map((record) => '${record.message} ${record.error}').join();
+      expect(logText, isNot(contains('private-handle')));
+      expect(logText, isNot(contains('private-tracking')));
+      expect(logText, isNot(contains('captured-account-token')));
+    });
+
+    test('keeps a resolved Music playlist in the music domain', () async {
+      final original = ContentLink.parseAddress(
+          'https://music.youtube.com/browse/MPREb_K8qWMWVqXGi')!;
+      final client = MockClient((request) async {
+        expect(request.url.host, 'inv.example');
+        return http.Response(
+            '{"playlistId":"PLresolved_playlist","pageType":"WEB_PAGE_TYPE_PLAYLIST"}',
+            200);
+      });
+      addTearDown(client.close);
+
+      final result = await Service(httpClient: client).resolveContentLink(
+          original,
+          server: await db.getCurrentlySelectedServer());
+
+      expect(result?.kind, ContentLinkKind.playlist);
+      expect(result?.id, 'PLresolved_playlist');
+      expect(result?.music, isTrue);
+    });
+
+    for (final fixture in [
+      (status: 200, body: '{"browseId":"not-a-channel"}'),
+      (status: 200, body: '{"videoId":"../private"}'),
+      (status: 200, body: '{"url":"https://youtube.com/watch?v=dQw4w9WgXcQ"}'),
+      (status: 200, body: '[]'),
+      (status: 200, body: '<html>private upstream detail</html>'),
+      (status: 401, body: '{"error":"private upstream detail"}'),
+      (status: 429, body: '{"error":"private upstream detail"}'),
+      (status: 500, body: '{"error":"private upstream detail"}'),
+      (status: 302, body: ''),
+    ]) {
+      test(
+          'rejects unsupported resolver response ${fixture.status} ${fixture.body}',
+          () async {
+        final records = <LogRecord>[];
+        final subscription = Logger('Service').onRecord.listen(records.add);
+        addTearDown(subscription.cancel);
+        final original =
+            ContentLink.parseAddress('https://youtube.com/@private-handle')!;
+        var calls = 0;
+        final client = MockClient((request) async {
+          calls++;
+          expect(request.url.host, 'inv.example');
+          expect(request.followRedirects, isFalse);
+          return http.Response(fixture.body, fixture.status,
+              request: request,
+              headers: {'location': 'https://youtube.com/@private-handle'});
+        });
+        addTearDown(client.close);
+
+        expect(
+            await Service(httpClient: client).resolveContentLink(original,
+                server: await db.getCurrentlySelectedServer()),
+            isNull);
+        expect(calls, 1);
+        final logText =
+            records.map((record) => '${record.message} ${record.error}').join();
+        expect(logText, isNot(contains('private-handle')));
+        expect(logText, isNot(contains('private upstream detail')));
+      });
+    }
+
+    test('does not resolve known IDs or use an official destination instance',
+        () async {
+      final client = MockClient((_) async {
+        fail('This input must not cause a network request');
+      });
+      addTearDown(client.close);
+      final api = Service(httpClient: client);
+      expect(
+          await api.resolveContentLink(
+              ContentLink.parseAddress('https://youtu.be/dQw4w9WgXcQ')!,
+              server: await db.getCurrentlySelectedServer()),
+          isNull);
+      expect(
+          await api.resolveContentLink(
+              ContentLink.parseAddress('https://youtube.com/@example')!,
+              server: const Server(url: 'https://www.youtube.com')),
+          isNull);
+    });
+
+    for (final changeProxy in [false, true]) {
+      test(
+          'does not dispatch a prepared resolver request after ${changeProxy ? 'proxy change' : 'newer navigation'}',
+          () async {
+        var calls = 0;
+        final client = MockClient((_) async {
+          calls++;
+          return http.Response('{"videoId":"dQw4w9WgXcQ"}', 200);
+        });
+        addTearDown(client.close);
+        final api = _DeferredLinkRequestService(client);
+        var current = true;
+        final pending = api.resolveContentLink(
+            ContentLink.parseAddress('https://youtube.com/@example')!,
+            server: await db.getCurrentlySelectedServer(),
+            isCurrent: () => current);
+        await api.requestReady.future;
+        if (changeProxy) {
+          await NetworkProxy.instance
+              .initialize(saved: '{}', configureNative: false);
+        } else {
+          current = false;
+        }
+        api.releaseRequest.complete();
+
+        expect(await pending, isNull);
+        expect(calls, 0);
+      });
+    }
+
+    test('discards a resolver response after the proxy configuration changes',
+        () async {
+      final started = Completer<void>();
+      final response = Completer<http.Response>();
+      final client = MockClient((_) {
+        started.complete();
+        return response.future;
+      });
+      addTearDown(client.close);
+      final pending = Service(httpClient: client).resolveContentLink(
+          ContentLink.parseAddress('https://youtube.com/@example')!,
+          server: await db.getCurrentlySelectedServer());
+      await started.future;
+      await NetworkProxy.instance
+          .initialize(saved: '{}', configureNative: false);
+      response.complete(http.Response('{"videoId":"dQw4w9WgXcQ"}', 200));
+
+      expect(await pending, isNull);
+    });
   });
 
   group('history synchronization', () {
@@ -366,6 +585,9 @@ void main() {
       );
       expect(transcript, isA<VideoTranscript>());
       expect(transcript.lines.single.text, 'Transcript text');
+      expect(transcript.label, caption.label);
+      expect(transcript.languageCode, 'en');
+      expect(transcript.autoGenerated, isTrue);
     });
 
     test('falls back to WebVTT with the same label and custom headers',
@@ -400,7 +622,83 @@ void main() {
       expect(transcript.lines.single.text, 'Fallback text');
     });
 
-    test('throws an Invidious error when both instance requests fail',
+    for (final track in [
+      '/api/v1/captions/video-id?label=English&check=private%2Bsigned',
+      '/companion/api/v1/captions/video-id?label=English&check=private%2Bsigned',
+      '/api/v1/captions/video-id?label=English&lang=en&tlang=en&check=private%2Bsigned',
+    ]) {
+      test('direct transcript preserves a matching signed caption track $track',
+          () async {
+        final requests = <http.Request>[];
+        final records = <LogRecord>[];
+        final subscription = Logger('Service').onRecord.listen(records.add);
+        addTearDown(subscription.cancel);
+        final client = MockClient((request) async {
+          requests.add(request);
+          if (requests.length == 1) return http.Response('', 500);
+          expect(request.url.path, Uri.parse(track).path);
+          expect(request.url.query, Uri.parse(track).query);
+          return http.Response(
+              'WEBVTT\n\n00:01.000 --> 00:02.000\nSigned caption\n\n'
+              '00:03.000 --> 00:04.000\nSigned caption\n\n',
+              200,
+              headers: {'content-type': 'text/vtt'});
+        });
+        addTearDown(client.close);
+
+        final transcript = await Service(httpClient: client)
+            .getTranscript('video-id', Caption('English', 'en', track));
+
+        expect(requests, hasLength(2));
+        expect(requests.last.followRedirects, isFalse);
+        expect(
+            requests.last.headers['Authorization'], 'Basic private-instance');
+        expect(transcript.label, 'English');
+        expect(transcript.languageCode, 'en');
+        expect(transcript.lines.single.text, 'Signed caption');
+        expect(
+            records.map((record) => '${record.message} ${record.error}').join(),
+            isNot(contains('private%2Bsigned')));
+      });
+    }
+
+    for (final track in [
+      '/api/v1/captions/video-id?label=German&check=private',
+      '/api/v1/captions/video-id?check=private',
+      '/api/v1/captions/another-video?label=English&check=private',
+      '/login?label=English&check=private',
+      '/api/v1/captions/video-id?label=English&lang=de&check=private',
+      '/api/v1/captions/video-id?label=English&tlang=de&check=private',
+      '/api/v1/captions/video-id?label=English&label=German&check=private',
+      '/api/v1/captions/video-id?label=English&lang=en&lang=de&check=private',
+      'https://youtube.com/api/v1/captions/video-id?label=English&check=private',
+    ]) {
+      test(
+          'direct transcript retains canonical track for mismatched advertisement $track',
+          () async {
+        final requests = <http.Request>[];
+        final client = MockClient((request) async {
+          requests.add(request);
+          if (requests.length == 1) return http.Response('', 500);
+          return http.Response(
+              'WEBVTT\n\n00:01.000 --> 00:02.000\nCanonical caption\n\n', 200,
+              headers: {'content-type': 'text/vtt'});
+        });
+        addTearDown(client.close);
+
+        final transcript = await Service(httpClient: client)
+            .getTranscript('video-id', Caption('English', 'en', track));
+
+        expect(requests, hasLength(2));
+        expect(requests.last.url.origin, 'https://inv.example');
+        expect(requests.last.url.path, '/api/v1/captions/video-id');
+        expect(requests.last.url.queryParameters['label'], 'English');
+        expect(requests.last.url.queryParameters.containsKey('check'), isFalse);
+        expect(transcript.lines.single.text, 'Canonical caption');
+      });
+    }
+
+    test('throws an Invidious error when all instance transcript routes fail',
         () async {
       final requests = <http.Request>[];
       final client = MockClient((request) async {
@@ -413,11 +711,137 @@ void main() {
         throwsA(isA<InvidiousServiceError>()),
       );
 
-      expect(requests, hasLength(2));
+      expect(requests, hasLength(3));
       expect(
         requests.every((request) => request.url.host == 'inv.example'),
         isTrue,
       );
+    });
+
+    test(
+        'direct transcript uses the captured NerdVPN watch track once and deduplicates',
+        () async {
+      final requests = <http.Request>[];
+      const server = Server(
+          url: 'https://invidious.nerdvpn.de',
+          id: 'transcript-account',
+          customHeaders: {'Cookie': 'COMPANION_ID=7'});
+      final client = MockClient((request) async {
+        requests.add(request);
+        if (request.url.path.startsWith('/api/v1/transcripts/')) {
+          const replacement = Server(url: 'https://new-selection.example');
+          await db.upsertServer(replacement);
+          await db.useServer(replacement);
+          return http.Response('{"error":"Transcript unavailable"}', 500);
+        }
+        if (request.url.path == '/api/v1/captions/video-id') {
+          return http.Response('WEBVTT\n\nKind: captions\n', 200,
+              headers: {'content-type': 'text/vtt'});
+        }
+        if (request.url.path == '/watch') {
+          return http.Response(
+              '''<video id="player"><track kind="captions"
+              label="English" src="/companion/api/v1/captions/video-id?label=English&amp;check=private%2Bsigned"></video>''',
+              200,
+              headers: {'content-type': 'text/html'});
+        }
+        expect(request.url.query, 'label=English&check=private%2Bsigned');
+        return http.Response(
+            'WEBVTT\n\n00:01.000 --> 00:02.000\nRepeated\n\n'
+            '00:03.000 --> 00:04.000\nRepeated\n\n'
+            '00:05.000 --> 00:06.000\nNext line\n\n',
+            200,
+            headers: {'content-type': 'text/vtt'});
+      });
+      addTearDown(client.close);
+
+      final transcript = await Service(httpClient: client).getTranscript(
+          'video-id', Caption('English', 'en', '/api/v1/captions/video-id'),
+          serverOverride: server);
+
+      expect(requests.map((request) => request.url.path), [
+        '/api/v1/transcripts/video-id',
+        '/api/v1/captions/video-id',
+        '/watch',
+        '/companion/api/v1/captions/video-id'
+      ]);
+      expect(transcript.label, 'English');
+      expect(transcript.languageCode, 'en');
+      expect(
+          transcript.lines.map((line) => line.text), ['Repeated', 'Next line']);
+      expect(transcript.lines.first.startMs, 1000);
+      for (final request in requests) {
+        expect(request.url.origin, server.url);
+        expect(request.followRedirects, isFalse);
+        expect(request.headers['Cookie'], 'COMPANION_ID=7');
+        expect(request.headers[gatewayContextHeader],
+            server.headersForUrl(server.url)![gatewayContextHeader]);
+      }
+    });
+
+    for (final refusedAt in [1, 2]) {
+      for (final status in [401, 403, 429, 503]) {
+        test(
+            'direct transcript HTTP $status at request $refusedAt stops fallback',
+            () async {
+          var calls = 0;
+          final client = MockClient((_) async => ++calls == refusedAt
+              ? http.Response.bytes([0xff], status,
+                  headers: {'retry-after': '60'})
+              : http.Response('', 500));
+          addTearDown(client.close);
+          await expectLater(
+              Service(httpClient: client).getTranscript('video-id', caption),
+              throwsA(isA<InvidiousServiceError>()
+                  .having((error) => error.statusCode, 'status', status)));
+          expect(calls, refusedAt);
+        });
+      }
+      for (final failure in [
+        const NerdVpnAccessRequired('waiting'),
+        const GatewayAuthenticationRequired(),
+        const GatewayTransportUnavailable(),
+        const HandshakeException('Certificate rejected'),
+        const SocketException('Request cancelled'),
+        StateError('HttpClient is closed'),
+      ]) {
+        test(
+            'direct transcript ${failure.runtimeType} at request $refusedAt stops fallback',
+            () async {
+          var calls = 0;
+          final client = MockClient((_) async {
+            if (++calls == refusedAt) throw failure;
+            return http.Response('', 500);
+          });
+          addTearDown(client.close);
+          await expectLater(
+              Service(httpClient: client).getTranscript('video-id', caption),
+              throwsA(same(failure)));
+          expect(calls, refusedAt);
+        });
+      }
+    }
+
+    test('direct transcript never follows an off-origin watch caption track',
+        () async {
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        return request.url.path == '/watch'
+            ? http.Response(
+                '''<video id="player"><track kind="captions" label="English"
+                src="https://youtube.com/api/v1/captions/video-id"></video>''',
+                200)
+            : http.Response('', 500);
+      });
+      addTearDown(client.close);
+      await expectLater(
+          Service(httpClient: client).getTranscript('video-id',
+              Caption('English', 'en', '/api/v1/captions/video-id')),
+          throwsA(isA<InvidiousServiceError>()));
+      expect(requests, hasLength(3));
+      expect(requests.every((request) => request.url.host == 'inv.example'),
+          isTrue);
     });
 
     for (final origin in [
@@ -685,6 +1109,94 @@ void main() {
       }
     }
 
+    for (final languageCode in ['en', null]) {
+      test(
+          'watch fallback accepts a sole exact-label track without srclang (metadata=$languageCode)',
+          () async {
+        final requests = <http.Request>[];
+        final server = Server(
+          url: 'https://invidious.nerdvpn.de',
+          id: 'caption-account',
+          customHeaders: {'Cookie': 'COMPANION_ID=7'},
+        );
+        final client = MockClient((request) async {
+          requests.add(request);
+          if (request.url.path == '/watch') {
+            return http.Response(
+                '''<video id="player">
+            <track kind="captions" label="English"
+              src="/companion/api/v1/captions/video-id?label=English&amp;check=private%2Bmanual">
+            <track kind="captions" label="English (auto-generated)"
+              src="/companion/api/v1/captions/video-id?label=English%20%28auto-generated%29&amp;check=private%2Bauto">
+          </video>''',
+                200,
+                headers: {'content-type': 'text/html'});
+          }
+          if (request.url.path == '/companion/api/v1/captions/video-id') {
+            expect(request.url.query, 'label=English&check=private%2Bmanual');
+            return http.Response(captionBody, 200,
+                headers: {'content-type': 'text/vtt'});
+          }
+          return http.Response('', 500);
+        });
+        addTearDown(client.close);
+
+        final result = await Service(httpClient: client).getPlaybackCaptions(
+          'video-id',
+          Caption('English', languageCode, '/api/v1/captions/video-id'),
+          server: server,
+        );
+
+        expect(result, contains('Companion caption'));
+        expect(requests, hasLength(4));
+        for (final request in requests) {
+          expect(request.url.origin, server.url);
+          expect(request.followRedirects, isFalse);
+          expect(request.headers['Cookie'], 'COMPANION_ID=7');
+          expect(request.headers[gatewayContextHeader],
+              server.headersForUrl(server.url)![gatewayContextHeader]);
+        }
+      });
+    }
+
+    for (final fixture in [
+      (language: null, attribute: '', count: 2),
+      (language: '', attribute: ' srclang=""', count: 1),
+    ]) {
+      test(
+          'watch fallback rejects ambiguous or empty language metadata (${fixture.language})',
+          () async {
+        final requests = <http.Request>[];
+        final track =
+            '<track kind="captions" label="English"${fixture.attribute} '
+            'src="/companion/api/v1/captions/video-id?check=same">';
+        final client = MockClient((request) async {
+          requests.add(request);
+          if (request.url.path == '/watch') {
+            return http.Response(
+                '<video id="player">${List.filled(fixture.count, track).join()}</video>',
+                200,
+                headers: {'content-type': 'text/html'});
+          }
+          if (request.url.path == '/companion/api/v1/captions/video-id') {
+            return http.Response(captionBody, 200,
+                headers: {'content-type': 'text/vtt'});
+          }
+          return http.Response('', 500);
+        });
+        addTearDown(client.close);
+
+        await expectLater(
+          Service(httpClient: client).getPlaybackCaptions('video-id',
+              Caption('English', fixture.language, '/api/v1/captions/video-id'),
+              server: await db.getCurrentlySelectedServer()),
+          throwsA(isA<InvidiousServiceError>()),
+        );
+        expect(requests, hasLength(3));
+        expect(requests.last.url.path, '/watch');
+      });
+    }
+
     for (final track in [
       '<track kind="captions" label="English" srclang="en" src="https://outside.example/api/v1/captions/video-id?check=secret">',
       '<track kind="captions" label="English" srclang="en" src="http://inv.example/api/v1/captions/video-id?check=secret">',
@@ -694,6 +1206,16 @@ void main() {
       '<track kind="captions" label="English" srclang="de" src="/companion/api/v1/captions/video-id?check=secret">',
       '<track kind="captions" label="English" srclang="en" src="/companion/api/v1/captions/video-id?check=first">'
           '<track kind="captions" label="English" srclang="en" src="/companion/api/v1/captions/video-id?check=second">',
+      '<track kind="captions" label="English" srclang="" src="/companion/api/v1/captions/video-id?check=secret">',
+      '<track kind="captions" label="English" src="https://outside.example/api/v1/captions/video-id?check=secret">',
+      '<track kind="captions" label="English" src="/companion/api/v1/captions/video-id?check=first">'
+          '<track kind="captions" label="English" src="/companion/api/v1/captions/video-id?check=second">',
+      '<track kind="captions" label="English" src="/companion/api/v1/captions/video-id?check=same">'
+          '<track kind="captions" label="English" src="/companion/api/v1/captions/video-id?check=same">',
+      '<track kind="captions" label="English" src="/companion/api/v1/captions/video-id?check=first">'
+          '<track kind="captions" label="English" srclang="de" src="/companion/api/v1/captions/video-id?check=second">',
+      '<track kind="captions" label="English" src="/companion/api/v1/captions/video-id?check=first">'
+          '<track kind="captions" label="English" src="https://outside.example/api/v1/captions/video-id?check=second">',
     ]) {
       test('watch fallback rejects an unsafe or different track $track',
           () async {

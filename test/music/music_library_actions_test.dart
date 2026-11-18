@@ -1,23 +1,40 @@
 import 'dart:async';
+import 'dart:collection';
+import 'dart:io';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/music_recommendation_collection.dart';
+import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/states/compact_video.dart';
+import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import '../test_player_cubit.dart';
+import '../test_settings_cubit.dart';
 
 class _App extends AppCubit {
   _App() : super(AppState(0, null, HomeLayout())) {
@@ -49,6 +66,11 @@ class _PausedLibrary extends Service {
 }
 
 class _Downloads implements DownloadManagerCubit {
+  _Downloads({this.state = const DownloadManagerState()});
+
+  @override
+  final DownloadManagerState state;
+
   final calls = <({String id, bool audioOnly, Video? video})>[];
 
   @override
@@ -70,6 +92,24 @@ class _Downloads implements DownloadManagerCubit {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+class _PlaybackPlayer extends TestPlayerCubit {
+  _PlaybackPlayer(super.initialState, super.settings);
+
+  final calls = <({List<Video> videos, bool? audio, int? startIndex})>[];
+  final offlineCalls = <List<DownloadedVideo>>[];
+
+  @override
+  Future<void> playVideo(List<Video> videos,
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+    calls.add((videos: List.of(videos), audio: audio, startIndex: startIndex));
+  }
+
+  @override
+  Future<void> playOfflineVideos(List<DownloadedVideo> videos) async {
+    offlineCalls.add(List.of(videos));
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const first = Video(
@@ -85,21 +125,65 @@ void main() {
   late Service previousService;
   late bool previousTv;
   late _App app;
+  TestSettingsCubit? settings;
+  _PlaybackPlayer? player;
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (_) async => throw MissingPluginException());
     previousService = service;
     previousTv = app_globals.isTv;
     app_globals.isTv = false;
     service = Service();
     db = await SembastSqfDb.createInMemory();
     app = _App();
+    settings = null;
+    player = null;
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('videre/recommendations'), null);
+    await player?.close();
+    await settings?.close();
     await app.close();
     await db.close();
     service = previousService;
     app_globals.isTv = previousTv;
+  });
+
+  test('explicit song saves learn while bulk saves and paused learning do not',
+      () async {
+    final events = <Map>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (call) async {
+      final args = call.arguments as Map;
+      events.addAll((args['events'] as List).cast<Map>());
+      return {
+        'state': <String, Object?>{},
+        'ranked': <Object?>[],
+        'summary': <String, Object?>{}
+      };
+    });
+    await MusicLibrarySession(app)
+        .setBookmark(MusicLibraryEntry.song(first), saved: true);
+    await RecommendationService.flushPending();
+    expect(events.map((event) => event['type']), ['save']);
+    await MusicLibrarySession(app)
+        .saveToPlaylist(localWatchLaterId, [first, second]);
+    await RecommendationService.flushPending();
+    expect(events, hasLength(1));
+    await RecommendationService.forProfile(db, db.profileId)
+        .setLearningEnabled(RecommendationDomain.music, false);
+    await MusicLibrarySession(app)
+        .setBookmark(MusicLibraryEntry.song(second), saved: true);
+    await RecommendationService.flushPending();
+    expect(events, hasLength(1));
+    expect(
+        MusicLibraryService.forProfile(db, db.profileId).entries, hasLength(2));
   });
 
   test('collection save preserves order, metadata and deduplicates all songs',
@@ -202,6 +286,413 @@ void main() {
         ),
       ),
     ));
+  }
+
+  Widget songRow(Video video, {Future<void> Function()? onPlay}) => Builder(
+        builder: (context) => ListTile(
+          key: const ValueKey('song-long-press-row'),
+          title: Text(video.musicMetadata!.title),
+          onTap: onPlay ?? () => MusicScreen.playTracks(context, [video]),
+          onLongPress: () =>
+              MusicLibraryActions.showSongMenu(context, video, onPlay: onPlay),
+          trailing: MusicLibraryActions(videos: [video]),
+        ),
+      );
+
+  Future<_PlaybackPlayer> showSongActions(WidgetTester tester,
+      {PlayerState? initial,
+      Widget Function(_PlaybackPlayer player)? body}) async {
+    settings = TestSettingsCubit(SettingsState.init(), app);
+    final current =
+        player = _PlaybackPlayer(initial ?? PlayerState.init(null), settings!);
+    await show(tester,
+        body: BlocProvider<PlayerCubit>.value(
+          value: current,
+          child: body?.call(current) ?? songRow(first),
+        ));
+    await tester.pumpAndSettle();
+    return current;
+  }
+
+  Future<void> openSongMenu(WidgetTester tester) async {
+    await tester.longPress(find.byKey(const ValueKey('song-long-press-row')));
+    await tester.pumpAndSettle();
+  }
+
+  Future<_PlaybackPlayer> showDownloadedSong(
+      WidgetTester tester, DownloadedVideo video) async {
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final documents = (await tester.runAsync(
+        () => Directory.systemTemp.createTemp('videre-download-song-menu-')))!;
+    messenger.setMockMethodCallHandler(
+        pathProvider, (_) async => documents.path);
+    final thumbnailPath = (await tester.runAsync(() => video.thumbnailPath))!;
+    final thumbnailImage = FileImage(File(thumbnailPath));
+    addTearDown(() async {
+      // The visible thumbnail owns a separate file lookup from CompactVideo's
+      // cubit. Finish that lookup before disposing the row and its image cache.
+      final lookups = tester.widgetList<FutureBuilder<String?>>(
+        find.descendant(
+          of: find.byType(DownloadedVideoView),
+          matching: find.byType(FutureBuilder<String?>),
+        ),
+      );
+      for (final lookup in lookups) {
+        await tester.runAsync(() async => await lookup.future);
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await thumbnailImage.evict();
+        await documents.delete(recursive: true);
+      });
+      messenger.setMockMethodCallHandler(pathProvider, null);
+    });
+    await tester.runAsync(() async {
+      await File('assets/icon.png').copy(thumbnailPath);
+    });
+    final downloads = _Downloads(state: DownloadManagerState(videos: [video]));
+    final current = await showSongActions(tester,
+        body: (_) => BlocProvider<DownloadManagerCubit>.value(
+              value: downloads,
+              child: DownloadedVideoView(video: video),
+            ));
+    final thumbnail = tester
+        .element(find.byType(BlocBuilder<CompactVideoCubit, CompactVideoState>))
+        .read<CompactVideoCubit>();
+    await tester.runAsync(() async {
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        await tester.pump();
+        return thumbnail.state.offlineVideoThumbnailPath == null;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    // Image.file decodes outside the fake clock. Await that reader as well as
+    // the metadata lookup, so Windows can release the fixture during teardown.
+    await tester.runAsync(() => precacheImage(
+        thumbnailImage, tester.element(find.byType(DownloadedVideoView))));
+    await tester.pumpAndSettle();
+    return current;
+  }
+
+  testWidgets('holding a song offers Play, Play next and Add to queue',
+      (tester) async {
+    final current = await showSongActions(tester);
+    final before = current.state;
+    await openSongMenu(tester);
+    expect(current.calls, isEmpty,
+        reason: 'Holding must open the menu without executing the tap action.');
+    expect(current.state.currentQueueId, before.currentQueueId);
+    expect(current.state.videos, before.videos);
+    expect(current.state.playQueue.toList(), before.playQueue.toList());
+    expect(current.state.position, before.position);
+    for (final action in ['play', 'play-next', 'add-to-queue']) {
+      expect(find.byKey(ValueKey('music-song-$action')), findsOneWidget);
+    }
+    expect(find.text('Play'), findsOneWidget);
+    expect(find.text('Play next'), findsOneWidget);
+    expect(find.text('Add to queue'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+    expect(current.calls, hasLength(1));
+    expect(current.calls.single.videos, [first]);
+    expect(current.calls.single.audio, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('held Play retains the original collection playback callback',
+      (tester) async {
+    final replacement = ValueNotifier(false);
+    addTearDown(replacement.dispose);
+    final current = await showSongActions(tester,
+        body: (playback) => ValueListenableBuilder<bool>(
+              valueListenable: replacement,
+              builder: (context, changed, _) => songRow(
+                changed ? second : first,
+                onPlay: () => playback.playVideo(
+                  changed ? [second, first] : [first, second],
+                  audio: true,
+                  startIndex: 0,
+                ),
+              ),
+            ));
+    await openSongMenu(tester);
+    replacement.value = true;
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+    expect(current.calls, hasLength(1));
+    expect(current.calls.single.videos, [first, second]);
+    expect(current.calls.single.audio, isTrue);
+    expect(current.calls.single.startIndex, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final audio in [true, false]) {
+    for (final next in [true, false]) {
+      testWidgets(
+          'held ${next ? 'Play next' : 'Add to queue'} preserves current occurrence and duplicates in ${audio ? 'audio' : 'video'} mode',
+          (tester) async {
+        final entries = assignPlaybackQueueIds([first, second, first]);
+        final originalIds = entries.map(playbackQueueId).toList();
+        final upcoming = originalIds.skip(1).toList();
+        const position = Duration(seconds: 37);
+        final replacement = ValueNotifier(false);
+        addTearDown(replacement.dispose);
+        final current = await showSongActions(tester,
+            initial: PlayerState.init(null).copyWith(
+              isAudio: audio,
+              isHidden: false,
+              isPlaying: true,
+              currentlyPlaying: entries.first,
+              videos: entries,
+              playQueue: ListQueue.of(upcoming),
+              position: position,
+            ),
+            body: (_) => ValueListenableBuilder<bool>(
+                  valueListenable: replacement,
+                  builder: (context, changed, _) =>
+                      songRow(changed ? second : first),
+                ));
+        await openSongMenu(tester);
+        expect(current.calls, isEmpty,
+            reason: 'A long press must not interrupt the active recording.');
+        expect(current.state.currentQueueId, originalIds.first);
+        expect(current.state.videos, entries);
+        expect(current.state.playQueue.toList(), upcoming);
+        expect(current.state.position, position);
+        expect(current.state.isPlaying, isTrue);
+        expect(current.state.isAudio, audio);
+        replacement.value = true;
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(ValueKey(
+            next ? 'music-song-play-next' : 'music-song-add-to-queue')));
+        await tester.pumpAndSettle();
+
+        final state = current.state;
+        final inserted = state.videos.singleWhere(
+            (video) => !originalIds.contains(playbackQueueId(video)));
+        expect(current.calls, isEmpty);
+        expect(inserted.videoId, first.videoId);
+        expect(state.videos.map(playbackQueueId).toSet(), hasLength(4));
+        expect(state.videos.where((video) => video.videoId == first.videoId),
+            hasLength(3));
+        expect(state.currentQueueId, originalIds.first);
+        expect(state.currentlyPlaying, same(entries.first));
+        expect(state.position, position);
+        expect(state.isPlaying, isTrue);
+        expect(state.isAudio, audio);
+        expect(
+            state.playQueue.toList(),
+            next
+                ? [playbackQueueId(inserted), ...upcoming]
+                : [...upcoming, playbackQueueId(inserted)]);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
+  for (final next in [true, false]) {
+    testWidgets(
+        'held ${next ? 'Play next' : 'Add to queue'} starts audio when playback is idle',
+        (tester) async {
+      final initial = PlayerState.init(null);
+      final current = await showSongActions(tester, initial: initial);
+      await openSongMenu(tester);
+      await tester.tap(find.byKey(
+          ValueKey(next ? 'music-song-play-next' : 'music-song-add-to-queue')));
+      await tester.pumpAndSettle();
+      expect(current.calls, hasLength(1));
+      expect(current.calls.single.videos, [first]);
+      expect(current.calls.single.audio, isTrue);
+      // The fake only records a fresh launch. An idle queue has no active
+      // decoder or occurrence that needs to be retained.
+      expect(current.state.videos, initial.videos);
+      expect(current.state.offlineVideos, initial.offlineVideos);
+      expect(current.state.position, initial.position);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final dismissal in ['Back', 'outside']) {
+    testWidgets('held song menu $dismissal dismissal preserves playback',
+        (tester) async {
+      const position = Duration(seconds: 41);
+      final before = PlayerState.init(null).copyWith(
+        isAudio: true,
+        isHidden: false,
+        isPlaying: true,
+        currentlyPlaying: second,
+        videos: [second, first],
+        playQueue: ListQueue.of([first.videoId]),
+        position: position,
+      );
+      final current = await showSongActions(tester, initial: before);
+      await openSongMenu(tester);
+      expect(find.byKey(const ValueKey('music-song-play')), findsOneWidget);
+      expect(current.calls, isEmpty);
+      expect(current.state.currentQueueId, second.videoId);
+      expect(current.state.videos, before.videos);
+      expect(current.state.playQueue.toList(), [first.videoId]);
+      expect(current.state.position, position);
+
+      if (dismissal == 'Back') {
+        await tester.binding.handlePopRoute();
+      } else {
+        await tester.tapAt(
+            tester.getBottomRight(find.byType(Scaffold)) - const Offset(2, 2));
+      }
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('music-song-play')), findsNothing);
+      expect(current.calls, isEmpty);
+      expect(current.state.currentQueueId, second.videoId);
+      expect(current.state.currentlyPlaying, same(second));
+      expect(current.state.videos, before.videos);
+      expect(current.state.playQueue.toList(), [first.videoId]);
+      expect(current.state.position, position);
+      expect(current.state.isPlaying, isTrue);
+      expect(current.state.isAudio, isTrue);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets(
+      'holding a recommendation collection sliver row opens song actions',
+      (tester) async {
+    const tracks = [
+      MusicTrack(
+          videoId: 'firstsong01', title: 'First song', artists: ['Artist']),
+      MusicTrack(
+          videoId: 'secondsong2', title: 'Second song', artists: ['Artist']),
+    ];
+    final changes = ValueNotifier(0);
+    addTearDown(changes.dispose);
+    const position = Duration(seconds: 17);
+    final current = await showSongActions(tester,
+        initial: PlayerState.init(null).copyWith(
+          isAudio: true,
+          isHidden: false,
+          currentlyPlaying: first,
+          videos: [first],
+          position: position,
+        ),
+        body: (_) => MusicRecommendationCollection(
+              title: 'Recommended collection',
+              tracks: tracks,
+              isCurrent: () => true,
+              eligible: (songs) => songs.toList(),
+              changes: changes,
+            ));
+    final row = find.byKey(const ValueKey('music-collection-secondsong2'));
+    await tester.ensureVisible(row);
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    for (final action in ['play', 'play-next', 'add-to-queue']) {
+      expect(find.byKey(ValueKey('music-song-$action')), findsOneWidget);
+    }
+    expect(current.calls, isEmpty);
+    expect(current.offlineCalls, isEmpty);
+    expect(current.state.currentlyPlaying, same(first));
+    expect(current.state.videos, [first]);
+    expect(current.state.position, position);
+
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+    expect(current.calls, hasLength(1));
+    expect(current.calls.single.videos.map((song) => song.videoId),
+        tracks.map((track) => track.videoId));
+    expect(current.calls.single.audio, isTrue);
+    expect(current.calls.single.startIndex, 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final withMetadata in [false, true]) {
+    testWidgets(
+        'downloaded audio hold opens song actions without playing, metadata: $withMetadata',
+        (tester) async {
+      final saved = DownloadedVideo(
+          videoId: 'saved-audio',
+          title: 'Saved audio',
+          author: 'Saved artist',
+          lengthSeconds: 180,
+          quality: 'audio',
+          audioOnly: true,
+          downloadComplete: true,
+          storageUri: 'content://fixture/saved-audio',
+          musicMetadata: withMetadata
+              ? const MusicMetadata(
+                  title: 'Saved audio', artist: 'Saved artist')
+              : null);
+      final current = await showDownloadedSong(tester, saved);
+      final row = find.byType(CompactVideo);
+      expect(tester.widget<CompactVideo>(row).onLongPress, isNotNull);
+      await tester.longPress(row);
+      await tester.pumpAndSettle();
+      for (final action in ['play', 'play-next', 'add-to-queue']) {
+        expect(find.byKey(ValueKey('music-song-$action')), findsOneWidget);
+      }
+      expect(current.calls, isEmpty);
+      expect(current.offlineCalls, isEmpty,
+          reason: 'Holding the saved row must not execute its normal tap.');
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      // Download management remains reachable separately from song playback.
+      await tester.tap(find.byTooltip('Downloads'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, 'Delete'), findsOneWidget);
+      expect(current.offlineCalls, isEmpty);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      await tester.longPress(row);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('music-song-play')));
+      await tester.pumpAndSettle();
+      expect(current.calls, isEmpty);
+      expect(current.offlineCalls, hasLength(1));
+      expect(current.offlineCalls.single, [saved]);
+      expect(current.offlineCalls.single.single, same(saved));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final (complete, audioOnly) in [
+    (false, true),
+    (true, false),
+    (false, false),
+  ]) {
+    testWidgets(
+        'download row retains its existing hold behavior, complete: $complete, audio: $audioOnly',
+        (tester) async {
+      final saved = DownloadedVideo(
+          videoId: 'ordinary-download',
+          title: 'Ordinary download',
+          lengthSeconds: 180,
+          quality: '720p',
+          audioOnly: audioOnly,
+          downloadComplete: complete,
+          storageUri: 'content://fixture/ordinary-download');
+      final current = await showDownloadedSong(tester, saved);
+      expect(tester.widget<CompactVideo>(find.byType(CompactVideo)).onLongPress,
+          isNull);
+      expect(find.byKey(const ValueKey('music-song-play')), findsNothing);
+      expect(current.calls, isEmpty);
+      expect(current.offlineCalls, isEmpty);
+      await tester.tap(find.byTooltip('Downloads'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ListTile, 'Delete'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('mounted song actions update after another control saves it',

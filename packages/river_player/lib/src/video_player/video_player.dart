@@ -188,6 +188,10 @@ class VideoPlayerValue {
 ///
 /// After [dispose] all further calls are ignored.
 class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
+  final _nativePositions = StreamController<Duration>.broadcast();
+
+  /// Only accepted platform position polls; excludes synthetic seek/UI updates.
+  Stream<Duration> get nativePositionStream => _nativePositions.stream;
   final BetterPlayerBufferingConfiguration bufferingConfiguration;
 
   /// Constructs a [VideoPlayerController] and creates video controller on platform side.
@@ -376,6 +380,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     int? maxCacheSize,
     int? maxCacheFileSize,
     String? cacheKey,
+    Map<String, Object?>? playbackCache,
     bool? showNotification,
     String? title,
     String? author,
@@ -409,6 +414,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         maxCacheSize: maxCacheSize,
         maxCacheFileSize: maxCacheFileSize,
         cacheKey: cacheKey,
+        playbackCache: playbackCache,
         showNotification: showNotification,
         title: title,
         author: author,
@@ -508,6 +514,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
       await _eventSubscription?.cancel();
       await _videoPlayerPlatform.dispose(_textureId);
       videoEventStreamController.close();
+      await _nativePositions.close();
     }
     _isDisposed = true;
     super.dispose();
@@ -580,6 +587,9 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
             if (difference > 0) {
               _seekPosition = null;
             }
+          }
+          if (newPosition != null && _seekPosition == null && !_isDisposed) {
+            _nativePositions.add(newPosition);
           }
         },
       );

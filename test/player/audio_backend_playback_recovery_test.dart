@@ -6,6 +6,10 @@ import 'package:audio_service/audio_service.dart'
 import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/download_playback_provenance.dart';
+import 'package:clipious/downloads/services/download_playback_source.dart';
+import 'package:crypto/crypto.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
@@ -418,6 +422,121 @@ void main() {
     players.add(audio);
     return audio;
   }
+
+  Future<Video> savedAudio() async {
+    final format = AdaptiveFormat(
+        null,
+        '128000',
+        null,
+        '${preferred.url}/saved-audio',
+        '251',
+        'audio/webm',
+        '4',
+        '1',
+        '',
+        'webm',
+        'opus',
+        null,
+        null);
+    final video =
+        _video('saved-song', preferred).copyWith(adaptiveFormats: [format]);
+    final download = DownloadedVideo(
+        videoId: video.videoId,
+        title: 'Saved song',
+        profileId: preferred.profileId,
+        accountId: preferred.accountId,
+        audioOnly: true,
+        container: DownloadContainer.webm,
+        lengthSeconds: 120,
+        quality: 'audio',
+        downloadComplete: true,
+        playbackProvenance: DownloadPlaybackProvenance.create(
+            video: video,
+            server: preferred,
+            audioOnly: true,
+            container: DownloadContainer.webm,
+            audio: format,
+            byteLength: 4,
+            sha256: sha256.convert([1, 2, 3, 4]).toString()));
+    expect(download.playbackProvenance, isNotNull);
+    await File(await download.downloadPath).writeAsBytes([1, 2, 3, 4]);
+    await db.upsertDownload(download);
+    return video;
+  }
+
+  test('compatible saved audio precedes admitted network sources', () async {
+    final video = await savedAudio();
+    final native = _NativeAudio();
+    final audio = create(native, video: video);
+    await audio.playVideo(false, startAt: const Duration(seconds: 21));
+    final loaded = native.sources.single as ProgressiveAudioSource;
+    expect(loaded.uri.scheme, 'file');
+    expect(loaded.headers, isNull);
+    expect(loaded.playbackCache?['download'], isA<Map>());
+    expect(native.sourcePositions.single, const Duration(seconds: 21));
+    expect(retryService.metadataCalls, 0);
+    expect(retryService.retryCalls, 0);
+  });
+
+  test('unavailable saved audio tries the original network source once',
+      () async {
+    final video = await savedAudio();
+    final native = _NativeAudio()..errors.add(_retryable());
+    final audio = create(native, video: video);
+    await audio.playVideo(false, startAt: const Duration(seconds: 21));
+    expect(native.sources, hasLength(2));
+    expect((native.sources.first as UriAudioSource).uri.scheme, 'file');
+    expect((native.sources.last as UriAudioSource).uri.path, '/saved-audio');
+    expect(retryService.metadataCalls, 0);
+    expect(player.refreshCalls, 0);
+    expect(retryService.retryCalls, 0);
+  });
+
+  test('saved-only audio lazily loads real metadata after a failed local open',
+      () async {
+    final remote = await savedAudio();
+    final local = (await prepareDownloadedPlaybackVideo(
+        database: db,
+        video: Video(videoId: remote.videoId),
+        server: preferred,
+        audioOnly: true,
+        isCurrent: () => true))!;
+    expect(local.downloadPlaybackOnly, isTrue);
+    expect(local.adaptiveFormats, isNull);
+    player.refreshedVideo = remote;
+    final native = _NativeAudio()..errors.add(_retryable());
+    final audio = create(native, video: local);
+    await audio.playVideo(false, startAt: const Duration(seconds: 21));
+    expect(player.refreshCalls, 1);
+    expect(native.sources, hasLength(2));
+    expect((native.sources.first as UriAudioSource).uri.scheme, 'file');
+    expect((native.sources.last as UriAudioSource).uri.path, '/saved-audio');
+    expect(native.sourcePositions, everyElement(const Duration(seconds: 21)));
+  });
+
+  test('parent selects a compatible saved song before fetching metadata',
+      () async {
+    final saved = await savedAudio();
+    final sparse = Video(videoId: saved.videoId);
+    final controller = _MediaSessionPlayer(
+        PlayerState.init(null)
+            .copyWith(isAudio: true, isHidden: false, videos: [sparse]),
+        settings);
+    controller.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(controller);
+    try {
+      await controller.switchToVideo(sparse,
+          startAt: const Duration(seconds: 21));
+      expect(retryService.metadataCalls, 0);
+      expect(controller.state.currentlyPlaying?.downloadPlaybackOnly, isTrue);
+      expect(controller.state.currentlyPlaying?.formatStreams, isNull);
+      expect(controller.state.currentlyPlaying?.adaptiveFormats, isNull);
+      expect(controller.state.offlineCurrentlyPlaying, isNull);
+      expect(controller.state.videos.single.videoId, sparse.videoId);
+    } finally {
+      await controller.close();
+    }
+  });
 
   test('a pending player switch supersedes ordinary audio while detaching EQ',
       () async {

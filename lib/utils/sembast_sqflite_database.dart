@@ -28,6 +28,7 @@ import '../playlists/services/playlist_progress.dart';
 import '../playlists/services/playlist_library_service.dart';
 import '../playlists/models/playlist_reference.dart';
 import '../playlists/models/saved_playlist.dart';
+import '../recommendations/subscription_revision.dart';
 import 'backup.dart';
 
 const maxLogs = 1000;
@@ -895,12 +896,14 @@ class SembastSqfDb extends IDbClient {
     await _writeProfile((owner, txn) => owner.offlineSubscriptions
         .record(sub.channelId)
         .put(txn, sub.toJson()));
+    recommendationSubscriptionRevision.value++;
   }
 
   @override
   Future<void> deleteOfflineSubscription(String channelId) async {
     await _writeProfile((owner, txn) =>
         owner.offlineSubscriptions.record(channelId).delete(txn));
+    recommendationSubscriptionRevision.value++;
   }
 
   @override

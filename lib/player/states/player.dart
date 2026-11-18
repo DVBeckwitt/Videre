@@ -15,6 +15,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/network/network_proxy.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/podcasts/services/podcast_player.dart';
 import 'package:clipious/podcasts/services/podcast_progress_store.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -27,6 +28,7 @@ import 'package:logging/logging.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
 
 import '../../downloads/models/downloaded_video.dart';
+import '../../downloads/services/download_playback_source.dart';
 import '../../playlists/models/playlist.dart';
 import '../../playlists/models/playlist_reference.dart';
 import '../../playlists/services/playlist_load_session.dart';
@@ -52,6 +54,7 @@ import '../models/playback_pitch.dart';
 import '../models/backend_playback.dart';
 import '../models/backend_recovery.dart';
 import '../models/playback_recovery.dart';
+import '../models/playback_learning_clock.dart';
 
 export '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 
@@ -78,6 +81,21 @@ class _PlaybackRefreshRequest {
   bool get active => observers.any((observer) => observer());
 }
 
+class _RecommendationPlayback {
+  final Video video;
+  final RecommendationDomain domain;
+  final RecommendationService service;
+  final int generation;
+  final String id;
+  final clock = PlaybackLearningClock();
+  Duration lastCheckpoint = Duration.zero;
+  bool clickPending;
+
+  _RecommendationPlayback(
+      this.video, this.domain, this.service, this.id, this.clickPending)
+      : generation = service.generation(domain);
+}
+
 class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static PlayerCubit? _sessionOwner;
   static final _runtimePlayers = <PlayerCubit>{};
@@ -86,8 +104,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   String? _pitchVideoId;
   String? _speedVideoId;
   static Future<void> _sessionWrite = Future.value();
+  static const _learningCheckpointInterval = Duration(seconds: 15);
   final SettingsCubit settings;
   final musicSound = MusicSoundController();
+  final _learningTime = Stopwatch()..start();
+  final int Function()? _learningTimeMicroseconds;
+  _RecommendationPlayback? _learningPlayback;
+  int _learningSequence = 0;
+  Future<void>? _learningWrite;
+  String? _selectedWatchVideoId;
   final PlaylistReference? _initialPlaylistReference;
   final PlaylistLoadSession? _initialPlaylistLoader;
   final int _initialPlaylistIndex;
@@ -98,6 +123,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   final _playlistEntries = LinkedHashMap<String, Video>();
   int _playlistGeneration = 0;
   bool _waitingForPlaylist = false;
+  bool _waitingForPlaylistUserSkip = false;
   bool _playlistSourceComplete = true;
   bool _sessionTransitionPending = false;
   String? _playlistCheckpointSignature;
@@ -162,6 +188,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   int _progressGeneration = 0;
   int _videoSwitchGeneration = 0;
   int _sponsorRequestGeneration = 0;
+  final _sponsorMemory = LinkedHashMap<String,
+      ({DateTime expires, List<SponsorSegment> segments})>();
+  final _sponsorPending = <String, Future<List<SponsorSegment>>>{};
+  static final _sponsorVideoId = RegExp(r'^[A-Za-z0-9_-]{11}$');
+  ({String? queueId, List<SponsorSegment> segments})? _savedSponsors;
   String? _requestedBackendVideoId;
   bool _backendSwitchPending = false;
   bool _manualSelectionPending = false;
@@ -174,6 +205,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   final Future<void> Function(Duration) _waitForPlaybackRecovery;
   Timer? _backendSuccessTimer;
   final _timers = <String, Timer>{};
+  String? _sleepAtEndQueueId;
+  DateTime? _sleepDeadline;
   Duration? _backendProgressPosition;
   (int, String?, String, bool)? _playbackStatusOwner;
   MediaState _playbackStatus = MediaState.idle;
@@ -265,8 +298,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       int startIndex = 0,
       bool? playlistAudio,
       Future<void> Function(Duration)? playbackRecoveryDelay,
-      Future<bool> Function()? videoFocusActivation})
+      Future<bool> Function()? videoFocusActivation,
+      int Function()? learningTimeMicroseconds})
       : _resumeOnReady = resume,
+        _learningTimeMicroseconds = learningTimeMicroseconds,
         _activateVideoFocus = videoFocusActivation,
         _waitForPlaybackRecovery =
             playbackRecoveryDelay ?? Future<void>.delayed,
@@ -291,6 +326,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> _proxyChanging() async {
     if (isClosed) return;
+    _clearSponsorPreparation();
+    await _finishLearning();
     final podcast = activePodcast;
     if (podcast != null) await podcast.stop();
     if (state.isHidden && !state.hasVideo) {
@@ -893,6 +930,151 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     });
   }
 
+  Video? get _learningVideo {
+    final online = state.currentlyPlaying;
+    if (online != null) return online;
+    final offline = state.offlineCurrentlyPlaying;
+    return offline == null
+        ? null
+        : Video(
+            videoId: offline.videoId,
+            title: offline.title,
+            author: offline.author,
+            lengthSeconds: offline.lengthSeconds,
+            musicMetadata: offline.musicMetadata);
+  }
+
+  void _beginLearning(Video? video, {bool selectedByUser = false}) {
+    if (video == null ||
+        _switchingProfile ||
+        _isDisposing ||
+        NetworkProxy.instance.isChanging) return;
+    final domain = video.musicMetadata == null
+        ? RecommendationDomain.video
+        : RecommendationDomain.music;
+    final recommendations =
+        RecommendationService.forProfile(db, _profileDatabase.profileId);
+    final previous = _learningPlayback;
+    if (previous != null &&
+        previous.video.videoId == video.videoId &&
+        previous.domain == domain &&
+        previous.generation == recommendations.generation(domain)) return;
+    _learningPlayback = _RecommendationPlayback(
+        video,
+        domain,
+        recommendations,
+        '${DateTime.now().microsecondsSinceEpoch}-${identityHashCode(this)}-${++_learningSequence}',
+        selectedByUser && domain == RecommendationDomain.video);
+  }
+
+  void _observeLearning(MediaEvent event) {
+    if (event.type == MediaEventType.playbackSample &&
+        event.value is Duration) {
+      // A reset or pause/resume of learning starts a fresh clock. Consumption
+      // accumulated before that privacy decision cannot reappear afterward.
+      _beginLearning(_learningVideo);
+      if (event.state == MediaState.playing &&
+          requestedPlaying &&
+          !playbackInterrupted) {
+        _learningPlayback?.clock.sample(
+            event.value as Duration,
+            _learningTimeMicroseconds?.call() ??
+                _learningTime.elapsedMicroseconds,
+            speed: state.speed);
+        _recordConfirmedWatchClick();
+        _checkpointLearning();
+      } else {
+        _learningPlayback?.clock.interrupt();
+      }
+    } else if (event.type != MediaEventType.progress &&
+        (event.state != MediaState.playing ||
+            event.type == MediaEventType.pause ||
+            event.type == MediaEventType.seek ||
+            event.type == MediaEventType.speedChanged ||
+            event.type == MediaEventType.backendRetry)) {
+      _learningPlayback?.clock.interrupt();
+      if (event.type == MediaEventType.pause) _checkpointLearning(force: true);
+    }
+  }
+
+  void _recordConfirmedWatchClick() {
+    final occurrence = _learningPlayback;
+    if (occurrence == null ||
+        !occurrence.clickPending ||
+        occurrence.clock.played <= Duration.zero) {
+      return;
+    }
+    occurrence.clickPending = false;
+    unawaited(occurrence.service
+        .recordVideoClick(occurrence.video,
+            occurrenceId: occurrence.id,
+            expectedGeneration: occurrence.generation)
+        .catchError((Object error) {
+      log.fine('Could not record local watch selection', error);
+    }));
+  }
+
+  void _checkpointLearning({bool force = false}) {
+    final session = _learningPlayback;
+    if (session == null) return;
+    final played = session.clock.played;
+    if (played <= session.lastCheckpoint ||
+        (!force &&
+            played - session.lastCheckpoint < _learningCheckpointInterval)) {
+      return;
+    }
+    final previous = session.lastCheckpoint;
+    session.lastCheckpoint = played;
+    unawaited(session.service
+        .checkpointPlayback(session.video,
+            domain: session.domain,
+            played: played,
+            duration: Duration(seconds: session.video.lengthSeconds ?? 0),
+            sessionId: session.id,
+            expectedGeneration: session.generation)
+        .catchError((Object error) {
+      if (session.lastCheckpoint == played) {
+        session.lastCheckpoint = previous;
+      }
+      log.fine('Could not checkpoint local playback learning', error);
+    }));
+  }
+
+  void _recoverLearning() {
+    unawaited(RecommendationService.forProfile(db, _profileDatabase.profileId)
+        .recoverPlayback()
+        .catchError((Object error) {
+      log.fine('Could not recover local playback learning', error);
+    }));
+  }
+
+  Future<void> _finishLearning({bool skipped = false, bool completed = false}) {
+    final session = _learningPlayback;
+    _learningPlayback = null;
+    if (session == null) return _learningWrite ?? Future<void>.value();
+    final played = session.clock.played;
+    final write = (_learningWrite ?? Future<void>.value()).then((_) async {
+      try {
+        await session.service.recordPlayback(session.video,
+            domain: session.domain,
+            played: played,
+            duration: Duration(seconds: session.video.lengthSeconds ?? 0),
+            sessionId: session.id,
+            expectedGeneration: session.generation,
+            skipped: skipped,
+            completed: completed);
+      } catch (error) {
+        // Recommendation persistence is optional and cannot interrupt media.
+        log.fine('Could not save local listening preferences', error);
+      }
+    });
+    _learningWrite = write;
+    unawaited(write.whenComplete(() {
+      if (identical(_learningWrite, write)) _learningWrite = null;
+    }));
+    return write;
+  }
+
   void setEvent(MediaEvent event) {
     if (isClosed ||
         _isDisposing ||
@@ -903,6 +1085,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (_backendSwitchPending &&
         event.type != MediaEventType.backendRetry &&
         event.type != MediaEventType.metadataRetry) {
+      return;
+    }
+    if (event.type == MediaEventType.playbackSample) {
+      _observeLearning(event);
       return;
     }
     if (event.state == MediaState.error ||
@@ -928,6 +1114,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _backendProgressPosition = null;
       _recoveryProgressPosition = null;
     }
+    _observeLearning(event);
     handleMediaEvent(event);
     mapMediaEventToMediaHandler(event);
 
@@ -960,6 +1147,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       unawaited(_updateAutoPip(state));
       if (!_switchingProfile) unawaited(service.syncHistory());
     } else {
+      _checkpointLearning(force: true);
       unawaited(_saveSession(state));
       final podcast = activePodcast;
       if (podcast != null) unawaited(podcast.saveProgress());
@@ -1062,6 +1250,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> onReady() async {
+    _recoverLearning();
     var startupGeneration = _videoSwitchGeneration;
     bool startupActive() =>
         !_isDisposing &&
@@ -1104,7 +1293,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     } else if (startVideos.isNotEmpty && startupActive()) {
       final reference = _initialPlaylistReference;
       final switching = reference == null
-          ? playVideo(startVideos, startAt: state.startAt)
+          ? playVideo(startVideos,
+              startAt: state.startAt,
+              startIndex:
+                  _initialPlaylistIndex == 0 ? null : _initialPlaylistIndex)
           : playPlaylist(startVideos,
               reference: reference,
               startIndex: _initialPlaylistIndex,
@@ -1123,17 +1315,24 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   void handleMediaEvent(MediaEvent event) {
     switch (event.state) {
       case MediaState.completed:
+        unawaited(_finishLearning(completed: true));
+        final stopAtEnd = _sleepAtEndQueueId != null &&
+            _sleepAtEndQueueId == state.currentQueueId;
+        if (stopAtEnd) {
+          cancelSleep();
+          pause();
+        }
         final length = state.currentlyPlaying?.lengthSeconds ??
             state.offlineCurrentlyPlaying?.lengthSeconds ??
             0;
         if (_playlistReference != null) {
-          unawaited(_completePlaylistEntry(length));
+          unawaited(_completePlaylistEntry(length, advance: !stopAtEnd));
         } else {
           unawaited(saveProgress(length));
           // A late completion must not undo a Stop already in progress.
-          if (!state.isClosing) {
+          if (!state.isClosing && !stopAtEnd) {
             if (settings.state.autoplayQueue) {
-              playNext();
+              playNext(userInitiated: false);
             } else if (_requestedPlaying != false) {
               pause();
             }
@@ -1184,7 +1383,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _completePlaylistEntry(int length) async {
+  Future<void> _completePlaylistEntry(int length,
+      {required bool advance}) async {
     final generation = _videoSwitchGeneration;
     final playlistGeneration = _playlistGeneration;
     final queueId = state.currentQueueId;
@@ -1196,7 +1396,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     } catch (error, stack) {
       log.warning('Could not save completed playlist position', error, stack);
     }
-    if (isClosed ||
+    if (!advance ||
+        isClosed ||
         _isDisposing ||
         _switchingProfile ||
         state.isClosing ||
@@ -1206,7 +1407,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         profileId != _profileDatabase.profileId ||
         _requestedPlaying == false) return;
     if (settings.state.autoplayQueue) {
-      playNext();
+      playNext(userInitiated: false);
     } else {
       pause();
     }
@@ -1225,6 +1426,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    await _finishLearning();
     _runtimePlayers.remove(this);
     if (identical(_podcastOwner, _podcasts)) _podcastOwner = null;
     if (_podcasts != null) await _podcasts!.close();
@@ -1277,6 +1479,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void hide() {
     if (isClosed || state.isClosing) return;
+    unawaited(_finishLearning());
     unawaited(musicSound.resetSession());
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();
@@ -1365,10 +1568,39 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     await _updateAutoPip(state, disable: true);
   }
 
+  /// Explicit credential edits retire only this account's online decoders.
+  /// Offline downloads and another person's playback do not depend on them.
+  static Future<void> stopForAccountChange(Server account) async {
+    for (final player in List.of(_runtimePlayers)) {
+      if (player.isClosed ||
+          player._isDisposing ||
+          player._switchingProfile ||
+          player._profileDatabase.profileId != account.profileId ||
+          player.state.offlineCurrentlyPlaying != null) continue;
+      final generation = player._videoSwitchGeneration;
+      Server? selected;
+      try {
+        selected = await player._profileDatabase.getCurrentlySelectedServer();
+      } catch (_) {
+        continue;
+      }
+      if (!player.isClosed &&
+          !player._isDisposing &&
+          generation == player._videoSwitchGeneration &&
+          selected.profileId == account.profileId &&
+          selected.accountId == account.accountId) {
+        await player._stopForPodcastPlayback();
+      }
+    }
+  }
+
   /// Save under the old person before the application selects the new one.
   /// Clear immediately: an animation callback must never clear the next queue.
   Future<void> prepareForProfileSwitch() async {
     if (isClosed) return;
+    _clearSponsorPreparation();
+    _selectedWatchVideoId = null;
+    final learning = _finishLearning();
     final stoppingPodcast = activePodcast?.stop();
     final clearingSound = musicSound.resetSession();
     _clearPlaybackRecovery(resetBudget: true);
@@ -1395,6 +1627,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final clearingSession = _mediaSessionHandler?.clearSession();
     emit(PlayerState.init(null));
     await Future.wait([
+      learning,
       saved,
       stopping,
       clearingSound,
@@ -1415,6 +1648,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _profileDatabase = db.forProfile(db.profileId);
     _watchBinding = Future.value();
     _switchingProfile = false;
+    _recoverLearning();
     restoreSession();
   }
 
@@ -1611,20 +1845,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _playNextNow() async {
+  Future<void> _playNextNow({bool userInitiated = false}) async {
     if (settings.state.playerRepeatMode != PlayerRepeat.repeatOne &&
         state.playQueue.isEmpty &&
         !playlistComplete) {
       // The end of a loaded page is not the end of the playlist. Keep the
       // current item until more metadata arrives or the user retries a failure.
       _waitingForPlaylist = true;
+      _waitingForPlaylistUserSkip |= userInitiated;
       playlistLoadingRevision.value++;
       return;
     }
+    if (state.playQueue.isEmpty &&
+        settings.state.playerRepeatMode == PlayerRepeat.noRepeat) return;
+    final skipped = userInitiated || _waitingForPlaylistUserSkip;
+    _waitingForPlaylistUserSkip = false;
     if (settings.state.playerRepeatMode == PlayerRepeat.repeatOne) {
       seek(Duration.zero);
       play();
     } else if (state.videos.isNotEmpty || state.offlineVideos.isNotEmpty) {
+      unawaited(_finishLearning(skipped: skipped));
       if (state.playQueue.isNotEmpty ||
           settings.state.playerRepeatMode == PlayerRepeat.repeatAll) {
         _sessionTransitionPending = true;
@@ -1659,15 +1899,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  void playNext() {
-    EasyThrottle.throttle(
-        skipToVideoThrottleName, const Duration(seconds: 1), _playNextNow);
+  void playNext({bool userInitiated = true}) {
+    EasyThrottle.throttle(skipToVideoThrottleName, const Duration(seconds: 1),
+        () async {
+      await _playNextNow(userInitiated: userInitiated);
+    });
   }
 
   void playPrevious() {
     EasyThrottle.throttle(skipToVideoThrottleName, const Duration(seconds: 1),
         () async {
       if (state.playedVideos.isNotEmpty) {
+        unawaited(_finishLearning(skipped: true));
         _sessionTransitionPending = true;
         // putting back current video in play queue
         final currentVideoId = state.currentQueueId;
@@ -1697,7 +1940,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> _playVideos(List<IdedVideo> vids,
-      {Duration? startAt, int startIndex = 0}) async {
+      {Duration? startAt,
+      int startIndex = 0,
+      bool selectedByUser = false}) async {
     if (vids.isEmpty) return;
     RangeError.checkValidIndex(startIndex, vids, 'startIndex');
     final isOffline = vids.first is DownloadedVideo;
@@ -1730,7 +1975,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
     showBigPlayer();
     await _switchToVideo(entries[startIndex],
-        startAt: startAt, playing: _requestedPlaying);
+        startAt: startAt,
+        playing: _requestedPlaying,
+        selectedByUser: selectedByUser);
   }
 
   /// skip to queue video of index
@@ -1741,12 +1988,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (index < 0 || index >= listToCheckAgainst.length) {
       return;
     }
-
-    if (settings.state.playerShuffleMode) {
-      final selectedId = playbackQueueId(listToCheckAgainst[index]);
-      final currentId = state.currentQueueId;
-      if (selectedId == currentId) return;
+    final selected = listToCheckAgainst[index];
+    final selectedId = playbackQueueId(selected);
+    final currentId = state.currentQueueId;
+    final switching = selectedId != currentId;
+    final shuffled = settings.state.playerShuffleMode;
+    if (!switching && shuffled) return;
+    if (switching) {
+      unawaited(_finishLearning(skipped: true));
       _sessionTransitionPending = true;
+    }
+
+    if (shuffled) {
       emit(state.copyWith(
           playedVideos: [
             ...state.playedVideos,
@@ -1755,7 +2008,6 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           playQueue:
               ListQueue.of(state.playQueue.where((id) => id != selectedId))));
     } else {
-      _sessionTransitionPending = true;
       List<String> played = [];
       List<String> playNext = [];
       for (int i = 0; i < listToCheckAgainst.length; i++) {
@@ -1769,7 +2021,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       emit(state.copyWith(
           playedVideos: played, playQueue: ListQueue.from(playNext)));
     }
-    await _switchToVideo(listToCheckAgainst[index]);
+    if (switching) {
+      await _switchToVideo(selected, selectedByUser: true);
+    } else {
+      await _saveSession(state);
+    }
   }
 
   /// Switches to a video without changing the queue
@@ -1777,10 +2033,25 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       {Duration? startAt,
       bool? playing,
       BackendPlayback? backendRequest,
+      bool selectedByUser = false,
       bool retainOnFailure = false}) async {
     if (isClosed || _switchingProfile) return;
+    if (_sleepAtEndQueueId != null &&
+        _sleepAtEndQueueId != playbackQueueId(video)) {
+      // Muzza SleepTimer.kt pauses on a media-item transition. Recovery of the
+      // same queue occurrence keeps the timer even if its source URL changes.
+      cancelSleep();
+      pause();
+      playing = false;
+    }
+    if (backendRequest == null && !retainOnFailure) {
+      unawaited(_finishLearning());
+    } else {
+      _learningPlayback?.clock.interrupt();
+    }
     _waitingForPlaylist = false;
     _sessionTransitionPending = true;
+    _waitingForPlaylistUserSkip = false;
     // Selecting a song, including advancing the queue, starts it over. Explicit
     // session restoration and backend recovery still supply their own position.
     if ((video is Video && video.musicMetadata != null) ||
@@ -1791,6 +2062,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final generation = ++_videoSwitchGeneration;
     _clearPlaybackRecovery(resetBudget: true);
     bool active() => !isClosed && generation == _videoSwitchGeneration;
+    final sponsorTypes = _enabledSponsorTypes;
+    List<SponsorSegment>? preparedSponsorSegments;
+    var savedSponsorSegments = const <SponsorSegment>[];
+    // Start optional community metadata while source metadata and focus are
+    // loading. It never delays source setup, even on a failed connection.
+    final sponsorPreparation = video is DownloadedVideo
+        ? Future.value(video.sponsorSegments)
+        : _loadSponsorSegments(video.videoId, sponsorTypes);
+    unawaited(sponsorPreparation.then((segments) {
+      if (active()) preparedSponsorSegments = segments;
+    }));
     final podcast = activePodcast;
     if (podcast != null) await podcast.stop();
     if (!active()) return;
@@ -1854,12 +2136,26 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           currentlyPlaying: currentlyPlaying,
           offlineVideos: offlineVideos,
           offlineCurrentlyPlaying: offlineCurrentlyPlaying));
-
       late MediaCommand mediaCommand;
       currentlyPlaying = state.currentlyPlaying;
       offlineCurrentlyPlaying = state.offlineCurrentlyPlaying;
       if (!isOffline) {
         late Video v;
+        Video? downloaded;
+        if (video is Video && backendRequest == null && !retainOnFailure) {
+          downloaded = await prepareDownloadedPlaybackVideo(
+              database: db,
+              video: video,
+              audioOnly: state.isAudio,
+              preferredQuality: settings.state.rememberVideoQuality
+                  ? settings.state.lastVideoQuality
+                  : null,
+              onPrepared: (source) {
+                savedSponsorSegments = source.download.sponsorSegments;
+              },
+              isCurrent: active);
+          if (!active()) return;
+        }
         var reuseLoaded = video is Video &&
             video.formatStreams != null &&
             video.adaptiveFormats != null;
@@ -1871,7 +2167,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           if (!active()) return;
           reuseLoaded = cachedConnection.matches(currentServer);
         }
-        if (reuseLoaded && video is Video && backendRequest == null) {
+        if (downloaded != null) {
+          v = downloaded;
+        } else if (reuseLoaded && video is Video && backendRequest == null) {
           v = video;
         } else {
           var metadataPending = true;
@@ -1927,8 +2225,31 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           intentional: backendRequest == null && !retainOnFailure);
       if (!active() || _switchingProfile) return;
       final progress = _profileDatabase.getVideoProgress(video.videoId);
-      final resumeAt = startAt ??
+      var resumeAt = startAt ??
           Duration(seconds: progress < 0.9 ? (length * progress).floor() : 0);
+      final preparedIntervals = _sponsorIntervals(
+          preparedSponsorSegments ?? [], _enabledSponsorTypes,
+          videoLength: length);
+      final initialSegments = preparedIntervals.isNotEmpty
+          ? preparedIntervals
+          : _sponsorIntervals(
+              offlineCurrentlyPlaying?.sponsorSegments ?? savedSponsorSegments,
+              _enabledSponsorTypes,
+              videoLength: length);
+      final initialSkip = initialSegments
+          .where((segment) =>
+              segment.first <= resumeAt.inMilliseconds &&
+              resumeAt.inMilliseconds < segment.last)
+          .firstOrNull;
+      if (initialSkip != null) {
+        resumeAt = Duration(milliseconds: initialSkip.last);
+        startAt = resumeAt;
+        if (currentlyPlaying != null) {
+          mediaCommand = MediaCommand(MediaCommandType.switchVideo,
+              value:
+                  SwitchVideoValue(video: currentlyPlaying, startAt: startAt));
+        }
+      }
       _sessionOwner = this;
       _backendSwitchPending = false;
       if (currentlyPlaying != null) {
@@ -1943,13 +2264,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       emit(state.copyWith(
           position: resumeAt,
           startAt: startAt,
-          sponsorSegments: [],
+          sponsorSegments: initialSegments,
           forwardStep: settings.state.skipStep,
           rewindStep: settings.state.skipStep,
           mediaCommand: mediaCommand,
           currentlyPlaying: currentlyPlaying,
           requestedBackend: currentlyPlaying?.backendPlayback,
           offlineCurrentlyPlaying: offlineCurrentlyPlaying));
+      _beginLearning(_learningVideo, selectedByUser: selectedByUser);
+      _savedSponsors = savedSponsorSegments.isEmpty
+          ? null
+          : (queueId: state.currentQueueId, segments: savedSponsorSegments);
       unawaited(_saveSession(state));
       if (_playlistReference != null) {
         await saveProgress(resumeAt.inSeconds);
@@ -1971,7 +2296,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         playbackHistoryRevision.value++;
       }
 
-      await setSponsorBlock();
+      await setSponsorBlock(
+          prepared: sponsorPreparation, preparedTypes: sponsorTypes);
       if (!active()) return;
 
       if (!isTv) {
@@ -1992,7 +2318,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
               (state.backendRecovery != null || video.musicMetadata != null))) {
         pause();
         videoDragCancelled();
-        if (retainOnFailure) _sessionTransitionPending = false;
+        _sessionTransitionPending = false;
         // Retry belongs to this selection, even when metadata never arrived.
         // Do not carry the previous video's position into a newly chosen song.
         emit(state.copyWith(
@@ -2101,20 +2427,38 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     await _playVideos(offlineVids);
   }
 
+  /// Paired immediately with playVideo by an explicit watch command. A
+  /// preview, restore or automatic advance supplies no marker.
+  void noteWatchSelection(String videoId) {
+    _selectedWatchVideoId = videoId;
+  }
+
   Future<void> playVideo(List<Video> v,
-      {bool? audio, Duration? startAt, bool? playing}) async {
-    if (isClosed || _switchingProfile) return;
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+    final selected = _selectedWatchVideoId;
+    _selectedWatchVideoId = null;
+    if (isClosed || _switchingProfile || v.isEmpty) return;
+    if (startIndex != null) {
+      RangeError.checkValidIndex(startIndex, v, 'startIndex');
+      if (v[startIndex].filtered) return;
+    }
     final videos = v.where((element) => !element.filtered).toList();
     if (videos.isEmpty) return;
+    final index = startIndex == null
+        ? 0
+        : v.take(startIndex).where((video) => !video.filtered).length;
     _sessionTransitionPending = true;
     _bindPlaylist(null, []);
     _requestedPlaying = playing;
     // TODO: find how to do this with auto router
     log.fine('Playing ${videos.length} videos');
 
-    setAudio(audio ?? (videos.firstOrNull?.musicMetadata != null));
+    setAudio(audio ?? (videos[index].musicMetadata != null));
 
-    await _playVideos(videos, startAt: startAt);
+    await _playVideos(videos,
+        startAt: startAt,
+        startIndex: index,
+        selectedByUser: selected == videos[index].videoId);
   }
 
   /// Start the selected occurrence and its surrounding queue as one operation.
@@ -2222,6 +2566,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || _isDisposing) return;
     if (event.begin) {
       if (_playbackInterrupted && _audioInterruptionType == event.type) return;
+      _learningPlayback?.clock.interrupt();
+      _checkpointLearning(force: true);
       _audioFocusRevision++;
       // Permanent loss abandons focus and has no promised end event. Cancel
       // automatic playback, while allowing a later explicit Play to ask again.
@@ -2354,10 +2700,81 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void pause() {
+    _learningPlayback?.clock.interrupt();
+    _checkpointLearning(force: true);
     _transportIntentRevision++;
     _waitingForPlaylist = false;
+    _waitingForPlaylistUserSkip = false;
     _requestedPlaying = false;
     emit(state.copyWith(mediaCommand: MediaCommand(MediaCommandType.pause)));
+  }
+
+  /// Move an upcoming occurrence in the actual playback order used by Muzza's
+  /// queue. The mounted item and played history never enter this reorder.
+  void moveQueueOccurrence(String movedId, {String? beforeId}) {
+    if (isClosed || _switchingProfile || _sessionTransitionPending) return;
+    final order = state.playQueue.toList();
+    if (movedId == beforeId ||
+        movedId == state.currentQueueId ||
+        (beforeId != null && beforeId == state.currentQueueId) ||
+        !order.contains(movedId) ||
+        (beforeId != null && !order.contains(beforeId))) {
+      return;
+    }
+    final upcoming = order.toSet();
+    order.remove(movedId);
+    order.insert(
+        beforeId == null ? order.length : order.indexOf(beforeId), movedId);
+
+    List<T> applyOrder<T extends IdedVideo>(List<T> source) {
+      if (settings.state.playerShuffleMode || source.isEmpty) return source;
+      final byId = {for (final item in source) playbackQueueId(item): item};
+      if (!upcoming.every(byId.containsKey)) return source;
+      var index = 0;
+      return [
+        for (final item in source)
+          if (upcoming.contains(playbackQueueId(item)))
+            byId[order[index++]]!
+          else
+            item,
+      ];
+    }
+
+    emit(state.copyWith(
+        videos: applyOrder(state.videos),
+        offlineVideos: applyOrder(state.offlineVideos),
+        playQueue: ListQueue.of(order)));
+    unawaited(_saveSession(state));
+  }
+
+  /// Select a row in the same timeline order displayed by the Music queue.
+  Future<void> selectQueueOccurrence(String id) async {
+    if (isClosed ||
+        _switchingProfile ||
+        _sessionTransitionPending ||
+        state.currentQueueId == null ||
+        state.currentQueueId == id) {
+      return;
+    }
+    final timeline = playbackQueueTraversal<IdedVideo>(
+        state.videos.isNotEmpty ? state.videos : state.offlineVideos,
+        played: state.playedVideos,
+        current: state.currentQueueId,
+        upcoming: state.playQueue);
+    final index = timeline.indexWhere((item) => playbackQueueId(item) == id);
+    if (index < 0) return;
+    final selected = timeline[index];
+    if (selected is DownloadedVideo &&
+        selected.profileId != _profileDatabase.profileId) {
+      return;
+    }
+    unawaited(_finishLearning(skipped: true));
+    _sessionTransitionPending = true;
+    emit(state.copyWith(
+        playedVideos: timeline.take(index).map(playbackQueueId).toList(),
+        playQueue:
+            ListQueue.of(timeline.skip(index + 1).map(playbackQueueId))));
+    await _switchToVideo(selected, selectedByUser: true);
   }
 
   void removeVideoFromQueue(String queueId) {
@@ -2380,6 +2797,162 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           playQueue: playQueue,
           playedVideos: playedVideos));
     }
+  }
+
+  void removeInactiveQueueOccurrences(Set<String> occurrenceIds) {
+    if (isClosed || _isDisposing || _switchingProfile || state.isClosing)
+      return;
+    final current = state.currentQueueId;
+    if (current == null) return;
+    bool retain(IdedVideo video) {
+      final occurrence = playbackQueueId(video);
+      return occurrence == current || !occurrenceIds.contains(occurrence);
+    }
+
+    final videos = state.videos.where(retain).toList();
+    final offline = state.offlineVideos.where(retain).toList();
+    if (videos.length == state.videos.length &&
+        offline.length == state.offlineVideos.length) return;
+    emit(state.copyWith(
+      videos: videos,
+      offlineVideos: offline,
+      playedVideos: state.playedVideos
+          .where((id) => id == current || !occurrenceIds.contains(id))
+          .toList(),
+      playQueue: ListQueue.of(state.playQueue.where(
+        (id) => id == current || !occurrenceIds.contains(id),
+      )),
+    ));
+  }
+
+  /// Muzza QueueSelectionMenu adds new occurrences of the selected songs.
+  /// Resolve copies against the current queue before exposing them to playback.
+  void enqueueQueueCopies(List<Video> selection, {required bool next}) {
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        state.isClosing ||
+        selection.isEmpty ||
+        state.videos.isEmpty) return;
+    final current = state.currentQueueId;
+    final index =
+        state.videos.indexWhere((video) => playbackQueueId(video) == current);
+    if (index < 0) return;
+    final originalLength = state.videos.length;
+    final combined = assignPlaybackQueueIds([...state.videos, ...selection]);
+    final copies = combined.skip(originalLength).toList();
+    final ids = copies.map(playbackQueueId);
+    emit(state.copyWith(
+      videos: next
+          ? [
+              ...combined.take(index + 1),
+              ...copies,
+              ...combined.take(originalLength).skip(index + 1),
+            ]
+          : combined,
+      playQueue: ListQueue.of(
+          next ? [...ids, ...state.playQueue] : [...state.playQueue, ...ids]),
+    ));
+  }
+
+  bool _canEnqueueMusicSelection(List<Video> selection) =>
+      !isClosed &&
+      !_isDisposing &&
+      !_switchingProfile &&
+      !_sessionTransitionPending &&
+      !_backendSwitchPending &&
+      !state.isClosing &&
+      !state.isHidden &&
+      selection.isNotEmpty &&
+      _profileDatabase.profileId == db.profileId &&
+      state.currentQueueId != null;
+
+  List<DownloadedVideo>? _offlineMusicSelection(
+      List<Video> selection, List<DownloadedVideo>? downloads) {
+    if (state.offlineCurrentlyPlaying == null ||
+        !state.offlineVideos
+            .any((video) => playbackQueueId(video) == state.currentQueueId)) {
+      return null;
+    }
+    final selectedIds = selection.map((song) => song.videoId).toSet();
+    // Saved-only queues use the download ID as their occurrence key. Do not
+    // manufacture duplicates or convert the active decoder into an online queue.
+    if (selectedIds.length != selection.length ||
+        state.offlineVideos
+            .any((video) => selectedIds.contains(video.videoId))) {
+      return null;
+    }
+    final explicit = downloads == null
+        ? null
+        : {for (final download in downloads) download.videoId: download};
+    if (explicit != null &&
+        (downloads!.length != selection.length ||
+            explicit.length != selection.length ||
+            !selectedIds.every(explicit.containsKey))) {
+      return null;
+    }
+    try {
+      final result = <DownloadedVideo>[];
+      for (final song in selection) {
+        final saved = _profileDatabase.getDownloadByVideoId(song.videoId);
+        if (saved == null ||
+            saved.videoId != song.videoId ||
+            !saved.downloadComplete ||
+            saved.downloadFailed ||
+            saved.storageFailed ||
+            saved.authenticationRequired ||
+            saved.profileId != _profileDatabase.profileId ||
+            (explicit != null && explicit[song.videoId] != saved)) {
+          return null;
+        }
+        result.add(saved);
+      }
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool canEnqueueMusicSongs(List<Video> selection,
+      {List<DownloadedVideo>? downloads}) {
+    if (!_canEnqueueMusicSelection(selection)) return false;
+    if (state.videos.isNotEmpty) {
+      return state.currentlyPlaying != null &&
+          state.videos
+              .any((video) => playbackQueueId(video) == state.currentQueueId);
+    }
+    return _offlineMusicSelection(selection, downloads) != null;
+  }
+
+  /// Shared by Muzza-style song menus. The local lookup and insertion are
+  /// synchronous so no stale queue/profile snapshot can commit after an await.
+  Future<bool> enqueueMusicSongs(List<Video> selection,
+      {required bool next, List<DownloadedVideo>? downloads}) {
+    if (!_canEnqueueMusicSelection(selection)) return Future.value(false);
+    if (state.videos.isNotEmpty) {
+      if (!canEnqueueMusicSongs(selection, downloads: downloads)) {
+        return Future.value(false);
+      }
+      enqueueQueueCopies(selection, next: next);
+      return Future.value(true);
+    }
+    final additions = _offlineMusicSelection(selection, downloads);
+    if (additions == null) return Future.value(false);
+    final index = state.offlineVideos
+        .indexWhere((video) => playbackQueueId(video) == state.currentQueueId);
+    final ids = additions.map(playbackQueueId);
+    emit(state.copyWith(
+      offlineVideos: next
+          ? [
+              ...state.offlineVideos.take(index + 1),
+              ...additions,
+              ...state.offlineVideos.skip(index + 1),
+            ]
+          : [...state.offlineVideos, ...additions],
+      playQueue: ListQueue.of(
+          next ? [...ids, ...state.playQueue] : [...state.playQueue, ...ids]),
+    ));
+    return Future.value(true);
   }
 
   void videoDragged(DragUpdateDetails details) {
@@ -2454,7 +3027,25 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         playedVideos: playedVideos,
         videos: videos,
         offlineVideos: offlineVideos));
-    generatePlayQueue();
+    if (settings.state.playerShuffleMode) {
+      // Move only the requested upcoming occurrence. Preserve the relative
+      // shuffled order of every other song and the actual playback history.
+      final movedId = playbackQueueId(movedItem);
+      final next = state.playQueue.toList();
+      if (next.remove(movedId)) {
+        final nextVisibleId = listToUpdate
+            .skip(newItemIndex + 1)
+            .map(playbackQueueId)
+            .where(next.contains)
+            .firstOrNull;
+        final slot =
+            nextVisibleId == null ? next.length : next.indexOf(nextVisibleId);
+        next.insert(slot, movedId);
+        emit(state.copyWith(playQueue: ListQueue.of(next)));
+      }
+    } else {
+      generatePlayQueue();
+    }
   }
 
   void playVideoNext(Video video) {
@@ -2478,29 +3069,99 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> setSponsorBlock() async {
+  List<SponsorSegmentType> get _enabledSponsorTypes => SponsorSegmentType.values
+      .where((type) => type
+          .isEnabled(_profileDatabase.getSettings(type.settingsName())?.value))
+      .toList();
+
+  void _clearSponsorPreparation() {
+    _sponsorMemory.clear();
+    _sponsorPending.clear();
+    _savedSponsors = null;
+  }
+
+  /// Begin the optional lookup before a route waits for video metadata.
+  Future<List<SponsorSegment>> prepareSponsorSegments(String videoId) async {
+    if (videoId.length != 11 || !_sponsorVideoId.hasMatch(videoId)) return [];
+    try {
+      return await _loadSponsorSegments(videoId, _enabledSponsorTypes);
+    } catch (error) {
+      log.fine('SponsorBlock preparation unavailable', error);
+      return [];
+    }
+  }
+
+  Future<List<SponsorSegment>> _loadSponsorSegments(
+      String videoId, List<SponsorSegmentType> types) async {
+    if (types.isEmpty ||
+        isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        NetworkProxy.instance.isChanging) {
+      return [];
+    }
+    final profile = _profileDatabase.profileId;
+    final proxy = NetworkProxy.instance.config;
+    final api = service;
+    final key = '$profile:${identityHashCode(api)}:$videoId:'
+        '${types.map((type) => type.index).join(',')}';
+    final cached = _sponsorMemory.remove(key);
+    if (cached != null && cached.expires.isAfter(DateTime.now())) {
+      _sponsorMemory[key] = cached;
+      return cached.segments;
+    }
+    final existing = _sponsorPending[key];
+    if (existing != null) return existing;
+    if (_sponsorPending.length >= 32) return [];
+    late final Future<List<SponsorSegment>> loading;
+    loading = Future<List<SponsorSegment>>.sync(
+            () => api.getSponsorSegments(videoId, types))
+        .timeout(const Duration(seconds: 3))
+        .then((segments) {
+      if (!isClosed &&
+          !_isDisposing &&
+          !_switchingProfile &&
+          _profileDatabase.profileId == profile &&
+          identical(NetworkProxy.instance.config, proxy) &&
+          identical(_sponsorPending[key], loading)) {
+        _sponsorMemory[key] = (
+          expires: DateTime.now().add(const Duration(minutes: 30)),
+          segments: List.unmodifiable(segments)
+        );
+        while (_sponsorMemory.length > 128) {
+          _sponsorMemory.remove(_sponsorMemory.keys.first);
+        }
+      }
+      return segments;
+    }).catchError((Object error) {
+      log.fine('SponsorBlock unavailable', error);
+      return <SponsorSegment>[];
+    }).whenComplete(() {
+      if (identical(_sponsorPending[key], loading)) {
+        _sponsorPending.remove(key);
+      }
+    });
+    _sponsorPending[key] = loading;
+    return loading;
+  }
+
+  Future<void> setSponsorBlock(
+      {Future<List<SponsorSegment>>? prepared,
+      List<SponsorSegmentType>? preparedTypes}) async {
     final generation = _videoSwitchGeneration;
     final request = ++_sponsorRequestGeneration;
     final queueId = state.currentQueueId;
     final offline = state.offlineCurrentlyPlaying;
     final videoId = state.currentlyPlaying?.videoId ?? offline?.videoId;
-    final types = SponsorSegmentType.values
-        .where((type) => type.isEnabled(
-            _profileDatabase.getSettings(type.settingsName())?.value))
-        .toList();
+    final types = _enabledSponsorTypes;
     List<SponsorSegment> segments = [];
     if (videoId != null && types.isNotEmpty) {
       if (offline != null) {
         segments = offline.sponsorSegments;
       } else {
-        try {
-          segments = await service
-              .getSponsorSegments(videoId, types)
-              .timeout(const Duration(seconds: 3), onTimeout: () => []);
-        } catch (error) {
-          // Optional community metadata must never prevent playback.
-          log.fine('SponsorBlock unavailable', error);
-        }
+        segments =
+            await ((listEquals(types, preparedTypes) ? prepared : null) ??
+                _loadSponsorSegments(videoId, types));
       }
     }
     if (!isClosed &&
@@ -2509,13 +3170,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         generation == _videoSwitchGeneration &&
         request == _sponsorRequestGeneration &&
         state.currentQueueId == queueId) {
-      emit(state.copyWith(sponsorSegments: _sponsorIntervals(segments, types)));
+      final remote = _sponsorIntervals(segments, types);
+      final saved = _savedSponsors;
+      final next = remote.isEmpty && saved != null && saved.queueId == queueId
+          ? _sponsorIntervals(saved.segments, types)
+          : remote;
+      emit(state.copyWith(sponsorSegments: next));
     }
   }
 
   List<Pair<int>> _sponsorIntervals(
-      List<SponsorSegment> segments, List<SponsorSegmentType> types) {
-    final length = state.currentlyPlaying?.lengthSeconds ??
+      List<SponsorSegment> segments, List<SponsorSegmentType> types,
+      {int? videoLength}) {
+    final length = videoLength ??
+        state.currentlyPlaying?.lengthSeconds ??
         state.offlineCurrentlyPlaying?.lengthSeconds ??
         0;
     final intervals = <Pair<int>>[];
@@ -2554,6 +3222,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void seek(Duration duration) {
+    _learningPlayback?.clock.interrupt();
     _recoveryProgressPosition = null;
     if (duration.inSeconds < 0) {
       duration = Duration.zero;
@@ -2807,12 +3476,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void sleep(SleepTimer sleepTimer) {
+    _sleepAtEndQueueId = null;
+    _sleepDeadline = DateTime.now().add(sleepTimer.duration);
     emit(state.copyWith(hasTimer: true));
 
     _debounce(
       'video-sleep-timer',
       sleepTimer.duration,
       () {
+        _sleepDeadline = null;
         emit(state.copyWith(hasTimer: false));
         pause();
         if (sleepTimer.stopVideo && !isClosed) {
@@ -2822,7 +3494,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     );
   }
 
+  /// Muzza's alternate sleep mode is tied to a real item transition or end,
+  /// rather than a timer derived from playback position.
+  void sleepAtEndOfTrack() {
+    final occurrence = state.currentQueueId;
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        state.isClosing ||
+        state.isHidden ||
+        !state.isAudio ||
+        state.mediaEvent.state == MediaState.completed ||
+        occurrence == null) {
+      return;
+    }
+    _timers.remove('video-sleep-timer')?.cancel();
+    _sleepDeadline = null;
+    _sleepAtEndQueueId = occurrence;
+    emit(state.copyWith(hasTimer: true));
+  }
+
+  Duration? get sleepRemaining {
+    final remaining = _sleepAtEndQueueId != null
+        ? duration - state.position
+        : _sleepDeadline?.difference(DateTime.now());
+    return remaining?.isNegative == true ? Duration.zero : remaining;
+  }
+
   void cancelSleep() {
+    _sleepAtEndQueueId = null;
+    _sleepDeadline = null;
     emit(state.copyWith(hasTimer: false));
     _timers.remove('video-sleep-timer')?.cancel();
   }

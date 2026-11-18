@@ -60,7 +60,10 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-          {bool? audio, Duration? startAt, bool? playing}) async =>
+          {bool? audio,
+          Duration? startAt,
+          bool? playing,
+          int? startIndex}) async =>
       online.addAll(videos);
 
   @override
@@ -295,6 +298,75 @@ void main() {
     expect(library.entries.single.id, song.videoId);
   });
 
+  testWidgets('title sorting is local and grid actions preserve saved songs',
+      (tester) async {
+    const first = MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'firstsong01',
+        title: 'Alpha song',
+        subtitle: 'First artist');
+    const last = MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'lastsong001',
+        title: 'Zulu song',
+        subtitle: 'Last artist');
+    await tester.runAsync(() async {
+      await library.save(first);
+      await library.save(last);
+    });
+    await show(tester);
+    await tester.tap(find.text('Songs'));
+    await tester.pumpAndSettle();
+    expect(find.byType(GridView), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('Zulu song')).dy,
+        lessThan(tester.getTopLeft(find.text('Alpha song')).dy));
+
+    await tester.tap(find.byKey(const ValueKey('music-library-sort')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Title'));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('Alpha song')).dy,
+        lessThan(tester.getTopLeft(find.text('Zulu song')).dy));
+    expect(library.entries.map((entry) => entry.id), [last.id, first.id]);
+
+    await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+    await tester.pumpAndSettle();
+    expect(find.byType(GridView), findsOneWidget);
+    await tester.tap(find.text('Alpha song'));
+    await tester.pump();
+    expect(player.online.single.videoId, first.id);
+    expect(find.byTooltip('Music actions'), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('music cards adapt to a narrow screen with large text',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.runAsync(() => library.save(const MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: 'longtitle01',
+        title: 'A long recording title that wraps across the card',
+        subtitle: 'A long artist and collaborator name')));
+    await show(tester,
+        body: const MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(2)),
+            child: MusicLibraryPage()));
+    await tester.ensureVisible(find.text('Songs'));
+    await tester.tap(find.text('Songs'));
+    await tester.pumpAndSettle();
+    expect(find.byType(GridView), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+    await tester.pumpAndSettle();
+    expect(find.byType(ListView), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final kind in [MusicLibraryKind.song, MusicLibraryKind.playlist]) {
     testWidgets('large $kind libraries allocate rows only near the viewport',
         (tester) async {
@@ -316,8 +388,12 @@ void main() {
       await show(tester);
       if (kind == MusicLibraryKind.song) {
         await tester.tap(find.text('Songs'));
-        await tester.pumpAndSettle();
+      } else {
+        await tester.tap(find.text('Playlists'));
       }
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+      await tester.pumpAndSettle();
       final list = tester.widget<ListView>(find.byType(ListView));
       final delegate = list.childrenDelegate;
       final eagerRows =
@@ -374,7 +450,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Saved song'), findsNothing);
       expect(find.text('Music list'), findsOneWidget);
-      expect(find.text('Create new playlist'), findsOneWidget);
+      expect(find.byTooltip('Create new playlist'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
       active.dispose();
     });
@@ -420,7 +496,7 @@ void main() {
   testWidgets('empty Music playlist creation is visible immediately',
       (tester) async {
     await show(tester);
-    await tester.tap(find.text('Create new playlist'));
+    await tester.tap(find.byTooltip('Create new playlist'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'My music');
     await tester.runAsync(() async {
@@ -527,7 +603,7 @@ void main() {
   }
 
   testWidgets(
-      'downloads show only current-profile music audio and play completed files',
+      'the Downloads shortcut shows current-profile music and plays completed files',
       (tester) async {
     const complete = DownloadedVideo(
         videoId: 'abcdefghijk',
@@ -553,7 +629,8 @@ void main() {
           videoId: 'spokenword1', musicMetadata: null, title: 'Speech'),
     ]));
     await show(tester, downloads: downloads);
-    await tester.tap(find.text('Downloads'));
+    await tester
+        .tap(find.byKey(const ValueKey('music-library-shortcut-downloads')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('music-download-abcdefghijk')),
         findsOneWidget);

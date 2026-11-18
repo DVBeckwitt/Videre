@@ -1,7 +1,10 @@
 import 'dart:convert';
 import '../home/models/phone_navigation.dart';
+import '../home/models/home_tabs_layout.dart';
 import '../content_filter/community_filter.dart';
 import '../music/models/music_library_entry.dart';
+import '../recommendations/recommendation_models.dart';
+import '../recommendations/recommendation_snapshot.dart';
 
 import '../offline_subscriptions/models/offline_subscription.dart';
 import '../playlists/models/playlist.dart';
@@ -111,6 +114,23 @@ class UserBackup {
               final setting = SettingsValue.fromJson(value);
               if (!validSetting(setting)) {
                 throw FormatException('Unsupported setting: ${setting.name}');
+              }
+              if (RecommendationDomain.values.any((domain) =>
+                  setting.name == recommendationSettingName(domain))) {
+                final snapshot =
+                    RecommendationSnapshot.tryParse(setting.value)!;
+                final portable = {...snapshot.state}
+                  ..remove('coWatchSources')
+                  ..remove('channelCategories');
+                return SettingsValue(
+                        setting.name,
+                        snapshot
+                            .copyWith(
+                                state: portable,
+                                pendingPlayback: const [],
+                                learningEpoch: 0)
+                            .encode())
+                    .toJson();
               }
               return setting.toJson();
             case 'subscriptions':
@@ -315,6 +335,13 @@ class UserBackup {
       return parseCommunityExceptions(value) != null;
     }
     if (name == 'music-library-v1') return _validMusicLibrary(value);
+    if (name == homeTabsLayoutSettingName) {
+      return HomeTabsLayout.tryDecode(value) != null;
+    }
+    if (name == 'recommendations-video-v1' ||
+        name == 'recommendations-music-v1') {
+      return validRecommendationSetting(setting);
+    }
     if (value.length > 2048) return false;
     const booleans = {
       dynamicTheme,

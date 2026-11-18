@@ -1,0 +1,21 @@
+Flow Android Client
+Copyright (C) 2025-2026 Flow | A-EDev
+https://github.com/Flow-Tube/Flow
+Revision: 565d1f7a3da4ca8e54463b029f151ef87415858a
+
+Muzza and its contributors
+https://github.com/Maloy-Android/Muzza
+Revision: 9e6cdc6be158e9699cf689970f30f279dddc2895
+
+Videre includes modified translations of user-interface, interaction and playback code
+from these projects. Their GPL version 3 license accompanies this notice.
+Source mappings and adaptations are recorded in docs/flow-video-ui-sources.md,
+docs/music-ui-sources.md and docs/download-playback-sources.md in Videre's source tree.
+
+Muzza acknowledges InnerTune (z-huang), OuterTune (DD3Boh and mikooomich),
+Metrolist (mostafaalagamy), OpenTune (Arturo254), and other contributors.
+Existing notices in copied or translated source are retained.
+
+Videre modifications: Copyright (C) 2026 Videre contributors.
+Videre retains its own player, profile storage and Invidious transport.
+No affiliation with or endorsement by the upstream projects is implied.

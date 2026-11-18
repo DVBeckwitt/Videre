@@ -1,4 +1,5 @@
 import 'package:clipious/utils/motion.dart';
+import 'package:clipious/globals.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/video_filter.dart';
@@ -8,7 +9,6 @@ import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:flutter_swipe_action_cell/core/cell.dart';
 
 import '../../../utils/models/image_object.dart';
 import '../../models/db/video_filter.dart';
@@ -18,13 +18,47 @@ class VideoFilterChannel extends StatelessWidget {
 
   const VideoFilterChannel({super.key, required this.filters});
 
-  editFilter(BuildContext context, {required VideoFilter filter}) {
+  void editFilter(BuildContext context, {required VideoFilter filter}) {
     var cubit = context.read<VideoFilterCubit>();
 
     AutoRouter.of(context)
         .push(
             VideoFilterSetupRoute(channelId: filter.channelId, filter: filter))
         .then((value) => cubit.refreshFilters());
+  }
+
+  Future<void> confirmDelete(BuildContext context, VideoFilter filter) async {
+    final cubit = context.read<VideoFilterChannelCubit>();
+    final filterCubit = context.read<VideoFilterCubit>();
+    final profile = db.profileId;
+    final locals = AppLocalizations.of(context)!;
+    final remove = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      animationStyle: AppMotion.dialogStyle(context),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(locals.delete),
+        content: Text(filter.localizedLabel(locals, context)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(locals.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(locals.delete),
+          ),
+        ],
+      ),
+    );
+    if (remove == true &&
+        context.mounted &&
+        !cubit.isClosed &&
+        !filterCubit.isClosed &&
+        db.profileId == profile) {
+      await cubit.deleteFilter(filter);
+      if (!filterCubit.isClosed) filterCubit.refreshFilters();
+    }
   }
 
   @override
@@ -38,7 +72,6 @@ class VideoFilterChannel extends StatelessWidget {
       child: BlocBuilder<VideoFilterChannelCubit, VideoFilterChannelState>(
         builder: (context, state) {
           var cubit = context.read<VideoFilterChannelCubit>();
-          var filterCubit = context.read<VideoFilterCubit>();
           TextStyle titleStyle = TextStyle(color: colors.primary);
 
           return Padding(
@@ -89,31 +122,11 @@ class VideoFilterChannel extends StatelessWidget {
                     ],
                   ),
                 ),
-                ...state.filters.map((e) => SwipeActionCell(
-                    key: ValueKey('filter-swipe-${e.uuid}'),
-                    trailingActions: [
-                      SwipeAction(
-                        icon: const Icon(Icons.delete, color: Colors.white),
-                        performsFirstActionWithFullSwipe: true,
-                        onTap: (handler) async {
-                          await handler(true);
-                          await cubit.deleteFilter(e);
-                          filterCubit.refreshFilters();
-                        },
-                      ),
-                      SwipeAction(
-                        icon: const Icon(Icons.edit, color: Colors.white),
-                        color: Colors.orangeAccent,
-                        closeOnTap: false,
-                        onTap: (handler) async {
-                          // await handler(true);
-                          editFilter(context, filter: e);
-                        },
-                      )
-                    ],
-                    child: InkWell(
-                        onTap: () => editFilter(context, filter: e),
-                        child: VideoFilterItem(filter: e))))
+                ...state.filters.map((e) => InkWell(
+                    key: ValueKey('filter-${e.uuid}'),
+                    onTap: () => editFilter(context, filter: e),
+                    onLongPress: () => confirmDelete(context, e),
+                    child: VideoFilterItem(filter: e)))
               ],
             ),
           );

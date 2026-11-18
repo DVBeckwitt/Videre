@@ -33,7 +33,14 @@ class TabletExpandedPlayer extends StatelessWidget {
             !controller.isMini &&
             (video != null || offlineVid != null)
         ? Column(children: [
-            const MiniPlayerControls(),
+            if (video != null)
+              const Flexible(
+                child: SingleChildScrollView(
+                  child: MiniPlayerControls(directActions: true),
+                ),
+              )
+            else
+              const MiniPlayerControls(),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.symmetric(

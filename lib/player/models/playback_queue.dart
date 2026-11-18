@@ -6,6 +6,32 @@ import '../../videos/models/video.dart';
 String playbackQueueId(IdedVideo video) =>
     video is Video ? video.queueEntryId ?? video.videoId : video.videoId;
 
+/// Muzza's PlayerExt.getQueueWindows traverses the player timeline through
+/// previous, current and next windows, including the active shuffle order.
+/// Videre has separate source and traversal lists. Use each occurrence once
+/// and give an explicitly queued repeat priority over its earlier history.
+List<T> playbackQueueTraversal<T extends IdedVideo>(
+  Iterable<T> entries, {
+  required Iterable<String> played,
+  required String? current,
+  required Iterable<String> upcoming,
+}) {
+  final remaining = {
+    for (final entry in entries) playbackQueueId(entry): entry
+  };
+  final next = upcoming.where((id) => id != current).toSet();
+  return [
+    for (final id in played)
+      if (id != current && !next.contains(id))
+        if (remaining.remove(id) case final entry?) entry,
+    if (remaining.remove(current) case final entry?) entry,
+    for (final id in next)
+      if (remaining.remove(id) case final entry?) entry,
+    // A source may be awaiting its initial transition or a playlist append.
+    ...remaining.values,
+  ];
+}
+
 /// Unique-ID queues keep their existing IDs, including in legacy sessions.
 /// Only collisions need a local key, retained when the queue is reordered.
 List<Video> assignPlaybackQueueIds(Iterable<Video> videos) {

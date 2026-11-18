@@ -66,10 +66,19 @@ class _SessionFocusGuardState extends State<SessionFocusGuard> {
       }
 
       // ExcludeFocus does not replay autofocus after unblocking. Traverse into
-      // the active navigator/route scopes until an actionable control is found.
-      final seed = _scope.traversalDescendants
-          .where((node) => node is! FocusScopeNode && node.children.isEmpty)
-          .firstOrNull;
+      // the active route and honor its requested initial control before
+      // falling back to the first control in traversal order.
+      final controls = _scope.traversalDescendants
+          .where((node) => node is! FocusScopeNode && node.children.isEmpty);
+      final autofocus = controls.where((node) {
+        final control = node.context?.widget;
+        return control is Focus && control.autofocus;
+      }).firstOrNull;
+      if (autofocus != null) {
+        autofocus.requestFocus();
+        return;
+      }
+      final seed = controls.firstOrNull;
       if (seed == null || seed.context?.mounted != true) return;
       final policy = FocusTraversalGroup.maybeOf(seed.context!) ??
           ReadingOrderTraversalPolicy();

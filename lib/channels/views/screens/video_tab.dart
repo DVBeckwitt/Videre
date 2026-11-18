@@ -25,10 +25,10 @@ class ChannelVideoTab extends StatelessWidget {
             final sortBy = context.select((ChannelCubit c) => c.state.sortBy);
 
             return Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Padding(
-                  padding: const EdgeInsets.only(right: innerHorizontalPadding),
+                  padding: const EdgeInsetsDirectional.only(start: 12),
                   child: SortDropdownButton(
                     selectedSortingOption: sortBy,
                     onChanged: (ChannelSortBy newValue) =>

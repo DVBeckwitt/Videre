@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/recommendations/subscription_revision.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/app_logs.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -167,6 +168,47 @@ void main() {
   Future<void> switchSelection(bool person) => person
       ? database.useProfile(otherProfileId)
       : database.useServer(nextAccount);
+
+  test('recommendation follows read the pinned authenticated instance',
+      () async {
+    final previous = recommendationSubscriptionRevision.value;
+    final follows = await api.getRecommendationSubscriptions(
+        server: first, beforeRequest: () async {});
+    expect(follows.single.authorId, 'original-channel');
+    expect(requests.single.url.host, 'instance.example');
+    expect(requests.single.url.path, '/api/v1/auth/subscriptions');
+    expect(requests.single.headers['Authorization'], 'Bearer first-token');
+    expect(recommendationSubscriptionRevision.value, previous);
+  });
+
+  for (final person in [false, true]) {
+    test(
+        'recommendation follows stop retrying after ${person ? 'profile' : 'account'} switch',
+        () async {
+      final limited = MockClient((request) async {
+        requests.add(request);
+        return http.Response('', 429, headers: {'retry-after': '1'});
+      });
+      addTearDown(limited.close);
+      final scoped = Service(
+          httpClient: limited,
+          wait: (_) async => await switchSelection(person));
+      Future<void> current() async {
+        final selected = await database.getCurrentlySelectedServer();
+        if (selected.accountId != first.accountId ||
+            selected.profileId != first.profileId) {
+          throw StateError('Different subscription source');
+        }
+      }
+
+      await expectLater(
+          scoped.getRecommendationSubscriptions(
+              server: first, beforeRequest: current),
+          throwsStateError);
+      expect(requests, hasLength(1));
+      expect(requests.single.headers['Authorization'], 'Bearer first-token');
+    });
+  }
 
   final remoteOperations =
       <(String, Future<dynamic> Function(Service), String, String, dynamic)>[

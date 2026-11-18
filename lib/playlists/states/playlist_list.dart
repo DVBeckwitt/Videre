@@ -25,13 +25,12 @@ class PlaylistListCubit extends Cubit<PlaylistListState> {
     getPlaylists();
   }
 
-  void onScrollEvent() {
-    if (isClosed ||
-        _loading ||
-        !scrollController.hasClients ||
-        !state.paginatedList.getHasMore()) return;
-    if (scrollController.offset >=
-        scrollController.position.maxScrollExtent * 0.9) {
+  void onScrollEvent([ScrollMetrics? metrics]) {
+    if (isClosed || _loading || !state.paginatedList.getHasMore()) return;
+    final position = metrics ??
+        (scrollController.hasClients ? scrollController.position : null);
+    if (position == null) return;
+    if (position.pixels >= position.maxScrollExtent * 0.9) {
       _loadMoreTimer?.cancel();
       _loadMoreTimer =
           Timer(const Duration(milliseconds: 500), getMorePlaylists);

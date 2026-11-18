@@ -67,20 +67,41 @@ void main() {
     await db.close();
   });
 
-  Future<void> showSearch(WidgetTester tester) async {
+  Future<void> mountSearch(WidgetTester tester,
+      {String? query, bool? searchNow}) async {
     await tester.pumpWidget(BlocProvider<SettingsCubit>.value(
       value: settings,
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
-        home: const TvSearchScreen(),
+        home: TvSearchScreen(query: query, searchNow: searchNow),
       ),
     ));
+  }
+
+  Future<void> showSearch(WidgetTester tester) async {
+    await mountSearch(tester);
     final field = tester.widget<TvTextField>(find.byType(TvTextField));
     field.controller.text = 'dogs';
     await tester.pump(const Duration(milliseconds: 500));
     field.onSubmitted!('dogs');
     await tester.pump();
+  }
+
+  for (final searchNow in [false, true]) {
+    testWidgets('TV initial query respects searchNow=$searchNow',
+        (tester) async {
+      await mountSearch(tester, query: 'shared search', searchNow: searchNow);
+      await tester.pumpAndSettle();
+      final field = tester.widget<TvTextField>(find.byType(TvTextField));
+      expect(field.controller.text, 'shared search');
+      expect(fakeService.requests.map((request) => request.query),
+          searchNow ? ['shared search', 'shared search', 'shared search'] : []);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+      expect(tester.takeException(), isNull);
+    });
   }
 
   testWidgets('TV suggestions immediately replace all result lists',

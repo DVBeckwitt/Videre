@@ -6,6 +6,8 @@ import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
+import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/videos/models/video.dart';
 
 MusicCatalogService musicCatalogService = InvidiousMusicCatalogService();
 
@@ -44,6 +46,18 @@ abstract class MusicCatalogService {
   /// Callers can revoke the request when its screen or session is replaced.
   Future<List<MusicTrack>> getDiscoverySongs(
           {String? artist, bool Function()? isCurrent}) async =>
+      throw const MusicCatalogUnsupported();
+
+  /// Fetch music related to up to three learned recordings in one explicit
+  /// request. The catalog verifies each returned song against full metadata.
+  Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
+          {bool Function()? isCurrent}) async =>
+      throw const MusicCatalogUnsupported();
+
+  /// Inspects a small followed-channel upload pool. Feed metadata alone does
+  /// not establish that an upload is music or that its creator matches.
+  Future<List<MusicTrack>> getSubscriptionSongs(Iterable<Video> uploads,
+          {required Server expectedServer, bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
 
   Future<MusicTrack> getSong(String videoId,

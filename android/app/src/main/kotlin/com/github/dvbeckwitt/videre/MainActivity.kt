@@ -3,6 +3,7 @@ package com.github.dvbeckwitt.videre
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -17,6 +18,7 @@ import android.provider.OpenableColumns
 import android.util.Rational
 import cl.puntito.simple_pip_mode.PipCallbackHelper
 import com.ryanheise.audioservice.AudioServiceActivity
+import com.kasem.receive_sharing_intent.ReceiveSharingIntentPlugin
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
@@ -64,6 +66,18 @@ class MainActivity : AudioServiceActivity() {
         super.onNewIntent(intent)
     }
 
+    override fun provideFlutterEngine(context: Context): FlutterEngine {
+        // The pinned AudioService provider returns its cached engine, creating
+        // one when needed; Flutter's nullable base signature still propagates.
+        val engine = checkNotNull(super.provideFlutterEngine(context))
+        // AudioService creates/registers its cached engine before Flutter
+        // attaches the Activity. Remove the legacy Android parser here so it
+        // cannot interpret a typed web VIEW as a media file during attachment.
+        // The retained inbox below is the sole Android content-link intake.
+        engine.plugins.remove(ReceiveSharingIntentPlugin::class.java)
+        return engine
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         callbackHelper.configureFlutterEngine(flutterEngine)
@@ -107,6 +121,9 @@ class MainActivity : AudioServiceActivity() {
         }
         if (!flutterEngine.plugins.has(DownloadStoragePlugin::class.java)) {
             flutterEngine.plugins.add(DownloadStoragePlugin())
+        }
+        if (!flutterEngine.plugins.has(IncomingLinksPlugin::class.java)) {
+            flutterEngine.plugins.add(IncomingLinksPlugin())
         }
     }
 

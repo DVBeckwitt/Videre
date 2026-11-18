@@ -30,6 +30,7 @@ import 'package:clipious/videos/states/video.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -324,6 +325,11 @@ void main() {
     expect(paths, ['/es']);
     expect(completed.extension, 'm4a');
     expect(completed.mimeType, 'audio/mp4');
+    expect(completed.playbackProvenance?.audioOnly, isTrue);
+    expect(completed.playbackProvenance?.byteLength, 4);
+    expect(completed.playbackProvenance?.sha256,
+        sha256.convert([1, 2, 3, 4]).toString());
+    expect(completed.playbackProvenance?.defaultAudioTrack, isFalse);
     expect(
         await File(await completed.effectivePath).readAsBytes(), [1, 2, 3, 4]);
   });
@@ -526,6 +532,14 @@ void main() {
       if (call.method == 'deleteDocument') {
         deleted = call.arguments['uri'] as String;
       }
+      if (call.method == 'inspectDocument') {
+        expect(call.arguments['uri'], document);
+        expect(call.arguments['folderUri'], folder);
+        return {
+          'byteLength': savedBytes!.length,
+          'sha256': sha256.convert(savedBytes!).toString(),
+        };
+      }
       return null;
     });
     await manager.setWifiOnly(false);
@@ -535,6 +549,8 @@ void main() {
     final completed = db.getDownloadByVideoId(video.videoId)!;
     expect(savedBytes, [0, 1, 2, 3, 4, 5, 6, 7]);
     expect(await completed.effectivePath, document);
+    expect(completed.playbackProvenance?.sha256,
+        sha256.convert(savedBytes!).toString());
     expect(await File(await audio.downloadPath).exists(), isFalse);
     expect(
         await File('${await audio.downloadPath}.mux.webm').exists(), isFalse);

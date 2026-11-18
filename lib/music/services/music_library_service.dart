@@ -77,6 +77,9 @@ class MusicLibraryService {
   bool contains(MusicLibraryKind kind, String id) =>
       entries.any((entry) => entry.kind == kind && entry.id == id);
 
+  /// Explicit Music playlist membership, including nonempty imported lists.
+  Set<String> get localPlaylistIds => Set.unmodifiable(_playlists(_read()));
+
   bool isMusicPlaylist(Playlist playlist) =>
       playlist.isLocal &&
       (playlist.videos.any((video) => video.musicMetadata != null) ||

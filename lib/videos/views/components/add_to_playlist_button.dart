@@ -5,12 +5,14 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/videos/states/add_to_playlist.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/utils.dart';
 
 import 'add_to_playlist_dialog.dart';
 
 enum AddToPlayListButtonType {
   appBar,
-  modalSheet;
+  modalSheet,
+  watch;
 }
 
 const buttonScaleOffset = 0.8;
@@ -20,19 +22,24 @@ class AddToPlayListButton extends StatelessWidget {
   final Video? video;
   final AddToPlayListButtonType type;
   final Function? afterAdd;
+  final Widget? reactionMetric;
+  final bool inPlayer;
 
   const AddToPlayListButton(
       {super.key,
       required this.videoId,
       this.video,
       this.type = AddToPlayListButtonType.appBar,
-      this.afterAdd});
+      this.afterAdd,
+      this.reactionMetric,
+      this.inPlayer = false});
 
   showAddToPlaylistDialog(BuildContext context) async {
     var cubit = context.read<AddToPlaylistCubit>();
     final added = await AddToPlaylistDialog.showAddToPlaylistDialog(context,
         playlists: cubit.state.playlists,
-        videoId: videoId, onAdd: (selectedPlaylistId) async {
+        videoId: videoId,
+        inPlayer: inPlayer, onAdd: (selectedPlaylistId) async {
       await cubit.saveVideoToPlaylist(selectedPlaylistId);
     });
     if (added == true && context.mounted) afterAdd?.call();
@@ -51,6 +58,44 @@ class AddToPlayListButton extends StatelessWidget {
           builder: (context, state) {
         var cubit = context.read<AddToPlaylistCubit>();
         return switch (type) {
+          AddToPlayListButtonType.watch => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colors.surfaceContainerHighest,
+                    foregroundColor: colors.onSurface,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                  onPressed: state.loading ? null : cubit.toggleLike,
+                  icon: Icon(
+                      state.isVideoLiked
+                          ? Icons.thumb_up
+                          : Icons.thumb_up_outlined,
+                      size: 20),
+                  label: Text(video?.likeCount == null
+                      ? '–'
+                      : compactCurrency.format(video!.likeCount!)),
+                ),
+                if (reactionMetric case final metric?) ...[
+                  const SizedBox(width: 4),
+                  metric,
+                ],
+                const SizedBox(width: 8),
+                FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: colors.surfaceContainerHighest,
+                    foregroundColor: colors.onSurface,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                  ),
+                  onPressed: state.loading
+                      ? null
+                      : () => showAddToPlaylistDialog(context),
+                  icon: const Icon(Icons.bookmark_border_rounded, size: 20),
+                  label: Text(locals.save),
+                ),
+              ],
+            ),
           (AddToPlayListButtonType.modalSheet) => Column(
               mainAxisSize: MainAxisSize.min,
               children: [

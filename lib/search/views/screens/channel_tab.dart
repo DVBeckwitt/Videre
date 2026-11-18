@@ -7,10 +7,11 @@ import 'package:clipious/router.dart';
 import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/search/states/search.dart';
 import 'package:clipious/search/views/screens/search.dart';
-import 'package:clipious/utils.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/components/paginated_list_view.dart';
 import 'package:clipious/videos/views/components/community_browse.dart';
+
+import '../components/search_channel_hero_card.dart';
 
 @RoutePage()
 class SearchChannelTab extends StatelessWidget {
@@ -18,11 +19,8 @@ class SearchChannelTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
     return Builder(builder: (context) {
-      final query =
-          context.select((SearchCubit s) => s.state.queryController.value.text);
+      final query = context.select((SearchCubit s) => s.submittedQuery);
       final sortBy = context.select((SearchCubit s) => s.state.filters.sortBy);
       final date = context.select((SearchCubit s) => s.state.filters.date);
       final duration =
@@ -42,37 +40,11 @@ class SearchChannelTab extends StatelessWidget {
                 .then((value) => value.channels),
             maxResults: searchPageSize,
           ),
-          itemBuilder: (e) => InkWell(
-                onTap: () {
-                  AutoRouter.of(context)
-                      .push(ChannelRoute(channelId: e.authorId));
-                },
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8.0, vertical: 20),
-                  child: Row(
-                    children: [
-                      Expanded(
-                          child: Text(
-                        e.author,
-                        style: TextStyle(color: colors.primary),
-                      )),
-                      VideoChannelCommunityLabels(
-                        authorId: e.authorId,
-                        authorUrl: e.authorUrl,
-                        compact: true,
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.only(right: 8.0),
-                        child: Icon(
-                          Icons.people,
-                          size: 15,
-                        ),
-                      ),
-                      Text(compactCurrency.format(e.subCount)),
-                    ],
-                  ),
-                ),
+          itemBuilder: (channel) => SearchChannelHeroCard(
+                key: ValueKey(channel.authorId),
+                channel: channel,
+                onOpen: () => context.router
+                    .push(ChannelRoute(channelId: channel.authorId)),
               ));
     });
   }

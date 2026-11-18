@@ -5,8 +5,11 @@ import 'package:flutter/material.dart';
 /// playback or leave fullscreen. Only the current route intercepts the event.
 class PlayerModalBackHandler extends StatefulWidget {
   final Widget child;
+  final VoidCallback? onBack;
+  final int priority;
 
-  const PlayerModalBackHandler({super.key, required this.child});
+  const PlayerModalBackHandler(
+      {super.key, required this.child, this.onBack, this.priority = 3});
 
   @override
   State<PlayerModalBackHandler> createState() => _PlayerModalBackHandlerState();
@@ -17,12 +20,16 @@ class _PlayerModalBackHandlerState extends State<PlayerModalBackHandler> {
   void initState() {
     super.initState();
     BackButtonInterceptor.add(_handleBack,
-        zIndex: 3, ifNotYetIntercepted: true);
+        zIndex: widget.priority, ifNotYetIntercepted: true);
   }
 
   bool _handleBack(bool stopDefaultButtonEvent, RouteInfo info) {
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) return false;
-    Navigator.of(context).pop();
+    if (widget.onBack case final dismiss?) {
+      dismiss();
+    } else {
+      Navigator.of(context).pop();
+    }
     return true;
   }
 

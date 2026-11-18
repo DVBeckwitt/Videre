@@ -111,6 +111,9 @@ private class OnionGuardSelector(private val delegate: ProxySelector?) : ProxySe
  * origin must be anchored to the original media source rather than each call. */
 private data class SourceHeaderScope(val origin: HttpUrl?, val names: Set<String>)
 
+/** Cancellation ownership is independent of the credential scope shared with API calls. */
+private object MediaCallScope
+
 private fun sameOrigin(left: HttpUrl, right: HttpUrl): Boolean =
     left.scheme == right.scheme && left.host == right.host && left.port == right.port
 
@@ -216,6 +219,14 @@ internal class PolicyCallFactory : Call.Factory {
         client?.connectionPool?.evictAll()
     }
 
+    /** Interrupt native media bodies before their cache readers are closed.
+     * Ordinary API/download calls retain their own cancellation lifecycle. */
+    fun cancelMediaCalls(accountKey: String? = null) = synchronized(lock) {
+        calls.filter { it.request().tag(MediaCallScope::class.java) != null &&
+            (accountKey == null || it.request().tag(GatewayRequestScope::class.java)?.context?.key == accountKey) }
+            .toList().forEach(Call::cancel)
+    }
+
     override fun newCall(request: Request): Call = synchronized(lock) {
         val active = client ?: throw IOException("SOCKS5 transport settings have not been loaded or are invalid.")
         trackCall(active.newCall(prepareSelectedOriginRequest(prepareGatewayRequest(request))))
@@ -226,6 +237,7 @@ internal class PolicyCallFactory : Call.Factory {
         return object : Call.Factory {
             override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
                 prepareGatewayRequest(request.newBuilder()
+                    .tag(MediaCallScope::class.java, MediaCallScope)
                     .tag(SourceHeaderScope::class.java, scope)
                     .tag(SelectedOriginScope::class.java, scope.origin?.let(::SelectedOriginScope))
                     .build(), gateway),
@@ -240,6 +252,7 @@ internal class PolicyCallFactory : Call.Factory {
         return object : Call.Factory {
             override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
                 preparePodcastRequest(request).newBuilder()
+                    .tag(MediaCallScope::class.java, MediaCallScope)
                     .tag(SourceHeaderScope::class.java, scope).build(),
             )
         }
@@ -255,6 +268,7 @@ internal class PolicyCallFactory : Call.Factory {
             SourceHeaderScope::class.java,
             SourceHeaderScope(request.url, request.headers.names().toSet()),
         ).apply {
+            tag(MediaCallScope::class.java, null)
             if (options.sameOriginOnly && options.followRedirects && preparedRequest.tag(SelectedOriginScope::class.java) == null) {
                 tag(SelectedOriginScope::class.java, SelectedOriginScope(request.url))
             }

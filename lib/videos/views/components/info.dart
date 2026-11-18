@@ -28,11 +28,13 @@ class VideoInfo extends StatelessWidget {
       this.titleAndChannelInfo = true,
       this.descriptionAndTags = true});
 
-  openChannel(BuildContext context) {
-    AutoRouter.of(context).push(ChannelRoute(channelId: video.authorId!));
+  void openChannel(BuildContext context) {
+    final channelId = video.authorId;
+    if (channelId == null || channelId.isEmpty) return;
+    AutoRouter.of(context).push(ChannelRoute(channelId: channelId));
   }
 
-  showSearchWindow(BuildContext context, String query) {
+  void showSearchWindow(BuildContext context, String query) {
     AutoRouter.of(context).push(SearchRoute(
       query: query,
       searchNow: true,
@@ -60,7 +62,8 @@ class VideoInfo extends StatelessWidget {
           if (titleAndChannelInfo)
             SelectableText(
               video.title ?? '',
-              style: textTheme.titleLarge?.copyWith(color: colorScheme.primary),
+              style: textTheme.titleLarge?.copyWith(
+                  color: colorScheme.onSurface, fontWeight: FontWeight.w700),
               textAlign: TextAlign.start,
             ),
           if (titleAndChannelInfo)
@@ -79,43 +82,49 @@ class VideoInfo extends StatelessWidget {
                     ),
             ),
           if (titleAndChannelInfo)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                InkWell(
-                  onTap: () => openChannel(context),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4.0),
-                    child: ChannelAvatar(
-                      name: video.author ?? '',
-                      images: video.authorThumbnails,
-                      size: 40,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: InkWell(
-                    onTap: () => openChannel(context),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                      child: SelectableText(video.author ?? '',
-                          onTap: () => openChannel(context)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          if (titleAndChannelInfo)
-            Row(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: SubscribeButton(
-                    channelId: video.authorId ?? '',
-                    subCount: video.subCountText ?? '',
-                  ),
-                )
-              ],
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      InkWell(
+                        onTap: () => openChannel(context),
+                        borderRadius: BorderRadius.circular(20),
+                        child: ChannelAvatar(
+                          name: video.author ?? '',
+                          images: video.authorThumbnails,
+                          size: 40,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: InkWell(
+                          onTap: () => openChannel(context),
+                          child: SelectableText(video.author ?? '',
+                              style: textTheme.titleSmall,
+                              onTap: () => openChannel(context)),
+                        ),
+                      ),
+                      if (video.authorId?.isNotEmpty == true)
+                        const Icon(Icons.chevron_right_rounded),
+                    ]),
+                    if (video.authorId?.isNotEmpty == true) ...[
+                      const SizedBox(height: 12),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SubscribeButton(
+                          channelId: video.authorId!,
+                          subCount: video.subCountText ?? '',
+                        ),
+                      ),
+                    ],
+                  ]),
             ),
           if (descriptionAndTags)
             TextLinkified(
@@ -125,7 +134,10 @@ class VideoInfo extends StatelessWidget {
             ),
           if (descriptionAndTags) const Divider(),
           if (descriptionAndTags)
-            Row(
+            Wrap(
+              spacing: 4,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 const Padding(
                   padding: EdgeInsets.only(right: 4.0),

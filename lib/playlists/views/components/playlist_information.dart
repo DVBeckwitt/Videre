@@ -12,12 +12,16 @@ class PlaylistInformation extends StatelessWidget {
   final PlaylistReference? reference;
   final bool complete;
   final bool enabled;
+  final bool compact;
+  final bool showServerCopy;
   const PlaylistInformation(
       {super.key,
       this.playlist,
       this.reference,
       this.complete = true,
-      this.enabled = true});
+      this.enabled = true,
+      this.compact = false,
+      this.showServerCopy = true});
 
   @override
   Widget build(BuildContext context) {
@@ -47,21 +51,33 @@ class PlaylistInformation extends StatelessWidget {
         ? MaterialLocalizations.of(context).formatMediumDate(
             DateTime.fromMillisecondsSinceEpoch(updated * 1000))
         : null;
+    final details = [
+      if (compact && playlist.author.trim().isNotEmpty) playlist.author,
+      locals.nVideos(playlist.videoCount),
+      if (durations.isEmpty && playlist.videoCount > 0)
+        locals.playlistDurationUnknown
+      else if (complete)
+        locals.playlistTotalDuration(duration)
+      else
+        locals.playlistKnownDuration(duration),
+      if (date == null)
+        locals.playlistUpdatedUnknown
+      else
+        locals.playlistUpdated(date),
+    ];
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(locals.nVideos(playlist.videoCount)),
-          Text(durations.isEmpty && playlist.videoCount > 0
-              ? locals.playlistDurationUnknown
-              : complete
-                  ? locals.playlistTotalDuration(duration)
-                  : locals.playlistKnownDuration(duration)),
-          Text(date == null
-              ? locals.playlistUpdatedUnknown
-              : locals.playlistUpdated(date)),
-          if (reference != null &&
+          if (compact)
+            Text(details.join(' · '),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant))
+          else
+            ...details.map(Text.new),
+          if (showServerCopy &&
+              reference != null &&
               (playlist.isLocal || reference.kind == PlaylistSourceKind.public))
             PlaylistServerSaveButton(
                 playlist: playlist,

@@ -352,6 +352,155 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'expanded Music keeps artwork and controls visible after reopening',
+      (tester) async {
+    await player.seed(player.state.copyWith(isMini: false, top: 0));
+    await pumpPlayer(tester);
+
+    void expectVisibleBody() {
+      final frame = tester.getRect(positioned);
+      final header = tester.getRect(find.byType(AppBar));
+      for (final key in [
+        'music-now-playing-scroll',
+        'music-player-artwork',
+        'music-player-title',
+        'music-player-play',
+      ]) {
+        final bounds = tester.getRect(find.byKey(ValueKey(key)));
+        expect(bounds.height, greaterThan(0), reason: key);
+        expect(bounds.width, greaterThan(0), reason: key);
+        expect(bounds.top, greaterThanOrEqualTo(header.bottom), reason: key);
+        expect(bounds.bottom, lessThanOrEqualTo(frame.bottom), reason: key);
+      }
+      expect(find.byKey(const ValueKey('music-player-play')).hitTestable(),
+          findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+
+    expectVisibleBody();
+    await tester.tap(find.byIcon(Icons.expand_more));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byKey(const ValueKey('music-mini-expand')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(player.state.isMini, isFalse);
+    expectVisibleBody();
+  });
+
+  testWidgets('expanded Music follows a short pull and returns on release',
+      (tester) async {
+    await player.seed(player.state.copyWith(isMini: false, top: 0));
+    final decoder = await pumpPlayer(tester);
+    final native = decoder.audioPlayer;
+    final expanded = tester.getRect(positioned);
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(AppBar)));
+
+    await gesture.moveBy(const Offset(0, 45));
+    await tester.pump();
+    final first = tester.getRect(positioned);
+    await gesture.moveBy(const Offset(0, 75));
+    await tester.pump();
+    final pulled = tester.getRect(positioned);
+
+    expect(first.top, greaterThan(expanded.top));
+    expect(pulled.top, greaterThan(first.top));
+    expect(player.state.isMini, isFalse);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+
+    await gesture.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(player.state.isMini, isFalse);
+    expect(tester.getRect(positioned).top, closeTo(expanded.top, 0.01));
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Music minimize settles from the held position with one decoder',
+      (tester) async {
+    await player.seed(player.state.copyWith(isMini: false, top: 0));
+    final decoder = await pumpPlayer(tester);
+    final native = decoder.audioPlayer;
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(AppBar)));
+    await gesture.moveBy(const Offset(0, 40));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 220));
+    await tester.pump();
+    final held = tester.getRect(positioned);
+    expect(held.top, greaterThan(0));
+    expect(player.state.isMini, isFalse);
+
+    await gesture.up();
+    await tester.pump();
+    expect(player.state.isMini, isTrue);
+    expect(tester.getRect(positioned).top, closeTo(held.top, 1));
+    await tester.pump(const Duration(milliseconds: 80));
+    final settling = tester.getRect(positioned);
+    expect(settling.top, greaterThan(held.top));
+    await tester.pump(const Duration(milliseconds: 500));
+    final compact = tester.getRect(positioned);
+    expect(compact.top, greaterThan(settling.top));
+    expect(compact.bottom, lessThanOrEqualTo(window.height));
+    expect(find.byType(MusicMiniPlayer), findsOneWidget);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(decoder.audioPlayer, same(native));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('cancelled expanded Music pull returns without minimizing',
+      (tester) async {
+    await player.seed(player.state.copyWith(isMini: false, top: 0));
+    final decoder = await pumpPlayer(tester);
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(AppBar)));
+    await gesture.moveBy(const Offset(0, 45));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 220));
+    await tester.pump();
+    expect(tester.getRect(positioned).top, greaterThan(0));
+
+    await gesture.cancel();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(player.state.isMini, isFalse);
+    expect(tester.getRect(positioned).top, closeTo(0, 0.01));
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Music minimize honors disabled animations at release',
+      (tester) async {
+    viewport.value = viewport.value.copyWith(disableAnimations: true);
+    await player.seed(player.state.copyWith(isMini: false, top: 0));
+    final decoder = await pumpPlayer(tester);
+    final gesture =
+        await tester.startGesture(tester.getCenter(find.byType(AppBar)));
+    await gesture.moveBy(const Offset(0, 45));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 220));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(player.state.isMini, isTrue);
+    expect(tester.getRect(positioned).top, greaterThan(window.height / 2));
+    expect(
+        tester.widget<AnimatedPositioned>(positioned).duration, Duration.zero);
+    expect(
+        tester.element(audioBuilder).read<AudioPlayerCubit>(), same(decoder));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('cancelled Music artwork drag returns to the compact player',
       (tester) async {
     await pumpPlayer(tester);

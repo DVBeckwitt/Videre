@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:logging/logging.dart';
 
+import '../../../player/views/components/player_modal_back_handler.dart';
 import '../../../playlists/models/playlist.dart';
 import '../../../playlists/views/components/add_to_playlist_list.dart';
 
@@ -13,27 +14,32 @@ class AddToPlaylistDialog extends StatefulWidget {
   final String videoId;
   final List<Playlist> playlists;
   final Function(String selectedPlaylistId) onAdd;
+  final bool inPlayer;
 
   const AddToPlaylistDialog(
       {super.key,
       required this.videoId,
       required this.playlists,
-      required this.onAdd});
+      required this.onAdd,
+      this.inPlayer = false});
 
   static Future<bool?> showAddToPlaylistDialog(BuildContext context,
       {required String videoId,
       required List<Playlist> playlists,
-      required Function(String selectedPlaylistId) onAdd}) {
+      required Function(String selectedPlaylistId) onAdd,
+      bool inPlayer = false}) {
     return showSafeModalBottomSheet<bool>(
         showDragHandle: true,
         isScrollControlled: true,
         context: context,
         builder: (BuildContext context) {
-          return AddToPlaylistDialog(
+          final sheet = AddToPlaylistDialog(
             videoId: videoId,
             playlists: playlists,
             onAdd: onAdd,
+            inPlayer: inPlayer,
           );
+          return inPlayer ? PlayerModalBackHandler(child: sheet) : sheet;
         });
   }
 
@@ -78,10 +84,15 @@ class _AddToPlaylistDialogState extends State<AddToPlaylistDialog> {
         animationStyle: AppMotion.dialogStyle(context),
         context: context,
         useRootNavigator: false,
-        builder: (BuildContext ctx) => Dialog(
-              child: AddPlayListForm(
-                  afterAdd: (playlistId) => addToPlaylist(context, playlistId)),
-            ));
+        builder: (BuildContext ctx) {
+          final dialog = Dialog(
+            child: AddPlayListForm(
+                afterAdd: (playlistId) => addToPlaylist(context, playlistId)),
+          );
+          return widget.inPlayer
+              ? PlayerModalBackHandler(child: dialog)
+              : dialog;
+        });
   }
 
   @override

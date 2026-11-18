@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:clipious/home/models/home_tabs_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_library_service.dart';
@@ -704,6 +705,40 @@ void main() {
         isFalse);
   });
 
+  test('Home tabs backup preserves order, all-off and optional resume shelf',
+      () async {
+    for (final layout in [
+      HomeTabsLayout(enabledOrder: [
+        HomeTabsLayout.discover,
+        HomeTabsLayout.topicId('saved-topic'),
+        HomeTabsLayout.yourFeeds,
+      ], continueWatching: true),
+      HomeTabsLayout(enabledOrder: const []),
+      HomeTabsLayout(enabledOrder: [
+        for (var index = 0; index < 5; index++)
+          HomeTabsLayout.topicId('$index${'x' * 500}'),
+      ]),
+    ]) {
+      await source.saveSetting(
+          SettingsValue(homeTabsLayoutSettingName, layout.encode()));
+      await target.restoreBackup(
+          UserBackup.parse((await source.exportBackup()).encode()),
+          replace: true);
+      expect(target.getSettings(homeTabsLayoutSettingName)?.value,
+          layout.encode());
+    }
+    for (final invalid in [
+      '{}',
+      '{"version":1,"enabledOrder":["unknown"],"continueWatching":false}',
+      '{"version":1,"enabledOrder":false,"continueWatching":false}',
+    ]) {
+      expect(
+          UserBackup.validSetting(
+              SettingsValue(homeTabsLayoutSettingName, invalid)),
+          isFalse);
+    }
+  });
+
   test('backup restores motion choices and rejects invalid values', () async {
     for (final value in ['system', 'reduced', 'off']) {
       await source
@@ -823,8 +858,9 @@ void main() {
   test('phone navigation placement and startup survive backup restore',
       () async {
     final layout = PhoneNavigation.defaults()
-        .move(PhoneNavigationItem.playlist, NavigationArea.bottom)!
-        .startAt(PhoneNavigationItem.playlist);
+        .move(PhoneNavigationItem.music, NavigationArea.bottom,
+            before: PhoneNavigationItem.home)!
+        .startAt(PhoneNavigationItem.music);
     await source.saveSetting(
         SettingsValue(phoneNavigationSettingName, layout.encode()));
     await target.restoreBackup(

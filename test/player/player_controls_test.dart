@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -11,7 +14,9 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/player_controls.dart';
 import 'package:clipious/player/states/tv_player_controls.dart';
 import 'package:clipious/player/states/video_player.dart';
+import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
 import 'package:clipious/player/views/components/player_controls.dart';
+import 'package:clipious/player/views/components/seek_preview.dart';
 import 'package:clipious/player/views/components/video_display_mode_picker.dart';
 import 'package:clipious/player/views/tv/components/player_settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -28,18 +33,51 @@ import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
 
+class _ControlsTestPlayer extends TestPlayerCubit {
+  _ControlsTestPlayer(super.initialState, super.settings);
+
+  void replaceOccurrence() => emit(state.copyWith(
+      currentlyPlaying: const Video(videoId: 'next-track', lengthSeconds: 60)));
+}
+
 class _SpeedBoostVideo extends VideoPlayerCubit {
   _SpeedBoostVideo(super.initialState, super.player, super.settings);
 
   final speedChanges = <double>[];
   bool onionPlayback = false;
   List<String> qualityTracks = [];
+  List<String> audioTracks = [];
+  List<String> subtitleTracks = [];
+  final selectedAudioTracks = <int>[];
+  final selectedSubtitleTracks = <int>[];
+  Completer<bool>? qualityPreparation;
+  bool qualityPreparationResult = true;
+  int qualityPreparationCalls = 0;
 
   @override
   bool get isOnionPlayback => onionPlayback;
 
   @override
   List<String> getVideoTracks() => qualityTracks;
+
+  @override
+  List<String> getAudioTracks() => audioTracks;
+
+  @override
+  List<String> getSubtitles() => subtitleTracks;
+
+  @override
+  void selectAudioTrack(int index) => selectedAudioTracks.add(index);
+
+  @override
+  void selectSubtitle(int index) => selectedSubtitleTracks.add(index);
+
+  @override
+  Future<bool> prepareVideoTracks() async {
+    qualityPreparationCalls++;
+    final pending = qualityPreparation;
+    return pending == null ? qualityPreparationResult : await pending.future;
+  }
 
   @override
   void onInit() {}
@@ -60,13 +98,13 @@ class _SpeedBoostVideo extends VideoPlayerCubit {
 void main() {
   late TestAppCubit app;
   late TestSettingsCubit settings;
-  late TestPlayerCubit player;
+  late _ControlsTestPlayer player;
 
   setUp(() async {
     db = await SembastSqfDb.createInMemory();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
     settings = TestSettingsCubit(SettingsState.init(), app);
-    player = TestPlayerCubit(
+    player = _ControlsTestPlayer(
         PlayerState.init(null).copyWith(isMini: false), settings);
   });
 
@@ -94,10 +132,10 @@ void main() {
   }
 
   Future<_SpeedBoostVideo> createPlayingVideo(WidgetTester tester,
-      {double aspectRatio = 16 / 9}) async {
-    const video = Video(videoId: 'boost-test', lengthSeconds: 60);
+      {double aspectRatio = 16 / 9, int lengthSeconds = 60}) async {
+    final video = Video(videoId: 'boost-test', lengthSeconds: lengthSeconds);
     await tester.runAsync(player.close);
-    player = TestPlayerCubit(
+    player = _ControlsTestPlayer(
       PlayerState.init(null).copyWith(
         isMini: false,
         isHidden: false,
@@ -121,6 +159,42 @@ void main() {
     addTearDown(videoPlayer.close);
     return videoPlayer;
   }
+
+  testWidgets('Flow watch time pill toggles and the idle timeline seeks',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final video = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: video),
+    )));
+    player.setEvent(const MediaEvent<Duration>(
+      state: MediaState.ready,
+      type: MediaEventType.durationChanged,
+      value: Duration(seconds: 60),
+    ));
+    await tester.pump();
+    final pill = find.byKey(const ValueKey('flow-watch-time-pill'));
+    expect(pill, findsOneWidget);
+    await tester.tap(pill);
+    await tester.pump();
+    expect(find.descendant(of: pill, matching: find.textContaining('-')),
+        findsOneWidget);
+    await tester.pump(const Duration(seconds: 4));
+    expect(pill, findsNothing);
+
+    final timeline = find.byKey(const ValueKey('flow-watch-seekbar'));
+    final bounds = tester.getRect(timeline);
+    await tester.tapAt(bounds.center + const Offset(0, 10));
+    await tester.pumpAndSettle();
+    expect(player.state.position.inSeconds, closeTo(30, 1));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('closing controls cancels pending feedback and hide timers',
       (tester) async {
@@ -155,6 +229,93 @@ void main() {
     expect(player.state.isMini, isTrue);
     expect(player.state.top, isNull);
     expect(player.state.showMiniPlaceholder, isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'hidden video controls leave expanded pulls to the minimize scope',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    final updates = <double>[];
+    final endings = <bool>[];
+    var fallbackMinimizes = 0;
+    await tester.pumpWidget(hostControls(MinimizeDragScope(
+      identity: videoPlayer,
+      onUpdate: updates.add,
+      onEnd: (commit) {
+        endings.add(commit);
+        if (commit) player.showMiniPlayer();
+      },
+      child: MinimizeOnSwipeDown(
+        enabled: true,
+        onSwipeDown: () {
+          fallbackMinimizes++;
+          player.showMiniPlayer();
+        },
+        child: SizedBox(
+          width: 390,
+          height: 220,
+          child: PlayerControls(mediaPlayerCubit: videoPlayer),
+        ),
+      ),
+    )));
+    player.setEvent(const MediaEvent<Duration>(
+      state: MediaState.ready,
+      type: MediaEventType.durationChanged,
+      value: Duration(seconds: 60),
+    ));
+    await tester.pump(const Duration(seconds: 4));
+    final controls = tester
+        .element(find.byType(LayoutBuilder).last)
+        .read<PlayerControlsCubit>();
+    expect(controls.state.displayControls, isFalse);
+    expect(controls.state.duration, const Duration(seconds: 60));
+    final initialPosition = player.state.position;
+
+    for (final finish in ['short', 'cancel', 'commit']) {
+      updates.clear();
+      endings.clear();
+      final gesture = await tester
+          .startGesture(tester.getCenter(find.byType(PlayerControls)));
+      await gesture.moveBy(const Offset(0, 40));
+      await tester.pump();
+      expect(updates, isNotEmpty);
+      expect(updates.last, 40);
+      expect(player.state.isMini, isFalse);
+      expect(player.state.isDragging, isFalse);
+      expect(endings, isEmpty);
+      expect(find.byType(SeekPreview), findsNothing);
+      expect(player.state.position, initialPosition);
+
+      await gesture.moveBy(Offset(0, finish == 'short' ? 75 : 220));
+      await tester.pump();
+      expect(updates.last, finish == 'short' ? 115 : 260);
+      expect(player.state.isMini, isFalse);
+      expect(player.state.isDragging, isFalse);
+      expect(endings, isEmpty);
+      expect(videoPlayer.isClosed, isFalse);
+      expect(find.byType(SeekPreview), findsNothing);
+      expect(player.state.position, initialPosition);
+
+      if (finish == 'cancel') {
+        await gesture.cancel();
+      } else {
+        await gesture.up();
+      }
+      await tester.pump();
+      expect(endings, [finish == 'commit']);
+      expect(player.state.isMini, finish == 'commit');
+      expect(player.state.isDragging, isFalse);
+      expect(fallbackMinimizes, 0);
+      expect(videoPlayer.isClosed, isFalse);
+      expect(find.byType(SeekPreview), findsNothing);
+      expect(player.state.position, initialPosition);
+      expect(tester.takeException(), isNull);
+    }
+    // Committing mounts the compact controls' deferred animation starters.
+    // Let those controls settle before disposing their owning subtree.
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -244,9 +405,11 @@ void main() {
     Offset pointAt(double fraction) =>
         bounds.topLeft + Offset(bounds.width * fraction, bounds.height * .25);
     final indicator = find.text('2×');
-    final slider = find.byType(Slider);
+    final transportButton = find.byIcon(Icons.pause);
+    final seekbar = find.byKey(const ValueKey('flow-watch-seekbar'));
 
-    expect(slider, findsOneWidget);
+    expect(transportButton, findsOneWidget);
+    expect(seekbar, findsOneWidget);
     final left = await tester.startGesture(pointAt(.15));
     await tester.pump(const Duration(milliseconds: 199));
     expect(videoPlayer.speedChanges, isEmpty);
@@ -257,7 +420,8 @@ void main() {
 
     // The controls can auto-hide while the same finger is still held down.
     await tester.pump(const Duration(seconds: 4));
-    expect(slider, findsNothing);
+    expect(transportButton, findsNothing);
+    expect(seekbar, findsOneWidget);
     expect(indicator, findsOneWidget);
     await left.up();
     // Restoring speed must not wait for another frame or a release timer.
@@ -322,6 +486,109 @@ void main() {
     expect(player.state.isDragging, isTrue);
     expect(videoPlayer.speedChanges, isEmpty);
     await drag.cancel();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(Duration.zero); // Flush animation startup callbacks.
+  });
+
+  testWidgets('Flow double tap toggles at the center and seeks on either side',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    player.seek(const Duration(seconds: 30));
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pump();
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    Offset point(double x) => bounds.topLeft + Offset(x, bounds.height * .30);
+    Future<void> doubleTap(double x) async {
+      await tester.tapAt(point(x));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(point(x));
+      await tester.pump();
+    }
+
+    // At 42% of the stage an even split would rewind, while Flow's middle
+    // third pauses. This point is outside the center button's hit target.
+    await doubleTap(bounds.width * .42);
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+    expect(player.state.position, const Duration(seconds: 30));
+
+    final forward = player.state.forwardStep;
+    await doubleTap(bounds.width * .85);
+    expect(player.state.position, Duration(seconds: 30 + forward));
+    final nextForward = player.state.forwardStep;
+    await tester.tapAt(point(bounds.width * .85));
+    await tester.pump();
+    expect(
+        player.state.position, Duration(seconds: 30 + forward + nextForward));
+
+    final beforeBack = player.state.position;
+    final back = player.state.rewindStep;
+    await doubleTap(bounds.width * .15);
+    expect(player.state.position, beforeBack - Duration(seconds: back));
+    final beforeEdge = player.state.position;
+    await doubleTap(5);
+    expect(player.state.position, beforeEdge,
+        reason: 'Android Back owns the outer edge');
+    await tester.pump(const Duration(seconds: 1));
+    expect(player.state.position, beforeEdge);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'Flow horizontal drag previews 90s across the stage and commits on release',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester, lengthSeconds: 180);
+    player.seek(const Duration(seconds: 60));
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pump(const Duration(seconds: 4));
+    final bounds = tester.getRect(find.byType(PlayerControls));
+    final start =
+        bounds.topLeft + Offset(bounds.width * .30, bounds.height * .35);
+    final gesture = await tester.startGesture(start);
+    await gesture.moveBy(const Offset(30, 0)); // Claim the horizontal axis.
+    await gesture.moveBy(Offset(bounds.width / 3, 0));
+    await tester.pump();
+    expect(find.byType(SeekPreview), findsOneWidget);
+    expect(player.state.position, const Duration(seconds: 60));
+    await gesture.up();
+    await tester.pump();
+    expect(find.byType(SeekPreview), findsNothing);
+    expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+    expect(player.state.position, const Duration(seconds: 90));
+
+    final canceled = await tester.startGesture(start);
+    await canceled.moveBy(const Offset(-30, 0));
+    await canceled.moveBy(const Offset(-60, 0));
+    await tester.pump();
+    expect(find.byType(SeekPreview), findsOneWidget);
+    await canceled.cancel();
+    await tester.pump();
+    expect(find.byType(SeekPreview), findsNothing);
+    expect(player.state.position, const Duration(seconds: 90));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a quick Flow center-button tap pauses without a tap delay',
+      (tester) async {
+    final videoPlayer = await createPlayingVideo(tester);
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+
+    await tester.pump(Duration.zero); // Start the transport animations.
+    await tester.tap(find.byIcon(Icons.pause));
+    expect(player.state.mediaCommand?.type, MediaCommandType.pause,
+        reason: 'A button tap must complete as soon as the finger lifts');
+    expect(videoPlayer.speedChanges, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -447,6 +714,284 @@ void main() {
     expect(settings.state.videoDisplayMode, VideoDisplayMode.stretch);
     expect(player.state.isPlaying, isTrue);
     expect(find.byType(AlertDialog), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  Future<AppLocalizations> openPhoneQuality(
+      WidgetTester tester, _SpeedBoostVideo videoPlayer) async {
+    await tester.pumpWidget(hostControls(SizedBox(
+      width: 390,
+      height: 220,
+      child: PlayerControls(mediaPlayerCubit: videoPlayer),
+    )));
+    await tester.pumpAndSettle();
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(PlayerControls)))!;
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text(locals.quality));
+    await tester.tap(find.text(locals.quality));
+    await tester.pump();
+    return locals;
+  }
+
+  Future<void> pressAndroidBack(WidgetTester tester) async {
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      SystemChannels.navigation.name,
+      SystemChannels.navigation.codec
+          .encodeMethodCall(const MethodCall('popRoute')),
+      null,
+    );
+    await tester.pumpAndSettle();
+    // Minimizing mounts controls whose Animate initialization starts on a
+    // zero-delay future after the last frame. Let that start before settling
+    // again and disposing the tree; keep the real Back/state assertions below.
+    await tester.pump();
+    await tester.pumpAndSettle();
+  }
+
+  for (final subtitles in [false, true]) {
+    final kind = subtitles ? 'subtitle' : 'audio';
+    for (final transition in ['replacement', 'track order', 'none']) {
+      testWidgets('phone $kind picker handles $transition while open',
+          (tester) async {
+        final videoPlayer = (await createPlayingVideo(tester))
+          ..audioTracks = ['English audio', 'Spanish audio']
+          ..subtitleTracks = ['English captions', 'Spanish captions'];
+        await tester.pumpWidget(hostControls(SizedBox(
+          width: 390,
+          height: 220,
+          child: PlayerControls(mediaPlayerCubit: videoPlayer),
+        )));
+        await tester.pumpAndSettle();
+        final locals =
+            AppLocalizations.of(tester.element(find.byType(PlayerControls)))!;
+        await tester.tap(find.byIcon(Icons.more_vert));
+        await tester.pumpAndSettle();
+        final option = find.text(subtitles ? locals.subtitles : locals.audio);
+        await tester.ensureVisible(option);
+        await tester.tap(option);
+        await tester.pumpAndSettle();
+        final selectedLabel = subtitles ? 'Spanish captions' : 'Spanish audio';
+        expect(find.text(selectedLabel), findsOneWidget);
+
+        if (transition == 'replacement') {
+          player.replaceOccurrence();
+        } else if (transition == 'track order') {
+          videoPlayer.audioTracks = ['Spanish audio', 'English audio'];
+          videoPlayer.subtitleTracks = ['Spanish captions', 'English captions'];
+        }
+        await tester.pump();
+        await tester.tap(find.text(selectedLabel));
+        await tester.pumpAndSettle();
+
+        expect(
+            subtitles
+                ? videoPlayer.selectedSubtitleTracks
+                : videoPlayer.selectedAudioTracks,
+            transition == 'none' ? [1] : isEmpty);
+        expect(find.byType(BottomSheet), findsNothing);
+        expect(player.state.isPlaying, isTrue);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+
+    testWidgets('phone $kind options retire when the occurrence changes',
+        (tester) async {
+      final videoPlayer = (await createPlayingVideo(tester))
+        ..audioTracks = ['English audio', 'Spanish audio']
+        ..subtitleTracks = ['English captions', 'Spanish captions'];
+      await tester.pumpWidget(hostControls(SizedBox(
+        width: 390,
+        height: 220,
+        child: PlayerControls(mediaPlayerCubit: videoPlayer),
+      )));
+      await tester.pumpAndSettle();
+      final locals =
+          AppLocalizations.of(tester.element(find.byType(PlayerControls)))!;
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+      player.replaceOccurrence();
+      await tester.pump();
+      final option = find.text(subtitles ? locals.subtitles : locals.audio);
+      await tester.ensureVisible(option);
+      await tester.tap(option);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(videoPlayer.selectedAudioTracks, isEmpty);
+      expect(videoPlayer.selectedSubtitleTracks, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final quality in [false, true]) {
+    for (final fullscreen in [false, true]) {
+      testWidgets(
+          'Android Back dismisses ${quality ? 'quality' : 'options'} before ${fullscreen ? 'leaving fullscreen' : 'minimizing playback'}',
+          (tester) async {
+        final videoPlayer = (await createPlayingVideo(tester))
+          ..qualityTracks = ['720p', '1080p'];
+        if (fullscreen) player.setFullScreen(FullScreenState.fullScreen);
+        BackButtonInterceptor.add(player.handleBackButton,
+            name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+        final interceptorsBefore = BackButtonInterceptor.describe();
+        await tester.pumpWidget(hostControls(SizedBox(
+          width: 390,
+          height: 220,
+          child: PlayerControls(mediaPlayerCubit: videoPlayer),
+        )));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byIcon(Icons.more_vert));
+        await tester.pumpAndSettle();
+        if (quality) {
+          final locals =
+              AppLocalizations.of(tester.element(find.byType(PlayerControls)))!;
+          await tester.ensureVisible(find.text(locals.quality));
+          await tester.tap(find.text(locals.quality));
+          await tester.pumpAndSettle();
+          expect(find.text('1080p'), findsOneWidget);
+        }
+        expect(find.byType(BottomSheet), findsOneWidget);
+        final initialFullscreen = player.state.fullScreenState;
+
+        await pressAndroidBack(tester);
+        expect(find.byType(BottomSheet), findsNothing);
+        expect(player.state.isMini, isFalse);
+        expect(player.state.isPlaying, isTrue);
+        expect(player.state.fullScreenState, initialFullscreen);
+        expect(BackButtonInterceptor.describe(), interceptorsBefore);
+
+        await pressAndroidBack(tester);
+        expect(player.state.isMini, !fullscreen);
+        expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+        expect(player.state.isPlaying, isTrue);
+        if (fullscreen) {
+          await pressAndroidBack(tester);
+          expect(player.state.isMini, isTrue);
+          expect(player.state.isPlaying, isTrue);
+        }
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
+  testWidgets('phone quality waits for preparation and reads the fresh tracks',
+      (tester) async {
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..qualityTracks = ['720p']
+      ..qualityPreparation = Completer<bool>();
+    final locals = await openPhoneQuality(tester, videoPlayer);
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    expect(find.text(locals.quality), findsOneWidget);
+    expect(find.text('1080p'), findsNothing);
+    expect(find.text('720p'), findsNothing);
+    expect(player.state.isPlaying, isTrue);
+
+    videoPlayer.qualityTracks = ['720p', '1080p'];
+    videoPlayer.qualityPreparation!.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text('720p'), findsOneWidget);
+    expect(find.text('1080p'), findsOneWidget);
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'dismissed phone options cannot reopen after preparation completes',
+      (tester) async {
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..qualityTracks = ['720p']
+      ..qualityPreparation = Completer<bool>();
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    await openPhoneQuality(tester, videoPlayer);
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    await pressAndroidBack(tester);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(player.state.isMini, isFalse);
+
+    videoPlayer.qualityTracks = ['720p', '1080p'];
+    videoPlayer.qualityPreparation!.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.text('1080p'), findsNothing);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('phone quality failure keeps the local choice with feedback',
+      (tester) async {
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..qualityTracks = ['720p']
+      ..qualityPreparationResult = false;
+    final locals = await openPhoneQuality(tester, videoPlayer);
+    await tester.pumpAndSettle();
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    expect(find.text('720p'), findsOneWidget);
+    expect(find.text(locals.couldntLoadVideo), findsOneWidget);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('TV quality retains local choices while preparing fresh tracks',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..qualityTracks = ['720p']
+      ..qualityPreparation = Completer<bool>();
+    await tester.pumpWidget(hostControls(BlocProvider<VideoPlayerCubit>.value(
+      value: videoPlayer,
+      child: const TvPlayerSettings(),
+    )));
+    await tester.pump();
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    expect(find.text('720p'), findsOneWidget);
+    expect(find.text('1080p'), findsNothing);
+    expect(player.state.isPlaying, isTrue);
+
+    videoPlayer.qualityTracks = ['720p', '1080p'];
+    videoPlayer.qualityPreparation!.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text('720p'), findsOneWidget);
+    expect(find.text('1080p'), findsOneWidget);
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('TV quality failure keeps local choices with inline feedback',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final videoPlayer = (await createPlayingVideo(tester))
+      ..qualityTracks = ['720p']
+      ..qualityPreparationResult = false;
+    await tester.pumpWidget(hostControls(BlocProvider<VideoPlayerCubit>.value(
+      value: videoPlayer,
+      child: const TvPlayerSettings(),
+    )));
+    await tester.pumpAndSettle();
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(TvPlayerSettings)))!;
+    expect(videoPlayer.qualityPreparationCalls, 1);
+    expect(find.text('720p'), findsOneWidget);
+    expect(find.text(locals.couldntLoadVideo), findsOneWidget);
+    expect(player.state.isPlaying, isTrue);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

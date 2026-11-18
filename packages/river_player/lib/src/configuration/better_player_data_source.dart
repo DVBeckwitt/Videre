@@ -48,6 +48,9 @@ class BetterPlayerDataSource {
   ///Optional cache configuration, used only for network data sources
   final BetterPlayerCacheConfiguration? cacheConfiguration;
 
+  /// Videre's transient source identity for the shared guarded native cache.
+  final Map<String, Object?>? playbackCache;
+
   ///List of bytes, used only in memory player
   final List<int>? bytes;
 
@@ -93,6 +96,7 @@ class BetterPlayerDataSource {
     this.asmsTrackNames,
     this.resolutions,
     this.cacheConfiguration,
+    this.playbackCache,
     this.notificationConfiguration =
         const BetterPlayerNotificationConfiguration(
       showNotification: false,
@@ -126,6 +130,7 @@ class BetterPlayerDataSource {
     bool? useAsmsAudioTracks,
     Map<String, String>? qualities,
     BetterPlayerCacheConfiguration? cacheConfiguration,
+    Map<String, Object?>? playbackCache,
     BetterPlayerNotificationConfiguration notificationConfiguration =
         const BetterPlayerNotificationConfiguration(showNotification: false),
     Duration? overriddenDuration,
@@ -147,6 +152,7 @@ class BetterPlayerDataSource {
       useAsmsAudioTracks: useAsmsAudioTracks,
       resolutions: qualities,
       cacheConfiguration: cacheConfiguration,
+      playbackCache: playbackCache,
       notificationConfiguration: notificationConfiguration,
       overriddenDuration: overriddenDuration,
       videoFormat: videoFormat,
@@ -228,6 +234,7 @@ class BetterPlayerDataSource {
     bool? useAsmsAudioTracks,
     Map<String, String>? resolutions,
     BetterPlayerCacheConfiguration? cacheConfiguration,
+    Map<String, Object?>? playbackCache,
     BetterPlayerNotificationConfiguration? notificationConfiguration =
         const BetterPlayerNotificationConfiguration(showNotification: false),
     Duration? overriddenDuration,
@@ -251,6 +258,7 @@ class BetterPlayerDataSource {
       useAsmsAudioTracks: useAsmsAudioTracks ?? this.useAsmsAudioTracks,
       resolutions: resolutions ?? this.resolutions,
       cacheConfiguration: cacheConfiguration ?? this.cacheConfiguration,
+      playbackCache: playbackCache ?? this.playbackCache,
       notificationConfiguration:
           notificationConfiguration ?? this.notificationConfiguration,
       overriddenDuration: overriddenDuration ?? this.overriddenDuration,

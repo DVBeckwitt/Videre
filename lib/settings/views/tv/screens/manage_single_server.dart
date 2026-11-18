@@ -110,11 +110,13 @@ class TvManageSingleServerScreen extends StatelessWidget {
               try {
                 await cubit.logInWithCookie(
                     userController.text, passwordController.text);
-                if (context.mounted) {
+                if (context.mounted &&
+                    ModalRoute.of(context)?.isCurrent == true) {
                   Navigator.of(context).pop();
                 }
               } catch (_) {
-                if (context.mounted) {
+                if (context.mounted &&
+                    ModalRoute.of(context)?.isCurrent == true) {
                   showTvAlertdialog(context, locals.error, [
                     Text(
                       locals.accountActionFailed,

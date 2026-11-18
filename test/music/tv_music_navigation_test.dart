@@ -3,7 +3,7 @@ import 'package:clipious/app/views/tv/screens/tv_home.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
-import 'package:clipious/home/views/components/content_mode_selector.dart';
+import 'package:clipious/home/views/screens/home_tabs_editor.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
 import 'package:clipious/music/models/music_artist.dart';
@@ -20,7 +20,6 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
-import 'package:clipious/settings/views/components/home_experience_setting.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -36,6 +35,9 @@ class _App extends Cubit<AppState> implements AppCubit {
 
   @override
   bool get isLoggedIn => false;
+
+  @override
+  bool tryOpenPastedAppLink(String text) => false;
 
   void setSession(AppState value) => emit(value);
 
@@ -55,12 +57,11 @@ class _Settings extends Cubit<SettingsState> implements SettingsCubit {
     }));
   }
 
-  @override
-  Future<void> setHomeExperience(HomeExperience experience) async {
+  void seedLegacyHomeExperience(String experience) {
     emit(state.copyWith(settings: {
       ...state.settings,
       homeExperienceSettingName:
-          SettingsValue(homeExperienceSettingName, experience.name),
+          SettingsValue(homeExperienceSettingName, experience),
     }));
   }
 
@@ -226,11 +227,17 @@ void main() {
     }
   }
 
-  Finder modeLabel(String label) => find.descendant(
-      of: find.byType(ContentModeSelector), matching: find.text(label));
+  Finder modeDestination(HomeContentMode mode) =>
+      find.byKey(ValueKey('tv-home-${mode.name}'));
 
-  Future<void> select(WidgetTester tester, Finder label) async {
-    Focus.of(tester.element(label)).requestFocus();
+  Finder modeIcon(HomeContentMode mode) => find.descendant(
+      of: modeDestination(mode),
+      matching: find.byIcon(mode == HomeContentMode.music
+          ? Icons.music_note
+          : Icons.ondemand_video));
+
+  Future<void> select(WidgetTester tester, Finder control) async {
+    Focus.of(tester.element(control)).requestFocus();
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
@@ -244,34 +251,30 @@ void main() {
       of: find.byKey(const ValueKey('tv-music-search')),
       matching: find.byIcon(Icons.search));
 
-  testWidgets('TV mode selector and Music sidebar respond to remote keys',
+  testWidgets('TV sidebar Music and Videos destinations respond to the remote',
       (tester) async {
     await mount(tester);
     expect(catalog.trendingCalls, 0,
         reason: 'Video browsing must not load hidden Music pages');
+    expect(find.byType(SegmentedButton<HomeContentMode>), findsNothing);
+    final videoSearch = find.descendant(
+        of: find.byKey(const ValueKey('tv-home-page-search')),
+        matching: find.byIcon(Icons.search));
+    final music = modeIcon(HomeContentMode.music);
     expect(
-        Focus.of(tester.element(find.byIcon(Icons.search))).hasFocus, isTrue);
+        tester.getCenter(music).dy, lessThan(tester.getCenter(videoSearch).dy));
+    expect(Focus.of(tester.element(videoSearch)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
-    expect(Focus.of(tester.element(modeLabel('Videos'))).hasFocus, isTrue,
-        reason: 'The visible switch must be reachable from the video menu');
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pumpAndSettle();
-    expect(Focus.of(tester.element(modeLabel('Music'))).hasFocus, isTrue);
+    expect(Focus.of(tester.element(music)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
     expect(settings.state.homeContentMode, HomeContentMode.music);
     expect(find.byType(MusicHomePage), findsOneWidget);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pumpAndSettle();
-    expect(Focus.of(tester.element(musicSearchIcon())).hasFocus, isTrue,
-        reason: 'Music search stays reachable from the top bar');
-    expect(tester.getRect(modeLabel('Videos')).top, greaterThanOrEqualTo(0));
-    expect(tester.getRect(modeLabel('Music')).right, lessThanOrEqualTo(960));
+    expect(modeDestination(HomeContentMode.videos), findsOneWidget);
 
     final home = musicMenuIcon(Icons.home_outlined, 0);
-    Focus.of(tester.element(home)).requestFocus();
-    await tester.pumpAndSettle();
+    expect(Focus.of(tester.element(home)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(Focus.of(tester.element(musicMenuIcon(Icons.search, 1))).hasFocus,
@@ -297,14 +300,19 @@ void main() {
       expect(Focus.of(tester.element(item)).hasFocus, isTrue);
       expect(tester.getRect(item).bottom, lessThanOrEqualTo(540));
     }
+    await select(tester, modeIcon(HomeContentMode.videos));
+    expect(settings.state.homeContentMode, HomeContentMode.videos);
+    expect(find.byType(MusicLibraryPage), findsNothing);
+    expect(Focus.of(tester.element(music)).hasFocus, isTrue);
     expect(tester.takeException(), isNull);
   });
 
   testWidgets('Music query and scroll survive switching modes with no refetch',
       (tester) async {
-    settings.setVideoLayout([HomeDataSource.history, HomeDataSource.search]);
+    settings.setVideoLayout([HomeDataSource.history]);
     await mount(tester);
-    await select(tester, modeLabel('Music'));
+    expect(find.byKey(const ValueKey('tv-home-page-search')), findsNothing);
+    await select(tester, modeIcon(HomeContentMode.music));
     await select(tester, musicMenuIcon(Icons.search, 1));
     await tester.enterText(find.byKey(const ValueKey('music-search')), 'kept');
     await tester.testTextInput.receiveAction(TextInputAction.search);
@@ -319,14 +327,14 @@ void main() {
     final offset = position.pixels;
     final calls = catalog.searchCalls;
 
-    await select(tester, modeLabel('Videos'));
+    await select(tester, modeIcon(HomeContentMode.videos));
     expect(find.byType(MusicScreen), findsNothing);
     expect(find.byIcon(Icons.history), findsOneWidget);
     expect(find.byIcon(Icons.subscriptions), findsNothing,
         reason: 'The customized video menu must remain unchanged');
     final hiddenSong = find.text('kept song 4', skipOffstage: false).last;
     expect(Focus.of(tester.element(hiddenSong)).canRequestFocus, isFalse);
-    await select(tester, modeLabel('Music'));
+    await select(tester, modeIcon(HomeContentMode.music));
     expect(tester.state(find.byType(MusicScreen)), same(searchState));
     expect(position.pixels, offset);
     expect(
@@ -342,7 +350,7 @@ void main() {
   testWidgets('TV discards retained Music navigation on a profile change',
       (tester) async {
     await mount(tester);
-    await select(tester, modeLabel('Music'));
+    await select(tester, modeIcon(HomeContentMode.music));
     await select(tester, musicMenuIcon(Icons.search, 1));
     await tester.enterText(
         find.byKey(const ValueKey('music-search')), 'private');
@@ -404,44 +412,64 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('TV ignores a Home experience choice from an older session',
+  testWidgets('TV remote opens Home tabs settings and Back restores Settings',
       (tester) async {
-    await settings.setHomeExperience(HomeExperience.musicOnly);
+    const channel = MethodChannel('videre/recommendations');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+        channel, (_) async => {'state': {}, 'ranked': [], 'summary': {}});
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
     final router = AppRouter(hasServer: true);
     addTearDown(router.dispose);
     await mount(tester, router: router);
     await select(tester, find.byIcon(Icons.settings));
-    await tester.sendKeyEvent(LogicalKeyboardKey.select);
-    await tester.pumpAndSettle();
-    appCubit.setSession(appCubit.state.copyWith(sessionRevision: 1));
-    await tester.pumpAndSettle();
+    expect(find.byType(TVSettingsScreen), findsOneWidget);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
+    final homeTabs = find.text('Home tabs');
+    expect(homeTabs, findsOneWidget);
+    expect(
+        Focus.of(tester.element(
+                find.ancestor(of: homeTabs, matching: find.byType(ListTile))))
+            .hasFocus,
+        isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    }
     await tester.pumpAndSettle();
-    expect(settings.state.homeExperience, HomeExperience.musicOnly);
+    expect(find.byType(HomeTabsEditorScreen), findsOneWidget);
+    expect(find.text('Your feeds'), findsNothing);
+    expect(find.text('For you'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeTabsEditorScreen), findsNothing);
+    expect(find.byType(TVSettingsScreen), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  for (final experience in [
-    HomeExperience.videosOnly,
-    HomeExperience.musicOnly,
-  ]) {
-    testWidgets('TV $experience hides the selector and Settings restores it',
+  for (final experience in ['videosOnly', 'musicOnly']) {
+    testWidgets('TV ignores legacy $experience and keeps both destinations',
         (tester) async {
-      await settings.setHomeContentMode(experience == HomeExperience.videosOnly
+      final startMode = experience == 'videosOnly'
           ? HomeContentMode.music
-          : HomeContentMode.videos);
-      await settings.setHomeExperience(experience);
+          : HomeContentMode.videos;
+      final otherMode = startMode == HomeContentMode.music
+          ? HomeContentMode.videos
+          : HomeContentMode.music;
+      settings.seedLegacyHomeExperience(experience);
+      await settings.setHomeContentMode(startMode);
       final router = AppRouter(hasServer: true);
       addTearDown(router.dispose);
       await mount(tester, router: router);
-      expect(find.byType(ContentModeSelector), findsNothing);
-      if (experience == HomeExperience.musicOnly) {
+      expect(settings.state.homeContentMode, startMode);
+      expect(modeDestination(otherMode), findsOneWidget);
+      if (startMode == HomeContentMode.music) {
         expect(find.byType(MusicHomePage), findsOneWidget);
         expect(videoService.videoRequests, 0,
-            reason: 'Music-only startup must not load hidden video feeds');
-        expect(find.byIcon(Icons.history), findsNothing);
+            reason: 'Music startup must not load hidden video feeds');
       } else {
         expect(find.byIcon(Icons.history), findsOneWidget);
         expect(catalog.trendingCalls, 0);
@@ -452,31 +480,20 @@ void main() {
           AppLocalizations.of(tester.element(find.byType(TvHomeScreen)))!;
       await select(tester, find.byIcon(Icons.settings));
       expect(find.byType(TVSettingsScreen), findsOneWidget);
-      final setting = find.text(locals.homeExperience);
+      expect(find.text('Home experience'), findsNothing);
+      final navigation = find.text(locals.customizeAppLayout);
+      expect(navigation, findsOneWidget);
       expect(
-          Focus.of(tester.element(
-                  find.ancestor(of: setting, matching: find.byType(ListTile))))
+          Focus.of(tester.element(find.ancestor(
+                  of: navigation, matching: find.byType(ListTile))))
               .hasFocus,
           isTrue);
-      await tester.sendKeyEvent(LogicalKeyboardKey.select);
-      await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      final dualMode =
-          find.text(homeExperienceLabel(HomeExperience.videosAndMusic, locals));
-      expect(
-          Focus.of(tester.element(
-                  find.ancestor(of: dualMode, matching: find.byType(ListTile))))
-              .hasFocus,
-          isTrue);
-      await tester.sendKeyEvent(LogicalKeyboardKey.select);
-      await tester.pumpAndSettle();
-      expect(settings.state.homeExperience, HomeExperience.videosAndMusic);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
-      expect(find.byType(ContentModeSelector), findsOneWidget);
-      expect(Focus.of(tester.element(find.byIcon(Icons.settings))).hasFocus,
-          isTrue);
+      await select(tester, modeIcon(otherMode));
+      expect(settings.state.homeContentMode, otherMode);
+      expect(modeDestination(startMode), findsOneWidget);
+      expect(find.byType(SegmentedButton<HomeContentMode>), findsNothing);
       expect(tester.takeException(), isNull);
     });
   }

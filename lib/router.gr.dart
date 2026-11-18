@@ -495,6 +495,26 @@ class MainContentRoute extends PageRouteInfo<void> {
 }
 
 /// generated route for
+/// [MainMusicTab]
+class MainMusicRoute extends PageRouteInfo<void> {
+  const MainMusicRoute({List<PageRouteInfo>? children})
+      : super(
+          MainMusicRoute.name,
+          initialChildren: children,
+          argsEquality: false,
+        );
+
+  static const String name = 'MainMusicRoute';
+
+  static PageInfo page = PageInfo(
+    name,
+    builder: (data) {
+      return const MainMusicTab();
+    },
+  );
+}
+
+/// generated route for
 /// [MainScreen]
 class MainRoute extends PageRouteInfo<void> {
   const MainRoute({List<PageRouteInfo>? children})
@@ -598,6 +618,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
     String? playlistId,
     String? artistId,
     String? initialQuery,
+    Duration startAt = Duration.zero,
     bool embedded = false,
     List<PageRouteInfo>? children,
   }) : super(
@@ -608,6 +629,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
             playlistId: playlistId,
             artistId: artistId,
             initialQuery: initialQuery,
+            startAt: startAt,
             embedded: embedded,
           ),
           initialChildren: children,
@@ -628,6 +650,7 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
         playlistId: args.playlistId,
         artistId: args.artistId,
         initialQuery: args.initialQuery,
+        startAt: args.startAt,
         embedded: args.embedded,
       );
     },
@@ -641,6 +664,7 @@ class MusicRouteArgs {
     this.playlistId,
     this.artistId,
     this.initialQuery,
+    this.startAt = Duration.zero,
     this.embedded = false,
   });
 
@@ -654,11 +678,13 @@ class MusicRouteArgs {
 
   final String? initialQuery;
 
+  final Duration startAt;
+
   final bool embedded;
 
   @override
   String toString() {
-    return 'MusicRouteArgs{key: $key, videoId: $videoId, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, embedded: $embedded}';
+    return 'MusicRouteArgs{key: $key, videoId: $videoId, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
   }
 }
 
@@ -1677,19 +1703,49 @@ class TvSearchHistorySettingsRoute extends PageRouteInfo<void> {
 
 /// generated route for
 /// [TvSearchScreen]
-class TvSearchRoute extends PageRouteInfo<void> {
-  const TvSearchRoute({List<PageRouteInfo>? children})
-      : super(TvSearchRoute.name,
-            initialChildren: children, argsEquality: false);
+class TvSearchRoute extends PageRouteInfo<TvSearchRouteArgs> {
+  TvSearchRoute({
+    Key? key,
+    String? query,
+    bool? searchNow,
+    List<PageRouteInfo>? children,
+  }) : super(
+          TvSearchRoute.name,
+          args: TvSearchRouteArgs(key: key, query: query, searchNow: searchNow),
+          initialChildren: children,
+          argsEquality: false,
+        );
 
   static const String name = 'TvSearchRoute';
 
   static PageInfo page = PageInfo(
     name,
     builder: (data) {
-      return const TvSearchScreen();
+      final args = data.argsAs<TvSearchRouteArgs>(
+        orElse: () => const TvSearchRouteArgs(),
+      );
+      return TvSearchScreen(
+        key: args.key,
+        query: args.query,
+        searchNow: args.searchNow,
+      );
     },
   );
+}
+
+class TvSearchRouteArgs {
+  const TvSearchRouteArgs({this.key, this.query, this.searchNow});
+
+  final Key? key;
+
+  final String? query;
+
+  final bool? searchNow;
+
+  @override
+  String toString() {
+    return 'TvSearchRouteArgs{key: $key, query: $query, searchNow: $searchNow}';
+  }
 }
 
 /// generated route for
@@ -1957,10 +2013,11 @@ class TvVideoRoute extends PageRouteInfo<TvVideoRouteArgs> {
   TvVideoRoute({
     Key? key,
     required String videoId,
+    Duration? startAt,
     List<PageRouteInfo>? children,
   }) : super(
           TvVideoRoute.name,
-          args: TvVideoRouteArgs(key: key, videoId: videoId),
+          args: TvVideoRouteArgs(key: key, videoId: videoId, startAt: startAt),
           initialChildren: children,
           argsEquality: false,
         );
@@ -1971,21 +2028,27 @@ class TvVideoRoute extends PageRouteInfo<TvVideoRouteArgs> {
     name,
     builder: (data) {
       final args = data.argsAs<TvVideoRouteArgs>();
-      return TvVideoScreen(key: args.key, videoId: args.videoId);
+      return TvVideoScreen(
+        key: args.key,
+        videoId: args.videoId,
+        startAt: args.startAt,
+      );
     },
   );
 }
 
 class TvVideoRouteArgs {
-  const TvVideoRouteArgs({this.key, required this.videoId});
+  const TvVideoRouteArgs({this.key, required this.videoId, this.startAt});
 
   final Key? key;
 
   final String videoId;
 
+  final Duration? startAt;
+
   @override
   String toString() {
-    return 'TvVideoRouteArgs{key: $key, videoId: $videoId}';
+    return 'TvVideoRouteArgs{key: $key, videoId: $videoId, startAt: $startAt}';
   }
 }
 
@@ -2188,10 +2251,16 @@ class VideoRoute extends PageRouteInfo<VideoRouteArgs> {
     Key? key,
     required String videoId,
     bool? playNow,
+    Duration? startAt,
     List<PageRouteInfo>? children,
   }) : super(
           VideoRoute.name,
-          args: VideoRouteArgs(key: key, videoId: videoId, playNow: playNow),
+          args: VideoRouteArgs(
+            key: key,
+            videoId: videoId,
+            playNow: playNow,
+            startAt: startAt,
+          ),
           initialChildren: children,
           argsEquality: false,
         );
@@ -2206,13 +2275,19 @@ class VideoRoute extends PageRouteInfo<VideoRouteArgs> {
         key: args.key,
         videoId: args.videoId,
         playNow: args.playNow,
+        startAt: args.startAt,
       );
     },
   );
 }
 
 class VideoRouteArgs {
-  const VideoRouteArgs({this.key, required this.videoId, this.playNow});
+  const VideoRouteArgs({
+    this.key,
+    required this.videoId,
+    this.playNow,
+    this.startAt,
+  });
 
   final Key? key;
 
@@ -2220,9 +2295,11 @@ class VideoRouteArgs {
 
   final bool? playNow;
 
+  final Duration? startAt;
+
   @override
   String toString() {
-    return 'VideoRouteArgs{key: $key, videoId: $videoId, playNow: $playNow}';
+    return 'VideoRouteArgs{key: $key, videoId: $videoId, playNow: $playNow, startAt: $startAt}';
   }
 }
 

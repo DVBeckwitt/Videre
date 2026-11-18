@@ -3,6 +3,7 @@ import 'package:clipious/app/views/components/session_focus_guard.dart';
 import 'package:clipious/app/views/tv/screens/tv_home.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/home/views/components/flow_video_home.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
 import 'package:clipious/player/states/player.dart';
@@ -75,6 +76,9 @@ void main() {
   late _Player player;
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (_) async => throw MissingPluginException());
     originalService = service;
     service = _Service();
     originalIsTv = app.isTv;
@@ -86,6 +90,9 @@ void main() {
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('videre/recommendations'), null);
     await settings.close();
     await player.close();
     await appCubit.close();
@@ -158,6 +165,27 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('TV remote opens local recommendations and Back restores focus',
+      (tester) async {
+    await mount(tester, const Size(1280, 720));
+    final forYouIcon = find.byIcon(Icons.auto_awesome_outlined);
+    Focus.of(tester.element(forYouIcon)).requestFocus();
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byType(FlowVideoHome), findsOneWidget);
+    expect(tester.widget<FlowVideoHome>(find.byType(FlowVideoHome)).television,
+        isTrue);
+    expect(Focus.of(tester.element(find.byIcon(Icons.tune_rounded))).hasFocus,
+        isTrue);
+    expect(tester.takeException(), isNull);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(FlowVideoHome), findsNothing);
+    expect(Focus.of(tester.element(forYouIcon)).hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('TV sidebar remains navigable at a 720p TV logical size',
       (tester) async {
     await mount(tester, const Size(960, 540));
@@ -169,6 +197,7 @@ void main() {
       Icons.playlist_play,
       Icons.local_fire_department,
       Icons.trending_up,
+      Icons.auto_awesome_outlined,
       Icons.account_circle_outlined,
       Icons.phonelink,
       Icons.settings,

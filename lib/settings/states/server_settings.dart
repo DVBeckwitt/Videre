@@ -3,6 +3,8 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
+import '../../player/states/player.dart';
+import '../../recommendations/subscription_recommendations.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../utils/interfaces/db.dart';
 import '../models/db/server.dart';
@@ -107,21 +109,25 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
       await setApiKey(value);
       return;
     }
-    await _updateServer((saved) => saved.copyWith(customHeaders: {
-          ...saved.customHeaders,
-          key: value,
-        }));
+    await PlayerCubit.stopForAccountChange(_savedServer());
+    await SubscriptionRecommendationSource.duringAccountChange(
+        _profileDb,
+        () => _updateServer((saved) => saved.copyWith(customHeaders: {
+              ...saved.customHeaders,
+              key: value,
+            })));
   }
 
   Future<void> setApiKey(String value) => _authenticate(() async {
         final server = _savedServer();
+        await PlayerCubit.stopForAccountChange(server);
         await NerdVpnAccess.instance.setKey(server, value.trim());
         await _updateServer((saved) => saved.copyWith(
             customHeaders: Map<String, String>.from(saved.customHeaders)
               ..removeWhere(
                   (name, _) => name.toLowerCase() == 'x-invidious-token')));
         service.clearSessionCaches();
-      });
+      }, changeAccount: true);
 
   Future<void> checkApiAccess() => _authenticate(() async {
         await service.checkNerdVpnAccess(_savedServer());
@@ -131,9 +137,12 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
       });
 
   Future<void> removeHeader(String key) async {
-    await _updateServer((saved) => saved.copyWith(
-        customHeaders: Map<String, String>.from(saved.customHeaders)
-          ..remove(key)));
+    await PlayerCubit.stopForAccountChange(_savedServer());
+    await SubscriptionRecommendationSource.duringAccountChange(
+        _profileDb,
+        () => _updateServer((saved) => saved.copyWith(
+            customHeaders: Map<String, String>.from(saved.customHeaders)
+              ..remove(key))));
   }
 
   Future<void> logOut() async {
@@ -142,7 +151,9 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     if (isClosed) return;
     emit(state.copyWith(authenticating: true));
     try {
-      await service.logOutProtected(_savedServer());
+      await PlayerCubit.stopForAccountChange(_savedServer());
+      await SubscriptionRecommendationSource.duringAccountChange(
+          _profileDb, () => service.logOutProtected(_savedServer()));
       final latest = _savedServer();
       if (!isClosed) emit(state.copyWith(server: latest));
       if (!app.isClosed && _isActive(latest)) app.setServer(latest);
@@ -153,11 +164,17 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     }
   }
 
-  Future<void> _authenticate(Future<void> Function() action) async {
+  Future<void> _authenticate(Future<void> Function() action,
+      {bool changeAccount = false}) async {
     if (isClosed || state.authenticating) return;
     emit(state.copyWith(authenticating: true));
     try {
-      await action();
+      if (changeAccount) {
+        await SubscriptionRecommendationSource.duringAccountChange(
+            _profileDb, action);
+      } else {
+        await action();
+      }
     } finally {
       if (!isClosed) emit(state.copyWith(authenticating: false));
     }
@@ -173,7 +190,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
         if (!app.isClosed && _isActive(server)) {
           app.setServer(server);
         }
-      });
+      }, changeAccount: true);
 
   Future<void> logInWithCookie(String username, String password) =>
       _authenticate(() async {
@@ -182,14 +199,14 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
         final latest = _savedServer();
         if (!isClosed) emit(state.copyWith(server: latest));
         if (!app.isClosed && _isActive(latest)) app.setServer(latest);
-      });
+      }, changeAccount: true);
 
   Future<void> logInProtected() => _authenticate(() async {
         await service.logInProtected(_savedServer());
         final saved = _savedServer();
         if (!isClosed) emit(state.copyWith(server: saved));
         if (!app.isClosed && _isActive(saved)) app.setServer(saved);
-      });
+      }, changeAccount: true);
 
   Future<void> renameAccount(String name) async {
     final clean = name.trim();

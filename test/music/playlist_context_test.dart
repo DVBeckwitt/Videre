@@ -74,7 +74,7 @@ class _Player extends TestPlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing}) async {
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
     standaloneCalls++;
   }
 }

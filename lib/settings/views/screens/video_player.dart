@@ -7,6 +7,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:settings_ui/settings_ui.dart';
+import '../components/playback_cache_settings.dart';
 
 @RoutePage()
 class VideoPlayerSettingsScreen extends StatelessWidget {
@@ -34,6 +35,12 @@ class VideoPlayerSettingsScreen extends StatelessWidget {
           darkTheme: theme,
           sections: [
             SettingsSection(tiles: [
+              SettingsTile.navigation(
+                leading: const Icon(Icons.storage_outlined),
+                title: Text(locals.playbackCache),
+                description: Text(locals.playbackCacheHint),
+                onPressed: showPlaybackCacheSettings,
+              ),
               SettingsTile.switchTile(
                 leading: const Icon(Icons.stream),
                 initialValue: state.useDash,

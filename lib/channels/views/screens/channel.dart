@@ -1,14 +1,16 @@
-import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/utils/views/components/motion_animation.dart';
-import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:clipious/channels/states/channel.dart';
-import 'package:clipious/channels/views/components/channel_load_error.dart';
-import 'package:clipious/router.dart';
 
+import '../../../l10n/generated/app_localizations.dart';
+import '../../../router.dart';
 import '../../../utils.dart';
+import '../../../utils/motion.dart';
+import '../../../utils/views/components/placeholders.dart';
+import '../../states/channel.dart';
+import '../components/channel_load_error.dart';
+import '../components/channel_search.dart';
+import '../components/info.dart';
 
 @RoutePage()
 class ChannelScreen extends StatelessWidget {
@@ -18,128 +20,98 @@ class ChannelScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    ColorScheme colorScheme = Theme.of(context).colorScheme;
-    var locals = AppLocalizations.of(context)!;
+    return BlocProvider(
+      create: (_) => ChannelCubit(ChannelController(channelId: channelId)),
+      child: BlocBuilder<ChannelCubit, ChannelController>(
+        buildWhen: (previous, current) =>
+            previous.channel != current.channel ||
+            previous.loading != current.loading ||
+            previous.hasError != current.hasError,
+        builder: (context, state) {
+          final channel = state.channel;
+          if (state.hasError) {
+            return Scaffold(
+              appBar: AppBar(),
+              body: ChannelLoadError(
+                  onRetry: context.read<ChannelCubit>().onReady),
+            );
+          }
+          if (channel == null) {
+            return Scaffold(appBar: AppBar(), body: const ChannelPlaceHolder());
+          }
 
-    return OrientationBuilder(builder: (context, orientation) {
-      return BlocProvider(
-        create: (BuildContext context) =>
-            ChannelCubit(ChannelController(channelId: channelId)),
-        child: BlocBuilder<ChannelCubit, ChannelController>(
-          builder: (context, channelState) {
-            if (channelState.hasError) {
-              return Scaffold(
-                appBar: AppBar(),
-                body: ChannelLoadError(
-                    onRetry: context.read<ChannelCubit>().onReady),
-              );
-            }
-            var deviceType = getDeviceType();
-            return AutoTabsRouter.tabBar(
-                animatePageTransition: AppMotion.allowsMovement(context),
-                key: ValueKey(channelState.channel),
-                physics: const NeverScrollableScrollPhysics(),
-                routes: [
-                  ChannelInfoRoute(channel: channelState.channel),
-                  ChannelVideoRoute(channel: channelState.channel),
-                  ChannelShortsRoute(channel: channelState.channel),
-                  ChannelStreamRoute(channel: channelState.channel),
-                  ChannelPlaylistsRoute(
-                      channelId: channelState.channel?.authorId)
-                ],
-                builder: (context, child, controller) {
-                  final tabsRouter = AutoTabsRouter.of(context);
-
-                  return Scaffold(
-                    appBar: AppBar(
-                      title: Text(
-                        channelState.channel?.author ?? '',
-                      ),
-                      actions: channelState.loading
-                          ? []
-                          : [
-                              Visibility(
-                                visible: channelState.channel != null,
-                                child: Row(
-                                  children: <Widget>[
-                                    IconButton(
-                                      onPressed: () => showSharingSheet(
-                                          context, channelState.channel!),
-                                      icon: const Icon(Icons.share),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                    ),
-                    backgroundColor: colorScheme.surface,
-                    bottomNavigationBar: deviceType == DeviceType.tablet ||
-                            channelState.loading
-                        ? null
-                        : MotionAnimation.fadeIn(
-                            child: NavigationBar(
-                              animationDuration: AppMotion.duration(
-                                  context, const Duration(milliseconds: 500)),
-                              onDestinationSelected: tabsRouter.setActiveIndex,
-                              selectedIndex: tabsRouter.activeIndex,
-                              destinations: <Widget>[
-                                NavigationDestination(
-                                    icon: const Icon(Icons.info),
-                                    label: locals.info),
-                                NavigationDestination(
-                                    icon: const Icon(Icons.play_arrow),
-                                    label: locals.videos),
-                                NavigationDestination(
-                                    icon: const Icon(Icons.videocam),
-                                    label: locals.shorts),
-                                NavigationDestination(
-                                    icon: const Icon(Icons.stream),
-                                    label: locals.streams),
-                                NavigationDestination(
-                                    icon: const Icon(Icons.playlist_play),
-                                    label: locals.playlists)
-                              ],
-                            ),
+          final locals = AppLocalizations.of(context)!;
+          final colors = Theme.of(context).colorScheme;
+          // Flow ChannelContent.kt and ChannelTabRow.kt at 565d1f7a keep
+          // one collapsing header and pin the secondary tabs above the list.
+          return AutoTabsRouter.tabBar(
+            key: ValueKey(channel.authorId),
+            animatePageTransition: AppMotion.allowsMovement(context),
+            routes: [
+              ChannelInfoRoute(channel: channel),
+              ChannelVideoRoute(channel: channel),
+              ChannelShortsRoute(channel: channel),
+              ChannelStreamRoute(channel: channel),
+              ChannelPlaylistsRoute(channelId: channel.authorId),
+            ],
+            builder: (context, page, controller) => ChannelSearchShell(
+              channelId: channel.authorId,
+              builder: (context, openSearch) => Scaffold(
+                body: NestedScrollView(
+                  headerSliverBuilder: (context, innerScrolled) => [
+                    SliverAppBar(
+                      pinned: true,
+                      title: innerScrolled
+                          ? Text(channel.author,
+                              overflow: TextOverflow.ellipsis)
+                          : null,
+                      actions: [
+                        if (openSearch != null)
+                          IconButton(
+                            tooltip: locals.channelSearch,
+                            onPressed: openSearch,
+                            icon: const Icon(Icons.search_rounded),
                           ),
-                    body: SafeArea(
-                        bottom: false,
-                        child: Row(
-                          children: [
-                            if (deviceType == DeviceType.tablet)
-                              NavigationRail(
-                                extended:
-                                    getOrientation() == Orientation.landscape,
-                                destinations: [
-                                  NavigationRailDestination(
-                                      icon: const Icon(Icons.info),
-                                      label: Text(locals.info)),
-                                  NavigationRailDestination(
-                                      icon: const Icon(Icons.play_arrow),
-                                      label: Text(locals.videos)),
-                                  NavigationRailDestination(
-                                      icon: const Icon(Icons.videocam),
-                                      label: Text(locals.shorts)),
-                                  NavigationRailDestination(
-                                      icon: const Icon(Icons.stream),
-                                      label: Text(locals.streams)),
-                                  NavigationRailDestination(
-                                      icon: const Icon(Icons.playlist_play),
-                                      label: Text(locals.playlists))
-                                ],
-                                selectedIndex: tabsRouter.activeIndex,
-                                onDestinationSelected:
-                                    tabsRouter.setActiveIndex,
-                              ),
-                            Expanded(
-                              child: child,
-                            ),
+                        IconButton(
+                          tooltip: locals.share,
+                          onPressed: () => showSharingSheet(context, channel),
+                          icon: const Icon(Icons.share_outlined),
+                        ),
+                      ],
+                    ),
+                    SliverToBoxAdapter(child: ChannelHeader(channel: channel)),
+                    PinnedHeaderSliver(
+                      child: Material(
+                        color: colors.surface,
+                        child: TabBar(
+                          controller: controller,
+                          isScrollable: true,
+                          tabAlignment: TabAlignment.start,
+                          indicatorSize: TabBarIndicatorSize.tab,
+                          indicatorWeight: 2,
+                          labelColor: colors.onSurface,
+                          unselectedLabelColor: colors.onSurfaceVariant,
+                          indicatorColor: colors.onSurface,
+                          dividerColor: colors.outlineVariant,
+                          tabs: [
+                            Tab(text: locals.home),
+                            Tab(text: locals.videos),
+                            Tab(text: locals.shorts),
+                            Tab(text: locals.streams),
+                            Tab(text: locals.playlists),
                           ],
-                        )),
-                  );
-                });
-          },
-        ),
-      );
-    });
+                        ),
+                      ),
+                    ),
+                  ],
+                  body: MediaQuery.removePadding(
+                      context: context, removeTop: true, child: page),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }

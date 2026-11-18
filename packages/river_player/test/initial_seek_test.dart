@@ -157,6 +157,55 @@ void main() {
       }
     });
 
+    test('shared cache identity survives source copy and native setup',
+        () async {
+      final controller = controllerWithResume();
+      const identity = <String, Object?>{
+        'version': 1,
+        'profileId': 'person',
+        'sessionId': 'occurrence'
+      };
+      final source = video()
+          .copyWith(playbackCache: identity)
+          .copyWith(url: 'https://instance.example/refreshed.mp4');
+      try {
+        await controller.setupDataSource(source);
+        final native = platform.sources.single.source;
+        expect(native.playbackCache, identity);
+        expect(native.useCache, isFalse);
+        expect(native.uri, 'https://instance.example/refreshed.mp4');
+        expect(native.headers, isEmpty);
+      } finally {
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test('native position samples exclude synthetic seek presentation',
+        () async {
+      final controller = controllerWithResume();
+      final samples = <Duration>[];
+      StreamSubscription<Duration>? subscription;
+      try {
+        await controller.setupDataSource(video());
+        final native = controller.videoPlayerController!;
+        subscription = native.nativePositionStream.listen(samples.add);
+        platform.seekStarted = Completer<void>();
+        await native.seekTo(const Duration(seconds: 17));
+        await Future<void>.delayed(Duration.zero);
+        expect(samples, isEmpty);
+        await native.play();
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+        expect(samples, isNotEmpty);
+        expect(samples.every((sample) => sample == const Duration(seconds: 40)),
+            isTrue);
+      } finally {
+        await subscription?.cancel();
+        controller.dispose();
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
     test('same URL ignores initialization from a replaced load', () async {
       final controller = controllerWithResume();
       final source = video();

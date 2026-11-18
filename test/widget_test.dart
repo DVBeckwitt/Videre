@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:collection';
 
+import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
@@ -12,7 +14,6 @@ import 'package:clipious/globals.dart' as globals;
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
-import 'package:clipious/home/views/components/content_mode_selector.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/music/models/music_artist.dart';
@@ -25,7 +26,9 @@ import 'package:clipious/music/views/screens/music_mode.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/player/views/components/expanded_player.dart';
+import 'package:clipious/player/views/components/mini_player_controls.dart';
 import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/player/views/screens/video_queue.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -38,6 +41,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/app_customizer.dart';
 import 'package:clipious/settings/views/components/phone_navigation_editor.dart';
+import 'package:clipious/subscription_management/models/subscription.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/paginated_list.dart';
 import 'package:clipious/utils/views/tv/components/tv_horizontal_item_list.dart';
@@ -47,6 +51,7 @@ import 'package:clipious/utils/views/components/text_linkified.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/user_feed.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
@@ -86,6 +91,7 @@ class _TestService extends Service {
   final List<String> transcriptRequests = [];
   bool loggedIn = true;
   List<Comment> comments = [];
+  final commentSorts = <String?>[];
   List<Video> feedVideos = [];
   final feedRequests = <int>[];
   int discoveryRequests = 0;
@@ -145,6 +151,15 @@ class _TestService extends Service {
   Future<bool> isLoggedIn() async => loggedIn;
 
   @override
+  Future<List<Subscription>> getRecommendationSubscriptions({
+    required Server server,
+    required Future<void> Function() beforeRequest,
+  }) async {
+    await beforeRequest();
+    return const [];
+  }
+
+  @override
   Future<List<Video>> getTrending({String? type}) async {
     discoveryRequests++;
     return videos;
@@ -165,8 +180,10 @@ class _TestService extends Service {
 
   @override
   Future<VideoComments> getComments(String videoId,
-          {String? continuation, String? sortBy, String? source}) async =>
-      VideoComments(comments.length, videoId, null, comments);
+      {String? continuation, String? sortBy, String? source}) async {
+    commentSorts.add(sortBy);
+    return VideoComments(comments.length, videoId, null, comments);
+  }
 
   @override
   Future<bool> isSubscribedToChannel(String channelId) async => false;
@@ -272,9 +289,21 @@ class _TestMusicCatalog extends MusicCatalogService {
       tracks: const [MusicTrack(videoId: 'freshsong01', title: 'Fresh song')]);
 }
 
-Future<void> _selectHomeMode(WidgetTester tester, String label) async {
-  await tester.tap(find.descendant(
-      of: find.byType(ContentModeSelector), matching: find.text(label)));
+Finder _phoneTab(PhoneNavigationItem item) =>
+    find.byKey(ValueKey('main-navigation-${item.name}'));
+
+Future<void> _selectPhoneTab(
+    WidgetTester tester, PhoneNavigationItem item) async {
+  await tester.tap(_phoneTab(item));
+  await tester.pumpAndSettle();
+}
+
+Finder _musicSection(int index) => find.byKey(ValueKey('music-section-$index'));
+
+Future<void> _selectMusicSection(WidgetTester tester, int index) async {
+  await tester.ensureVisible(_musicSection(index));
+  await tester.pumpAndSettle();
+  await tester.tap(_musicSection(index));
   await tester.pumpAndSettle();
 }
 
@@ -296,6 +325,18 @@ class _QueueSelectionPlayer extends TestPlayerCubit {
   }
 }
 
+class _WatchSelectionPlayer extends TestPlayerCubit {
+  _WatchSelectionPlayer(super.initialState, super.settings);
+
+  final selection = <(String, bool?)>[];
+
+  @override
+  Future<void> playVideo(List<Video> videos,
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+    selection.add((videos.single.videoId, audio));
+  }
+}
+
 Future<void> _pumpHomepage(
   WidgetTester tester,
   Size size, {
@@ -304,6 +345,7 @@ Future<void> _pumpHomepage(
   PlayerCubit Function(SettingsCubit)? createPlayer,
   SettingsCubit Function(SettingsState, AppCubit)? createSettings,
   AppCubit? initialApp,
+  ThemeData? theme,
   int firstIndex = 0,
   bool settle = true,
 }) async {
@@ -336,6 +378,7 @@ Future<void> _pumpHomepage(
       ),
     ],
     child: MaterialApp.router(
+      theme: theme,
       routerConfig: appRouter.config(),
       locale: const Locale('en', 'US'),
       localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -373,6 +416,16 @@ Future<void> _pumpExpandedPlayer(
       top: 0,
     ),
   );
+}
+
+void _mockVideoWakelock() {
+  const channel =
+      'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle';
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  messenger.setMockMessageHandler(
+      channel, (_) async => const StandardMessageCodec().encodeMessage([null]));
+  addTearDown(() => messenger.setMockMessageHandler(channel, null));
 }
 
 Future<void> _pumpVideo(WidgetTester tester, Size size,
@@ -537,6 +590,9 @@ void main() {
   late MusicCatalogService previousCatalog;
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (_) async => throw MissingPluginException());
     app_main.isTv = false;
     previousCatalog = musicCatalogService;
     musicCatalogService = _TestMusicCatalog();
@@ -576,6 +632,9 @@ void main() {
   });
 
   tearDown(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('videre/recommendations'), null);
     musicCatalogService = previousCatalog;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, null);
@@ -593,7 +652,7 @@ void main() {
             .destinations
             .cast<NavigationDestination>()
             .map((destination) => destination.label),
-        ['Home', 'Subscriptions', 'History', 'Search']);
+        ['Home', 'Subscriptions', 'History', 'Music', 'Search']);
     final searchButton =
         find.descendant(of: navigation, matching: find.byIcon(Icons.search));
     expect(searchButton, findsOneWidget);
@@ -640,7 +699,7 @@ void main() {
         }));
     expect(
         tester.widget<NavigationBar>(find.byType(NavigationBar)).destinations,
-        hasLength(2));
+        hasLength(3));
     await tester.tap(find.byIcon(Icons.search));
     await tester.pumpAndSettle();
     expect(
@@ -741,9 +800,7 @@ void main() {
       'home editor drags navigation between areas, reorders and restores defaults',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
-    await tester.tap(find.byIcon(Icons.edit));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Navigation'));
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     final settings = tester
         .element(find.byKey(const ValueKey('navigation-item-home')))
@@ -759,24 +816,26 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    await drag('playlist',
-        tester.getCenter(find.byKey(const ValueKey('navigation-item-search'))));
-    expect(settings.state.phoneNavigation.bottom, [
-      PhoneNavigationItem.home,
-      PhoneNavigationItem.subscription,
-      PhoneNavigationItem.history,
-      PhoneNavigationItem.playlist,
-      PhoneNavigationItem.search
-    ]);
     final top =
         tester.getRect(find.byKey(const ValueKey('navigation-area-top')));
     await drag('history', Offset(top.center.dx, top.bottom - 20));
     expect(
         settings.state.phoneNavigation.top.last, PhoneNavigationItem.history);
+    await drag('playlist',
+        tester.getCenter(find.byKey(const ValueKey('navigation-item-search'))));
+    expect(settings.state.phoneNavigation.bottom, [
+      PhoneNavigationItem.home,
+      PhoneNavigationItem.subscription,
+      PhoneNavigationItem.music,
+      PhoneNavigationItem.playlist,
+      PhoneNavigationItem.search
+    ]);
+    await drag('music',
+        tester.getCenter(find.byKey(const ValueKey('navigation-item-home'))));
     await drag('search',
         tester.getCenter(find.byKey(const ValueKey('navigation-item-home'))));
-    expect(settings.state.phoneNavigation.bottom.first,
-        PhoneNavigationItem.search);
+    expect(settings.state.phoneNavigation.bottom.take(2),
+        [PhoneNavigationItem.music, PhoneNavigationItem.search]);
     expect(SettingsState.init().phoneNavigation.encode(),
         settings.state.phoneNavigation.encode());
     await tester.pageBack();
@@ -786,8 +845,8 @@ void main() {
         navigation.destinations
             .cast<NavigationDestination>()
             .map((item) => item.label),
-        ['Search', 'Home', 'Subscriptions', 'Playlists']);
-    expect(navigation.selectedIndex, 1);
+        ['Music', 'Search', 'Home', 'Subscriptions', 'Playlists']);
+    expect(navigation.selectedIndex, 2);
     await tester.tap(find.byTooltip('More shortcuts'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('History'));
@@ -795,9 +854,7 @@ void main() {
     expect(find.text('History'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.edit));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Navigation'));
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
         find.text('Restore default navigation'), 240,
@@ -818,9 +875,7 @@ void main() {
       'navigation drag back onto the same item does not reorder or save',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
-    await tester.tap(find.byIcon(Icons.edit));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Navigation'));
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     final item = find.byKey(const ValueKey('navigation-item-home'));
     final settings = tester.element(item).read<SettingsCubit>();
@@ -841,9 +896,7 @@ void main() {
       (tester) async {
     globals.service = _TestService(videos: []);
     await _pumpHomepage(tester, const Size(320, 640));
-    await tester.tap(find.byIcon(Icons.edit));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Navigation'));
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     final scrollable = find
         .descendant(
@@ -870,9 +923,7 @@ void main() {
       (tester) async {
     globals.service = _TestService(videos: []);
     await _pumpHomepage(tester, const Size(320, 640));
-    await tester.tap(find.byIcon(Icons.edit));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Navigation'));
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     final settings = tester
         .element(find.byType(PhoneNavigationEditor))
@@ -905,7 +956,10 @@ void main() {
     await tester.tap(find.byIcon(Icons.edit));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('Navigation'));
+    expect(find.text('Home tabs'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -918,9 +972,7 @@ void main() {
     await _pumpHomepage(tester, const Size(390, 844),
         createSettings: (initial, app) =>
             settings = _PendingNavigationSettings(initial, app));
-    await tester.tap(find.byIcon(Icons.edit));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Navigation'));
+    unawaited(appRouter.push(const EditHomeLayoutRoute()));
     await tester.pumpAndSettle();
     final original = settings.state.phoneNavigation.encode();
     Future<void> hideQueue() async {
@@ -1083,6 +1135,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Browsing'));
     await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Customize app sections'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Customize app sections'));
     await tester.pumpAndSettle();
     final scrollable = find
@@ -1213,74 +1267,215 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('phone mode switch retains video and swipeable Music navigation',
+  testWidgets('Music is a primary phone tab and retains its section pages',
       (tester) async {
     await _pumpHomepage(tester, const Size(320, 640));
     final navigation = find.byType(NavigationBar);
-    await tester.tap(
-        find.descendant(of: navigation, matching: find.byIcon(Icons.history)));
-    await tester.pumpAndSettle();
-    final selectedIndex =
-        tester.widget<NavigationBar>(navigation).selectedIndex;
-    expect((musicCatalogService as _TestMusicCatalog).trendingCalls, 0);
-    await _selectHomeMode(tester, 'Music');
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
+    final historyIndex = tester.widget<NavigationBar>(navigation).selectedIndex;
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
     expect(find.byType(MusicModeScreen), findsOneWidget);
+    expect(find.byType(SegmentedButton<HomeContentMode>), findsNothing);
+    expect(navigation, findsOneWidget);
     expect(find.text('Saved songs'), findsOneWidget);
     expect((musicCatalogService as _TestMusicCatalog).trendingCalls, 0);
+    final primary = tester.widget<NavigationBar>(navigation);
     expect(
-        tester
-            .widget<NavigationBar>(navigation)
-            .destinations
+        primary.destinations
             .cast<NavigationDestination>()
             .map((item) => item.label),
-        ['Home', 'Search', 'Library']);
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    await tester.dragFrom(const Offset(290, 430), const Offset(-270, 0));
-    await tester.pumpAndSettle();
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+        ['Home', 'Subscriptions', 'History', 'Music', 'Search']);
+    expect(primary.selectedIndex, 3);
+
+    await _selectMusicSection(tester, 1);
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
+    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
     expect(find.byKey(const ValueKey('music-search')), findsOneWidget);
-    await tester.dragFrom(const Offset(290, 430), const Offset(-270, 0));
-    await tester.pumpAndSettle();
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
-    expect(
-        find.text(
-            'Nothing saved here yet. Save music while browsing, or create a playlist.'),
+    await _selectMusicSection(tester, 2);
+    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
         findsOneWidget);
-    await tester.tap(find.descendant(
-        of: find.byType(AppBar), matching: find.byTooltip('Search')));
-    await tester.pumpAndSettle();
-    expect(find.text('Search songs, channels, or playlists'), findsOneWidget);
-    expect(tester.takeException(), isNull);
+
+    // The primary Search action is the video catalog even from Music.
+    await _selectPhoneTab(tester, PhoneNavigationItem.search);
+    expect(
+        tester
+            .widget<EditableText>(find.byType(EditableText))
+            .focusNode
+            .hasFocus,
+        isTrue);
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
-    await _selectHomeMode(tester, 'Videos');
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
+    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
     expect(
-        tester.widget<NavigationBar>(navigation).selectedIndex, selectedIndex);
+        tester.widget<NavigationBar>(navigation).selectedIndex, historyIndex);
     expect(find.text('History'), findsWidgets);
-    await _selectHomeMode(tester, 'Music');
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
-    await tester
-        .tap(find.descendant(of: navigation, matching: find.text('Home')));
-    await tester.pumpAndSettle();
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    await _selectMusicSection(tester, 0);
     expect(find.text('Saved songs'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('Music may start first and move out of the primary bar',
+      (tester) async {
+    final layout =
+        PhoneNavigation.defaults().startAt(PhoneNavigationItem.music);
+    final initial = SettingsState.init();
+    await _pumpHomepage(tester, const Size(390, 844),
+        settingsState: initial.copyWith(settings: {
+          ...initial.settings,
+          phoneNavigationSettingName:
+              SettingsValue(phoneNavigationSettingName, layout.encode()),
+        }));
+    final navigation = find.byType(NavigationBar);
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
+    expect(find.text('Saved songs'), findsOneWidget);
+    final settings =
+        tester.element(find.byType(MusicModeScreen)).read<SettingsCubit>();
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+
+    final top = layout.move(PhoneNavigationItem.music, NavigationArea.top)!;
+    await tester.runAsync(() => settings.setPhoneNavigation(top));
+    await tester.pumpAndSettle();
+    expect(_phoneTab(PhoneNavigationItem.music), findsNothing);
+    final bar = tester.widget<NavigationBar>(navigation);
+    expect((bar.destinations[bar.selectedIndex] as NavigationDestination).label,
+        'History');
+    await tester.tap(find.byTooltip('More shortcuts'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Music'));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved songs'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('History'), findsWidgets);
+
+    final hidden = top.move(PhoneNavigationItem.music, NavigationArea.hidden)!;
+    await tester.runAsync(() => settings.setPhoneNavigation(hidden));
+    await tester.pumpAndSettle();
+    expect(SettingsState.init().phoneNavigation.hidden,
+        contains(PhoneNavigationItem.music));
+    expect(_phoneTab(PhoneNavigationItem.music), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final musicIndex in [0, 1, 2]) {
+    testWidgets('phone swipes follow reordered Music at page $musicIndex',
+        (tester) async {
+      final pages = [PhoneNavigationItem.home, PhoneNavigationItem.history]
+        ..insert(musicIndex, PhoneNavigationItem.music);
+      // Search is an action, not a page. Its position must not shift the
+      // relationship between the pager and the primary navigation selection.
+      final bottom = [...pages]..insert(1, PhoneNavigationItem.search);
+      final layout = PhoneNavigation(bottom, const []);
+      final initial = SettingsState.init();
+      await _pumpHomepage(tester, const Size(390, 844),
+          settingsState: initial.copyWith(settings: {
+            ...initial.settings,
+            phoneNavigationSettingName:
+                SettingsValue(phoneNavigationSettingName, layout.encode()),
+          }));
+
+      void expectPage(PhoneNavigationItem item) {
+        expect(
+            tester
+                .widget<NavigationBar>(find.byType(NavigationBar))
+                .selectedIndex,
+            bottom.indexOf(item));
+      }
+
+      expectPage(pages.first);
+      if (pages.first == PhoneNavigationItem.music) {
+        await _selectMusicSection(tester, 2);
+      }
+      for (var i = 1; i < pages.length; i++) {
+        await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
+        await tester.pumpAndSettle();
+        expectPage(pages[i]);
+        if (pages[i] == PhoneNavigationItem.music) {
+          await _selectMusicSection(tester, 2);
+        }
+      }
+      for (var i = pages.length - 2; i >= 0; i--) {
+        await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
+        await tester.pumpAndSettle();
+        expectPage(pages[i]);
+        if (pages[i] == PhoneNavigationItem.music) {
+          expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+        }
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final homeBrightness in [Brightness.light, Brightness.dark]) {
+    testWidgets('Music status icons follow $homeBrightness Home after closing',
+        (tester) async {
+      app_main.darkColorScheme = const ColorScheme.dark();
+      tester.view.padding = const FakeViewPadding(top: 24);
+      addTearDown(tester.view.resetPadding);
+      const song = Video(
+        videoId: 'musicstatus',
+        title: 'Status song',
+        lengthSeconds: 60,
+        musicMetadata: MusicMetadata(title: 'Status song', artist: 'Artist'),
+      );
+      await _pumpHomepage(
+        tester,
+        const Size(390, 844),
+        theme: ThemeData(brightness: homeBrightness),
+        playerState: PlayerState.init([song]).copyWith(
+          currentlyPlaying: song,
+          isAudio: true,
+          isHidden: false,
+          isMini: false,
+          top: 0,
+        ),
+      );
+      final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+
+      // Sample the composited region at the same physical point RenderView
+      // uses to choose Android's status bar style.
+      Brightness? statusIcons() => tester.binding.renderViews.single.debugLayer
+          ?.find<SystemUiOverlayStyle>(const Offset(195, 12))
+          ?.statusBarIconBrightness;
+
+      expect(statusIcons(), Brightness.light);
+
+      final homeIcons = homeBrightness == Brightness.light
+          ? Brightness.dark
+          : Brightness.light;
+      final header = find.descendant(
+          of: find.byType(Player), matching: find.byType(AppBar));
+      await tester.dragFrom(tester.getCenter(header), const Offset(0, 245));
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isTrue);
+      expect(statusIcons(), homeIcons);
+
+      player.hide();
+      await tester.pumpAndSettle();
+      expect(player.state.isHidden, isTrue);
+      expect(statusIcons(), homeIcons);
+    });
+  }
+
   testWidgets('Back closes Music channel detail but ignores inactive Search',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
     final navigation = find.byType(NavigationBar);
-    await tester
-        .tap(find.descendant(of: navigation, matching: find.text('History')));
-    await tester.pumpAndSettle();
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
     final videoTab = tester.widget<NavigationBar>(navigation).selectedIndex;
-    await _selectHomeMode(tester, 'Music');
-    await tester
-        .tap(find.descendant(of: navigation, matching: find.text('Search')));
-    await tester.pumpAndSettle();
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await _selectMusicSection(tester, 1);
     await tester.enterText(
         find.byKey(const ValueKey('music-search')), 'kept query');
     await tester.testTextInput.receiveAction(TextInputAction.search);
@@ -1290,18 +1485,19 @@ void main() {
     expect(find.text('Channel uploads'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
     expect(find.text('Channel uploads'), findsNothing);
     expect(find.text('Search result kept query'), findsOneWidget);
+
     await tester.tap(find.widgetWithText(TextButton, 'Music channel'));
     await tester.pumpAndSettle();
-    await _selectHomeMode(tester, 'Videos');
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, videoTab);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
-    await _selectHomeMode(tester, 'Music');
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 1);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
     expect(find.text('Channel uploads'), findsOneWidget,
         reason:
             'The hidden Music detail must not consume the video Back action');
@@ -1316,85 +1512,79 @@ void main() {
   });
 
   for (final size in [const Size(320, 640), const Size(1024, 768)]) {
-    for (final musicOnly in [false, true]) {
+    for (final retiredExperience in ['videosOnly', 'musicOnly']) {
       testWidgets(
-          'single-mode home opens the forced mode at $size (Music=$musicOnly)',
+          'legacy $retiredExperience keeps video and Music navigation at $size',
           (tester) async {
         final initial = SettingsState.init();
         await _pumpHomepage(tester, size,
             settingsState: initial.copyWith(settings: {
               ...initial.settings,
-              homeExperienceSettingName: SettingsValue(
-                  homeExperienceSettingName,
-                  musicOnly
-                      ? HomeExperience.musicOnly.name
-                      : HomeExperience.videosOnly.name),
+              homeExperienceSettingName:
+                  SettingsValue(homeExperienceSettingName, retiredExperience),
               homeContentModeSettingName: SettingsValue(
-                  homeContentModeSettingName,
-                  musicOnly
-                      ? HomeContentMode.videos.name
-                      : HomeContentMode.music.name),
+                  homeContentModeSettingName, HomeContentMode.music.name),
             }));
-        expect(find.byType(ContentModeSelector), findsNothing);
-        expect(find.byType(MusicModeScreen),
-            musicOnly ? findsOneWidget : findsNothing);
-        final catalog = musicCatalogService as _TestMusicCatalog;
-        if (musicOnly) {
-          expect(catalog.trendingCalls, 0);
-          expect(find.text('Saved songs'), findsOneWidget);
-          expect((globals.service as _TestService).discoveryRequests, 0);
-          expect((globals.service as _TestService).feedRequests, isEmpty);
+        expect(find.byType(SegmentedButton<HomeContentMode>), findsNothing);
+        if (size.width < 600) {
+          expect(_phoneTab(PhoneNavigationItem.home), findsOneWidget);
+          expect(_phoneTab(PhoneNavigationItem.music), findsOneWidget);
+          await _selectPhoneTab(tester, PhoneNavigationItem.music);
+          expect(find.byType(MusicModeScreen), findsOneWidget);
+          await _selectPhoneTab(tester, PhoneNavigationItem.home);
+          expect(
+              tester
+                  .widget<NavigationBar>(find.byType(NavigationBar))
+                  .selectedIndex,
+              0);
         } else {
-          expect(catalog.trendingCalls, 0);
-          expect(find.text('Home'), findsWidgets);
+          final rail = find.byType(NavigationRail);
+          expect(find.descendant(of: rail, matching: find.text('Home')),
+              findsOneWidget);
+          await tester
+              .tap(find.descendant(of: rail, matching: find.text('Music')));
+          await tester.pumpAndSettle();
+          expect(find.byType(MusicModeScreen), findsOneWidget);
+          await tester
+              .tap(find.descendant(of: rail, matching: find.text('Home')));
+          await tester.pumpAndSettle();
+          expect(tester.widget<NavigationRail>(rail).selectedIndex, 0);
         }
-        await tester.tap(find.byIcon(Icons.settings));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Browsing'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Home experience'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Videos and Music'));
-        await tester.pumpAndSettle();
-        await tester.pageBack();
-        await tester.pumpAndSettle();
-        await tester.pageBack();
-        await tester.pumpAndSettle();
-        expect(find.byType(ContentModeSelector), findsOneWidget);
-        final selector = tester
-            .widget<ContentModeSelector>(find.byType(ContentModeSelector));
-        expect(selector.value,
-            musicOnly ? HomeContentMode.videos : HomeContentMode.music);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       });
     }
   }
 
-  testWidgets('tablet Music rail and swipes select the same pages',
+  testWidgets('tablet Music retains content while selecting its primary rail',
       (tester) async {
     await _pumpHomepage(tester, const Size(1024, 768));
-    await _selectHomeMode(tester, 'Music');
     final rail = find.byType(NavigationRail);
-    expect(tester.widget<NavigationRail>(rail).selectedIndex, 0);
-    await tester.tap(find.descendant(of: rail, matching: find.text('Search')));
+    Future<void> select(String label) async {
+      await tester.tap(find.descendant(of: rail, matching: find.text(label)));
+      await tester.pumpAndSettle();
+    }
+
+    await select('Music');
+    expect(rail, findsOneWidget);
+    expect(tester.widget<NavigationRail>(rail).selectedIndex, 4);
+    await _selectMusicSection(tester, 1);
+    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    await tester.dragFrom(const Offset(950, 420), const Offset(-740, 0));
     await tester.pumpAndSettle();
-    expect(tester.widget<NavigationRail>(rail).selectedIndex, 1);
-    await tester.dragFrom(const Offset(950, 420), const Offset(-850, 0));
-    await tester.pumpAndSettle();
-    expect(tester.widget<NavigationRail>(rail).selectedIndex, 2);
-    await _selectHomeMode(tester, 'Videos');
+    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    await select('Home');
     expect(find.descendant(of: rail, matching: find.text('Subscriptions')),
         findsOneWidget);
     expect(
         find.descendant(of: rail, matching: find.text('Search')), findsNothing);
-    await _selectHomeMode(tester, 'Music');
-    expect(tester.widget<NavigationRail>(rail).selectedIndex, 2);
+    await select('Music');
+    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('an empty tablet video layout still exposes the mode switch',
+  testWidgets('an empty tablet video layout offers a Music shortcut',
       (tester) async {
     final initial = SettingsState.init();
     await _pumpHomepage(tester, const Size(1024, 768),
@@ -1402,51 +1592,49 @@ void main() {
           ...initial.settings,
           appLayoutSettingName: SettingsValue(appLayoutSettingName, ''),
         }));
-    expect(find.byType(ContentModeSelector), findsOneWidget);
     expect(find.byType(NavigationRail), findsNothing);
-    await _selectHomeMode(tester, 'Music');
+    await tester.tap(find.byTooltip('Music'));
+    await tester.pumpAndSettle();
     expect(find.text('Saved songs'), findsOneWidget);
     expect(find.byType(NavigationRail), findsOneWidget);
-    await _selectHomeMode(tester, 'Videos');
-    expect(find.byType(ContentModeSelector), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Music'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('a new session resets both retained mode page selections',
+  testWidgets('a new session resets both retained browsing selections',
       (tester) async {
     final app = _SessionApp();
     await _pumpHomepage(tester, const Size(390, 844), initialApp: app);
     final navigation = find.byType(NavigationBar);
-    await tester
-        .tap(find.descendant(of: navigation, matching: find.text('History')));
-    await tester.pumpAndSettle();
-    await _selectHomeMode(tester, 'Music');
-    await tester
-        .tap(find.descendant(of: navigation, matching: find.text('Library')));
-    await tester.pumpAndSettle();
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 2);
+    await _selectPhoneTab(tester, PhoneNavigationItem.history);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await _selectMusicSection(tester, 2);
+    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
     app.restartSession();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(find.byType(MusicModeScreen), findsNothing);
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    expect(tester.widget<ChoiceChip>(_musicSection(0)).selected, isTrue);
     expect(find.text('Saved songs'), findsOneWidget);
-    await _selectHomeMode(tester, 'Videos');
-    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('mode switch fits a narrow phone with large text',
+  testWidgets('five primary tabs fit a narrow phone with large text',
       (tester) async {
     tester.platformDispatcher.textScaleFactorTestValue = 2;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await _pumpHomepage(tester, const Size(320, 640));
     expect(tester.takeException(), isNull);
-    await _selectHomeMode(tester, 'Music');
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
     expect(find.byType(MusicModeScreen), findsOneWidget);
     expect(tester.takeException(), isNull);
-    await _selectHomeMode(tester, 'Videos');
-    expect(find.byType(ContentModeSelector), findsOneWidget);
+    await _selectPhoneTab(tester, PhoneNavigationItem.home);
+    expect(find.byType(SegmentedButton<HomeContentMode>), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -1475,14 +1663,12 @@ void main() {
           ));
       final player = tester.element(find.byType(Player)).read<PlayerCubit>();
       final before = player.state;
-      await _selectHomeMode(tester, 'Music');
-      await tester.tap(find.descendant(
-          of: find.byType(NavigationBar), matching: find.text('Search')));
-      await tester.pumpAndSettle();
+      await _selectPhoneTab(tester, PhoneNavigationItem.music);
+      await _selectMusicSection(tester, 1);
       expect(tester.element(find.byType(Player)).read<PlayerCubit>(),
           same(player));
       expect(player.state, same(before));
-      await _selectHomeMode(tester, 'Videos');
+      await _selectPhoneTab(tester, PhoneNavigationItem.home);
       expect(player.state, same(before));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -1821,7 +2007,11 @@ void main() {
     final testService = globals.service as _TestService;
     final openButton = find.byKey(const ValueKey('video-transcript-open'));
 
-    expect(openButton, findsOneWidget);
+    expect(find.byKey(const ValueKey('watch-open-settings')), findsNothing);
+    expect(openButton.hitTestable(), findsOneWidget);
+    final transcriptButton = tester.widget<IconButton>(openButton);
+    expect(transcriptButton.tooltip, 'Transcript');
+    expect(transcriptButton.onPressed, isNotNull);
     expect(testService.transcriptRequests, isEmpty);
 
     await tester.tap(openButton);
@@ -1877,23 +2067,30 @@ void main() {
     expect(language, findsOneWidget);
   });
 
-  testWidgets('expanded player hides transcript when captions are unavailable',
+  testWidgets(
+      'expanded player disables transcript when captions are unavailable',
       (tester) async {
     await _pumpExpandedPlayer(
       tester,
       const Size(390, 844),
       videoIndex: 1,
     );
-
-    expect(
-      find.byKey(const ValueKey('video-transcript-open')),
-      findsNothing,
-    );
+    final openButton = find.byKey(const ValueKey('video-transcript-open'));
+    expect(openButton.hitTestable(), findsOneWidget);
+    final transcriptButton = tester.widget<IconButton>(openButton);
+    expect(transcriptButton.tooltip, 'Transcript');
+    expect(transcriptButton.onPressed, isNull);
+    await tester.tap(openButton);
+    await tester.pumpAndSettle();
+    expect((globals.service as _TestService).transcriptRequests, isEmpty);
+    expect(find.byKey(const ValueKey('video-transcript-list')), findsNothing);
   });
 
   testWidgets('phone homepage tabs swipe fluidly and bounce at both edges',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byKey(const ValueKey('video-home-your-feeds')));
+    await tester.pumpAndSettle();
     final tabPosition = _tabPosition(tester);
 
     void expectSelectedTab(int index) {
@@ -1936,16 +2133,21 @@ void main() {
     expectSelectedTab(1);
     await swipeLeft();
     expectSelectedTab(2);
+    await swipeLeft();
+    expectSelectedTab(3);
+    expect(find.text('Saved songs'), findsOneWidget);
 
-    final trailingEdgeDrag = await tester.startGesture(const Offset(350, 400));
+    final trailingEdgeDrag = await tester.startGesture(const Offset(350, 500));
     await trailingEdgeDrag.moveBy(const Offset(-120, 0));
     await tester.pump();
     expect(tabPosition.pixels, greaterThan(tabPosition.maxScrollExtent));
     await trailingEdgeDrag.up();
     await tester.pumpAndSettle();
-    expectSelectedTab(2);
+    expectSelectedTab(3);
     expect(find.byType(TextField), findsNothing);
 
+    await swipeRight();
+    expectSelectedTab(2);
     await swipeRight();
     expectSelectedTab(1);
     await swipeRight();
@@ -1955,6 +2157,8 @@ void main() {
   testWidgets('phone homepage preserves horizontal carousel gestures',
       (tester) async {
     await _pumpHomepage(tester, const Size(390, 844));
+    await tester.tap(find.byKey(const ValueKey('video-home-your-feeds')));
+    await tester.pumpAndSettle();
 
     final firstCarouselVideo = find.byKey(const ValueKey('video-0-true'));
     expect(firstCarouselVideo, findsOneWidget);
@@ -1990,7 +2194,8 @@ void main() {
     );
   });
 
-  testWidgets('landscape home shows the feed without automatic resume sections',
+  testWidgets(
+      'landscape configured feeds preserve their layout without extra resume sections',
       (tester) async {
     await tester.runAsync(() async {
       await globals.db.upsertHistoryVideo(HistoryVideoCache('video-0',
@@ -1999,6 +2204,8 @@ void main() {
     });
 
     await _pumpHomepage(tester, const Size(640, 360));
+    await tester.tap(find.byKey(const ValueKey('video-home-your-feeds')));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.text('Continue Watching'), findsNothing);
     expect(find.text('Resume queue'), findsNothing);
@@ -2038,53 +2245,42 @@ void main() {
         0);
   });
 
-  testWidgets('phone video tabs swipe and stay synchronized with navigation',
+  testWidgets('phone video preview keeps details and comments on one page',
       (tester) async {
+    final service = globals.service as _TestService;
+    service.videos[0] =
+        service.videos[0].copyWith(description: 'A selectable description.');
+    service.comments = [
+      Comment('Viewer', [], 'viewer', '', false, 'A real instance comment.',
+          'Today', 0, 'preview', false, null, null),
+    ];
     await _pumpVideo(tester, const Size(390, 844));
+    final screen = find.byType(VideoScreen);
+    expect(find.byKey(const ValueKey('flow-watch-details')), findsOneWidget);
+    expect(find.descendant(of: screen, matching: find.byType(NavigationBar)),
+        findsNothing);
+    expect(find.byType(VideoThumbnailView), findsOneWidget);
+    expect(find.text('A real instance comment.'), findsOneWidget);
+    expect(service.commentSorts, ['top']);
 
-    void expectSelectedTab(int index) {
-      expect(
-        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
-        index,
-      );
-    }
-
-    Future<void> swipeLeft() async {
-      await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
-      await tester.pumpAndSettle();
-    }
-
-    Future<void> swipeRight() async {
-      await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
-      await tester.pumpAndSettle();
-    }
-
-    Finder destination(String label) => find.descendant(
-          of: find.byType(NavigationBar),
-          matching: find.text(label),
-        );
-
-    expectSelectedTab(0);
-
-    await swipeLeft();
-    expectSelectedTab(1);
-    await swipeLeft();
-    expectSelectedTab(2);
-    await swipeRight();
-    expectSelectedTab(1);
-    await swipeRight();
-    expectSelectedTab(0);
-
-    await tester.tap(destination('Recommended'));
+    await tester.tap(find.byKey(const ValueKey('watch-open-description')));
     await tester.pumpAndSettle();
-    expectSelectedTab(2);
-    await tester.tap(destination('Info'));
+    expect(find.byType(TextLinkified), findsOneWidget);
+    await tester.tapAt(const Offset(18, 40));
     await tester.pumpAndSettle();
-    expectSelectedTab(0);
+    expect(find.byType(TextLinkified), findsNothing);
 
-    await tester.drag(find.byType(VideoThumbnailView), const Offset(-320, 0));
+    await tester.tap(find.byKey(const ValueKey('watch-open-comments')));
     await tester.pumpAndSettle();
-    expectSelectedTab(0);
+    expect(find.widgetWithText(ChoiceChip, 'Top'), findsOneWidget);
+    expect(service.commentSorts, ['top']);
+    await tester.tap(find.widgetWithText(ChoiceChip, 'New'));
+    await tester.pumpAndSettle();
+    expect(service.commentSorts, ['top', 'new']);
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Top'));
+    await tester.pumpAndSettle();
+    expect(service.commentSorts, ['top', 'new']);
+    expect(tester.element(screen).read<PlayerCubit>().state.hasVideo, isFalse);
   });
 
   testWidgets('tablet video tabs ignore horizontal swipes', (tester) async {
@@ -2099,137 +2295,351 @@ void main() {
     expect(tabBar.controller!.index, 0);
   });
 
-  testWidgets(
-      'phone expanded player tabs swipe and stay synchronized with navigation',
+  testWidgets('phone watch queue opens and closes while retaining the decoder',
       (tester) async {
     await _pumpExpandedPlayer(tester, const Size(390, 844));
+    final expanded = find.byType(ExpandedPlayer);
+    final player = tester.element(expanded).read<PlayerCubit>();
+    final decoder = find.byKey(const ValueKey('player'));
+    final decoderState = tester.state(decoder);
+    expect(find.descendant(of: expanded, matching: find.byType(NavigationBar)),
+        findsNothing);
+    expect(
+        find.byKey(const ValueKey('watch-open-description')), findsOneWidget);
+    expect(find.byKey(const ValueKey('watch-open-comments')), findsOneWidget);
 
-    final expandedPlayer = find.byType(ExpandedPlayer);
-    final navigationBar = find.descendant(
-      of: expandedPlayer,
-      matching: find.byType(NavigationBar),
-    );
-
-    void expectSelectedTab(int index) {
-      expect(
-        tester.widget<NavigationBar>(navigationBar).selectedIndex,
-        index,
-      );
-    }
-
-    Future<void> swipeLeft() async {
-      await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
-      await tester.pumpAndSettle();
-    }
-
-    Future<void> swipeRight() async {
-      await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
-      await tester.pumpAndSettle();
-    }
-
-    Finder destination(String label) => find.descendant(
-          of: navigationBar,
-          matching: find.text(label),
-        );
-
-    expectSelectedTab(3);
-
-    await swipeRight();
-    expectSelectedTab(2);
-    await swipeRight();
-    expectSelectedTab(1);
-    await swipeRight();
-    expectSelectedTab(0);
-    await swipeLeft();
-    expectSelectedTab(1);
-    await swipeLeft();
-    expectSelectedTab(2);
-    await swipeLeft();
-    expectSelectedTab(3);
-
-    await tester.tap(destination('Info'));
+    final queue = find.byKey(const ValueKey('watch-open-queue'));
+    final next = (globals.service as _TestService).videos[1];
+    player.queueVideos([next]);
     await tester.pumpAndSettle();
-    expectSelectedTab(0);
-    await tester.tap(destination('Video queue'));
+    expect(find.descendant(of: queue, matching: find.text(next.title!)),
+        findsOneWidget);
+    await tester.tap(queue);
     await tester.pumpAndSettle();
-    expectSelectedTab(3);
-    await tester.tap(destination('Info'));
+    expect(find.byType(ReorderableListView), findsOneWidget);
+    expect(player.state.isMini, isFalse);
+    await tester.tapAt(const Offset(10, 40));
     await tester.pumpAndSettle();
-    expectSelectedTab(0);
-  });
-
-  testWidgets('portrait tablet expanded player tabs ignore horizontal swipes',
-      (tester) async {
-    await _pumpExpandedPlayer(
-      tester,
-      const Size(768, 1024),
-      selectedIndex: 0,
-    );
-
-    final navigationBar = find.descendant(
-      of: find.byType(ExpandedPlayer),
-      matching: find.byType(NavigationBar),
-    );
-
-    expect(tester.widget<NavigationBar>(navigationBar).selectedIndex, 0);
-
-    await tester.dragFrom(const Offset(700, 600), const Offset(-600, 0));
-    await tester.pumpAndSettle();
-
-    expect(tester.widget<NavigationBar>(navigationBar).selectedIndex, 0);
+    expect(find.byType(ReorderableListView), findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(tester.state(decoder), same(decoderState));
   });
 
   testWidgets(
-      'distraction-free expanded player maps swipes to its two visible tabs',
+      'watch related overflow contains Why and Back keeps playback open',
       (tester) async {
-    await _pumpExpandedPlayer(
-      tester,
-      const Size(390, 844),
-      distractionFree: true,
-      selectedIndex: 0,
-    );
+    const related = Video(videoId: 'related0001', title: 'Related recording');
+    const reason = 'Matches your local video interests.';
+    final service = globals.service as _TestService;
+    service.videos[0] =
+        service.videos[0].copyWith(recommendedVideos: [related]);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('videre/recommendations'),
+            (call) async {
+      final args = call.arguments as Map;
+      return {
+        'state': <String, Object?>{},
+        'ranked': [
+          for (final candidate in args['candidates'] as List)
+            {'id': (candidate as Map)['id'], 'score': 1.0, 'reason': reason}
+        ],
+      };
+    });
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final expanded = find.byType(ExpandedPlayer);
+    final player = tester.element(expanded).read<PlayerCubit>();
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    addTearDown(() => BackButtonInterceptor.removeByName('miniPlayer'));
 
-    final expandedPlayer = find.byType(ExpandedPlayer);
-    final player = tester.element(expandedPlayer).read<PlayerCubit>();
-    final navigationBar = find.descendant(
-      of: expandedPlayer,
-      matching: find.byType(NavigationBar),
-    );
-
-    void expectSelection({required int tab, required int destination}) {
-      expect(player.state.selectedFullScreenIndex, tab);
-      expect(
-        tester.widget<NavigationBar>(navigationBar).selectedIndex,
-        destination,
+    Future<void> back() async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        SystemChannels.navigation.name,
+        SystemChannels.navigation.codec
+            .encodeMethodCall(const MethodCall('popRoute')),
+        null,
       );
+      await tester.pumpAndSettle();
     }
 
-    Finder destination(String label) => find.descendant(
-          of: navigationBar,
-          matching: find.text(label),
-        );
-
-    expect(destination('Info'), findsOneWidget);
-    expect(destination('Comments'), findsNothing);
-    expect(destination('Recommended'), findsNothing);
-    expect(destination('Video queue'), findsOneWidget);
-    expectSelection(tab: 0, destination: 0);
-
-    await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
+    final why = find.text('Why this?');
+    expect(why, findsNothing);
+    final overflow = find.descendant(
+      of: find.byKey(const ValueKey('related0001')),
+      matching: find.byIcon(Icons.more_vert_rounded),
+    );
+    await tester.ensureVisible(overflow);
+    await tester.tap(overflow);
     await tester.pumpAndSettle();
-    expectSelection(tab: 3, destination: 1);
-
-    await tester.dragFrom(const Offset(40, 500), const Offset(320, 0));
+    expect(why, findsOneWidget);
+    await tester.tap(why);
     await tester.pumpAndSettle();
-    expectSelection(tab: 0, destination: 0);
+    expect(find.text(reason), findsOneWidget);
+    await back();
+    expect(find.text(reason), findsNothing);
+    expect(why, findsOneWidget);
+    expect(player.state.isMini, isFalse);
+    await back();
+    expect(why, findsNothing);
+    expect(player.state.isMini, isFalse);
+    await back();
+    expect(player.state.isMini, isTrue);
+  });
 
-    await tester.tap(destination('Video queue'));
-    await tester.pumpAndSettle();
-    expectSelection(tab: 3, destination: 1);
+  testWidgets('Flow watch adapts between the related grid and supporting pane',
+      (tester) async {
+    final service = globals.service as _TestService;
+    const related = ['watchrel001', 'watchrel002'];
+    service.videos[0] = service.videos[0].copyWith(
+        description: 'Details stay beside the video.',
+        recommendedVideos: [
+          service.videos[1].copyWith(videoId: related[0]),
+          service.videos[2].copyWith(videoId: related[1]),
+        ]);
+    await _pumpExpandedPlayer(tester, const Size(768, 1024), selectedIndex: 0);
+    final decoder = find.byKey(const ValueKey('player'));
+    final state = tester.state(decoder);
+    final player = tester.element(decoder).read<PlayerCubit>();
+    final pane = find.byKey(const ValueKey('flow-watch-side-pane'));
+    final first = find.byKey(const ValueKey('watchrel001'));
+    final second = find.byKey(const ValueKey('watchrel002'));
+    expect(pane, findsNothing);
+    expect(tester.getSize(decoder).width, 768);
+    expect(tester.getTopLeft(first).dy, tester.getTopLeft(second).dy);
+    expect(tester.getTopLeft(first).dx, lessThan(tester.getTopLeft(second).dx));
 
-    await tester.tap(destination('Info'));
+    tester.view.physicalSize = const Size(1024, 768);
     await tester.pumpAndSettle();
-    expectSelection(tab: 0, destination: 0);
+    expect(pane, findsOneWidget);
+    expect(tester.getSize(decoder).width, 1024 - 384);
+    expect(tester.state(decoder), same(state));
+    expect(find.descendant(of: pane, matching: first), findsOneWidget);
+
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    addTearDown(() => BackButtonInterceptor.removeByName('miniPlayer'));
+    await tester.tap(find.byKey(const ValueKey('watch-open-description')));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: pane, matching: find.byType(TextLinkified)),
+        findsOneWidget);
+    expect(tester.state(decoder), same(state));
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      SystemChannels.navigation.name,
+      SystemChannels.navigation.codec
+          .encodeMethodCall(const MethodCall('popRoute')),
+      null,
+    );
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: pane, matching: first), findsOneWidget);
+    expect(player.state.isMini, isFalse);
+
+    // Safe insets can leave a nominally wide window room for only one pane.
+    tester.view.padding = const FakeViewPadding(left: 55, right: 55);
+    addTearDown(tester.view.resetPadding);
+    tester.view.physicalSize = const Size(840, 500);
+    await tester.pumpAndSettle();
+    expect(pane, findsNothing);
+    expect(first, findsOneWidget);
+    expect(second, findsOneWidget);
+    expect(tester.state(decoder), same(state));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Flow Watch Back closes Share and both Save routes first',
+      (tester) async {
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    addTearDown(() => BackButtonInterceptor.removeByName('miniPlayer'));
+
+    Future<void> back() async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        SystemChannels.navigation.name,
+        SystemChannels.navigation.codec
+            .encodeMethodCall(const MethodCall('popRoute')),
+        null,
+      );
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isFalse);
+    }
+
+    final share = find.text('Share');
+    await tester.ensureVisible(share);
+    await tester.tap(share);
+    await tester.pumpAndSettle();
+    expect(find.text('Share Invidious link'), findsOneWidget);
+    await back();
+    expect(find.text('Share Invidious link'), findsNothing);
+
+    final save = find.text('Save');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final picker = find.text('Select playlist');
+    expect(picker, findsOneWidget);
+    await tester.tap(find.text('Create new playlist'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsOneWidget);
+    await back();
+    expect(find.byType(Dialog), findsNothing);
+    expect(picker, findsOneWidget);
+    await back();
+    expect(picker, findsNothing);
+  });
+
+  testWidgets('Flow related cards play immediately only in the active watch',
+      (tester) async {
+    final service = globals.service as _TestService;
+    final related = service.videos[1].copyWith(videoId: 'watchrel001');
+    service.videos.add(related);
+    final original = service.videos[0].copyWith(recommendedVideos: [related]);
+    service.videos[0] = original;
+    late _WatchSelectionPlayer player;
+    await _pumpHomepage(
+      tester,
+      const Size(390, 844),
+      createPlayer: (settings) => player = _WatchSelectionPlayer(
+        PlayerState.init([original]).copyWith(
+          currentlyPlaying: original,
+          isMini: false,
+          isHidden: false,
+          top: 0,
+        ),
+        settings,
+      ),
+    );
+    final decoder = find.byKey(const ValueKey('player'));
+    final state = tester.state(decoder);
+    final card = find.byKey(ValueKey(related.videoId));
+    await tester.ensureVisible(card);
+    await tester.tapAt(tester.getTopLeft(card) + const Offset(24, 24));
+    await tester.pumpAndSettle();
+    expect(player.selection, [(related.videoId, false)]);
+    expect(find.byType(VideoScreen), findsNothing);
+    expect(player.state.isMini, isFalse);
+    expect(tester.state(decoder), same(state));
+
+    player.showMiniPlayer();
+    unawaited(appRouter.push(VideoRoute(videoId: original.videoId)));
+    await tester.pumpAndSettle();
+    final preview =
+        find.descendant(of: find.byType(VideoScreen), matching: card);
+    await tester.ensureVisible(preview);
+    await tester.tapAt(tester.getTopLeft(preview) + const Offset(24, 24));
+    await tester.pumpAndSettle();
+    expect(tester.widget<VideoScreen>(find.byType(VideoScreen)).videoId,
+        related.videoId);
+    expect(player.selection, [(related.videoId, false)]);
+    expect(player.state.isMini, isTrue);
+  });
+
+  testWidgets('Flow queue dock stays visible at the end and predicts repeat',
+      (tester) async {
+    _mockVideoWakelock();
+    final videos = (globals.service as _TestService).videos.take(2).toList();
+    final settings = SettingsState.init();
+    await _pumpHomepage(
+      tester,
+      const Size(390, 844),
+      settingsState: settings.copyWith(settings: {
+        ...settings.settings,
+        playerRepeat:
+            SettingsValue(playerRepeat, '${PlayerRepeat.repeatAll.index}'),
+      }),
+      playerState: PlayerState.init(videos).copyWith(
+          currentlyPlaying: videos.last,
+          isMini: false,
+          isHidden: false,
+          top: 0),
+    );
+    final dock = find.byKey(const ValueKey('watch-open-queue'));
+    expect(find.descendant(of: dock, matching: find.text(videos.first.title!)),
+        findsOneWidget);
+    final settingsCubit = tester.element(dock).read<SettingsCubit>();
+    await tester
+        .runAsync(() => settingsCubit.setRepeatMode(PlayerRepeat.repeatOne));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: dock, matching: find.text(videos.last.title!)),
+        findsOneWidget);
+    await tester
+        .runAsync(() => settingsCubit.setRepeatMode(PlayerRepeat.noRepeat));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: dock, matching: find.text('Video queue')),
+        findsOneWidget);
+  });
+
+  testWidgets('Flow Watch queue follows and reorders actual occurrences',
+      (tester) async {
+    final all = (globals.service as _TestService).videos;
+    final played = all[0];
+    final current = all[1];
+    final repeated = current.copyWith(
+        queueEntryId: 'queued-copy', title: 'A second occurrence');
+    final next = all[2];
+    final initial = PlayerState.init([played, current, repeated, next]);
+    final settings = SettingsState.init();
+    await _pumpHomepage(tester, const Size(390, 844),
+        settingsState: settings.copyWith(settings: {
+          ...settings.settings,
+          playerShuffle: SettingsValue(playerShuffle, 'true'),
+        }),
+        playerState: initial.copyWith(
+            currentlyPlaying: current,
+            playedVideos: [played.videoId],
+            playQueue: ListQueue.of([next.videoId, repeated.queueEntryId!]),
+            isMini: false,
+            isHidden: false,
+            top: 0));
+    final decoder = find.byKey(const ValueKey('player'));
+    final decoderState = tester.state(decoder);
+    final player = tester.element(decoder).read<PlayerCubit>();
+    final dock = find.byKey(const ValueKey('watch-open-queue'));
+    expect(find.descendant(of: dock, matching: find.text(next.title!)),
+        findsOneWidget);
+    await tester.tap(dock);
+    await tester.pumpAndSettle();
+
+    final list = find.byType(ReorderableListView);
+    Finder occurrence(String id) =>
+        find.descendant(of: list, matching: find.byKey(ValueKey(id)));
+    final active = occurrence(current.videoId);
+    final upcoming = occurrence(next.videoId);
+    final duplicate = occurrence(repeated.queueEntryId!);
+    expect(
+        tester.getTopLeft(active).dy, lessThan(tester.getTopLeft(upcoming).dy));
+    expect(tester.getTopLeft(upcoming).dy,
+        lessThan(tester.getTopLeft(duplicate).dy));
+    expect(
+        find.descendant(
+            of: active, matching: find.byType(ReorderableDragStartListener)),
+        findsNothing);
+    final listWidget = tester.widget<ReorderableListView>(list);
+    listWidget.onReorderStart!(3);
+    listWidget.onReorder(3, 2);
+    await tester.pumpAndSettle();
+    expect(player.state.playQueue, [repeated.queueEntryId, next.videoId]);
+    expect(player.state.playedVideos, [played.videoId]);
+    expect(player.state.currentQueueId, current.videoId);
+    expect(tester.getTopLeft(duplicate).dy,
+        lessThan(tester.getTopLeft(upcoming).dy));
+    expect(tester.state(decoder), same(decoderState));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('distraction-free watch omits comments and keeps queue access',
+      (tester) async {
+    await _pumpExpandedPlayer(tester, const Size(390, 844),
+        distractionFree: true, selectedIndex: 0);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    expect(
+        find.byKey(const ValueKey('watch-open-description')), findsOneWidget);
+    expect(find.byKey(const ValueKey('watch-open-comments')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('watch-open-queue')));
+    await tester.pumpAndSettle();
+    expect(find.byType(ReorderableListView), findsOneWidget);
+    expect(player.state.isMini, isFalse);
   });
 
   testWidgets(
@@ -2275,128 +2685,373 @@ void main() {
     );
   });
 
-  testWidgets('mini player opens on tap without intercepting its controls',
+  testWidgets(
+      'video pull follows the hand and settles without replacing decoder',
+      (tester) async {
+    _mockVideoWakelock();
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    final video = find.byKey(const ValueKey('player'));
+    final videoState = tester.state(video);
+    final builder = find.descendant(
+      of: video,
+      matching: find.byType(BlocBuilder<VideoPlayerCubit, VideoPlayerState>),
+    );
+    final decoder = tester.element(builder).read<VideoPlayerCubit>();
+    final positioned = find.descendant(
+      of: find.byType(Player),
+      matching: find.byType(AnimatedPositioned),
+    );
+    final surface = find.ancestor(
+      of: video,
+      matching: find.byType(AspectRatio),
+    );
+    final expanded = tester.getRect(positioned);
+
+    void expectSameDecoder() {
+      expect(tester.state(video), same(videoState));
+      expect(tester.element(builder).read<VideoPlayerCubit>(), same(decoder));
+      expect(decoder.isClosed, isFalse);
+      expect(tester.takeException(), isNull);
+    }
+
+    for (final cancel in [false, true]) {
+      final gesture = await tester.startGesture(tester.getCenter(surface));
+      await gesture.moveBy(const Offset(0, 40));
+      await tester.pump();
+      final first = tester.getRect(positioned);
+      await gesture.moveBy(Offset(0, cancel ? 220 : 75));
+      await tester.pump();
+      expect(first.top, greaterThan(expanded.top));
+      expect(tester.getRect(positioned).top, greaterThan(first.top));
+      expect(player.state.isMini, isFalse);
+      expectSameDecoder();
+
+      if (cancel) {
+        await gesture.cancel();
+      } else {
+        await gesture.up();
+      }
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isFalse);
+      expect(tester.getRect(positioned).top, closeTo(expanded.top, 0.01));
+      expectSameDecoder();
+    }
+
+    final gesture = await tester.startGesture(tester.getCenter(surface));
+    await gesture.moveBy(const Offset(0, 40));
+    await tester.pump();
+    await gesture.moveBy(const Offset(0, 220));
+    await tester.pump();
+    final held = tester.getRect(positioned);
+    expect(held.top, greaterThan(expanded.top));
+    await gesture.up();
+    await tester.pump();
+    expect(player.state.isMini, isTrue);
+    expect(tester.getRect(positioned).top, closeTo(held.top, 1));
+    expectSameDecoder();
+    await tester.pump(const Duration(milliseconds: 80));
+    final settling = tester.getRect(positioned);
+    expect(settling.top, greaterThan(held.top));
+    await tester.pumpAndSettle();
+    final compact = tester.getRect(positioned);
+    expect(compact.top, greaterThan(settling.top));
+    expect(compact.bottom, lessThanOrEqualTo(844));
+    expect(find.byKey(const ValueKey('flow-mini-surface')), findsOneWidget);
+    expectSameDecoder();
+
+    await tester.tap(find.byKey(const ValueKey('flow-mini-close')));
+    await tester.pump(globals.animationDuration * 1.5);
+    await tester.pumpAndSettle();
+    expect(player.state.isHidden, isTrue);
+  });
+
+  testWidgets('floating video controls retain their individual tap targets',
       (tester) async {
     await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
     final player =
         tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
     player.showMiniPlayer();
     await tester.pumpAndSettle();
-    final playerView = find.byType(Player);
-    await tester.tap(find.descendant(
-        of: playerView, matching: find.byIcon(Icons.fast_forward)));
-    await tester.pumpAndSettle();
+    final stage = find.byKey(const ValueKey('flow-mini-surface'));
+    final play = find.byKey(const ValueKey('watch-mini-play'));
+    final close = find.byKey(const ValueKey('flow-mini-close'));
+    expect(tester.getRect(play).overlaps(tester.getRect(close)), isFalse);
+    await tester.tap(play);
+    await tester.pump(const Duration(milliseconds: 400));
     expect(player.state.isMini, isTrue);
 
-    final video = player.state.currentlyPlaying!;
-    await tester.tap(find.descendant(
-        of: playerView,
-        matching: find.text('${video.title} - ${video.author}')));
+    await tester.tapAt(tester.getRect(stage).center + const Offset(0, 8));
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(player.state.isMini, isFalse);
-    expect(player.state.isHidden, isFalse);
 
     player.showMiniPlayer();
     await tester.pumpAndSettle();
-    await tester.tap(
-        find.descendant(of: playerView, matching: find.byIcon(Icons.clear)));
+    await tester.tap(close);
+    expect(player.state.isClosing, isTrue);
+    await tester.pump(globals.animationDuration * 1.5);
     await tester.pumpAndSettle();
     expect(player.state.isHidden, isTrue);
     expect(tester.takeException(), isNull);
   });
 
-  for (final loggedIn in [false, true]) {
-    for (final tab in [0, 1]) {
-      testWidgets(
-          'pulling down ${tab == 0 ? 'description' : 'comments'} at the top minimizes (${loggedIn ? 'account' : 'guest'})',
-          (tester) async {
-        final service = globals.service as _TestService;
-        service.loggedIn = loggedIn;
-        service.videos[0] = service.videos[0].copyWith(
-          description:
-              List.filled(60, 'A line from the description.').join('\n'),
-        );
-        service.comments = List.generate(
-          20,
-          (index) => Comment(
-              'Viewer $index',
-              [],
-              'viewer-$index',
-              '',
-              false,
-              'A comment about this video.',
-              'Today',
-              0,
-              '$index',
-              false,
-              null,
-              null),
-        );
-        await _pumpExpandedPlayer(tester, const Size(390, 844),
-            selectedIndex: tab);
-        final player =
-            tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
-        final content = find
-            .descendant(
-              of: find.byType(ExpandedPlayer),
-              matching: find.byType(SingleChildScrollView),
-            )
-            .hitTestable()
-            .first;
-        final position = tester
-            .state<ScrollableState>(find
-                .descendant(
-                  of: content,
-                  matching: find.byType(Scrollable),
-                )
-                .first)
-            .position;
-        final start = tester.getTopLeft(content) + const Offset(180, 90);
-
-        await tester.dragFrom(
-            start + const Offset(0, 150), const Offset(0, -260));
-        await tester.pumpAndSettle();
-        expect(position.pixels, greaterThan(0));
-        expect(player.state.isMini, isFalse);
-
-        // Reaching the top during a scroll should not also dismiss the player.
-        position.jumpTo(80);
-        await tester.pump();
-        await tester.dragFrom(start, const Offset(0, 260));
-        await tester.pumpAndSettle();
-        expect(position.pixels, 0);
-        expect(player.state.isMini, isFalse);
-
-        await tester.dragFrom(start, const Offset(0, 260));
-        await tester.pumpAndSettle();
-        expect(player.state.isMini, isTrue);
-        expect(tester.takeException(), isNull);
-      });
-    }
-  }
-
-  testWidgets('empty comments can be pulled down from the blank area',
+  testWidgets('floating video pinch and expansion keep one mounted decoder',
       (tester) async {
-    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 1);
+    tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);
+    addTearDown(tester.view.resetPadding);
+    _mockVideoWakelock();
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
     final player =
         tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
-    await tester.tap(find.byType(DropdownButton<String>));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('New').last);
-    await tester.pumpAndSettle();
-    expect(player.state.isMini, isFalse);
-    expect(
-        tester
-            .widget<DropdownButton<String>>(find.byType(DropdownButton<String>))
-            .value,
-        'new');
+    final decoder = find.byKey(const ValueKey('player'));
+    final decoderState = tester.state(decoder);
+    final builder = find.descendant(
+      of: decoder,
+      matching: find.byType(BlocBuilder<VideoPlayerCubit, VideoPlayerState>),
+    );
+    final backend = tester.element(builder).read<VideoPlayerCubit>();
 
-    await tester.dragFrom(const Offset(180, 470), const Offset(0, 100));
+    Future<void> compact() async {
+      player.showMiniPlayer();
+      await tester.pumpAndSettle();
+      expect(tester.state(decoder), same(decoderState));
+      expect(tester.element(builder).read<VideoPlayerCubit>(), same(backend));
+      expect(backend.isClosed, isFalse);
+    }
+
+    await compact();
+    final stage = find.byKey(const ValueKey('flow-mini-surface'));
+    final corner = tester.getRect(stage);
+    expect(corner.width, closeTo(390 * .45, 1));
+    expect(corner.right, closeTo(382, 1));
+    expect(corner.bottom, lessThanOrEqualTo(844 - 60));
+    final center = corner.center + const Offset(0, 16);
+    // A pinch beginning during the single-tap window supersedes that tap.
+    await tester.tapAt(center);
+    await tester.pump(const Duration(milliseconds: 50));
+    final first = await tester.startGesture(center - const Offset(18, 0));
+    final second = await tester.startGesture(center + const Offset(18, 0));
+    await first.moveBy(const Offset(-36, 0));
+    await tester.pump();
+    await second.moveBy(const Offset(36, 0));
+    await tester.pump(const Duration(milliseconds: 330));
+    expect(player.state.isMini, isTrue);
+    expect(tester.getRect(stage).width, greaterThan(corner.width * 1.5));
+    await first.up();
+    await tester.pump();
+    await second.moveBy(const Offset(0, -40));
+    await second.up();
+    await tester.pumpAndSettle();
+    final wide = tester.getRect(stage);
+    expect(wide.width, closeTo(390 - 16, 1));
+    expect(wide.center.dx, closeTo(195, 1));
+    expect(wide.bottom, closeTo(corner.bottom, 1));
+    expect(player.state.isMini, isTrue);
+    expect(tester.state(decoder), same(decoderState));
+    expect(tester.element(builder).read<VideoPlayerCubit>(), same(backend));
+
+    // Flow's double tap toggles the size; a single tap after the timeout opens.
+    final tap = wide.center + const Offset(0, 12);
+    await tester.tapAt(tap);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(tap);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(stage).width, closeTo(corner.width, 1));
+    await tester.tapAt(tester.getRect(stage).center + const Offset(0, 8));
+    await tester.pump(const Duration(milliseconds: 301));
+    expect(player.state.isMini, isFalse);
+    expect(tester.getSize(decoder).width, lessThan(390));
+    expect(tester.takeException(), isNull);
+    for (var elapsed = Duration.zero;
+        elapsed < globals.animationDuration;
+        elapsed += const Duration(milliseconds: 16)) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(tester.state(decoder), same(decoderState));
+      expect(tester.takeException(), isNull);
+    }
     await tester.pumpAndSettle();
     expect(player.state.isMini, isFalse);
-    await tester.dragFrom(const Offset(180, 470), const Offset(0, 260));
+    expect(tester.state(decoder), same(decoderState));
+    await compact();
+    expect(tester.getRect(stage).width, closeTo(corner.width, 1));
+
+    await tester.tap(find.byKey(const ValueKey('flow-mini-close')));
+    expect(player.state.isClosing, isTrue);
+    await tester.pump(globals.animationDuration * 1.5);
     await tester.pumpAndSettle();
-    expect(player.state.isMini, isTrue);
+    expect(player.state.isHidden, isTrue);
+    expect(decoder, findsNothing);
+    expect(decoderState.mounted, isFalse);
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pump();
+    expect(backend.isClosed, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('expanding a downloaded video fits the legacy controls',
+      (tester) async {
+    tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);
+    addTearDown(tester.view.resetPadding);
+    _mockVideoWakelock();
+    const download = DownloadedVideo(
+        videoId: 'video-0',
+        title: 'Downloaded video',
+        lengthSeconds: 60,
+        quality: '720p');
+    await _pumpHomepage(tester, const Size(390, 844),
+        playerState: PlayerState.init(null).copyWith(
+          offlineVideos: [download],
+          offlineCurrentlyPlaying: download,
+          isMini: true,
+          isHidden: false,
+        ));
+    final player = tester.element(find.byType(Player)).read<PlayerCubit>();
+    final video = find.byKey(const ValueKey('player'));
+    final decoderState = tester.state(video);
+    final builder = find.descendant(
+      of: video,
+      matching: find.byType(BlocBuilder<VideoPlayerCubit, VideoPlayerState>),
+    );
+    final decoder = tester.element(builder).read<VideoPlayerCubit>();
+
+    player.showBigPlayer();
+    await tester.pump();
+    expect(tester.getSize(video).width, lessThan(390));
+    expect(tester.takeException(), isNull);
+    for (var elapsed = Duration.zero;
+        elapsed < globals.animationDuration;
+        elapsed += const Duration(milliseconds: 16)) {
+      await tester.pump(const Duration(milliseconds: 16));
+      expect(tester.state(video), same(decoderState));
+      expect(tester.element(builder).read<VideoPlayerCubit>(), same(decoder));
+      final error = tester.takeException();
+      expect(error, isNull,
+          reason: error is FlutterError ? error.toStringDeep() : null);
+    }
+
+    await tester.pumpAndSettle();
+    expect(player.state.isMini, isFalse);
+    expect(find.byType(MiniPlayerControls), findsOneWidget);
+    expect(decoder.isClosed, isFalse);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'floating video tucks with an accessible handle and honors insets',
+      (tester) async {
+    tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);
+    addTearDown(tester.view.resetPadding);
+    addTearDown(tester.view.resetViewInsets);
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    final video = find.byKey(const ValueKey('player'));
+    final state = tester.state(video);
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+
+    final stage = find.byKey(const ValueKey('flow-mini-surface'));
+    final handle = find.byKey(const ValueKey('flow-mini-tuck-handle'));
+    final original = tester.getRect(stage);
+    await tester.dragFrom(
+        original.center + const Offset(0, 10), const Offset(150, 0));
+    await tester.pumpAndSettle();
+    expect(handle.hitTestable(), findsOneWidget);
+    expect(tester.getRect(stage).left, greaterThanOrEqualTo(390));
+    expect(tester.state(video), same(state));
+    expect(find.byTooltip('Video player'), findsOneWidget);
+
+    await tester
+        .tap(find.descendant(of: handle, matching: find.byType(InkWell)));
+    await tester.pumpAndSettle();
+    expect(handle, findsNothing);
+    expect(tester.getRect(stage).topLeft, original.topLeft);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 360);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(stage).bottom, lessThanOrEqualTo(844 - 360));
+    tester.view.physicalSize = const Size(260, 540);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 160);
+    await tester.pumpAndSettle();
+    final resized = tester.getRect(stage);
+    expect(resized.left, greaterThanOrEqualTo(0));
+    expect(resized.right, lessThanOrEqualTo(260));
+    expect(resized.top, greaterThanOrEqualTo(24));
+    expect(resized.bottom, lessThanOrEqualTo(540 - 160));
+    expect(tester.state(video), same(state));
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final loggedIn in [false, true]) {
+    testWidgets(
+        'watch body minimizes after a new pull at the top (account=$loggedIn)',
+        (tester) async {
+      final service = globals.service as _TestService;
+      service.loggedIn = loggedIn;
+      service.videos[0] = service.videos[0].copyWith(
+          recommendedVideos: List.generate(
+              12,
+              (index) => Video(
+                  videoId: 'relation${index.toString().padLeft(3, '0')}',
+                  title: 'Related recording $index')));
+      await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+      final expanded = find.byType(ExpandedPlayer);
+      final player = tester.element(expanded).read<PlayerCubit>();
+      final content = find
+          .descendant(
+              of: expanded, matching: find.byType(SingleChildScrollView))
+          .first;
+      final position = tester
+          .state<ScrollableState>(find
+              .descendant(of: content, matching: find.byType(Scrollable))
+              .first)
+          .position;
+      final start = tester.getTopLeft(content) + const Offset(180, 90);
+
+      await tester.dragFrom(
+          start + const Offset(0, 140), const Offset(0, -260));
+      await tester.pumpAndSettle();
+      expect(position.pixels, greaterThan(0));
+      expect(player.state.isMini, isFalse);
+
+      position.jumpTo(80);
+      await tester.pump();
+      await tester.dragFrom(start, const Offset(0, 260));
+      await tester.pumpAndSettle();
+      expect(position.pixels, 0);
+      expect(player.state.isMini, isFalse);
+
+      await tester.dragFrom(start, const Offset(0, 260));
+      await tester.pumpAndSettle();
+      expect(player.state.isMini, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('Android Back closes comments before minimizing playback',
+      (tester) async {
+    await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
+    final player =
+        tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    await tester.tap(find.byKey(const ValueKey('watch-open-comments')));
+    await tester.pumpAndSettle();
+    final newest = find.widgetWithText(ChoiceChip, 'New');
+    await tester.tap(newest);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(newest).selected, isTrue);
+
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      SystemChannels.navigation.name,
+      SystemChannels.navigation.codec
+          .encodeMethodCall(const MethodCall('popRoute')),
+      null,
+    );
+    await tester.pumpAndSettle();
+    expect(newest, findsNothing);
+    expect(player.state.isMini, isFalse);
   });
 
   for (final selectionGesture in [
@@ -2418,11 +3073,13 @@ void main() {
             selectedIndex: 0);
         final player =
             tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+        await tester.tap(find.byKey(const ValueKey('watch-open-description')));
+        await tester.pumpAndSettle();
         final content = find
-            .descendant(
-                of: find.byType(ExpandedPlayer),
-                matching: find.byType(SingleChildScrollView))
-            .hitTestable()
+            .ancestor(
+              of: find.byType(TextLinkified),
+              matching: find.byType(SingleChildScrollView),
+            )
             .first;
         final position = tester
             .state<ScrollableState>(find
@@ -2484,11 +3141,10 @@ void main() {
     await _pumpExpandedPlayer(tester, const Size(390, 844), selectedIndex: 0);
     final player =
         tester.element(find.byType(ExpandedPlayer)).read<PlayerCubit>();
+    await tester.tap(find.byKey(const ValueKey('watch-open-description')));
+    await tester.pumpAndSettle();
     final text = find.descendant(
-        of: find.descendant(
-            of: find.byType(ExpandedPlayer),
-            matching: find.byType(TextLinkified)),
-        matching: find.byType(EditableText));
+        of: find.byType(TextLinkified), matching: find.byType(EditableText));
     final start = tester.getTopLeft(text) + const Offset(30, 10);
     final gesture = await tester.startGesture(start);
     await tester.pump(const Duration(milliseconds: 600));
@@ -2505,14 +3161,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<EditableText>(text).controller.selection, selected);
     expect(find.text('Copy'), findsOneWidget);
-    expect(find.text('Share'), findsOneWidget);
+    expect(find.text('Share').hitTestable(), findsOneWidget);
     expect(player.state.isMini, isFalse);
     expect(tester.takeException(), isNull);
   });
 
   for (final sourceAspectRatio in [9 / 16, 21 / 9]) {
     testWidgets(
-        'fullscreen fills the viewport for source aspect $sourceAspectRatio and restores inline sizing',
+        'fullscreen fills the viewport for source aspect $sourceAspectRatio and restores inline and floating sizes',
         (tester) async {
       const viewport = Size(390, 844);
       tester.view.padding = const FakeViewPadding(bottom: 24);
@@ -2548,7 +3204,8 @@ void main() {
       await tester.pumpAndSettle();
       final miniSize = tester.getSize(videoSurface);
       expect(miniSize.width, lessThan(inlineSize.width));
-      expect(miniSize.aspectRatio, closeTo(16 / 9, 0.001));
+      final floatingAspectRatio = sourceAspectRatio < 16 / 9 ? 9 / 16 : 16 / 9;
+      expect(miniSize.aspectRatio, closeTo(floatingAspectRatio, 0.001));
       expect(tester.state(videoWidget), same(videoState));
       expect(tester.takeException(), isNull);
     });
@@ -2596,31 +3253,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  for (final tab in [0, 1]) {
-    testWidgets('routed video tab $tab pulls down without starting playback',
+  for (final withMiniPlayer in [false, true]) {
+    testWidgets(
+        'routed watch preview pulls down without starting playback (mini=$withMiniPlayer)',
         (tester) async {
       final service = globals.service as _TestService;
       service.videos[0] = service.videos[0].copyWith(
-        description: List.filled(60, 'A line from the description.').join('\n'),
-      );
-      service.comments = List.generate(
-        20,
-        (index) => Comment(
-            'Viewer $index',
-            [],
-            'viewer-$index',
-            '',
-            false,
-            'A comment about this video.',
-            'Today',
-            0,
-            '$index',
-            false,
-            null,
-            null),
-      );
+          recommendedVideos: List.generate(
+              12,
+              (index) => Video(
+                  videoId: 'relation${index.toString().padLeft(3, '0')}',
+                  title: 'Related recording $index')));
       // An existing mini player should survive dismissing a different preview.
-      final playing = tab == 1 ? service.videos[1] : null;
+      final playing = withMiniPlayer ? service.videos[1] : null;
       await _pumpVideo(tester, const Size(390, 844),
           playerState: playing == null
               ? null
@@ -2628,12 +3273,6 @@ void main() {
                   currentlyPlaying: playing, isMini: true, isHidden: false));
       final screen = find.byType(VideoScreen);
       final player = tester.element(screen).read<PlayerCubit>();
-      if (tab == 1) {
-        await tester.tap(find.descendant(
-            of: find.byType(NavigationBar).last,
-            matching: find.text('Comments')));
-        await tester.pumpAndSettle();
-      }
       final content = find
           .descendant(of: screen, matching: find.byType(SingleChildScrollView))
           .hitTestable()

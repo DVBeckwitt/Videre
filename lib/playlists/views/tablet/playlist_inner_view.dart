@@ -3,7 +3,6 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:clipious/playlists/views/components/playlist_thumbnail.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/placeholders.dart';
 import 'package:clipious/videos/views/components/video_in_list.dart';
@@ -11,18 +10,21 @@ import 'package:clipious/videos/states/video_in_list.dart';
 
 import '../../../globals.dart';
 import '../../states/playlist.dart';
+import '../components/flow_playlist_header.dart';
 import '../components/playlist_playback_actions.dart';
 
 class TabletPlaylistInnerView extends StatelessWidget {
   final bool canDeleteVideos;
   final Function(BuildContext context, Video video) removeVideoFromPlaylist;
   final Function(BuildContext context, Video video) openVideo;
+  final List<Widget> headerActions;
 
   const TabletPlaylistInnerView(
       {super.key,
       required this.canDeleteVideos,
       required this.removeVideoFromPlaylist,
-      required this.openVideo});
+      required this.openVideo,
+      this.headerActions = const []});
 
   void showVideoModalSheet(BuildContext context, Video video) {
     video = context.read<VideoInListCubit>().state.video ?? video;
@@ -48,14 +50,8 @@ class TabletPlaylistInnerView extends StatelessWidget {
           SizedBox(
             width: headerWidth,
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  PlaylistThumbnails(videos: state.playlist.videos),
-                  const PlaylistPlaybackActions(),
-                ],
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: FlowPlaylistHeader(secondaryActions: headerActions),
             ),
           ),
           Expanded(

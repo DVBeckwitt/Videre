@@ -1512,8 +1512,15 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
+  videre_recommendations:
+    dependency: "direct main"
+    description:
+      path: "packages/videre_recommendations"
+      relative: true
+    source: path
+    version: "0.1.0"
   visibility_detector:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: visibility_detector
       sha256: dd5cc11e13494f432d15939c3aa8ae76844c42b723398643ce9addb88a5ed420

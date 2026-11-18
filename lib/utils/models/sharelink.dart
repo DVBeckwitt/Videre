@@ -3,6 +3,24 @@ import '../../settings/models/db/server.dart';
 
 abstract class ShareLinks {
   Uri getInvidiousLink(Server server, int? timestamp);
+
+  /// Construct an address for sharing only; never fetch YouTube directly.
+  Uri getYoutubeLink(int? timestamp);
+}
+
+class PublicPlaylistShareLinks implements ShareLinks {
+  final String id;
+
+  const PublicPlaylistShareLinks(this.id);
+
+  @override
+  Uri getInvidiousLink(Server server, int? timestamp) =>
+      invidiousShareLink(server,
+          pathSegments: const ['playlist'], queryParameters: {'list': id});
+
+  @override
+  Uri getYoutubeLink(int? timestamp) =>
+      Uri.https('www.youtube.com', '/playlist', {'list': id});
 }
 
 /// Share the configured instance address without account or request metadata.

@@ -13,6 +13,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:logging/logging.dart';
 
 import '../../settings/states/settings.dart';
+import '../../downloads/services/download_playback_source.dart';
 import '../../videos/models/adaptive_format.dart';
 import '../media_source.dart';
 import '../models/media_command.dart';
@@ -20,6 +21,7 @@ import '../models/media_event.dart';
 import '../models/backend_playback.dart';
 import '../models/audio_stall_detector.dart';
 import '../models/playback_pitch.dart';
+import '../models/playback_cache_identity.dart';
 
 part 'audio_player.freezed.dart';
 
@@ -51,6 +53,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
   bool _terminalErrorSent = false;
   int? _manualRetryGeneration;
   bool _sourceAdmitted = false;
+  bool _downloadReuseFailed = false;
+  bool _usingDownloadedSource = false;
   int _sourceLoadRevision = 0;
   int _stallRevision = 0;
   final _stallDetector = AudioStallDetector();
@@ -258,9 +262,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       !_terminalErrorSent &&
       _ownsParentPlayback &&
       player.state.isAudio &&
-      !_playbackOffline &&
       _sourceAdmitted &&
-      state.video != null &&
+      (state.video != null || state.offlineVideo != null) &&
       _loadingGeneration == null &&
       !_awaitingBackendMetadata &&
       _wantsToPlay &&
@@ -320,7 +323,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     if (_nativeProgressRequest != null) return;
     final generation = _playbackGeneration;
     final revision = _stallRevision;
-    final video = state.video!;
+    final video = state.video;
+    final offlineVideo = state.offlineVideo;
     final result = await _nativeProgress(current).timeout(
         const Duration(seconds: 3),
         onTimeout: () => (revision: _sourceLoadRevision, sample: null));
@@ -328,6 +332,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         revision != _stallRevision ||
         result.revision != _sourceLoadRevision ||
         !identical(state.video, video) ||
+        !identical(state.offlineVideo, offlineVideo) ||
         !_canWatchProgress(current)) {
       return;
     }
@@ -342,6 +347,17 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         sample.suppressionReason == 0 &&
         !sample.seekPending &&
         !sample.hasError;
+    player.setEvent(MediaEvent<Duration>(
+        type: MediaEventType.playbackSample,
+        value: sample.position,
+        state: playing
+            ? MediaState.playing
+            : sample.processingState == ProcessingState.buffering
+                ? MediaState.buffering
+                : MediaState.pause));
+    // Offline playback supplies real listening samples but never triggers
+    // network metadata recovery when a local decoder is paused or stalled.
+    if (_playbackOffline || video == null) return;
     player.reportPlaybackRecoveryProgress(video, sample.position,
         playing: playing);
     player.reportBackendPlaybackProgress(
@@ -469,6 +485,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
       _failPlayback(error);
       return;
     }
+    if (_usingDownloadedSource) _downloadReuseFailed = true;
     _beginPlaybackRecovery(current, error);
   }
 
@@ -551,7 +568,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           Video? next;
           var sameRoute = false;
           try {
-            if (allowStreamRefresh) {
+            if (allowStreamRefresh || video.downloadPlaybackOnly) {
               try {
                 next = await player.refreshCurrentPlayback(video,
                     isCurrent: active);
@@ -611,6 +628,21 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
             }
             final server = playback?.server ?? selectedServer;
             player.setRequestedBackend(video!.videoId, video.backendPlayback);
+            final local = _downloadReuseFailed
+                ? null
+                : await resolveDownloadPlaybackSource(
+                    database: db,
+                    video: video,
+                    server: server,
+                    audioOnly: true,
+                    sessionId:
+                        '${identityHashCode(this)}:$generation:${DateTime.now().microsecondsSinceEpoch}',
+                    isCurrent: active);
+            if (!active()) return false;
+            if (local != null) {
+              sources.add(AudioSource.uri(Uri.parse(local.uri),
+                  playbackCache: local.playbackCache));
+            }
             final combined = (video.formatStreams ?? [])
                 .where((stream) => !stream.isLegacyHd720)
                 .toList()
@@ -632,11 +664,21 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
                   validatedMediaUrl(proxyMediaUrl(parsed, server), server);
               if (url == null || !seen.add(url)) continue;
               sources.add(AudioSource.uri(Uri.parse(url),
-                  headers: mediaHeaders(server, url)));
+                  headers: mediaHeaders(server, url),
+                  playbackCache: playbackCacheIdentity(
+                    video: video,
+                    server: server,
+                    sourceUrl: url,
+                    sessionId:
+                        '${identityHashCode(this)}:$generation:${DateTime.now().microsecondsSinceEpoch}',
+                  )));
               if (sources.length >= _maxAudioSources) break;
             }
           }
           if (sources.isEmpty) {
+            if (video?.downloadPlaybackOnly == true) {
+              throw const _AudioPlaybackStall();
+            }
             throw StateError('No supported audio source');
           }
           for (var index = 0; index < sources.length; index++) {
@@ -649,9 +691,18 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
               _sourceLoadRevision++;
               await current.setAudioSource(sources[index],
                   initialPosition: _pendingSeek ?? startAt);
+              _usingDownloadedSource =
+                  sources[index] is ProgressiveAudioSource &&
+                      (sources[index] as ProgressiveAudioSource)
+                          .playbackCache?['download'] is Map;
               break;
             } catch (error) {
               if (!active()) return false;
+              if (sources[index] is ProgressiveAudioSource &&
+                  (sources[index] as ProgressiveAudioSource)
+                      .playbackCache?['download'] is Map) {
+                _downloadReuseFailed = true;
+              }
               // An unavailable audio track need not make the whole backend
               // unusable. Try its remaining admitted formats first. Access
               // refusals and non-retryable failures retain their terminal path.
@@ -742,6 +793,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
     _backendMetadataGeneration = null;
     _pendingSeek = null;
     _sourceAdmitted = false;
+    _downloadReuseFailed = false;
+    _usingDownloadedSource = false;
     _resumeAfterFocus = false;
     _deferredFocusResume = false;
     _stopStallWatch(forgetProgress: true);
