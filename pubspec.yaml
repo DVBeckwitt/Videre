@@ -1,5 +1,5 @@
 name: clipious
-version: 1.22.48+60944
+version: 1.22.48+60945
 publish_to: none
 description: Client for invidious.
 environment: 
@@ -24,7 +24,7 @@ dependencies:
   dynamic_color: 1.8.1
   easy_debounce: 2.0.3
   feedback: 3.2.0
-  ffmpeg_kit_flutter_new_min: 1.0.1
+  ffmpeg_kit_flutter_new_audio: 2.5.8
   flutter_animate: 4.5.2
   flutter_bloc: 9.1.1
   flutter_displaymode: 0.6.0

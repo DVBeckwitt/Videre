@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   awesome_notifications
   awesome_notifications_core
   dynamic_color
+  ffmpeg_kit_flutter_new_audio
   flutter_volume_controller
   url_launcher_linux
 )

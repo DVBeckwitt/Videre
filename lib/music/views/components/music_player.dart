@@ -9,6 +9,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_service.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
@@ -119,6 +120,8 @@ class _MusicPlayerState extends State<MusicPlayer> {
     final state = context.watch<PlayerCubit>().state;
     final video = state.currentlyPlaying;
     final offline = state.offlineCurrentlyPlaying;
+    final onDevice = isLocalMusicPlaybackId(video?.videoId ?? offline?.videoId);
+    final recovery = onDevice ? null : state.backendRecovery;
     final queueId = state.currentQueueId;
     if (queueId != _queueId) {
       _queueId = queueId;
@@ -144,6 +147,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
       final showQueue = _queueVisibility ?? (wide && !widget.television);
       final sideQueue = wide && showQueue;
       final allowCommunityLookup = video != null &&
+          !onDevice &&
           !video.downloadPlaybackOnly &&
           state.isAudio &&
           !state.isMini &&
@@ -216,7 +220,10 @@ class _MusicPlayerState extends State<MusicPlayer> {
                                         height: 1.14,
                                       )),
                                   const SizedBox(height: 2),
-                                  Text(music.artist,
+                                  Text(
+                                      onDevice && music.artist.isEmpty
+                                          ? locals.onDevice
+                                          : music.artist,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style:
@@ -225,7 +232,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
                                       )),
                                 ],
                               )),
-                              if (video != null) ...[
+                              if (video != null && !onDevice) ...[
                                 const SizedBox(width: 8),
                                 MusicBookmarkButton(
                                   key: ValueKey(
@@ -254,7 +261,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
                         if (player.playbackStatus == MediaState.loading ||
                             player.playbackStatus == MediaState.buffering)
                           const LinearProgressIndicator(),
-                        if (state.backendRecovery case final recovery?)
+                        if (recovery != null)
                           BackendRecoveryNotice(recovery: recovery),
                         if (player.playbackStatus == MediaState.error) ...[
                           Text(locals.musicPlaybackError,
@@ -306,7 +313,8 @@ class _MusicPlayerState extends State<MusicPlayer> {
                           ],
                         ),
                         SizedBox(height: shortLandscape ? 8 : 20),
-                        _options(context, player, state, showQueue: showQueue),
+                        _options(context, player, state,
+                            showQueue: showQueue, onDevice: onDevice),
                       ]);
                 }))),
       );
@@ -442,7 +450,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
         ),
       ),
       Column(children: [
-        const MusicSponsorNotice(),
+        if (!onDevice) const MusicSponsorNotice(),
         Expanded(child: view),
       ]),
     ]);
@@ -480,15 +488,16 @@ class _MusicPlayerState extends State<MusicPlayer> {
               ),
             )),
           ),
-          PositionedDirectional(
-            start: 8,
-            end: 8,
-            bottom: 8,
-            child: Align(
-              alignment: AlignmentDirectional.bottomEnd,
-              child: MusicLyricsButton(loader: widget.lyricsLoader),
+          if (!isLocalMusicPlaybackId(video?.videoId ?? offline?.videoId))
+            PositionedDirectional(
+              start: 8,
+              end: 8,
+              bottom: 8,
+              child: Align(
+                alignment: AlignmentDirectional.bottomEnd,
+                child: MusicLyricsButton(loader: widget.lyricsLoader),
+              ),
             ),
-          ),
         ]),
       );
 
@@ -657,7 +666,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
   }
 
   Widget _options(BuildContext context, PlayerCubit player, PlayerState state,
-      {required bool showQueue}) {
+      {required bool showQueue, required bool onDevice}) {
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final actionStyle = TextButton.styleFrom(
@@ -718,7 +727,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
                   : null),
           action('sound', locals.musicSound, Icons.tune,
               () => showMusicSoundSheet(context, player)),
-          const MusicAudioQualityButton(),
+          if (!onDevice) const MusicAudioQualityButton(),
           IconButton(
               tooltip: locals.musicRewind,
               onPressed: player.rewind,
@@ -727,7 +736,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
               tooltip: locals.musicForward,
               onPressed: player.fastForward,
               icon: const Icon(Icons.fast_forward)),
-          if (canChoosePlayerBackend(state))
+          if (!onDevice && canChoosePlayerBackend(state))
             IconButton(
                 tooltip: locals.backendChoose,
                 onPressed: () =>
@@ -966,6 +975,7 @@ class _MusicQueueState extends State<MusicQueue> {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final videos = _entries(state);
+    final onDevice = isLocalMusicPlaybackId(videos.firstOrNull?.videoId);
     final currentId = state.currentQueueId;
     final app = context.watch<AppCubit>();
     final session = app.state;
@@ -1021,11 +1031,19 @@ class _MusicQueueState extends State<MusicQueue> {
           .toList();
       final online = selected.whereType<Video>().toList();
       _closeSelection();
+      if (selected.isEmpty) return;
       switch (action) {
         case _QueueSelectionAction.play:
         case _QueueSelectionAction.shuffle:
           if (action == _QueueSelectionAction.shuffle) selected.shuffle();
-          if (online.length == selected.length) {
+          if (selected.any((entry) => isLocalMusicPlaybackId(entry.videoId))) {
+            final tracks = selected
+                .map((entry) => localMusicTrackForPlayback(entry.videoId))
+                .nonNulls
+                .toList();
+            if (tracks.length != selected.length) return;
+            await player.playLocalMusic(tracks);
+          } else if (online.length == selected.length) {
             await player.playVideo(selected.cast<Video>(), audio: true);
           } else {
             await player.playOfflineVideos(selected.cast<DownloadedVideo>());
@@ -1048,7 +1066,7 @@ class _MusicQueueState extends State<MusicQueue> {
       buildDefaultDragHandles: false,
       scrollController: _scroll,
       itemExtent: extent,
-      footer: const PlaylistLoadingNotice(),
+      footer: onDevice ? null : const PlaylistLoadingNotice(),
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
       itemCount: videos.length,
       onReorderStart: (index) {
@@ -1085,6 +1103,7 @@ class _MusicQueueState extends State<MusicQueue> {
         final video = item is Video ? item : null;
         final offline = item is DownloadedVideo ? item : null;
         final music = video?.musicMetadata ?? offline?.musicMetadata;
+        final artist = music?.artist ?? video?.author ?? offline?.author ?? '';
         final isActive = id == currentId;
         final mountedVideo = state.currentlyPlaying;
         final artworkVideo = isActive &&
@@ -1138,14 +1157,15 @@ class _MusicQueueState extends State<MusicQueue> {
               title: Text(music?.title ?? video?.title ?? offline?.title ?? '',
                   maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(
-                  music?.artist ?? video?.author ?? offline?.author ?? '',
+                  onDevice && artist.isEmpty ? locals.onDevice : artist,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis),
               onFocusChange: (focused) {
                 // The list builder's context belongs to the entire sliver. Reveal
                 // this row so remote focus cannot scroll the selected song away.
-                if (focused)
+                if (focused) {
                   Scrollable.ensureVisible(rowContext, alignment: 0.5);
+                }
               },
               onTap: () {
                 if (!current()) return;
@@ -1313,7 +1333,7 @@ class _MusicQueueState extends State<MusicQueue> {
                 PopupMenuItem(
                     value: _QueueSelectionAction.shuffle,
                     child: Text(locals.musicShuffle)),
-                if (state.videos.isNotEmpty) ...[
+                if (!onDevice && state.videos.isNotEmpty) ...[
                   PopupMenuItem(
                       value: _QueueSelectionAction.next,
                       child: Text(locals.playNext)),

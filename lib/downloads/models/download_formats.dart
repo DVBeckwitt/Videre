@@ -1,6 +1,9 @@
 import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 
+/// Stored in the download job's quality field for Music's audio-only action.
+const highestAudioDownloadQuality = 'highest-audio';
+
 enum DownloadContainer {
   webm,
   mp4;
@@ -65,6 +68,14 @@ class DownloadFormats {
 
   DownloadContainer? get audioContainer =>
       DownloadContainer.values.where(_audio.containsKey).firstOrNull;
+
+  DownloadContainer? get highestBitrateAudioContainer {
+    final available = DownloadContainer.values.where(_audio.containsKey);
+    if (available.isEmpty) return null;
+    // Keep the existing container preference when the rates are equal or unknown.
+    return available.reduce((best, next) =>
+        _bitrate(_audio[next]!) > _bitrate(_audio[best]!) ? next : best);
+  }
 
   AdaptiveFormat? audioFor(DownloadContainer? container) => _audio[container];
 

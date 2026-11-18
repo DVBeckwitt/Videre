@@ -103,12 +103,13 @@ enum HomeDataSource {
         icon: Icon(getIcon()), label: Text(getLabel(locals)));
   }
 
-  Widget build(BuildContext context, bool small) {
+  Widget build(BuildContext context, bool small, {bool nestedScroll = false}) {
     final compactHeight = small ? smallVideoListHeight(context) : null;
     return switch (this) {
       (HomeDataSource.trending) => SizedBox(
           height: compactHeight,
           child: VideoList(
+            nestedScroll: nestedScroll,
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
             animateDownload: true,
@@ -118,6 +119,7 @@ enum HomeDataSource {
       (HomeDataSource.subscription) => SizedBox(
           height: compactHeight,
           child: VideoList(
+            nestedScroll: nestedScroll,
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
             animateDownload: true,
@@ -127,6 +129,7 @@ enum HomeDataSource {
       (HomeDataSource.popular) => SizedBox(
           height: compactHeight,
           child: VideoList(
+            nestedScroll: nestedScroll,
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             small: small,
             animateDownload: true,
@@ -136,6 +139,7 @@ enum HomeDataSource {
       (HomeDataSource.playlist) => SizedBox(
           height: compactHeight,
           child: PlaylistList(
+            nestedScroll: nestedScroll,
             canDeleteVideos: true,
             includeSavedPlaylists: true,
             small: small,
@@ -151,6 +155,7 @@ enum HomeDataSource {
                     .where((e) => e.downloadComplete && !e.downloadFailed)
                     .toList();
                 return VideoList(
+                  nestedScroll: nestedScroll,
                   key: ValueKey(videos),
                   scrollDirection: small ? Axis.horizontal : Axis.vertical,
                   small: small,
@@ -161,6 +166,7 @@ enum HomeDataSource {
       (HomeDataSource.searchHistory) => SizedBox(
           height: small ? 40 : null,
           child: ListView(
+            primary: nestedScroll ? true : null,
             scrollDirection: small ? Axis.horizontal : Axis.vertical,
             children: db
                 .getSearchHistory()
@@ -191,7 +197,7 @@ enum HomeDataSource {
                                   .toList())),
                       maxResults: 20),
                 )
-              : const HistoryView(),
+              : HistoryView(nestedScroll: nestedScroll),
         ),
       (HomeDataSource.home) =>
         small ? const SizedBox.shrink() : const HomeView(),

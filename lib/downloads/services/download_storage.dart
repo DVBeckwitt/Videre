@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 
@@ -27,6 +29,13 @@ class DownloadStorage {
   static const _channel = MethodChannel('videre/download_storage');
   static int _nextWrite = 0;
 
+  bool get supportsSharedMusic => Platform.isAndroid;
+
+  /// Android 10+ can publish app-owned songs with no storage permission.
+  /// Earlier versions need a folder grant through the system picker.
+  Future<String?> sharedMusicFolder() =>
+      _channel.invokeMethod<String>('sharedMusicFolder');
+
   Future<DownloadFolder?> pickFolder(String? initialUri) async =>
       DownloadFolder.fromJson(await _channel
           .invokeMethod<dynamic>('pickFolder', {'initialUri': initialUri}));
@@ -48,13 +57,21 @@ class DownloadStorage {
     return uri;
   }
 
-  Future<void> writeDocument(
-      String source, String uri, CancelToken token) async {
+  Future<void> writeDocument(String source, String uri, CancelToken token) =>
+      _copy('writeDocument', {'source': source, 'uri': uri}, token);
+
+  Future<void> readDocument(
+          String uri, String folder, String destination, CancelToken token) =>
+      _copy('readDocument',
+          {'uri': uri, 'folderUri': folder, 'destination': destination}, token);
+
+  Future<void> _copy(
+      String method, Map<String, String> arguments, CancelToken token) async {
     final id = '${++_nextWrite}';
     if (token.isCancelled) throw token.cancelError!;
     var finished = false;
-    final writing = _channel.invokeMethod<void>(
-        'writeDocument', {'source': source, 'uri': uri, 'id': id});
+    final writing =
+        _channel.invokeMethod<void>(method, {...arguments, 'id': id});
     // Native copying stays off the UI thread and can be stopped by pause/delete.
     token.whenCancel.then((_) async {
       if (finished) return;

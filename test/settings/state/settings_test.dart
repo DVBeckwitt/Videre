@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/home_tabs_layout.dart';
@@ -406,6 +407,59 @@ Future<void> main() async {
     expect(settingsCubit.state.packageInfo.buildNumber, info.buildNumber);
   });
 
+  test('Music download formats default to MP3 and belong to each profile',
+      () async {
+    final first = db.forProfile(db.profileId);
+    final otherProfile = await db.createProfile('Other');
+    expect(MusicDownloadFormat.forDatabase(first), MusicDownloadFormat.mp3);
+    await first
+        .saveSetting(SettingsValue(musicDownloadFormatSettingName, 'flac'));
+    expect(MusicDownloadFormat.forDatabase(first), MusicDownloadFormat.mp3);
+    await setLrclibEnabled(true);
+    for (final format in MusicDownloadFormat.values) {
+      await format.save(first);
+      expect(MusicDownloadFormat.forDatabase(first), format);
+      expect(first.getSettings(musicDownloadFormatSettingName)?.value,
+          format.name);
+    }
+    expect(isLrclibEnabled(), isTrue);
+    expect(isCommunityCoverArtEnabled(), isFalse);
+    await MusicDownloadFormat.m4a.save(first);
+    await db.useProfile(otherProfile.id);
+    expect(MusicDownloadFormat.forDatabase(db), MusicDownloadFormat.mp3);
+    await MusicDownloadFormat.opus.save(db);
+    expect(MusicDownloadFormat.forDatabase(db), MusicDownloadFormat.opus);
+    expect(MusicDownloadFormat.forDatabase(first), MusicDownloadFormat.m4a);
+    expect(isLrclibEnabled(), isFalse);
+    expect(isCommunityCoverArtEnabled(), isFalse);
+  });
+
+  test('portable backups restore the format and reject unknown values',
+      () async {
+    await MusicDownloadFormat.opus.save(db);
+    await setLrclibEnabled(true);
+    final exported = await db.exportBackup();
+    final backup = UserBackup.parse(exported.encode());
+    final format = backup.sections['settings']!
+        .singleWhere((row) => row['name'] == musicDownloadFormatSettingName);
+    expect(format['value'], 'opus');
+    final target = await db.createProfile('Target');
+    await db.useProfile(target.id);
+    await MusicDownloadFormat.m4a.save(db);
+    await setCommunityCoverArtEnabled(true);
+    await db.restoreBackup(backup, replace: true);
+    expect(MusicDownloadFormat.forDatabase(db), MusicDownloadFormat.opus);
+    expect(isLrclibEnabled(), isFalse);
+    expect(isCommunityCoverArtEnabled(), isTrue);
+
+    final malformed = jsonDecode(exported.encode()) as Map<String, dynamic>;
+    malformed['settings'] = [
+      SettingsValue(musicDownloadFormatSettingName, 'flac').toJson(),
+    ];
+    expect(
+        () => UserBackup.parse(jsonEncode(malformed)), throwsFormatException);
+  });
+
   test('LRCLIB consent defaults off and is stored only for its profile',
       () async {
     final first = db.profileId;
@@ -517,9 +571,7 @@ Future<void> main() async {
     ('phone', SettingsScreen()),
     ('TV', TVSettingsScreen()),
   ]) {
-    testWidgets(
-        '$name YT Music settings keep cover and lyrics opt-ins independent',
-        (tester) async {
+    Future<void> showSettings(WidgetTester tester) async {
       tester.view.physicalSize =
           name == 'TV' ? const Size(1280, 720) : const Size(360, 720);
       tester.view.devicePixelRatio = 1;
@@ -536,10 +588,16 @@ Future<void> main() async {
               supportedLocales: AppLocalizations.supportedLocales,
               home: screen)));
       await tester.pumpAndSettle();
-      final lyrics = find.byKey(const ValueKey('music-lrclib-setting'));
-      final cover = find.byKey(const ValueKey('music-community-cover-setting'));
       await tester.scrollUntilVisible(find.text('YT Music'), 400,
           scrollable: find.byType(Scrollable).first);
+    }
+
+    testWidgets(
+        '$name YT Music settings keep cover and lyrics opt-ins independent',
+        (tester) async {
+      await showSettings(tester);
+      final lyrics = find.byKey(const ValueKey('music-lrclib-setting'));
+      final cover = find.byKey(const ValueKey('music-community-cover-setting'));
       await tester.ensureVisible(cover);
       await tester.pumpAndSettle();
       expect(tester.widget<SwitchListTile>(lyrics).value, isFalse);
@@ -580,6 +638,65 @@ Future<void> main() async {
       await tester.pumpAndSettle();
       expect(isLrclibEnabled(), isFalse);
       expect(isCommunityCoverArtEnabled(), isTrue);
+    });
+
+    testWidgets('$name selects and cancels the YT Music download format',
+        (tester) async {
+      await showSettings(tester);
+      final setting =
+          find.byKey(const ValueKey('music-download-format-setting'));
+      await tester.pumpAndSettle();
+      final formatNode =
+          tester.getSemantics(find.text('Music download format'));
+      expect(formatNode.rect.size, tester.getSize(setting));
+      expect(formatNode.label, contains('MP3'));
+      await tester.ensureVisible(setting);
+      await tester.pumpAndSettle();
+      Future<void> openFormatChoice() async {
+        if (name == 'TV') {
+          Focus.of(tester.element(find.descendant(
+                  of: setting, matching: find.text('Music download format'))))
+              .requestFocus();
+          await tester.pumpAndSettle();
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        } else {
+          await tester.tap(setting);
+        }
+        await tester.pumpAndSettle();
+      }
+
+      expect(find.descendant(of: setting, matching: find.text('MP3')),
+          findsOneWidget);
+      await openFormatChoice();
+      for (final format in MusicDownloadFormat.values) {
+        final row =
+            find.byKey(ValueKey('music-download-format-${format.name}'));
+        expect(find.descendant(of: row, matching: find.text(format.label)),
+            findsOneWidget);
+      }
+      final opus = find.byKey(const ValueKey('music-download-format-opus'));
+      if (name == 'TV') {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(opus);
+      }
+      await tester.pumpAndSettle();
+      expect(MusicDownloadFormat.forDatabase(db), MusicDownloadFormat.opus);
+      expect(find.descendant(of: setting, matching: find.text('Opus')),
+          findsOneWidget);
+      await openFormatChoice();
+      if (name == 'TV') {
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      } else {
+        await tester.tap(find.text('Cancel'));
+      }
+      await tester.pumpAndSettle();
+      expect(opus, findsNothing);
+      expect(MusicDownloadFormat.forDatabase(db), MusicDownloadFormat.opus);
+      expect(isLrclibEnabled(), isFalse);
+      expect(isCommunityCoverArtEnabled(), isFalse);
     });
   }
 

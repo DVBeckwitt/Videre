@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -55,6 +56,42 @@ class _SponsorSegmentConverter
   Map<String, dynamic> toJson(SponsorSegment segment) => segment.toJson();
 }
 
+/// Remembers the owned destination across retries. A finished exported copy
+/// belongs to the user independently of the original Videre download.
+@JsonSerializable()
+class ExportedMusicCopy {
+  final String folder;
+  final String uri;
+  final MusicDownloadFormat format;
+  final bool complete;
+  const ExportedMusicCopy(this.folder, this.uri, this.format,
+      {this.complete = false});
+  factory ExportedMusicCopy.fromJson(Map<String, dynamic> json) =>
+      _$ExportedMusicCopyFromJson(json);
+  Map<String, dynamic> toJson() => _$ExportedMusicCopyToJson(this);
+
+  @override
+  bool operator ==(Object other) =>
+      other is ExportedMusicCopy &&
+      folder == other.folder &&
+      uri == other.uri &&
+      format == other.format &&
+      complete == other.complete;
+
+  @override
+  int get hashCode => Object.hash(folder, uri, format, complete);
+}
+
+class _MusicCopyConverter
+    implements JsonConverter<ExportedMusicCopy?, Map<String, dynamic>?> {
+  const _MusicCopyConverter();
+  @override
+  ExportedMusicCopy? fromJson(Map<String, dynamic>? value) =>
+      value == null ? null : ExportedMusicCopy.fromJson(value);
+  @override
+  Map<String, dynamic>? toJson(ExportedMusicCopy? copy) => copy?.toJson();
+}
+
 @freezed
 sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   @Implements<IdedVideo>()
@@ -78,6 +115,8 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
       @_PlaybackProvenanceConverter()
       DownloadPlaybackProvenance? playbackProvenance,
       @Default(false) bool audioOnly,
+      MusicDownloadFormat? musicFormat,
+      @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel,
@@ -114,10 +153,14 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   // Keep the existing prefix so interrupted jobs can resume after upgrading.
   Future<String> get stagingPath => _privatePath('webm');
 
+  bool get storeAsMusic => audioOnly && musicFormat != null;
+
   String get extension =>
+      (audioOnly ? musicFormat?.extension : null) ??
       (container ?? DownloadContainer.webm).extension(audioOnly);
 
   String get mimeType =>
+      (audioOnly ? musicFormat?.mimeType : null) ??
       (container ?? DownloadContainer.webm).mimeType(audioOnly);
 
   /// Older video downloads can have an MP4 file without a saved container.

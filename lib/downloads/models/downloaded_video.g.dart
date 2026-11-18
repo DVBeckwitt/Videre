@@ -6,6 +6,28 @@ part of 'downloaded_video.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
+ExportedMusicCopy _$ExportedMusicCopyFromJson(Map<String, dynamic> json) =>
+    ExportedMusicCopy(
+      json['folder'] as String,
+      json['uri'] as String,
+      $enumDecode(_$MusicDownloadFormatEnumMap, json['format']),
+      complete: json['complete'] as bool? ?? false,
+    );
+
+Map<String, dynamic> _$ExportedMusicCopyToJson(ExportedMusicCopy instance) =>
+    <String, dynamic>{
+      'folder': instance.folder,
+      'uri': instance.uri,
+      'format': _$MusicDownloadFormatEnumMap[instance.format]!,
+      'complete': instance.complete,
+    };
+
+const _$MusicDownloadFormatEnumMap = {
+  MusicDownloadFormat.mp3: 'mp3',
+  MusicDownloadFormat.opus: 'opus',
+  MusicDownloadFormat.m4a: 'm4a',
+};
+
 _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
     _DownloadedVideo(
       videoId: json['videoId'] as String,
@@ -30,6 +52,10 @@ _DownloadedVideo _$DownloadedVideoFromJson(Map<String, dynamic> json) =>
       playbackProvenance: const _PlaybackProvenanceConverter()
           .fromJson(json['playbackProvenance']),
       audioOnly: json['audioOnly'] as bool? ?? false,
+      musicFormat: $enumDecodeNullable(
+          _$MusicDownloadFormatEnumMap, json['musicFormat']),
+      exportedMusic: const _MusicCopyConverter()
+          .fromJson(json['exportedMusic'] as Map<String, dynamic>?),
       container:
           $enumDecodeNullable(_$DownloadContainerEnumMap, json['container']),
       audioTrackId: json['audioTrackId'] as String?,
@@ -60,6 +86,9 @@ Map<String, dynamic> _$DownloadedVideoToJson(_DownloadedVideo instance) =>
       'playbackProvenance': const _PlaybackProvenanceConverter()
           .toJson(instance.playbackProvenance),
       'audioOnly': instance.audioOnly,
+      'musicFormat': _$MusicDownloadFormatEnumMap[instance.musicFormat],
+      'exportedMusic':
+          const _MusicCopyConverter().toJson(instance.exportedMusic),
       'container': _$DownloadContainerEnumMap[instance.container],
       'audioTrackId': instance.audioTrackId,
       'captionLabel': instance.captionLabel,

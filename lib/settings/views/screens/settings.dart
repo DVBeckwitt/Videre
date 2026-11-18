@@ -1,5 +1,6 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
+import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -151,6 +152,9 @@ class SettingsScreen extends StatelessWidget {
                     description: Text(locals.downloadFolderSummary),
                     onPressed: showDownloadFolder,
                   ),
+                  if (supportsLocalMusicFolders)
+                    CustomSettingsTile(
+                        child: const LocalMusicFolder.settings()),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.palette_outlined),
                     title: Text(locals.appearance),

@@ -12,6 +12,12 @@ import 'package:clipious/videos/models/video.dart';
 
 import '../../../videos/views/components/compact_video.dart';
 
+bool _canExportMusic(DownloadedVideo video) =>
+    video.downloadComplete &&
+    video.audioOnly &&
+    video.musicMetadata != null &&
+    (video.storageUri == null || !video.storeAsMusic);
+
 class DownloadedVideoView extends StatelessWidget {
   final DownloadedVideo video;
 
@@ -55,7 +61,12 @@ class DownloadedVideoView extends StatelessWidget {
                 cubit.retryDownload(video);
               },
             ),
-          if (video.downloadComplete && video.storageUri == null)
+          if (_canExportMusic(video))
+            BlocProvider.value(
+              value: cubit,
+              child: MusicDownloadExportAction(video: video),
+            )
+          else if (video.downloadComplete && video.storageUri == null)
             ListTile(
               leading: const Icon(Icons.copy),
               title: Text(locals.copyToDownloadFolder),
@@ -168,5 +179,82 @@ class DownloadedVideoView extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+class MusicDownloadExportAction extends StatefulWidget {
+  const MusicDownloadExportAction({
+    super.key,
+    required this.video,
+    this.compact = false,
+  });
+
+  final DownloadedVideo video;
+  final bool compact;
+
+  @override
+  State<MusicDownloadExportAction> createState() =>
+      _MusicDownloadExportActionState();
+}
+
+class _MusicDownloadExportActionState extends State<MusicDownloadExportAction> {
+  bool _busy = false;
+
+  Future<void> _export() async {
+    if (_busy) return;
+    final video = widget.video;
+    final manager = context.read<DownloadManagerCubit>();
+    final locals = AppLocalizations.of(context)!;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    String? message;
+    try {
+      if (await manager.exportMusic(video)) {
+        message = locals.musicDownloadExported;
+      }
+    } catch (_) {
+      message = locals.musicDownloadExportFailed;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    if (!mounted ||
+        widget.video.videoId != video.videoId ||
+        widget.video.profileId != video.profileId) {
+      return;
+    }
+    if (!widget.compact && ModalRoute.of(context)?.isCurrent == true) {
+      Navigator.of(context).pop();
+    }
+    if (message != null) {
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final video = widget.video;
+    if (!_canExportMusic(video)) {
+      return const SizedBox.shrink();
+    }
+    final label = AppLocalizations.of(context)!.exportMusicDownload;
+    final key = ValueKey('export-music-${video.videoId}');
+    final icon = _busy
+        ? const SizedBox.square(
+            dimension: 20,
+            child: MotionLoadingIndicator(
+                child: CircularProgressIndicator(strokeWidth: 2)))
+        : const Icon(Icons.file_copy_outlined);
+    return widget.compact
+        ? IconButton(
+            key: key,
+            tooltip: label,
+            icon: icon,
+            onPressed: _busy ? null : _export)
+        : ListTile(
+            key: key,
+            leading: icon,
+            title: Text(label),
+            enabled: !_busy,
+            onTap: _busy ? null : _export);
   }
 }

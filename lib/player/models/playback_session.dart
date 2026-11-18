@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../../videos/models/video.dart';
 import '../../playlists/models/playlist_reference.dart';
 import 'playback_queue.dart';
+import 'local_music_playback.dart';
 
 const playbackSessionSetting = 'playback-session';
 
@@ -87,6 +88,16 @@ class PlaybackSession {
 
       final videos = (json['videos'] as List).map(decodeVideo).toList();
       final offlineIds = List<String>.from(json['offlineIds']);
+      final playlistEntries =
+          (json['playlistEntries'] as List? ?? []).map(decodeVideo).toList();
+      if ([...videos, ...playlistEntries]
+              .any((v) => isLocalMusicPlaybackId(v.videoId)) ||
+          (offlineIds.any(isLocalMusicPlaybackId) &&
+              (offlineIds.any((id) => !isLocalMusicPlaybackId(id)) ||
+                  playlistReference != null ||
+                  playlistEntries.isNotEmpty))) {
+        return null;
+      }
       final currentId = json['currentId'] as String;
       final seconds = json['seconds'] as int;
       if (seconds < 0 ||
@@ -107,8 +118,7 @@ class PlaybackSession {
             List<String>.from(json['next'] ?? []).where(ids.contains).toList(),
         playlistReference: playlistReference,
         playlistComplete: json['playlistComplete'] == true,
-        playlistEntries:
-            (json['playlistEntries'] as List? ?? []).map(decodeVideo).toList(),
+        playlistEntries: playlistEntries,
       );
     } catch (_) {
       // A damaged backup should not prevent the app from opening.

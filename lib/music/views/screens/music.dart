@@ -9,6 +9,7 @@ import 'package:clipious/downloads/services/download_playback_source.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
@@ -16,6 +17,7 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/song_artwork.dart';
+import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
@@ -25,6 +27,7 @@ import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -71,6 +74,21 @@ class MusicScreen extends StatefulWidget {
 
   static Widget tvAudio({Video? video, DownloadedVideo? offlineVideo}) =>
       _MusicTvAudio(video: video, offlineVideo: offlineVideo);
+
+  static Future<void> playLocalTracks(
+      BuildContext context, List<LocalMusicTrack> tracks,
+      {int startIndex = 0}) async {
+    if (tracks.isEmpty || startIndex < 0 || startIndex >= tracks.length) return;
+    if (isTv) {
+      await Navigator.of(context).push<void>(MaterialPageRoute(
+          builder: (_) => _MusicTvPlayer(
+              videos: const [], localTracks: tracks, startIndex: startIndex)));
+    } else {
+      await context
+          .read<PlayerCubit>()
+          .playLocalMusic(tracks, startIndex: startIndex);
+    }
+  }
 
   static Future<void> playTracks(BuildContext context, List<Video> videos,
       {PlaylistReference? reference,
@@ -490,24 +508,40 @@ class _MusicScreenState extends State<MusicScreen> {
               label: Text(locals.musicNowPlaying));
         }
         final saved = player.savedSession;
-        final savedOffline =
-            saved == null ? null : db.getDownloadByVideoId(saved.currentId);
-        final savedMusic = saved != null &&
-            saved.audio &&
-            (saved.videos.any((video) =>
-                    playbackQueueId(video) == saved.currentId &&
-                    video.musicMetadata != null) ||
-                (saved.offlineIds.contains(saved.currentId) &&
-                    savedOffline?.downloadComplete == true &&
-                    savedOffline?.musicMetadata != null));
-        if (!savedMusic || (!state.isHidden && state.hasVideo)) {
+        if (saved == null ||
+            !saved.audio ||
+            (!state.isHidden && state.hasVideo)) {
           return const SizedBox.shrink();
         }
-        return TextButton.icon(
+        final resume = TextButton.icon(
             key: const ValueKey('music-resume'),
             onPressed: _starting ? null : _resumeListening,
             icon: const Icon(Icons.play_arrow),
             label: Text(locals.musicResume));
+        if (saved.offlineIds.contains(saved.currentId)) {
+          if (isLocalMusicPlaybackId(saved.currentId)) {
+            final library = LocalMusicLibrary.instance;
+            unawaited(library.initialize());
+            return ListenableBuilder(
+                listenable: library,
+                builder: (context, _) => library.enabled &&
+                        !library.unavailable &&
+                        (!library.loaded ||
+                            library.trackById(saved.currentId) != null)
+                    ? resume
+                    : const SizedBox.shrink());
+          }
+          final offline = db.getDownloadByVideoId(saved.currentId);
+          if (offline?.downloadComplete == true &&
+              offline?.musicMetadata != null) {
+            return resume;
+          }
+        }
+        return saved.videos.any((video) =>
+                playbackQueueId(video) == saved.currentId &&
+                video.musicMetadata != null)
+            ? resume
+            : const SizedBox.shrink();
       });
 
   Widget _artwork(List<ImageObject> images) => SizedBox.square(
@@ -947,6 +981,7 @@ class _MusicScreenState extends State<MusicScreen> {
 /// TV routes own their player, as the TV home does not mount the phone player.
 class _MusicTvPlayer extends StatelessWidget {
   final List<Video> videos;
+  final List<LocalMusicTrack>? localTracks;
   final bool resumeSession;
   final PlaylistReference? reference;
   final int startIndex;
@@ -954,6 +989,7 @@ class _MusicTvPlayer extends StatelessWidget {
 
   const _MusicTvPlayer(
       {required this.videos,
+      this.localTracks,
       this.resumeSession = false,
       this.reference,
       this.startIndex = 0,
@@ -967,6 +1003,7 @@ class _MusicTvPlayer extends StatelessWidget {
               isAudio: true, isMini: false, isHidden: false, startAt: startAt),
           context.read<SettingsCubit>(),
           resume: resumeSession,
+          initialLocalMusic: localTracks,
           playlistReference: reference,
           startIndex: startIndex,
           playlistAudio: true),
@@ -980,6 +1017,16 @@ class _MusicTvPlayer extends StatelessWidget {
             child: BlocBuilder<PlayerCubit, PlayerState>(
               builder: (context, state) {
                 final player = context.read<PlayerCubit>();
+                if (localTracks case final tracks?
+                    when state.offlineCurrentlyPlaying == null) {
+                  if (state.isClosing ||
+                      state.mediaEvent.state == MediaState.error) {
+                    return _MusicPlaybackFailure(
+                        onRetry: () => player.playLocalMusic(tracks,
+                            startIndex: startIndex));
+                  }
+                  return const Center(child: CircularProgressIndicator());
+                }
                 if (state.isClosing ||
                     (state.videos.isEmpty && state.offlineVideos.isEmpty)) {
                   return _MusicPlaybackFailure(

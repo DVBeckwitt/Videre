@@ -1,13 +1,18 @@
 package com.github.dvbeckwitt.videre
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.storage.StorageManager
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -17,10 +22,13 @@ import io.flutter.plugin.common.PluginRegistry
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import com.github.dvbeckwitt.videre.proxy.DownloadDocumentIntegrity
+import com.github.dvbeckwitt.videre.proxy.SharedMusicDownload
 
 /** The engine owns storage work; opening the picker is the only Activity operation. */
 class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityResultListener {
@@ -41,74 +49,144 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
 
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "sharedMusicFolder" -> result.success(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) SharedMusicDownload.COLLECTION else null)
             "pickFolder" -> pickFolder(call.argument("initialUri"), result)
             "cancelWrite" -> {
                 call.argument<String>("id")?.let { writes[it]?.set(true) }
                 result.success(null)
             }
-            "writeDocument" -> {
-                val id = call.argument<String>("id")
-                if (id == null || writes.containsKey(id)) {
-                    result.error("DOWNLOAD_STORAGE", "Invalid storage operation.", null)
-                    return
-                }
-                val cancelled = AtomicBoolean(false)
-                writes[id] = cancelled
-                run(result) {
-                    try {
-                        val uri = document(call.argument<String>("uri")!!)
-                        if (!exists(uri)) throw IOException()
-                        val source = File(call.argument<String>("source")!!).canonicalFile
-                        val privateRoot = File(context.applicationInfo.dataDir).canonicalPath + File.separator
-                        require(source.path.startsWith(privateRoot) && source.isFile)
-                        if (cancelled.get()) throw IOException()
-                        source.inputStream().use { input ->
-                            (context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException()).use { output ->
-                                val buffer = ByteArray(64 * 1024)
-                                while (true) {
-                                    if (cancelled.get() || Thread.currentThread().isInterrupted) throw IOException()
-                                    val count = input.read(buffer)
-                                    if (count < 0) break
-                                    output.write(buffer, 0, count)
-                                }
-                                output.flush()
-                            }
-                        }
-                        if (cancelled.get()) throw IOException()
-                        null
-                    } finally {
-                        writes.remove(id)
+            "writeDocument" -> transfer(call, result) { cancelled ->
+                val uri = Uri.parse(call.argument<String>("uri")!!)
+                val source = File(call.argument<String>("source")!!).canonicalFile
+                val privateRoot = File(context.applicationInfo.dataDir).canonicalPath + File.separator
+                require(source.path.startsWith(privateRoot) && source.isFile)
+                val shared = SharedMusicDownload.isItem(uri.toString())
+                if (shared) {
+                    when (SharedMusicDownload.pending(context, uri)) {
+                        null -> throw IOException()
+                        false -> setPending(uri, true)
+                        true -> Unit
+                    }
+                } else if (!exists(document(uri.toString()))) throw IOException()
+                source.inputStream().use { input ->
+                    (context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException()).use { output ->
+                        copy(input, output, cancelled)
                     }
                 }
+                if (cancelled.get()) throw IOException()
+                if (shared) setPending(uri, false) else scanAudioDocument(uri)
             }
-            "checkFolder" -> run(result) { folder(call.argument<String>("uri")!!); null }
+            "readDocument" -> transfer(call, result) { cancelled ->
+                val uri = document(call.argument<String>("uri")!!, writable = false)
+                val tree = Uri.parse(call.argument<String>("folderUri")!!)
+                require(tree == DocumentsContract.buildTreeDocumentUri(uri.authority, DocumentsContract.getTreeDocumentId(uri)))
+                val root = File(File(context.applicationInfo.dataDir).canonicalFile, "app_flutter/downloads")
+                val destination = exportInputFile(root, File(call.argument<String>("destination")!!)) ?: throw IOException()
+                val input = context.contentResolver.openInputStream(uri) ?: throw IOException()
+                try {
+                    input.use { source -> destination.outputStream().use { copy(source, it, cancelled) } }
+                    if (cancelled.get()) throw IOException()
+                } catch (error: Exception) {
+                    destination.delete()
+                    throw error
+                }
+            }
+            "checkFolder" -> run(result) {
+                val uri = call.argument<String>("uri")!!
+                if (uri == SharedMusicDownload.COLLECTION) {
+                    require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                        Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED)
+                } else folder(uri)
+                null
+            }
             "inspectDocument" -> run(result) {
                 DownloadDocumentIntegrity.inspect(context, call.argument<String>("uri")!!,
                     call.argument<String>("folderUri")!!)
             }
             "prepareDocument" -> run(result) {
                 val tree = Uri.parse(call.argument<String>("folder")!!)
-                val parent = folder(tree.toString())
                 val existing = call.argument<String>("existing")
+                val name = call.argument<String>("name")!!
+                val mime = call.argument<String>("mime")!!
+                if (tree.toString() == SharedMusicDownload.COLLECTION) {
+                    return@run prepareSharedMusic(existing, name, mime).toString()
+                }
+                val parent = folder(tree.toString())
                 if (existing != null) {
                     val uri = document(existing)
                     require(uri.authority == tree.authority &&
                         DocumentsContract.getTreeDocumentId(uri) == DocumentsContract.getTreeDocumentId(tree))
                     if (exists(uri)) return@run uri.toString()
                 }
-                val name = call.argument<String>("name")!!
-                val mime = call.argument<String>("mime")!!
                 require(name.isNotBlank() && name.length <= 240 && !name.contains('/') && !name.contains('\\'))
-                require(mime in setOf("video/webm", "audio/webm", "video/mp4", "audio/mp4"))
+                require(mime in setOf("video/webm", "audio/webm", "video/mp4", "audio/mp4", "audio/ogg", "audio/mpeg"))
                 (DocumentsContract.createDocument(context.contentResolver, parent, mime, name)
                     ?: throw IOException()).toString()
             }
             "deleteDocument" -> run(result) {
-                val uri = document(call.argument<String>("uri")!!)
-                if (exists(uri) && !DocumentsContract.deleteDocument(context.contentResolver, uri)) throw IOException()
+                val uri = Uri.parse(call.argument<String>("uri")!!)
+                if (SharedMusicDownload.isItem(uri.toString())) {
+                    if (SharedMusicDownload.pending(context, uri) != null &&
+                        context.contentResolver.delete(uri, null, null) != 1) throw IOException()
+                } else if (exists(document(uri.toString())) &&
+                    !DocumentsContract.deleteDocument(context.contentResolver, uri)) throw IOException()
                 null
             }
             else -> result.notImplemented()
+        }
+    }
+
+    private fun prepareSharedMusic(existing: String?, name: String, mime: String): Uri {
+        val visibleName = name.trimStart('.')
+        require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && SharedMusicDownload.acceptsFile(visibleName, mime))
+        if (existing != null) {
+            val uri = Uri.parse(existing)
+            if (SharedMusicDownload.pending(context, uri) != null) return uri
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, visibleName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, SharedMusicDownload.DIRECTORY)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        return context.contentResolver.insert(Uri.parse(SharedMusicDownload.COLLECTION), values)
+            ?: throw IOException()
+    }
+
+    private fun setPending(uri: Uri, pending: Boolean) {
+        val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, if (pending) 1 else 0) }
+        if (context.contentResolver.update(uri, values, null, null) != 1) throw IOException()
+    }
+
+    /** A SAF provider may be a cloud service. Only scan files on a known local shared volume. */
+    @Suppress("DEPRECATION")
+    private fun scanAudioDocument(uri: Uri) {
+        if (uri.authority != "com.android.externalstorage.documents") return
+        try {
+            val mime = context.contentResolver.getType(uri) ?: return
+            if (!mime.startsWith("audio/") && mime != "application/ogg") return
+            val id = DocumentsContract.getDocumentId(uri)
+            val volume = id.substringBefore(':')
+            val manager = context.getSystemService(StorageManager::class.java)
+            val root = when {
+                volume.equals("primary", true) -> Environment.getExternalStorageDirectory()
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ->
+                    manager.storageVolumes.firstOrNull { volume.equals(it.uuid, true) }?.directory
+                else -> {
+                    // Before API 30 StorageVolume has no directory getter. Match its UUID to this
+                    // app's known external files directory, then remove the app-specific suffix.
+                    val files = context.getExternalFilesDirs(null).filterNotNull().firstOrNull {
+                        volume.equals(manager.getStorageVolume(it)?.uuid, true)
+                    }
+                    val suffix = "/Android/data/${context.packageName}/files"
+                    files?.path?.takeIf { it.endsWith(suffix) }?.let { File(it.removeSuffix(suffix)) }
+                }
+            } ?: return
+            val path = sharedAudioFile(root, DocumentsContract.getTreeDocumentId(uri), id) ?: return
+            MediaScannerConnection.scanFile(context, arrayOf(path.path), arrayOf(mime), null)
+        } catch (_: Exception) {
+            // The document is already saved. A provider may not expose a scannable filesystem path.
         }
     }
 
@@ -124,17 +202,46 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
         }
     }
 
-    private fun requireGrant(uri: Uri) {
+    private fun transfer(call: MethodCall, result: MethodChannel.Result, action: (AtomicBoolean) -> Unit) {
+        val id = call.argument<String>("id")
+        val cancelled = AtomicBoolean(false)
+        if (id.isNullOrEmpty() || writes.putIfAbsent(id, cancelled) != null) {
+            result.error("DOWNLOAD_STORAGE", "Invalid storage operation.", null)
+            return
+        }
+        run(result) {
+            try {
+                if (cancelled.get()) throw IOException()
+                action(cancelled)
+                null
+            } finally {
+                writes.remove(id)
+            }
+        }
+    }
+
+    private fun copy(input: InputStream, output: OutputStream, cancelled: AtomicBoolean) {
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            if (cancelled.get() || Thread.currentThread().isInterrupted) throw IOException()
+            val count = input.read(buffer)
+            if (count < 0) break
+            output.write(buffer, 0, count)
+        }
+        output.flush()
+    }
+
+    private fun requireGrant(uri: Uri, writable: Boolean = true) {
         require(uri.scheme == "content" && DocumentsContract.isTreeUri(uri))
         val tree = DocumentsContract.buildTreeDocumentUri(uri.authority, DocumentsContract.getTreeDocumentId(uri))
         if (context.contentResolver.persistedUriPermissions.none {
-                it.uri == tree && it.isReadPermission && it.isWritePermission
+                it.uri == tree && it.isReadPermission && (!writable || it.isWritePermission)
             }) throw SecurityException()
     }
 
-    private fun document(value: String): Uri {
+    private fun document(value: String, writable: Boolean = true): Uri {
         val uri = Uri.parse(value)
-        requireGrant(uri)
+        requireGrant(uri, writable)
         require(DocumentsContract.isDocumentUri(context, uri))
         return uri
     }
@@ -248,3 +355,30 @@ class DownloadStoragePlugin : FlutterPlugin, ActivityAware, PluginRegistry.Activ
 
     companion object { private const val REQUEST_CODE = 4402 }
 }
+
+/** Resolve only immediate files of the granted tree from Android's ExternalStorageProvider. */
+internal fun sharedAudioFile(volumeRoot: File, treeId: String, documentId: String): File? {
+    val volume = treeId.substringBefore(':')
+    if (volume.isEmpty() || ':' !in treeId || !documentId.startsWith("$volume:")) return null
+    val directory = treeId.substringAfter(':')
+    val relative = documentId.substringAfter(':')
+    if (relative.substringBeforeLast('/', "") != directory ||
+        relative.split('/').any { it.isEmpty() || it == "." || it == ".." || '\\' in it }) return null
+    val root = volumeRoot.canonicalFile
+    val file = File(root, relative)
+    return file.takeIf { it.canonicalFile == it.absoluteFile }
+}
+
+/** A legacy export may write only its own temporary input beneath a Videre download directory. */
+internal fun exportInputFile(downloads: File, destination: File): File? {
+    val root = downloads.canonicalFile
+    // Android may return the application directory using either /data/data or /data/user/0.
+    val file = File(destination.parentFile?.canonicalFile ?: return null, destination.name)
+    if (file != file.canonicalFile || !exportInputName.matches(file.name)) return null
+    val parent = file.parentFile ?: return null
+    if (parent != root && !(parent.parentFile == File(root, "profiles") && profileName.matches(parent.name))) return null
+    return file
+}
+
+private val profileName = Regex("[A-Za-z0-9_-]{1,128}")
+private val exportInputName = Regex("[A-Za-z0-9_-]{1,128}(?:\\.(?:webm|mp4|m4a|mp3|ogg))?\\.export-input\\.part")

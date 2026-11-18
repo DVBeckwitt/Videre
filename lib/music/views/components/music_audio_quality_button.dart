@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../player/models/local_music_playback.dart';
 import '../../../player/models/music_audio_quality.dart';
 import '../../../player/states/player.dart';
 
@@ -15,6 +16,10 @@ class MusicAudioQualityButton extends StatelessWidget {
     final player = context.read<PlayerCubit>();
     final locals = AppLocalizations.of(context)!;
     final current = player.state.currentlyPlaying;
+    if (isLocalMusicPlaybackId(
+        current?.videoId ?? player.state.offlineCurrentlyPlaying?.videoId)) {
+      return;
+    }
     final menu = player.musicAudioQuality;
     final saved = player.state.offlineCurrentlyPlaying != null ||
         current?.downloadPlaybackOnly == true;

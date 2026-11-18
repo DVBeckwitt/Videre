@@ -42,6 +42,7 @@ const homeTabsLayoutSettingName = 'home-tabs-layout';
 const homeContentModeSettingName = 'home-content-mode';
 const homeExperienceSettingName = 'home-experience';
 const musicCommunityCoverSettingName = 'music-community-cover-art-enabled';
+const musicDownloadFormatSettingName = 'music-download-output-format';
 const navigationBarLabelBehaviorSettingName = 'navigation-bar-label-behavior';
 const distractionFreeModeSettingName = 'distraction-free-mode';
 const hideWatchedSubscriptionsSettingName = 'hide-watched-subscriptions';

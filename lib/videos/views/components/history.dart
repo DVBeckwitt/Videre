@@ -15,7 +15,9 @@ import '../../../utils/views/components/placeholders.dart';
 import '../../states/history.dart';
 
 class HistoryView extends StatefulWidget {
-  const HistoryView({super.key});
+  final bool nestedScroll;
+
+  const HistoryView({super.key, this.nestedScroll = false});
 
   @override
   State<HistoryView> createState() => _HistoryViewState();
@@ -137,25 +139,37 @@ class _HistoryViewState extends State<HistoryView> {
                               unawaited(service.syncHistory());
                               return listCubit.refreshItems();
                             },
-                            child: ListView.builder(
-                              controller: listCubit.scrollController,
-                              scrollDirection: Axis.vertical,
-                              itemCount:
-                                  state.items.length + (state.loading ? 5 : 0),
-                              itemBuilder: (context, index) => Padding(
-                                padding: EdgeInsets.only(
-                                    bottom: index == state.items.length - 1
-                                        ? 70.0
-                                        : 0),
-                                child: index >= state.items.length
-                                    ? const CompactVideoPlaceHolder()
-                                    : HistoryVideoView(
-                                        key: ValueKey(state.items[index]),
-                                        videoId: state.items[index],
-                                        onLongPress: () => _confirmRemoval(
-                                            context,
-                                            historyCubit,
-                                            state.items[index])),
+                            child:
+                                NotificationListener<ScrollUpdateNotification>(
+                              onNotification: (notice) {
+                                if (widget.nestedScroll && notice.depth == 0) {
+                                  listCubit.onScrollEvent(notice.metrics);
+                                }
+                                return false;
+                              },
+                              child: ListView.builder(
+                                controller: widget.nestedScroll
+                                    ? null
+                                    : listCubit.scrollController,
+                                primary: widget.nestedScroll ? true : null,
+                                scrollDirection: Axis.vertical,
+                                itemCount: state.items.length +
+                                    (state.loading ? 5 : 0),
+                                itemBuilder: (context, index) => Padding(
+                                  padding: EdgeInsets.only(
+                                      bottom: index == state.items.length - 1
+                                          ? 70.0
+                                          : 0),
+                                  child: index >= state.items.length
+                                      ? const CompactVideoPlaceHolder()
+                                      : HistoryVideoView(
+                                          key: ValueKey(state.items[index]),
+                                          videoId: state.items[index],
+                                          onLongPress: () => _confirmRemoval(
+                                              context,
+                                              historyCubit,
+                                              state.items[index])),
+                                ),
                               ),
                             ),
                           ),

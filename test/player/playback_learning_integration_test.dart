@@ -2,6 +2,8 @@ import 'package:clipious/app/states/app.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
@@ -37,6 +39,18 @@ class _LearningPlayer extends PlayerCubit {
       currentlyPlaying: video,
       isPlaying: true,
       isHidden: false));
+
+  void seedDevice(LocalMusicTrack track) {
+    final item = localMusicPlaybackEntry(track, db.profileId);
+    emit(state.copyWith(
+        videos: [],
+        currentlyPlaying: null,
+        offlineVideos: [item],
+        offlineCurrentlyPlaying: item,
+        isAudio: true,
+        isPlaying: true,
+        isHidden: false));
+  }
 }
 
 void main() {
@@ -114,6 +128,23 @@ void main() {
     expect(events, hasLength(1));
     expect(events.single['playedMs'], 12000);
     expect(events.single['skipped'], isFalse);
+  });
+
+  test('device audio never contributes native samples to recommendations',
+      () async {
+    player.seedDevice(const LocalMusicTrack(
+        uri: 'content://media/tree/music/document/local',
+        title: 'Local recording',
+        durationMs: 60000));
+    sample(0);
+    sample(15);
+    sample(30);
+    await player.close();
+    await RecommendationService.flushPending();
+    expect(events, isEmpty);
+    expect(
+        db.getSettings(recommendationSettingName(RecommendationDomain.music)),
+        isNull);
   });
 
   test('background and pause checkpoints preserve one seek-immune occurrence',

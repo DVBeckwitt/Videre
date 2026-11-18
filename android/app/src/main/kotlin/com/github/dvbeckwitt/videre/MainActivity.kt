@@ -122,6 +122,9 @@ class MainActivity : AudioServiceActivity() {
         if (!flutterEngine.plugins.has(DownloadStoragePlugin::class.java)) {
             flutterEngine.plugins.add(DownloadStoragePlugin())
         }
+        if (!flutterEngine.plugins.has(LocalMusicPlugin::class.java)) {
+            flutterEngine.plugins.add(LocalMusicPlugin())
+        }
         if (!flutterEngine.plugins.has(IncomingLinksPlugin::class.java)) {
             flutterEngine.plugins.add(IncomingLinksPlugin())
         }

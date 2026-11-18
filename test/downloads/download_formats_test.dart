@@ -47,6 +47,26 @@ void main() {
     expect(formats.audioFor(DownloadContainer.mp4), isNull);
   });
 
+  test(
+      'highest audio uses the chosen track and breaks unknown or equal rates in WebM order',
+      () {
+    final english = _audio('en', bitrate: '128000', isDefault: true);
+    final aac = _audio('en', bitrate: '128000', mp4: true);
+    final other = _audio('es', mp4: true, bitrate: '320000');
+    final formats = [aac, other, english];
+    expect(DownloadFormats(formats).highestBitrateAudioContainer,
+        DownloadContainer.webm);
+    expect(
+        DownloadFormats(formats, audioTrackId: 'es')
+            .highestBitrateAudioContainer,
+        DownloadContainer.mp4);
+    aac.bitrate = '';
+    english.bitrate = null;
+    expect(DownloadFormats(formats).highestBitrateAudioContainer,
+        DownloadContainer.webm);
+    expect(DownloadFormats(null).highestBitrateAudioContainer, isNull);
+  });
+
   test('DASH discovery preserves the original untagged default audio', () {
     final original = _audio('en')..audioTrack = null;
     final dash = _audio('dash:en:main:English', mp4: true, isDefault: true);

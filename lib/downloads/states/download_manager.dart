@@ -7,11 +7,10 @@ import 'package:bloc/bloc.dart';
 import 'package:dio/dio.dart';
 import 'package:crypto/crypto.dart';
 import 'package:downloadsfolder/downloadsfolder.dart';
-import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit_config.dart';
-import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_session.dart';
 import 'package:flutter/services.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/globals.dart';
@@ -40,6 +39,7 @@ import '../../videos/models/video.dart';
 import '../../videos/services/download_audio_tracks.dart';
 import 'resumable_download.dart';
 import '../services/download_storage.dart';
+import '../services/download_mux.dart';
 
 part 'download_manager.freezed.dart';
 
@@ -73,12 +73,22 @@ class DownloadProgress {
 class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final PlayerCubit player;
   final DownloadStorage storage;
+  final Future<void> Function(
+      {required String input,
+      required String output,
+      required DownloadedVideo video,
+      required CancelToken token,
+      String? sourceCodec,
+      MusicDownloadFormat? inputFormat}) encodeMusic;
   late final Future<void> _ready;
   late IDbClient _library;
   StreamSubscription<dynamic>? _networkSubscription;
   final Set<Future<void>> _mutations = {};
   final Set<String> _deleting = {};
   final Set<String> _enqueuing = {};
+  final Map<String, ({CancelToken token, Future<bool> result})> _exports = {};
+  DownloadFolder? _legacyMusicFolder;
+  Future<String?>? _pendingMusicFolder;
   bool _processing = false, _wifiConnected = false, _closing = false;
   bool _switchingProfile = false;
   int _generation = 0;
@@ -87,7 +97,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Completer<void>? _drainFinished;
 
   DownloadManagerCubit(super.initialState, this.player,
-      {DownloadStorage? storage})
+      {DownloadStorage? storage, this.encodeMusic = runMusicDownloadMux})
       : storage = storage ?? DownloadStorage() {
     _library = db.forProfile(db.profileId);
     _ready = onReady();
@@ -109,6 +119,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   /// can finish only in its original library; switching waits for all writers.
   Future<void> pauseForProfileSwitch() async {
     _switchingProfile = true;
+    for (final export in _exports.values) {
+      export.token.cancel();
+    }
     for (final progress in state.downloadProgresses.values) {
       progress.cancelToken.cancel();
     }
@@ -178,11 +191,20 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   void _loadLibrary() {
     Set<String> paused = {};
     DownloadFolder? folder;
+    var usePrivateStorage = false;
+    _legacyMusicFolder = null;
     try {
-      folder = DownloadFolder.fromJson(jsonDecode(
-          _library.getSettings(downloadFolderSetting)?.value ?? 'null'));
+      final saved = jsonDecode(
+          _library.getSettings(downloadFolderSetting)?.value ?? 'null');
+      folder = DownloadFolder.fromJson(saved);
+      if (saved is Map) {
+        _legacyMusicFolder = DownloadFolder.fromJson(saved['musicFolder']);
+      }
+      usePrivateStorage =
+          saved != null && folder == null && _legacyMusicFolder == null;
     } on FormatException {
       // Invalid local preferences fall back to private storage.
+      usePrivateStorage = true;
     }
     try {
       final saved =
@@ -194,6 +216,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     emit(state.copyWith(
         folderUri: folder?.uri,
         folderName: folder?.name,
+        usePrivateStorage: usePrivateStorage,
         wifiOnly: _library.getSettings(_wifiSetting)?.value == 'true',
         pausedVideoIds: paused,
         downloadProgresses: {},
@@ -242,16 +265,73 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     await library.saveSetting(
         SettingsValue(downloadFolderSetting, jsonEncode(folder.toJson())));
     if (_current && generation == _generation) {
-      emit(state.copyWith(folderUri: folder.uri, folderName: folder.name));
+      _legacyMusicFolder = null;
+      emit(state.copyWith(
+          folderUri: folder.uri,
+          folderName: folder.name,
+          usePrivateStorage: false));
     }
   }
 
-  Future<void> usePrivateFolder() => _mutate(() async {
+  Future<void> usePrivateFolder() => _resetFolder(private: true);
+
+  Future<void> useDefaultFolder() => _resetFolder(private: false);
+
+  Future<void> _resetFolder({required bool private}) => _mutate(() async {
         await _ready;
         if (!_current || _switchingProfile) return;
-        await _library.deleteSetting(downloadFolderSetting);
-        if (_current) emit(state.copyWith(folderUri: null, folderName: null));
+        if (private) {
+          await _library.saveSetting(
+              SettingsValue(downloadFolderSetting, jsonEncode('private')));
+        } else {
+          await _library.deleteSetting(downloadFolderSetting);
+        }
+        if (_current) {
+          _legacyMusicFolder = null;
+          emit(state.copyWith(
+              folderUri: null, folderName: null, usePrivateStorage: private));
+        }
       });
+
+  Future<String?> _deviceMusicFolder() async {
+    final shared = await storage.sharedMusicFolder();
+    if (shared != null) return shared;
+    if (_legacyMusicFolder case final folder?) return folder.uri;
+    return _pendingMusicFolder ??=
+        _pickMusicFolder().whenComplete(() => _pendingMusicFolder = null);
+  }
+
+  /// A batch gets one system folder prompt on Android versions before 10.
+  Future<bool> prepareMusicDownloads() async {
+    await _ready;
+    if (!_current || _switchingProfile) return false;
+    if (!storage.supportsSharedMusic ||
+        state.usePrivateStorage ||
+        state.folderUri != null) {
+      return true;
+    }
+    return await _deviceMusicFolder() != null && _current && !_switchingProfile;
+  }
+
+  Future<String?> _pickMusicFolder() async {
+    final library = _library;
+    final generation = _generation;
+    final folder = await storage.pickFolder(null);
+    if (folder == null ||
+        !_current ||
+        _switchingProfile ||
+        generation != _generation) {
+      return null;
+    }
+    // The pre-Android-10 fallback is scoped to Music. Preserve a separately
+    // configured private/SAF destination for ordinary downloads.
+    if (state.folderUri == null && !state.usePrivateStorage) {
+      await library.saveSetting(SettingsValue(
+          downloadFolderSetting, jsonEncode({'musicFolder': folder.toJson()})));
+      if (_current && generation == _generation) _legacyMusicFolder = folder;
+    }
+    return folder.uri;
+  }
 
   void setVideos() {
     if (_current) emit(state.copyWith(videos: _library.getAllDownloads()));
@@ -276,6 +356,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           return false;
         }
         try {
+          var folder = state.folderUri;
+          final isMusic = audioOnly && quality == highestAudioDownloadQuality;
+          final format =
+              isMusic ? MusicDownloadFormat.forDatabase(_library) : null;
+          final shareMusic = isMusic &&
+              storage.supportsSharedMusic &&
+              !state.usePrivateStorage;
+          if (shareMusic && folder == null) {
+            folder = await _deviceMusicFolder();
+            if (folder == null || !_current || _switchingProfile) return false;
+          }
           final account = await _library.getCurrentlySelectedServer();
           if (!_current || _switchingProfile) return false;
           await _library.upsertDownload(DownloadedVideo(
@@ -288,7 +379,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               accountId: account.accountId,
               lengthSeconds: video?.lengthSeconds ?? 0,
               quality: quality,
-              folderUri: state.folderUri,
+              folderUri: folder,
+              musicFormat: format,
               container: container,
               audioTrackId: audioTrackId,
               captionLabel: audioOnly ? null : captionLabel,
@@ -407,7 +499,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             throw StateError('The download account is no longer available');
           }
           if (token.isCancelled) throw token.cancelError!;
-          final loadVideo = video.musicMetadata == null
+          final loadVideo = !video.storeAsMusic && video.musicMetadata == null
               ? service.getVideo
               : service.getMusicVideo;
           var vid = await Future.any([
@@ -449,9 +541,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           final selectedVideo = video.audioOnly
               ? null
               : formats.videoFor(video.quality, container: savedContainer);
+          final automaticAudio =
+              video.audioOnly && video.quality == highestAudioDownloadQuality
+                  ? formats.highestBitrateAudioContainer
+                  : formats.audioContainer;
           final container = savedContainer ??
               (selectedVideo == null
-                  ? formats.audioContainer
+                  ? automaticAudio
                   : DownloadContainer.forVideo(selectedVideo));
           final audio = formats.audioFor(container);
           if (audio == null || (!video.audioOnly && selectedVideo == null)) {
@@ -539,10 +635,17 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
           if (token.isCancelled) throw token.cancelError!;
           final output = '$staging.mux.${video.extension}';
-          if (video.audioOnly) {
+          if (video.storeAsMusic) {
+            await encodeMusic(
+                input: audioPath,
+                output: output,
+                video: video,
+                token: token,
+                sourceCodec: audio.encoding);
+          } else if (video.audioOnly) {
             await File(audioPath).copy(output);
           } else {
-            final session = await FFmpegSession.create([
+            await runDownloadMux([
               '-y',
               '-i',
               videoPath,
@@ -571,46 +674,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               '-c:a',
               'copy',
               output
-            ]);
-            if (token.isCancelled) throw token.cancelError!;
-            if (session.getSessionId() == null) {
-              throw StateError('Could not create the download merge session');
-            }
-            var muxFinished = false;
-            Future<void>? cancelling;
-            Timer? cancelRetry;
-            void cancelMux() {
-              if (muxFinished || cancelling != null) return;
-              cancelling = session.cancel().catchError((Object error) {
-                log.fine('Could not cancel the download merge', error);
-              }).whenComplete(() => cancelling = null);
-            }
-
-            final execution = FFmpegKitConfig.ffmpegExecute(session);
-            unawaited(token.whenCancel.then((_) {
-              if (!muxFinished) {
-                cancelMux();
-                // Native startup resets an earlier cancellation flag. Retry
-                // while this session is still running or queued for execution.
-                cancelRetry = Timer.periodic(
-                    const Duration(milliseconds: 100), (_) => cancelMux());
-              }
-            }));
-            try {
-              // Cancellation requests native termination; join it before a
-              // delete/profile switch can remove files still being written.
-              await execution;
-            } finally {
-              muxFinished = true;
-              cancelRetry?.cancel();
-              await cancelling;
-            }
-            if (token.isCancelled) throw token.cancelError!;
-            if (!((await session.getReturnCode())?.isValueSuccess() ?? false)) {
-              throw StateError(
-                  'Could not merge the downloaded audio and video');
-            }
+            ], token);
           }
+          if (token.isCancelled) throw token.cancelError!;
           await artwork;
           video = video.copyWith(sponsorSegments: await sponsorSegments);
           if (token.isCancelled) throw token.cancelError!;
@@ -890,6 +956,12 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       '.mux.webm',
       '.mux.mp4',
       '.mux.m4a',
+      '.mux.mp3',
+      '.mux.ogg',
+      '.export-input.part',
+      '.export.mp3',
+      '.export.ogg',
+      '.export.m4a',
     ]) {
       final file = File('$path$suffix');
       if (await file.exists()) await file.delete();
@@ -903,8 +975,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         (await video.stockSongPosterFile)?.path
       };
       await for (final entry in covers.list(followLinks: false)) {
-        if (entry is File && !current.contains(entry.path))
+        if (entry is File && !current.contains(entry.path)) {
           await entry.delete();
+        }
       }
     }
   }
@@ -925,10 +998,22 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         video = saved;
         _deleting.add(video.videoId);
         try {
+          final export = _exports[video.videoId];
+          if (export != null) {
+            export.token.cancel();
+            try {
+              await export.result;
+            } catch (_) {
+              // The writer is now detached from the file being removed.
+            }
+          }
           state.downloadProgresses[video.videoId]?.cancelToken.cancel();
           if (_activeId == video.videoId) await _activeJob;
           // The active job may have created a document since this UI snapshot.
           video = _library.getDownloadByVideoId(video.videoId) ?? video;
+          if (video.exportedMusic case final copy? when !copy.complete) {
+            await storage.deleteDocument(copy.uri);
+          }
           if (video.storageUri != null) {
             await storage.deleteDocument(video.storageUri!);
           }
@@ -966,6 +1051,100 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         .toList());
   }
 
+  /// Publishes an existing song without fetching it again or moving the original.
+  Future<bool> exportMusic(DownloadedVideo video) {
+    if (!_current ||
+        _switchingProfile ||
+        video.profileId != _library.profileId ||
+        _deleting.contains(video.videoId)) {
+      return Future.value(false);
+    }
+    final previous = _exports[video.videoId];
+    if (previous != null) return previous.result;
+    final token = CancelToken();
+    final result = _mutate(() => _exportMusic(video.videoId, token))
+        .whenComplete(() => _exports.remove(video.videoId));
+    _exports[video.videoId] = (token: token, result: result);
+    return result;
+  }
+
+  Future<bool> _exportMusic(String id, CancelToken token) async {
+    await _ready;
+    final library = _library;
+    final saved = library.getDownloadByVideoId(id);
+    if (token.isCancelled ||
+        !_current ||
+        _switchingProfile ||
+        saved == null ||
+        !saved.audioOnly ||
+        saved.musicMetadata == null ||
+        !saved.downloadComplete ||
+        saved.downloadFailed ||
+        (saved.storageUri != null && saved.storeAsMusic)) {
+      return false;
+    }
+    final format = MusicDownloadFormat.forDatabase(library);
+    final folder = await _deviceMusicFolder();
+    if (folder == null || token.isCancelled) return false;
+    final previous = saved.exportedMusic;
+    final sameTarget = previous?.folder == folder && previous?.format == format;
+    if (sameTarget && previous!.complete) {
+      // An exported song may since have been moved or removed outside Videre.
+      try {
+        if (await storage.inspectDocument(previous.uri, folder) != null) {
+          return true;
+        }
+      } on PlatformException {
+        // Recreate a missing export without overwriting a different document.
+      }
+    }
+    if (previous != null && !previous.complete && !sameTarget) {
+      await storage.deleteDocument(previous.uri);
+    }
+    final outputSong = saved.copyWith(musicFormat: format);
+    final staging = await saved.stagingPath;
+    final stageInput = File('$staging.export-input.part');
+    final stageOutput = File('$staging.export.${outputSong.extension}');
+    try {
+      var input = await saved.effectivePath;
+      if (saved.storageUri case final uri?) {
+        if (saved.folderUri == null) {
+          throw StateError('Missing download folder');
+        }
+        await storage.readDocument(
+            uri, saved.folderUri!, stageInput.path, token);
+        input = stageInput.path;
+      }
+      if (saved.musicFormat != format) {
+        await encodeMusic(
+            input: input,
+            output: stageOutput.path,
+            video: outputSong,
+            inputFormat: saved.musicFormat,
+            token: token);
+        input = stageOutput.path;
+      }
+      if (token.isCancelled) return false;
+      final uri = await storage.prepareDocument(
+          folder,
+          sameTarget && !previous!.complete ? previous.uri : null,
+          outputSong.fileName,
+          outputSong.mimeType);
+      await library.upsertDownload(saved.copyWith(
+          exportedMusic: ExportedMusicCopy(folder, uri, format)));
+      await storage.writeDocument(input, uri, token);
+      await library.upsertDownload(saved.copyWith(
+          exportedMusic:
+              ExportedMusicCopy(folder, uri, format, complete: true)));
+      setVideos();
+      return true;
+    } finally {
+      for (final file in [stageInput, stageOutput]) {
+        if (await file.exists()) await file.delete();
+      }
+    }
+  }
+
   Future<void> copyToDownloadFolder(DownloadedVideo video) async {
     if (!_current ||
         _switchingProfile ||
@@ -984,6 +1163,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   Future<void> close() async {
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     _closing = true;
+    for (final export in _exports.values) {
+      export.token.cancel();
+    }
     for (final progress in state.downloadProgresses.values) {
       progress.cancelToken.cancel();
     }
@@ -999,6 +1181,7 @@ sealed class DownloadManagerState with _$DownloadManagerState {
   const factory DownloadManagerState({
     String? folderUri,
     String? folderName,
+    @Default(false) bool usePrivateStorage,
     @Default([]) List<DownloadedVideo> videos,
     @Default({}) Map<String, DownloadProgress> downloadProgresses,
     @Default({}) Set<String> pausedVideoIds,

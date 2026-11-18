@@ -43,7 +43,7 @@ class FlowVideoHome extends StatefulWidget {
   final bool television;
   final List<Widget> leadingChips;
   final Widget? editAction;
-  final Widget? configuredFeed;
+  final Widget Function(Widget? continueWatching)? configuredFeed;
   final ValueChanged<List<RecommendationInterest>>? onEdit;
 
   const FlowVideoHome(
@@ -1192,18 +1192,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
               child: TickerMode(
                 enabled: _selectedTab == HomeTabsLayout.yourFeeds,
                 child: _feedsVisited && widget.configuredFeed != null
-                    ? LayoutBuilder(
-                        builder: (context, constraints) => Column(children: [
-                          if (continuing.isNotEmpty)
-                            ConstrainedBox(
-                              constraints: BoxConstraints(
-                                  maxHeight: constraints.maxHeight * 0.5),
-                              child: SingleChildScrollView(
-                                  child: _continueWatching(continuing)),
-                            ),
-                          Expanded(child: widget.configuredFeed!),
-                        ]),
-                      )
+                    ? widget.configuredFeed!(continuing.isEmpty
+                        ? null
+                        : _continueWatching(continuing))
                     : const SizedBox.shrink(),
               ),
             ),

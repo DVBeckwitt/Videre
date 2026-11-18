@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
@@ -12,6 +13,7 @@ import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
+import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
@@ -29,7 +31,15 @@ import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-enum _LibraryFilter { all, playlists, songs, channels, downloads, podcasts }
+enum _LibraryFilter {
+  all,
+  playlists,
+  songs,
+  onDevice,
+  channels,
+  downloads,
+  podcasts
+}
 
 enum _LibrarySort { saved, title }
 
@@ -170,6 +180,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         _LibraryFilter.all => locals.musicLibrary,
         _LibraryFilter.playlists => locals.musicPlaylists,
         _LibraryFilter.songs => locals.musicSongs,
+        _LibraryFilter.onDevice => locals.onDevice,
         _LibraryFilter.podcasts => locals.podcasts,
         _LibraryFilter.channels => locals.channels,
         _LibraryFilter.downloads => locals.downloads,
@@ -292,6 +303,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       _LibraryFilter.channels => MusicLibraryKind.artist,
       _LibraryFilter.downloads => MusicLibraryKind.song,
       _LibraryFilter.podcasts => MusicLibraryKind.song,
+      _LibraryFilter.onDevice => null,
     };
     final entries = library.entries
         .where((entry) =>
@@ -725,7 +737,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                         : () => _downloadAction(
                             video, (_) => context.read<PlayerCubit>().playOfflineVideos([video])),
                     trailing: video.downloadComplete
-                        ? null
+                        ? MusicDownloadExportAction(video: video, compact: true)
                         : IconButton(
                             tooltip: retry
                                 ? locals.retry
@@ -807,6 +819,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                           child: Row(children: [
                             for (final filter in _LibraryFilter.values)
                               if (filter != _LibraryFilter.all &&
+                                  (filter != _LibraryFilter.onDevice ||
+                                      supportsLocalMusicFolders) &&
                                   (!isTv || filter != _LibraryFilter.downloads))
                                 Padding(
                                     padding: const EdgeInsets.only(right: 8),
@@ -836,18 +850,20 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                           ]),
                         ),
                         Expanded(
-                            child: state.globalLoading ||
-                                    state.sessionRecoveryRequired
-                                ? const Center(
-                                    child: CircularProgressIndicator())
-                                : _filter == _LibraryFilter.podcasts
-                                    ? PodcastLibraryPage(
-                                        key: ValueKey(
-                                            'podcasts-${db.profileId}-${state.sessionRevision}'))
-                                    : _filter == _LibraryFilter.downloads &&
-                                            !isTv
-                                        ? _downloads()
-                                        : _catalogLibrary(library)),
+                            child: _filter == _LibraryFilter.onDevice
+                                ? const LocalMusicFolder.library()
+                                : state.globalLoading ||
+                                        state.sessionRecoveryRequired
+                                    ? const Center(
+                                        child: CircularProgressIndicator())
+                                    : _filter == _LibraryFilter.podcasts
+                                        ? PodcastLibraryPage(
+                                            key: ValueKey(
+                                                'podcasts-${db.profileId}-${state.sessionRevision}'))
+                                        : _filter == _LibraryFilter.downloads &&
+                                                !isTv
+                                            ? _downloads()
+                                            : _catalogLibrary(library)),
                       ],
                     )),
           );

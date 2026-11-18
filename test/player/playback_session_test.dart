@@ -10,6 +10,8 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -151,6 +153,53 @@ Future<void> waitForSavedPosition(int seconds, {String? videoId}) async {
     return session?.seconds == seconds &&
         (videoId == null || session?.currentId == videoId);
   }).timeout(const Duration(seconds: 5));
+}
+
+Future<List<LocalMusicTrack>> openDeviceFolder() async {
+  const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+  const tree =
+      'content://com.android.externalstorage.documents/tree/primary%3AMusic';
+  final folder = {'uri': tree, 'name': 'Music'};
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  var granted = false;
+  messenger.setMockMethodCallHandler(channel, (call) async {
+    switch (call.method) {
+      case 'getFolder':
+        return granted ? folder : null;
+      case 'pickFolder':
+        granted = true;
+        return folder;
+      case 'listTracks':
+        expect(granted, isTrue);
+        expect(call.arguments['treeUri'], tree);
+        return [
+          for (final name in ['First', 'Second'])
+            {
+              'uri': '$tree/document/primary%3AMusic%2F$name.mp3',
+              'title': name,
+              'artist': 'Local artist',
+              'album': 'Local album',
+              'durationMs': name == 'First' ? 0 : 60000,
+            }
+        ];
+      case 'forgetFolder':
+        granted = false;
+        return null;
+      default:
+        throw UnsupportedError(call.method);
+    }
+  });
+  final library = LocalMusicLibrary.instance;
+  addTearDown(() async {
+    await library.disable();
+    messenger.setMockMethodCallHandler(channel, null);
+  });
+  await library.initialize();
+  await library.chooseFolder();
+  if (!library.loaded) await library.refresh();
+  expect(library.tracks.map((track) => track.title), ['First', 'Second']);
+  return library.tracks.toList();
 }
 
 void main() {
@@ -548,6 +597,97 @@ void main() {
       expect(player.state.hasVideo, isFalse);
       expect(player.state.isPlaying, isFalse);
       expect(player.state.mediaCommand, isNull);
+    });
+
+    test('device songs use the scanned source, local queue and media metadata',
+        () async {
+      final songs = await openDeviceFolder();
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      // A retained row may predate a rescan. The current library owns labels
+      // and artwork for the URI, even when the caller still has an older row.
+      final stale = LocalMusicTrack(uri: songs.last.uri, title: 'Old title');
+      await player.playLocalMusic([songs.first, stale], startIndex: 1);
+      expect(player.state.currentlyPlaying, isNull);
+      expect(player.state.videos, isEmpty);
+      expect(player.state.isAudio, isTrue);
+      expect(player.currentIndex, 1);
+      expect(player.state.offlineCurrentlyPlaying?.storageUri, songs[1].uri);
+      expect(player.state.currentQueueId, songs[1].playbackId);
+      expect(player.state.offlineVideos.map((item) => item.videoId),
+          songs.map((song) => song.playbackId));
+      final mediaItem = (await player.getMediaItem(1))!;
+      expect(mediaItem.title, 'Second');
+      expect(mediaItem.artist, 'Local artist');
+      expect(mediaItem.album, 'Local album');
+      expect(mediaItem.duration, const Duration(minutes: 1));
+      expect(mediaItem.artUri, isNull);
+      const measured = Duration(milliseconds: 90250);
+      player.reportLocalMusicDuration(songs.first.playbackId, measured);
+      expect(player.state.offlineVideos.first.lengthSeconds, 0);
+      expect(player.state.offlineCurrentlyPlaying?.lengthSeconds, 60);
+
+      await player.saveProgress(30);
+      await player.skipToVideo(0);
+      expect(player.state.offlineCurrentlyPlaying?.storageUri, songs.first.uri);
+      expect(player.state.playQueue, [songs.last.playbackId]);
+      await waitForSavedPosition(0, videoId: songs.first.playbackId);
+      player.reportLocalMusicDuration(songs.first.playbackId, measured);
+      expect(player.state.offlineVideos.first.lengthSeconds, 91);
+      expect(player.state.offlineCurrentlyPlaying?.lengthSeconds, 91);
+      expect((await player.getMediaItem(0))!.duration,
+          const Duration(seconds: 91));
+      player.seek(const Duration(minutes: 2));
+      expect(player.state.mediaCommand!.value, const Duration(seconds: 91));
+      final encoded = db.getSettings(playbackSessionSetting)!.value;
+      final session = PlaybackSession.decode(encoded)!;
+      expect(session.offlineIds, songs.map((song) => song.playbackId));
+      expect(encoded, isNot(contains('content://')));
+      expect(encoded, isNot(contains('Local artist')));
+      expect(db.getAllProgress(), isEmpty);
+      expect(db.getLocalHistory(), isEmpty);
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
+      expect((service as _GuestService).requestedCategories, isNull);
+    });
+
+    test('restoring device audio needs the current folder grant', () async {
+      final songs = await openDeviceFolder();
+      final saved = PlaybackSession(
+          offlineIds: songs.map((track) => track.playbackId).toList(),
+          currentId: songs.last.playbackId,
+          seconds: 17,
+          audio: true);
+      await db
+          .saveSetting(SettingsValue(playbackSessionSetting, saved.encode()));
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await player.resumeSession();
+      expect(player.state.offlineCurrentlyPlaying?.storageUri, songs.last.uri);
+      expect(player.state.startAt, const Duration(seconds: 17));
+      await waitForSavedPosition(17, videoId: songs.last.playbackId);
+
+      await LocalMusicLibrary.instance.disable();
+      await player.close();
+      // Restore an old on-device session, even if its ID happens to match a
+      // downloads row. Neither source can re-grant a forgotten Android tree.
+      await db.upsertDownload(DownloadedVideo(
+          videoId: songs.last.playbackId,
+          title: 'Old download',
+          storageUri: songs.last.uri,
+          audioOnly: true,
+          downloadComplete: true,
+          lengthSeconds: 60,
+          quality: ''));
+      await db
+          .saveSetting(SettingsValue(playbackSessionSetting, saved.encode()));
+      final reopened = _SessionPlayer(PlayerState.init(null), settings);
+      addTearDown(reopened.close);
+      await reopened.resumeSession();
+      expect(reopened.state.currentlyPlaying, isNull);
+      expect(reopened.state.offlineCurrentlyPlaying, isNull);
+      expect(reopened.state.offlineVideos, isEmpty);
+      expect((service as _GuestService).requestedVideoIds, isEmpty);
+      expect((service as _GuestService).requestedCategories, isNull);
     });
 
     test('music hydration preserves catalog identity and restored resume time',

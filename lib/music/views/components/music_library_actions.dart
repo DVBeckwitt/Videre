@@ -138,11 +138,16 @@ class MusicLibrarySession {
       {DownloadContainer? container}) async {
     _requireCurrent();
     if (isTv) return 0;
+    final songs = _unique(videos);
+    if (songs.length > 1 && !await manager.prepareMusicDownloads()) return 0;
     var added = 0;
-    for (final video in _unique(videos)) {
+    for (final video in songs) {
       _requireCurrent();
       if (await manager.addDownload(video.videoId,
-          audioOnly: true, container: container, video: video)) {
+          audioOnly: true,
+          quality: highestAudioDownloadQuality,
+          container: container,
+          video: video)) {
         added++;
       }
     }
@@ -395,7 +400,7 @@ class MusicLibraryActions extends StatefulWidget {
     final locals = AppLocalizations.of(context)!;
     try {
       final options = await DownloadModalSheet.showPlaylistOptions(context,
-          audioOnly: true, audioOnlyLocked: true);
+          musicAudioOnly: true);
       if (options == null || !context.mounted || !session.isCurrent) return 0;
       final count = await session.download(
           context.read<DownloadManagerCubit>(), videos,

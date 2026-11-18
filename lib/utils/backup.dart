@@ -393,6 +393,8 @@ class UserBackup {
           number <= (name == lastSpeedSettingName ? 10 : 200);
     }
     return switch (name) {
+      musicDownloadFormatSettingName =>
+        const {'mp3', 'opus', 'm4a'}.contains(value),
       'home-content-mode' => const ['videos', 'music'].contains(value),
       'home-experience' =>
         const ['videosAndMusic', 'videosOnly', 'musicOnly'].contains(value),

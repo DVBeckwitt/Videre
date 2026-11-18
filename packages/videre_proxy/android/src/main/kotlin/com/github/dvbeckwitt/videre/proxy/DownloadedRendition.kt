@@ -189,7 +189,7 @@ private fun openDownload(context: Context, descriptor: DownloadedRenditionDescri
             val owner = if (profileId == "default") downloads else File(downloads, "profiles/$profileId")
             val file = File(uri.path ?: throw LocalDownloadUnavailable()).canonicalFile
             if (owner.canonicalFile != owner.absoluteFile || file.parentFile?.canonicalFile != owner.canonicalFile ||
-                file.name !in listOf("$contentId.webm", "$contentId.mp4", "$contentId.m4a") || !file.isFile)
+                file.name !in listOf("$contentId.webm", "$contentId.mp4", "$contentId.m4a", "$contentId.mp3", "$contentId.ogg") || !file.isFile)
                 throw LocalDownloadUnavailable()
             val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             val input = ParcelFileDescriptor.AutoCloseInputStream(fd)
@@ -208,6 +208,10 @@ private fun openDownload(context: Context, descriptor: DownloadedRenditionDescri
 }
 
 private fun requireDocumentGrant(context: Context, uri: Uri, folderValue: String) {
+    if (folderValue == SharedMusicDownload.COLLECTION) {
+        if (SharedMusicDownload.pending(context, uri) != false) throw LocalDownloadUnavailable()
+        return
+    }
     val folder = Uri.parse(folderValue)
     if (uri.scheme != "content" || folder.scheme != "content" ||
         !DocumentsContract.isTreeUri(uri) || !DocumentsContract.isTreeUri(folder) ||
@@ -247,7 +251,7 @@ private fun hashDownload(handle: OpenDownload, admit: () -> Unit): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-/** Completion proof for an owned SAF document; no URI or credentials are returned. */
+/** Completion proof for an owned document or shared music file. */
 object DownloadDocumentIntegrity {
     @JvmStatic
     fun inspect(context: Context, uri: String, folderUri: String): Map<String, Any> {

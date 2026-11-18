@@ -1693,23 +1693,36 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Download folder'));
     await tester.pumpAndSettle();
-    expect(find.text('App storage (private)'), findsOneWidget);
+    void expectDestination(String label) {
+      expect(
+          find.descendant(
+              of: find.widgetWithText(ListTile, label),
+              matching: find.byIcon(Icons.radio_button_checked)),
+          findsOneWidget);
+    }
+
+    expectDestination('Default locations');
     await tester.tap(find.text('Choose folder'));
     await tester.pumpAndSettle();
     expect(find.text('Videre files'), findsOneWidget);
+    expectDestination('Choose folder');
     messenger.setMockMethodCallHandler(channel, (_) async => null);
     await tester.tap(find.text('Choose folder'));
     await tester.pumpAndSettle();
     expect(find.text('Videre files'), findsOneWidget);
+    expectDestination('Choose folder');
     messenger.setMockMethodCallHandler(channel,
         (_) async => throw PlatformException(code: 'PICKER_UNAVAILABLE'));
     await tester.tap(find.text('Choose folder'));
     await tester.pumpAndSettle();
     expect(
         find.textContaining('No folder picker is available.'), findsOneWidget);
-    await tester.tap(find.text('Use app storage'));
+    expectDestination('Choose folder');
+    await tester.ensureVisible(find.text('App storage (private)'));
+    await tester.tap(find.text('App storage (private)'));
     await tester.pumpAndSettle();
-    expect(find.text('App storage (private)'), findsOneWidget);
+    expectDestination('App storage (private)');
+    expect(find.text('Videre files'), findsNothing);
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);

@@ -19,11 +19,14 @@ class _DownloadFolderDialog extends StatefulWidget {
   State<_DownloadFolderDialog> createState() => _DownloadFolderDialogState();
 }
 
+enum _Destination { standard, private, custom }
+
 class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
   bool _busy = false;
   String? _error;
 
-  Future<void> _change({bool reset = false}) async {
+  Future<void> _change(_Destination destination) async {
+    if (_busy) return;
     final manager = context.read<DownloadManagerCubit>();
     final locals = AppLocalizations.of(context)!;
     setState(() {
@@ -31,10 +34,13 @@ class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
       _error = null;
     });
     try {
-      if (reset) {
-        await manager.usePrivateFolder();
-      } else {
-        await manager.chooseFolder();
+      switch (destination) {
+        case _Destination.standard:
+          await manager.useDefaultFolder();
+        case _Destination.private:
+          await manager.usePrivateFolder();
+        case _Destination.custom:
+          await manager.chooseFolder();
       }
     } on PlatformException catch (error) {
       if (mounted) {
@@ -57,6 +63,29 @@ class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final state = context.watch<DownloadManagerCubit>().state;
+    final selected = state.folderUri != null
+        ? _Destination.custom
+        : state.usePrivateStorage
+            ? _Destination.private
+            : _Destination.standard;
+
+    Widget option(_Destination value, String title, String subtitle) {
+      final active = selected == value;
+      return Semantics(
+        inMutuallyExclusiveGroup: true,
+        checked: active,
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(active
+              ? Icons.radio_button_checked
+              : Icons.radio_button_unchecked),
+          title: Text(title),
+          subtitle: Text(subtitle),
+          onTap: _busy ? null : () => _change(value),
+        ),
+      );
+    }
+
     return PopScope(
       canPop: !_busy,
       child: AlertDialog(
@@ -66,9 +95,14 @@ class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(state.folderName ?? locals.downloadFolderPrivate),
+            option(_Destination.standard, locals.downloadFolderDefault,
+                locals.downloadFolderDefaultDetails),
+            option(_Destination.private, locals.downloadFolderPrivate,
+                locals.downloadFolderPrivateDetails),
+            option(_Destination.custom, locals.downloadFolderChoose,
+                state.folderName ?? locals.downloadFolderCustomDetails),
             const SizedBox(height: 12),
-            Text(locals.downloadFolderDescription),
+            Text(locals.downloadFolderExistingFiles),
             if (_busy)
               const Padding(
                   padding: EdgeInsets.only(top: 16),
@@ -83,16 +117,9 @@ class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
           ],
         )),
         actions: [
-          if (state.folderUri != null)
-            TextButton(
-                onPressed: _busy ? null : () => _change(reset: true),
-                child: Text(locals.downloadFolderUsePrivate)),
           TextButton(
               onPressed: _busy ? null : () => Navigator.of(context).pop(),
               child: Text(locals.ok)),
-          FilledButton(
-              onPressed: _busy ? null : _change,
-              child: Text(locals.downloadFolderChoose)),
         ],
       ),
     );

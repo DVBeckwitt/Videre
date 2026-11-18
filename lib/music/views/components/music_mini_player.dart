@@ -1,4 +1,5 @@
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/states/player.dart';
@@ -27,7 +28,10 @@ class MusicMiniPlayer extends StatelessWidget {
     const supporting = Color(0xffc2c2c2);
     const error = Color(0xffffa8a8);
     final text = Theme.of(context).textTheme;
-    final recovery = state.backendRecovery;
+    final onDevice = isLocalMusicPlaybackId(video?.videoId ?? offline?.videoId);
+    final artist =
+        onDevice && music.artist.isEmpty ? locals.onDevice : music.artist;
+    final recovery = onDevice ? null : state.backendRecovery;
     final failed = player.playbackStatus == MediaState.error ||
         recovery?.phase == BackendRecoveryPhase.failed;
     final busy = !failed &&
@@ -93,7 +97,7 @@ class MusicMiniPlayer extends StatelessWidget {
                             child: Semantics(
                               button: true,
                               label:
-                                  '${locals.musicNowPlaying}, ${music.title}, ${music.artist}${statusLabel == null ? '' : ', $statusLabel'}',
+                                  '${locals.musicNowPlaying}, ${music.title}, $artist${statusLabel == null ? '' : ', $statusLabel'}',
                               onTap: player.showBigPlayer,
                               excludeSemantics: true,
                               child: InkWell(
@@ -159,11 +163,8 @@ class MusicMiniPlayer extends StatelessWidget {
                                                     title,
                                                   if (!largeText &&
                                                       (statusLabel != null ||
-                                                          music.artist
-                                                              .isNotEmpty))
-                                                    Text(
-                                                        statusLabel ??
-                                                            music.artist,
+                                                          artist.isNotEmpty))
+                                                    Text(statusLabel ?? artist,
                                                         maxLines: 1,
                                                         overflow: TextOverflow
                                                             .ellipsis,

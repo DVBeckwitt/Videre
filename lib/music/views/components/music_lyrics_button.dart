@@ -3,6 +3,7 @@ import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/utils.dart';
@@ -34,7 +35,9 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
     final offline = state.offlineCurrentlyPlaying;
     final track = video?.musicMetadata ?? offline?.musicMetadata;
     final videoId = video?.videoId ?? offline?.videoId;
-    if (track == null || videoId == null) return;
+    if (track == null || videoId == null || isLocalMusicPlaybackId(videoId)) {
+      return;
+    }
 
     bool isCurrent() {
       final current = player.state;

@@ -178,7 +178,12 @@ void main() {
             body: FlowVideoHome(
                 active: active,
                 television: television,
-                configuredFeed: configuredFeed,
+                configuredFeed: configuredFeed == null
+                    ? null
+                    : (shelf) => Column(children: [
+                          if (shelf != null) shelf,
+                          configuredFeed,
+                        ]),
                 onEdit: onEdit)),
       ),
     ));

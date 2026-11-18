@@ -68,12 +68,29 @@ class _PausedLibrary extends Service {
 }
 
 class _Downloads implements DownloadManagerCubit {
-  _Downloads({this.state = const DownloadManagerState()});
+  _Downloads(
+      {this.state = const DownloadManagerState(),
+      this.destinationReady = true});
+
+  final bool destinationReady;
+  int destinationRequests = 0;
+
+  @override
+  Future<bool> prepareMusicDownloads() async {
+    destinationRequests++;
+    return destinationReady;
+  }
 
   @override
   final DownloadManagerState state;
 
-  final calls = <({String id, bool audioOnly, Video? video})>[];
+  final calls = <({
+    String id,
+    bool audioOnly,
+    String quality,
+    DownloadContainer? container,
+    Video? video
+  })>[];
 
   @override
   Stream<DownloadManagerState> get stream => const Stream.empty();
@@ -86,7 +103,13 @@ class _Downloads implements DownloadManagerCubit {
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel}) async {
-    calls.add((id: videoId, audioOnly: audioOnly, video: video));
+    calls.add((
+      id: videoId,
+      audioOnly: audioOnly,
+      quality: quality,
+      container: container,
+      video: video
+    ));
     return true;
   }
 
@@ -244,10 +267,23 @@ void main() {
     final count = await MusicLibrarySession(app)
         .download(downloads, [first, second, first]);
     expect(count, 2);
+    expect(downloads.destinationRequests, 1);
     expect(downloads.calls.map((call) => call.id),
         [first.videoId, second.videoId]);
     expect(downloads.calls.every((call) => call.audioOnly), isTrue);
+    expect(downloads.calls.map((call) => call.quality),
+        everyElement(highestAudioDownloadQuality));
+    expect(downloads.calls.map((call) => call.container), everyElement(isNull));
     expect(downloads.calls.map((call) => call.video), [first, second]);
+  });
+
+  test('cancelling the Music folder picker stops the entire collection',
+      () async {
+    final downloads = _Downloads(destinationReady: false);
+    expect(
+        await MusicLibrarySession(app).download(downloads, [first, second]), 0);
+    expect(downloads.destinationRequests, 1);
+    expect(downloads.calls, isEmpty);
   });
 
   test('profile switch stops a collection save before touching another library',
@@ -866,6 +902,14 @@ void main() {
           await tester.tap(find.text('Watch Later'));
         }
         if (action == 'Download audio') {
+          expect(find.text('Save as MP3'), findsOneWidget);
+          expect(find.text('Highest quality available').hitTestable(),
+              findsOneWidget);
+          await tester
+              .tap(find.text('Highest quality available').hitTestable());
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('M4A (AAC)').hitTestable().last);
+          await tester.pumpAndSettle();
           await tester.tap(find.text('Download'));
           await tester.pumpAndSettle();
         }
@@ -891,6 +935,8 @@ void main() {
             [first.videoId]);
       } else {
         expect(downloads.calls.map((call) => call.id), [first.videoId]);
+        expect(downloads.calls.single.container, DownloadContainer.mp4);
+        expect(downloads.calls.single.quality, highestAudioDownloadQuality);
       }
     });
   }

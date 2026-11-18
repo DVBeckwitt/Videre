@@ -50,14 +50,16 @@ class _HomeViewState extends State<HomeView> {
     return FlowVideoHome(
       key: ValueKey((session.profileId, session.sessionRevision)),
       active: visible,
-      configuredFeed: const _ConfiguredHomeView(),
+      configuredFeed: (shelf) => _ConfiguredHomeView(continueWatching: shelf),
       onEdit: (interests) => _editLayout(context, interests),
     );
   }
 }
 
 class _ConfiguredHomeView extends StatelessWidget {
-  const _ConfiguredHomeView();
+  final Widget? continueWatching;
+
+  const _ConfiguredHomeView({required this.continueWatching});
 
   List<Widget> getSmallSources(
       BuildContext context, HomeLayout layout, bool isLoggedIn) {
@@ -91,97 +93,94 @@ class _ConfiguredHomeView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    var colors = Theme.of(context).colorScheme;
+    final layout = context.select((AppCubit app) => app.state.homeLayout);
+    final isLoggedIn = context.select((AppCubit app) => app.isLoggedIn);
+    final summaries = getSmallSources(context, layout, isLoggedIn);
+    final theme = Theme.of(context);
+    final locals = AppLocalizations.of(context)!;
 
+    final shelf = continueWatching;
+    final smallSources = Padding(
+      padding: const EdgeInsets.only(left: innerHorizontalPadding),
+      child: Column(children: summaries),
+    );
+    final header = [
+      if (shelf != null) SliverToBoxAdapter(child: shelf),
+      if (summaries.isNotEmpty) SliverToBoxAdapter(child: smallSources),
+    ];
+
+    if (!layout.showBigSource) {
+      return CustomScrollView(
+        slivers: [
+          ...header,
+          if (layout.smallSources.isEmpty)
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(
+                  child: Opacity(opacity: 0.2, child: AppIcon(height: 200))),
+            ),
+        ],
+      );
+    }
+
+    final mainSource = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: innerHorizontalPadding),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(layout.bigSource.getLabel(locals),
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(color: theme.colorScheme.secondary)),
+          Expanded(
+            key: ValueKey(layout.bigSource),
+            child: layout.bigSource
+                .build(context, false, nestedScroll: shelf != null),
+          ),
+        ],
+      ),
+    );
+    if (shelf != null) {
+      return NestedScrollView(
+        headerSliverBuilder: (context, innerScrolled) => header,
+        body: mainSource,
+      );
+    }
+
+    // The standard layout lets people swipe tabs from the main feed heading
+    // and independently scroll compact sources on short screens.
     return BlocProvider(
-      create: (context) => HomeCubit(false),
-      child: Builder(builder: (context) {
-        var layout = context.select((AppCubit value) => value.state.homeLayout);
-        var textTheme = Theme.of(context).textTheme;
-        var locals = AppLocalizations.of(context)!;
-        var scrolled = context.select((HomeCubit home) => home.state);
-        var home = context.read<HomeCubit>();
-        var isLoggedIn = context.select((AppCubit value) => value.isLoggedIn);
-
-        return NotificationListener(
-          onNotification: (notificationInfo) {
-            if (notificationInfo is ScrollUpdateNotification &&
-                (notificationInfo.metrics.axisDirection == AxisDirection.down ||
-                    notificationInfo.metrics.axisDirection ==
-                        AxisDirection.up)) {
-              home.setScroll(notificationInfo.metrics.pixels > 100);
+      create: (_) => HomeCubit(false),
+      child: BlocBuilder<HomeCubit, bool>(builder: (context, scrolled) {
+        return NotificationListener<ScrollUpdateNotification>(
+          onNotification: (notice) {
+            if (notice.metrics.axis == Axis.vertical) {
+              context.read<HomeCubit>().setScroll(notice.metrics.pixels > 100);
             }
-            return true;
+            return false;
           },
-          child: Container(
-              // only left because we don't want to cut horizontal scrolling lists
-              padding: const EdgeInsets.only(left: innerHorizontalPadding),
-              color: colors.surface,
-              child: layout.smallSources.isEmpty && !layout.showBigSource
-                  ? const Opacity(
-                      opacity: 0.2,
-                      child: AppIcon(
-                        height: 200,
-                      ))
-                  : LayoutBuilder(
-                      builder: (context, constraints) => Column(
-                            mainAxisAlignment: MainAxisAlignment.start,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              AnimatedCrossFade(
-                                crossFadeState: scrolled
-                                    ? CrossFadeState.showSecond
-                                    : CrossFadeState.showFirst,
-                                firstCurve: Curves.easeInOutQuad,
-                                secondCurve: Curves.easeInOutQuad,
-                                sizeCurve: Curves.easeInOutQuad,
-                                duration: AppMotion.duration(context),
-                                firstChild: ConstrainedBox(
-                                  // Keep space for the feed on short screens; the
-                                  // summaries remain available by scrolling them.
-                                  constraints: BoxConstraints(
-                                      maxHeight: constraints.maxHeight *
-                                          (layout.showBigSource ? 0.6 : 1)),
-                                  child:
-                                      NotificationListener<ScrollNotification>(
-                                    onNotification: (_) => true,
-                                    child: SingleChildScrollView(
-                                      child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            ...getSmallSources(
-                                                context, layout, isLoggedIn),
-                                          ]),
-                                    ),
-                                  ),
-                                ),
-                                secondChild: const Row(
-                                  children: [
-                                    SizedBox.shrink(),
-                                  ],
-                                ),
-                              ),
-                              if (layout.showBigSource)
-                                Row(
-                                  children: [
-                                    Text(
-                                      layout.bigSource.getLabel(locals),
-                                      style: textTheme.titleMedium
-                                          ?.copyWith(color: colors.secondary),
-                                    ),
-                                  ],
-                                ),
-                              if (layout.showBigSource)
-                                Expanded(
-                                    key: ValueKey(layout.bigSource),
-                                    child: Padding(
-                                      padding: const EdgeInsets.only(
-                                          right: innerHorizontalPadding),
-                                      child: layout.bigSource
-                                          .build(context, false),
-                                    ))
-                            ],
-                          ))),
+          child: LayoutBuilder(builder: (context, constraints) {
+            return Column(children: [
+              AnimatedCrossFade(
+                crossFadeState: scrolled
+                    ? CrossFadeState.showSecond
+                    : CrossFadeState.showFirst,
+                firstCurve: Curves.easeInOutQuad,
+                secondCurve: Curves.easeInOutQuad,
+                sizeCurve: Curves.easeInOutQuad,
+                duration: AppMotion.duration(context),
+                firstChild: ConstrainedBox(
+                  constraints:
+                      BoxConstraints(maxHeight: constraints.maxHeight * 0.6),
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (_) => true,
+                    child: SingleChildScrollView(child: smallSources),
+                  ),
+                ),
+                secondChild: const SizedBox(width: double.infinity),
+              ),
+              Expanded(child: mainSource),
+            ]);
+          }),
         );
       }),
     );

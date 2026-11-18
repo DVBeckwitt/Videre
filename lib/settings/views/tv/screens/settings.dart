@@ -1,5 +1,6 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
+import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
@@ -413,6 +414,8 @@ class TVSettingsScreen extends StatelessWidget {
                   description: locals.downloadFolderSummary,
                   onSelected: showDownloadFolder,
                 ),
+                if (supportsLocalMusicFolders)
+                  const LocalMusicFolder.settings(),
                 SettingsTitle(title: locals.appearance),
                 SettingsTile(
                   title: locals.animations,

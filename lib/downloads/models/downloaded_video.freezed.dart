@@ -33,6 +33,9 @@ mixin _$DownloadedVideo {
   @_PlaybackProvenanceConverter()
   DownloadPlaybackProvenance? get playbackProvenance;
   bool get audioOnly;
+  MusicDownloadFormat? get musicFormat;
+  @_MusicCopyConverter()
+  ExportedMusicCopy? get exportedMusic;
   DownloadContainer? get container;
   String? get audioTrackId;
   String? get captionLabel;
@@ -84,6 +87,10 @@ mixin _$DownloadedVideo {
                 other.playbackProvenance == playbackProvenance) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
+            (identical(other.musicFormat, musicFormat) ||
+                other.musicFormat == musicFormat) &&
+            (identical(other.exportedMusic, exportedMusic) ||
+                other.exportedMusic == exportedMusic) &&
             (identical(other.container, container) ||
                 other.container == container) &&
             (identical(other.audioTrackId, audioTrackId) ||
@@ -115,6 +122,8 @@ mixin _$DownloadedVideo {
         storageUri,
         playbackProvenance,
         audioOnly,
+        musicFormat,
+        exportedMusic,
         container,
         audioTrackId,
         captionLabel,
@@ -124,7 +133,7 @@ mixin _$DownloadedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -152,6 +161,8 @@ abstract mixin class $DownloadedVideoCopyWith<$Res> {
       @_PlaybackProvenanceConverter()
       DownloadPlaybackProvenance? playbackProvenance,
       bool audioOnly,
+      MusicDownloadFormat? musicFormat,
+      @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel,
@@ -188,6 +199,8 @@ class _$DownloadedVideoCopyWithImpl<$Res>
     Object? storageUri = freezed,
     Object? playbackProvenance = freezed,
     Object? audioOnly = null,
+    Object? musicFormat = freezed,
+    Object? exportedMusic = freezed,
     Object? container = freezed,
     Object? audioTrackId = freezed,
     Object? captionLabel = freezed,
@@ -259,6 +272,14 @@ class _$DownloadedVideoCopyWithImpl<$Res>
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable
               as bool,
+      musicFormat: freezed == musicFormat
+          ? _self.musicFormat
+          : musicFormat // ignore: cast_nullable_to_non_nullable
+              as MusicDownloadFormat?,
+      exportedMusic: freezed == exportedMusic
+          ? _self.exportedMusic
+          : exportedMusic // ignore: cast_nullable_to_non_nullable
+              as ExportedMusicCopy?,
       container: freezed == container
           ? _self.container
           : container // ignore: cast_nullable_to_non_nullable
@@ -392,6 +413,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             @_PlaybackProvenanceConverter()
             DownloadPlaybackProvenance? playbackProvenance,
             bool audioOnly,
+            MusicDownloadFormat? musicFormat,
+            @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
             DownloadContainer? container,
             String? audioTrackId,
             String? captionLabel,
@@ -420,6 +443,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageUri,
             _that.playbackProvenance,
             _that.audioOnly,
+            _that.musicFormat,
+            _that.exportedMusic,
             _that.container,
             _that.audioTrackId,
             _that.captionLabel,
@@ -463,6 +488,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             @_PlaybackProvenanceConverter()
             DownloadPlaybackProvenance? playbackProvenance,
             bool audioOnly,
+            MusicDownloadFormat? musicFormat,
+            @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
             DownloadContainer? container,
             String? audioTrackId,
             String? captionLabel,
@@ -490,6 +517,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageUri,
             _that.playbackProvenance,
             _that.audioOnly,
+            _that.musicFormat,
+            _that.exportedMusic,
             _that.container,
             _that.audioTrackId,
             _that.captionLabel,
@@ -530,6 +559,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             @_PlaybackProvenanceConverter()
             DownloadPlaybackProvenance? playbackProvenance,
             bool audioOnly,
+            MusicDownloadFormat? musicFormat,
+            @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
             DownloadContainer? container,
             String? audioTrackId,
             String? captionLabel,
@@ -557,6 +588,8 @@ extension DownloadedVideoPatterns on DownloadedVideo {
             _that.storageUri,
             _that.playbackProvenance,
             _that.audioOnly,
+            _that.musicFormat,
+            _that.exportedMusic,
             _that.container,
             _that.audioTrackId,
             _that.captionLabel,
@@ -589,6 +622,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
       this.storageUri,
       @_PlaybackProvenanceConverter() this.playbackProvenance,
       this.audioOnly = false,
+      this.musicFormat,
+      @_MusicCopyConverter() this.exportedMusic,
       this.container,
       this.audioTrackId,
       this.captionLabel,
@@ -647,6 +682,11 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
   @override
   @JsonKey()
   final bool audioOnly;
+  @override
+  final MusicDownloadFormat? musicFormat;
+  @override
+  @_MusicCopyConverter()
+  final ExportedMusicCopy? exportedMusic;
   @override
   final DownloadContainer? container;
   @override
@@ -707,6 +747,10 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
                 other.playbackProvenance == playbackProvenance) &&
             (identical(other.audioOnly, audioOnly) ||
                 other.audioOnly == audioOnly) &&
+            (identical(other.musicFormat, musicFormat) ||
+                other.musicFormat == musicFormat) &&
+            (identical(other.exportedMusic, exportedMusic) ||
+                other.exportedMusic == exportedMusic) &&
             (identical(other.container, container) ||
                 other.container == container) &&
             (identical(other.audioTrackId, audioTrackId) ||
@@ -738,6 +782,8 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
         storageUri,
         playbackProvenance,
         audioOnly,
+        musicFormat,
+        exportedMusic,
         container,
         audioTrackId,
         captionLabel,
@@ -747,7 +793,7 @@ class _DownloadedVideo extends DownloadedVideo implements IdedVideo {
 
   @override
   String toString() {
-    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
+    return 'DownloadedVideo(videoId: $videoId, title: $title, profileId: $profileId, accountId: $accountId, author: $author, authorUrl: $authorUrl, musicMetadata: $musicMetadata, sponsorSegments: $sponsorSegments, downloadComplete: $downloadComplete, downloadFailed: $downloadFailed, authenticationRequired: $authenticationRequired, storageFailed: $storageFailed, folderUri: $folderUri, storageUri: $storageUri, playbackProvenance: $playbackProvenance, audioOnly: $audioOnly, musicFormat: $musicFormat, exportedMusic: $exportedMusic, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, lengthSeconds: $lengthSeconds, quality: $quality)';
   }
 }
 
@@ -777,6 +823,8 @@ abstract mixin class _$DownloadedVideoCopyWith<$Res>
       @_PlaybackProvenanceConverter()
       DownloadPlaybackProvenance? playbackProvenance,
       bool audioOnly,
+      MusicDownloadFormat? musicFormat,
+      @_MusicCopyConverter() ExportedMusicCopy? exportedMusic,
       DownloadContainer? container,
       String? audioTrackId,
       String? captionLabel,
@@ -813,6 +861,8 @@ class __$DownloadedVideoCopyWithImpl<$Res>
     Object? storageUri = freezed,
     Object? playbackProvenance = freezed,
     Object? audioOnly = null,
+    Object? musicFormat = freezed,
+    Object? exportedMusic = freezed,
     Object? container = freezed,
     Object? audioTrackId = freezed,
     Object? captionLabel = freezed,
@@ -884,6 +934,14 @@ class __$DownloadedVideoCopyWithImpl<$Res>
           ? _self.audioOnly
           : audioOnly // ignore: cast_nullable_to_non_nullable
               as bool,
+      musicFormat: freezed == musicFormat
+          ? _self.musicFormat
+          : musicFormat // ignore: cast_nullable_to_non_nullable
+              as MusicDownloadFormat?,
+      exportedMusic: freezed == exportedMusic
+          ? _self.exportedMusic
+          : exportedMusic // ignore: cast_nullable_to_non_nullable
+              as ExportedMusicCopy?,
       container: freezed == container
           ? _self.container
           : container // ignore: cast_nullable_to_non_nullable

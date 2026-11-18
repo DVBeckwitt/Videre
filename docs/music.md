@@ -163,6 +163,25 @@ it offline.
 The existing download folder, Wi-Fi preference, retry, and profile ownership
 rules apply. TV does not offer downloads.
 
+Music downloads select the highest available compatible audio bitrate by default.
+Under **Settings → YT Music**, choose **MP3** (the default), **Opus** (Ogg), or
+**M4A (AAC)** for the saved file. Videre writes the available song title, artist
+and album into the file. The output format applies to new downloads and explicit
+exports.
+
+On Android 10 and later, the default Music destination is **Music/Videre**.
+Select this folder in another player to discover the songs. On Android 7–9,
+choose a shared folder when prompted. **Download folder** also lets you choose
+private app storage or another location. To share an existing private song,
+open **Downloads** and choose **Export a copy of this song**.
+
+**Music → Library → On this device** plays audio already on your device.
+Local playback starts off. Choose a folder using Android's picker to grant
+read-only access, then select a song. Videre uses embedded tags and artwork.
+The queue, speed and pitch controls work offline. The folder is available
+across Videre profiles. **Forget folder** removes Videre's local Music access
+and leaves the files in place.
+
 ## Google Takeout import
 
 Use the import button in **Music → Library**, or **Settings → Import Google

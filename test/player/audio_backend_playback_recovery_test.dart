@@ -14,6 +14,8 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/music/views/components/music_audio_quality_button.dart';
 import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/media_handler.dart';
@@ -1751,6 +1753,41 @@ void main() {
       await audio.close();
       await controller.close();
     }
+  });
+
+  test('device document IDs never select a network playlist decoder', () async {
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    const folder = 'content://media/tree/music';
+    const uri = '$folder/document/opaque.m3u8';
+    messenger.setMockMethodCallHandler(
+        channel,
+        (call) async => switch (call.method) {
+              'getFolder' => {'uri': folder, 'name': 'Music'},
+              'listTracks' => [
+                  {'uri': uri, 'title': 'Audio file', 'durationMs': 60000}
+                ],
+              'forgetFolder' => null,
+              _ => throw UnimplementedError(call.method),
+            });
+    final library = LocalMusicLibrary.instance;
+    addTearDown(() async {
+      await library.disable();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    await library.refresh();
+    final entry = localMusicPlaybackEntry(library.tracks.single, db.profileId)
+        .copyWith(storageUri: 'https://other.example/playlist.m3u8');
+    final native = _NativeAudio();
+    player.emit(player.state.copyWith(offlineCurrentlyPlaying: entry));
+    final audio =
+        _Audio(AudioPlayerState(offlineVideo: entry), player, settings, native);
+    players.add(audio);
+    await audio.playVideo(true);
+    final source = native.sources.single as ProgressiveAudioSource;
+    expect(source.uri.toString(), uri);
+    expect(source.headers, isNull);
+    expect(source.playbackCache, isNull);
+    expect(player.refreshCalls, 0);
   });
 
   test('offline failures never request online metadata', () async {

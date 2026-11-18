@@ -1,5 +1,6 @@
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart';
@@ -52,8 +53,7 @@ class DownloadModalSheet extends StatelessWidget {
 
   static Future<PlaylistDownloadOptions?> showPlaylistOptions(
       BuildContext context,
-      {bool audioOnly = false,
-      bool audioOnlyLocked = false}) async {
+      {bool musicAudioOnly = false}) async {
     final source = db;
     final profileId = db.profileId;
     final accounts = source.getServers();
@@ -61,8 +61,7 @@ class DownloadModalSheet extends StatelessWidget {
         isScrollControlled: true,
         showDragHandle: true,
         context: context,
-        builder: (_) => _PlaylistDownloadSheet(
-            audioOnly: audioOnly, audioOnlyLocked: audioOnlyLocked));
+        builder: (_) => _PlaylistDownloadSheet(musicAudioOnly: musicAudioOnly));
     if (options == null ||
         !identical(source, db) ||
         profileId != db.profileId) {
@@ -251,12 +250,14 @@ class _Choice<T> extends StatelessWidget {
 class _ContainerChoice extends StatelessWidget {
   final DownloadContainer? value;
   final bool audioOnly;
+  final bool musicAudioOnly;
   final List<DownloadContainer> containers;
   final ValueChanged<DownloadContainer?> onChanged;
 
   const _ContainerChoice(
       {required this.value,
       required this.audioOnly,
+      this.musicAudioOnly = false,
       required this.containers,
       required this.onChanged});
 
@@ -264,13 +265,19 @@ class _ContainerChoice extends StatelessWidget {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     return _Choice<int>(
-        label: locals.downloadFileFormat,
+        label: musicAudioOnly
+            ? locals.musicAudioQuality
+            : locals.downloadFileFormat,
         value: value?.index ?? -1,
         onChanged: (index) => onChanged(index == null || index < 0
             ? null
             : DownloadContainer.values[index]),
         items: [
-          DropdownMenuItem(value: -1, child: Text(locals.downloadAutomatic)),
+          DropdownMenuItem(
+              value: -1,
+              child: Text(musicAudioOnly
+                  ? locals.musicDownloadHighestQuality
+                  : locals.downloadAutomatic)),
           for (final container in containers)
             DropdownMenuItem(
                 value: container.index,
@@ -286,18 +293,16 @@ class _ContainerChoice extends StatelessWidget {
 }
 
 class _PlaylistDownloadSheet extends StatefulWidget {
-  final bool audioOnly;
-  final bool audioOnlyLocked;
+  final bool musicAudioOnly;
 
-  const _PlaylistDownloadSheet(
-      {required this.audioOnly, required this.audioOnlyLocked});
+  const _PlaylistDownloadSheet({required this.musicAudioOnly});
 
   @override
   State<_PlaylistDownloadSheet> createState() => _PlaylistDownloadSheetState();
 }
 
 class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
-  late bool _audioOnly = widget.audioOnly;
+  late bool _audioOnly = widget.musicAudioOnly;
   String _quality = '720p';
   DownloadContainer? _container;
 
@@ -305,18 +310,24 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     return _SheetBody(children: [
-      Text(locals.downloadPlaylist,
+      Text(
+          widget.musicAudioOnly
+              ? locals.musicDownloadAudio
+              : locals.downloadPlaylist,
           style: Theme.of(context).textTheme.titleLarge),
-      SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Text(locals.videoDownloadAudioOnly),
-          value: _audioOnly,
-          onChanged: widget.audioOnlyLocked
-              ? null
-              : (value) => setState(() => _audioOnly = value)),
+      if (widget.musicAudioOnly)
+        Text(locals
+            .musicDownloadOutput(MusicDownloadFormat.forDatabase(db).label))
+      else
+        SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(locals.videoDownloadAudioOnly),
+            value: _audioOnly,
+            onChanged: (value) => setState(() => _audioOnly = value)),
       _ContainerChoice(
           value: _container,
           audioOnly: _audioOnly,
+          musicAudioOnly: widget.musicAudioOnly,
           containers: DownloadContainer.values,
           onChanged: (value) => setState(() => _container = value)),
       if (!_audioOnly)
@@ -337,7 +348,9 @@ class _PlaylistDownloadSheetState extends State<_PlaylistDownloadSheet> {
               ])
                 DropdownMenuItem(value: quality, child: Text(quality)),
             ]),
-      Text(locals.downloadPlaylistQualityHelp),
+      Text(widget.musicAudioOnly
+          ? locals.musicDownloadQualityHelp
+          : locals.downloadPlaylistQualityHelp),
       const SizedBox(height: 16),
       FilledButton.icon(
           onPressed: () => Navigator.of(context).pop(PlaylistDownloadOptions(

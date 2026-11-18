@@ -13,14 +13,19 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_community_cover_preferences.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_mini_player.dart';
 import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -44,6 +49,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
 import 'package:clipious/videos/views/components/info.dart';
+import 'package:clipious/videos/views/components/video_share_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -57,6 +63,7 @@ class _Player extends TestPlayerCubit {
   int nextCalls = 0;
   int previousCalls = 0;
   int playlistRetries = 0;
+  final localQueueRequests = <List<LocalMusicTrack>>[];
   Object? playlistError;
   Duration? sought;
 
@@ -72,6 +79,12 @@ class _Player extends TestPlayerCubit {
 
   @override
   void playPrevious() => previousCalls++;
+
+  @override
+  Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
+      {int startIndex = 0}) async {
+    localQueueRequests.add(List.of(tracks));
+  }
 
   @override
   Object? get playlistLoadingError => playlistError;
@@ -215,6 +228,192 @@ void main() {
     await tester.pump();
     await tester.pump();
   }
+
+  Future<List<LocalMusicTrack>> seedDeviceQueue(WidgetTester tester,
+      {String? embeddedArt}) async {
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    const tree =
+        'content://com.android.externalstorage.documents/tree/primary%3AMusic';
+    final messenger = tester.binding.defaultBinaryMessenger;
+    Map<String, String>? folder;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return folder;
+        case 'pickFolder':
+          return folder = {'uri': tree, 'name': 'Music'};
+        case 'listTracks':
+          expect(call.arguments['treeUri'], tree);
+          return [
+            for (final name in ['Intro', 'Finale'])
+              {
+                'uri': '$tree/document/primary%3AMusic%2F$name.ogg',
+                'title': name,
+                'artist': 'Device artist',
+                'album': 'Device album',
+                'durationMs': 180000,
+                if (name == 'Finale' && embeddedArt != null)
+                  'artPath': embeddedArt,
+              }
+          ];
+        case 'forgetFolder':
+          folder = null;
+          return null;
+        default:
+          throw UnsupportedError(call.method);
+      }
+    });
+    final library = LocalMusicLibrary.instance;
+    addTearDown(() async {
+      await library.disable();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    await tester.runAsync(() async {
+      await setCommunityCoverArtEnabled(true);
+      await setLrclibEnabled(true);
+      expect(await library.chooseFolder(), isTrue);
+    });
+    final tracks = library.tracks;
+    expect(tracks.map((track) => track.title), ['Intro', 'Finale']);
+    final entries = [
+      for (final track in tracks) localMusicPlaybackEntry(track, db.profileId),
+    ];
+    await player.seed(player.state.copyWith(
+        videos: [],
+        currentlyPlaying: null,
+        offlineVideos: entries,
+        offlineCurrentlyPlaying: entries.first,
+        playQueue: ListQueue.of([entries.last.videoId])));
+    return tracks;
+  }
+
+  testWidgets(
+      'device songs show local artwork placeholders in expanded and mini playback',
+      (tester) async {
+    await seedDeviceQueue(tester);
+    // The full player mounts its native audio decoder behind the Music UI.
+    const audio = MethodChannel('com.ryanheise.just_audio.methods');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final channels = [audio];
+    messenger.setMockMethodCallHandler(audio, (call) async {
+      if (call.method == 'init') {
+        final id = call.arguments['id'];
+        for (final name in ['methods', 'events', 'data']) {
+          final channel = MethodChannel('com.ryanheise.just_audio.$name.$id');
+          channels.add(channel);
+          messenger.setMockMethodCallHandler(
+              channel,
+              (request) async =>
+                  request.method == 'load' ? {'duration': 180000000} : {});
+        }
+        return null;
+      }
+      return {};
+    });
+    addTearDown(() {
+      for (final channel in channels) {
+        messenger.setMockMethodCallHandler(channel, null);
+      }
+    });
+    await tester.runAsync(
+        () => pump(tester, child: const Stack(children: [Player(844)])));
+    final audioBuilder = find.byType(
+        BlocBuilder<AudioPlayerCubit, AudioPlayerState>,
+        skipOffstage: false);
+    final decoder = tester.element(audioBuilder).read<AudioPlayerCubit>();
+    try {
+      void expectLocalArtwork(String key, IconData icon) {
+        final artwork = find.byKey(ValueKey(key));
+        expect(find.descendant(of: artwork, matching: find.byIcon(icon)),
+            findsOneWidget);
+        expect(find.byType(CommunityMusicArtwork, skipOffstage: false),
+            findsNothing);
+        expect(find.byType(Thumbnail, skipOffstage: false), findsNothing);
+      }
+
+      expect(
+          tester
+              .widget<Text>(find.byKey(const ValueKey('music-player-title')))
+              .data,
+          'Intro');
+      expectLocalArtwork('music-player-artwork', Icons.music_note);
+      expect(find.byKey(const ValueKey('music-player-lyrics')), findsNothing);
+      expect(find.byKey(const ValueKey('music-player-audio-quality')),
+          findsNothing);
+      expect(find.byTooltip('Music actions'), findsNothing);
+      expect(find.byType(VideoShareButton, skipOffstage: false), findsNothing);
+      expect(
+          find.byKey(
+              ValueKey(('music-player-bookmark', player.state.currentQueueId))),
+          findsNothing);
+      await player.seed(player.state.copyWith(isMini: true));
+      await tester.pump(const Duration(milliseconds: 500));
+      expectLocalArtwork('music-mini-artwork', Icons.music_note_rounded);
+      expect(
+          find.descendant(
+              of: find.byKey(const ValueKey('music-mini-player')),
+              matching: find.text('Intro')),
+          findsOneWidget);
+      await tap(tester, 'music-mini-next');
+      expect(player.nextCalls, 1);
+    } finally {
+      await tester.runAsync(() async {
+        final closed = decoder.stream.drain<void>();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await closed.timeout(const Duration(seconds: 2));
+      });
+    }
+  });
+
+  testWidgets(
+      'device queue plays the selected local track and retains speed and pitch',
+      (tester) async {
+    const art =
+        '/data/user/0/com.github.dvbeckwitt.videre/cache/local-music/cover.png';
+    final tracks = await seedDeviceQueue(tester, embeddedArt: art);
+    await pump(tester);
+    await tap(tester, 'music-player-sound');
+    await tester.pumpAndSettle();
+    await tap(tester, 'playback-speed-increase');
+    await tap(tester, 'playback-pitch-increase');
+    expect(player.state.speed, 1.05);
+    expect(player.state.pitchSemitones, 1);
+    Navigator.of(tester
+            .element(find.byKey(const ValueKey('playback-pitch-increase'))))
+        .pop();
+    await tester.pumpAndSettle();
+
+    await tap(tester, 'music-player-queue');
+    final second = tracks.last;
+    final row = find.byKey(ValueKey('music-queue-${second.playbackId}'));
+    expect(find.descendant(of: row, matching: find.text(second.title)),
+        findsOneWidget);
+    final embeddedImage = find.image(FileImage(File(art)));
+    expect(find.descendant(of: row, matching: embeddedImage), findsOneWidget);
+    expect(find.byType(CommunityMusicArtwork), findsNothing);
+    await tester.longPress(row);
+    await tester.pump();
+    await tap(tester, 'music-queue-selection-menu');
+    await tester.pumpAndSettle();
+    expect(find.text('Save to playlist'), findsNothing);
+    expect(find.text('Download audio'), findsNothing);
+    expect(find.text('Play next'), findsNothing);
+    await tester.tap(find.text('Play'));
+    await tester.pumpAndSettle();
+    expect(player.localQueueRequests.single.single, same(second));
+    expect(player.state.videos, isEmpty);
+    final entry = player.state.offlineVideos.last;
+    await pump(tester,
+        child:
+            MusicPlaybackArtwork(music: entry.musicMetadata, offline: entry));
+    expect(embeddedImage, findsOneWidget);
+    await tester.runAsync(LocalMusicLibrary.instance.disable);
+    await tester.pump();
+    expect(embeddedImage, findsNothing);
+    expect(find.byIcon(Icons.music_note), findsOneWidget);
+    expect(find.byType(CommunityMusicArtwork), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('Lyrics asks before contacting LRCLIB and looks up the song once',
       (tester) async {

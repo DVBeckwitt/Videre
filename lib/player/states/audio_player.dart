@@ -23,6 +23,7 @@ import '../models/audio_stall_detector.dart';
 import '../models/playback_pitch.dart';
 import '../models/playback_cache_identity.dart';
 import '../models/music_audio_quality.dart';
+import '../models/local_music_playback.dart';
 
 part 'audio_player.freezed.dart';
 
@@ -438,7 +439,18 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         _awaitingBackendMetadata) {
       return;
     }
-    emit(state.copyWith(loading: false));
+    final offline = state.offlineVideo;
+    if (_sourceAdmitted &&
+        offline != null &&
+        isLocalMusicPlaybackId(offline.videoId) &&
+        offline.lengthSeconds == 0 &&
+        duration != null &&
+        duration > Duration.zero) {
+      player.reportLocalMusicDuration(offline.videoId, duration);
+      emit(state.copyWith(loading: false, audioLength: duration));
+    } else {
+      emit(state.copyWith(loading: false));
+    }
     player.setEvent(MediaEvent(
         state: MediaState.playing,
         type: MediaEventType.durationChanged,
@@ -679,7 +691,15 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
           final sourceQualities = <AudioSource, MusicAudioQuality>{};
           BackendPlayback? menuRoute;
           MusicAudioQuality? effective;
-          if (offline) {
+          if (offline && isLocalMusicPlaybackId(offlineVideo?.videoId)) {
+            final track = localMusicTrackForPlayback(offlineVideo!.videoId);
+            if (track == null || offlineVideo.profileId != db.profileId) {
+              throw StateError('Local music file is unavailable');
+            }
+            // A provider's document name is opaque. Even a misleading suffix
+            // must never select a playlist decoder that opens nested URLs.
+            sources.add(ProgressiveAudioSource(Uri.parse(track.uri)));
+          } else if (offline) {
             final path = await offlineVideo!.effectivePath;
             if (!active()) return false;
             sources.add(Uri.tryParse(path)?.scheme == 'content'
@@ -948,7 +968,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         seconds: offline
             ? state.offlineVideo!.lengthSeconds
             : (state.video!.lengthSeconds ?? 0));
-    if (startAt == null) {
+    if (startAt == null && !isLocalMusicPlaybackId(videoId)) {
       final progress = db.getVideoProgress(videoId);
       if (progress > 0 && progress < 0.9) {
         startAt = Duration(seconds: (audioLength.inSeconds * progress).floor());
@@ -964,6 +984,17 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState> {
         offline: offline, startAt: startAt);
     if (loaded && !isClosed && generation == _playbackGeneration) {
       super.playVideo(offline);
+      if (isLocalMusicPlaybackId(videoId) && audioLength == Duration.zero) {
+        final duration = current.duration;
+        if (duration != null && duration > Duration.zero) {
+          player.reportLocalMusicDuration(videoId, duration);
+          emit(state.copyWith(audioLength: duration));
+          player.setEvent(MediaEvent<Duration>(
+              state: MediaState.ready,
+              type: MediaEventType.durationChanged,
+              value: duration));
+        }
+      }
     }
   }
 

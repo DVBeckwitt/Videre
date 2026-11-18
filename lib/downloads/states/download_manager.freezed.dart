@@ -16,6 +16,7 @@ T _$identity<T>(T value) => value;
 mixin _$DownloadManagerState {
   String? get folderUri;
   String? get folderName;
+  bool get usePrivateStorage;
   List<DownloadedVideo> get videos;
   Map<String, DownloadProgress> get downloadProgresses;
   Set<String> get pausedVideoIds;
@@ -39,6 +40,8 @@ mixin _$DownloadManagerState {
                 other.folderUri == folderUri) &&
             (identical(other.folderName, folderName) ||
                 other.folderName == folderName) &&
+            (identical(other.usePrivateStorage, usePrivateStorage) ||
+                other.usePrivateStorage == usePrivateStorage) &&
             const DeepCollectionEquality().equals(other.videos, videos) &&
             const DeepCollectionEquality()
                 .equals(other.downloadProgresses, downloadProgresses) &&
@@ -55,6 +58,7 @@ mixin _$DownloadManagerState {
       runtimeType,
       folderUri,
       folderName,
+      usePrivateStorage,
       const DeepCollectionEquality().hash(videos),
       const DeepCollectionEquality().hash(downloadProgresses),
       const DeepCollectionEquality().hash(pausedVideoIds),
@@ -63,7 +67,7 @@ mixin _$DownloadManagerState {
 
   @override
   String toString() {
-    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
   }
 }
 
@@ -76,6 +80,7 @@ abstract mixin class $DownloadManagerStateCopyWith<$Res> {
   $Res call(
       {String? folderUri,
       String? folderName,
+      bool usePrivateStorage,
       List<DownloadedVideo> videos,
       Map<String, DownloadProgress> downloadProgresses,
       Set<String> pausedVideoIds,
@@ -98,6 +103,7 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
   $Res call({
     Object? folderUri = freezed,
     Object? folderName = freezed,
+    Object? usePrivateStorage = null,
     Object? videos = null,
     Object? downloadProgresses = null,
     Object? pausedVideoIds = null,
@@ -113,6 +119,10 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
           ? _self.folderName
           : folderName // ignore: cast_nullable_to_non_nullable
               as String?,
+      usePrivateStorage: null == usePrivateStorage
+          ? _self.usePrivateStorage
+          : usePrivateStorage // ignore: cast_nullable_to_non_nullable
+              as bool,
       videos: null == videos
           ? _self.videos
           : videos // ignore: cast_nullable_to_non_nullable
@@ -231,6 +241,7 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
     TResult Function(
             String? folderUri,
             String? folderName,
+            bool usePrivateStorage,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -245,6 +256,7 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
         return $default(
             _that.folderUri,
             _that.folderName,
+            _that.usePrivateStorage,
             _that.videos,
             _that.downloadProgresses,
             _that.pausedVideoIds,
@@ -273,6 +285,7 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
     TResult Function(
             String? folderUri,
             String? folderName,
+            bool usePrivateStorage,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -286,6 +299,7 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
         return $default(
             _that.folderUri,
             _that.folderName,
+            _that.usePrivateStorage,
             _that.videos,
             _that.downloadProgresses,
             _that.pausedVideoIds,
@@ -311,6 +325,7 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
     TResult? Function(
             String? folderUri,
             String? folderName,
+            bool usePrivateStorage,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -324,6 +339,7 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
         return $default(
             _that.folderUri,
             _that.folderName,
+            _that.usePrivateStorage,
             _that.videos,
             _that.downloadProgresses,
             _that.pausedVideoIds,
@@ -341,6 +357,7 @@ class _DownloadManagerState extends DownloadManagerState {
   const _DownloadManagerState(
       {this.folderUri,
       this.folderName,
+      this.usePrivateStorage = false,
       final List<DownloadedVideo> videos = const [],
       final Map<String, DownloadProgress> downloadProgresses = const {},
       final Set<String> pausedVideoIds = const {},
@@ -355,6 +372,9 @@ class _DownloadManagerState extends DownloadManagerState {
   final String? folderUri;
   @override
   final String? folderName;
+  @override
+  @JsonKey()
+  final bool usePrivateStorage;
   final List<DownloadedVideo> _videos;
   @override
   @JsonKey()
@@ -408,6 +428,8 @@ class _DownloadManagerState extends DownloadManagerState {
                 other.folderUri == folderUri) &&
             (identical(other.folderName, folderName) ||
                 other.folderName == folderName) &&
+            (identical(other.usePrivateStorage, usePrivateStorage) ||
+                other.usePrivateStorage == usePrivateStorage) &&
             const DeepCollectionEquality().equals(other._videos, _videos) &&
             const DeepCollectionEquality()
                 .equals(other._downloadProgresses, _downloadProgresses) &&
@@ -424,6 +446,7 @@ class _DownloadManagerState extends DownloadManagerState {
       runtimeType,
       folderUri,
       folderName,
+      usePrivateStorage,
       const DeepCollectionEquality().hash(_videos),
       const DeepCollectionEquality().hash(_downloadProgresses),
       const DeepCollectionEquality().hash(_pausedVideoIds),
@@ -432,7 +455,7 @@ class _DownloadManagerState extends DownloadManagerState {
 
   @override
   String toString() {
-    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
   }
 }
 
@@ -447,6 +470,7 @@ abstract mixin class _$DownloadManagerStateCopyWith<$Res>
   $Res call(
       {String? folderUri,
       String? folderName,
+      bool usePrivateStorage,
       List<DownloadedVideo> videos,
       Map<String, DownloadProgress> downloadProgresses,
       Set<String> pausedVideoIds,
@@ -469,6 +493,7 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
   $Res call({
     Object? folderUri = freezed,
     Object? folderName = freezed,
+    Object? usePrivateStorage = null,
     Object? videos = null,
     Object? downloadProgresses = null,
     Object? pausedVideoIds = null,
@@ -484,6 +509,10 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
           ? _self.folderName
           : folderName // ignore: cast_nullable_to_non_nullable
               as String?,
+      usePrivateStorage: null == usePrivateStorage
+          ? _self.usePrivateStorage
+          : usePrivateStorage // ignore: cast_nullable_to_non_nullable
+              as bool,
       videos: null == videos
           ? _self._videos
           : videos // ignore: cast_nullable_to_non_nullable

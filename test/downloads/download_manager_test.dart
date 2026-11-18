@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
@@ -106,6 +107,11 @@ class _VideoCubit extends VideoCubit {
   Future<void> onReady() async => getDownloadStatus();
 }
 
+class _AndroidDownloadStorage extends DownloadStorage {
+  @override
+  bool get supportsSharedMusic => true;
+}
+
 void main() {
   _DownloadTestBinding();
   const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
@@ -160,6 +166,24 @@ void main() {
   Future<void> openManager() async {
     manager = DownloadManagerCubit(const DownloadManagerState(), _Player());
     await manager.addDownloads([]); // Wait for saved preferences to load.
+  }
+
+  Future<void> openAndroidStorageManager(
+      {List<MusicDownloadFormat>? encodings}) async {
+    await manager.close();
+    manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
+        storage: _AndroidDownloadStorage(), encodeMusic: (
+            {required input,
+            required output,
+            required video,
+            required token,
+            inputFormat,
+            sourceCodec}) async {
+      encodings?.add(video.musicFormat!);
+      await File(output).writeAsBytes(
+          [video.musicFormat!.index, ...await File(input).readAsBytes()]);
+    });
+    await manager.addDownloads([]);
   }
 
   Future<void> waitFor(bool Function(DownloadManagerState) predicate,
@@ -298,8 +322,164 @@ void main() {
     expect(manager.state.folderUri, folder);
     await manager.usePrivateFolder();
     expect(manager.state.folderUri, isNull);
+    expect(manager.state.usePrivateStorage, isTrue);
+    await manager.close();
+    await openManager();
+    expect(manager.state.usePrivateStorage, isTrue);
+    await manager.useDefaultFolder();
+    expect(manager.state.usePrivateStorage, isFalse);
     expect(db.getSettings(downloadFolderSetting), isNull);
     expect(db.getDownloadByVideoId('12345678901')!.folderUri, folder);
+  });
+
+  test('only Music defaults to shared storage and legacy picker is cancellable',
+      () async {
+    const shared = 'content://media/external_primary/audio/media';
+    var modern = true;
+    var approve = false;
+    var picks = 0;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      if (call.method == 'sharedMusicFolder') return modern ? shared : null;
+      if (call.method == 'pickFolder') {
+        picks++;
+        return approve ? {'uri': folder, 'name': 'My songs'} : null;
+      }
+      fail('Unexpected ${call.method}');
+    });
+    await openAndroidStorageManager();
+    Future<bool> queue(String id) => manager.addDownload(id,
+        audioOnly: true,
+        quality: highestAudioDownloadQuality,
+        video: Video(
+            videoId: id,
+            musicMetadata:
+                const MusicMetadata(title: 'Song', artist: 'Artist')));
+    expect(await queue('modern'), isTrue);
+    expect(db.getDownloadByVideoId('modern')!.folderUri, shared);
+    expect(db.getDownloadByVideoId('modern')!.musicFormat,
+        MusicDownloadFormat.mp3);
+    expect(await manager.addDownload('watch', audioOnly: true), isTrue);
+    expect(db.getDownloadByVideoId('watch')!.folderUri, isNull);
+    expect(picks, 0);
+    modern = false;
+    expect(await queue('cancel'), isFalse);
+    expect(db.getDownloadByVideoId('cancel'), isNull);
+    approve = true;
+    expect(await manager.prepareMusicDownloads(), isTrue);
+    expect(await queue('approved'), isTrue);
+    expect(db.getDownloadByVideoId('approved')!.folderUri, folder);
+    await openAndroidStorageManager();
+    expect(await queue('another'), isTrue);
+    expect(db.getDownloadByVideoId('another')!.folderUri, folder);
+    expect(picks, 2);
+    expect(manager.state.folderUri, isNull);
+  });
+
+  test(
+      'existing private Music export reuses a pending document and preserves the source',
+      () async {
+    const shared = 'content://media/external_primary/audio/media';
+    const row = '$shared/42';
+    final encodings = <MusicDownloadFormat>[];
+    final previousDestinations = <String?>[];
+    final written = <int>[];
+    final removed = <String>[];
+    var failWrite = true;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'sharedMusicFolder':
+          return shared;
+        case 'prepareDocument':
+          expect(call.arguments['folder'], shared);
+          expect(call.arguments['name'], endsWith('.mp3'));
+          expect(call.arguments['mime'], 'audio/mpeg');
+          previousDestinations.add(call.arguments['existing'] as String?);
+          return row;
+        case 'writeDocument':
+          if (failWrite) throw PlatformException(code: 'DOWNLOAD_STORAGE');
+          written.addAll(
+              await File(call.arguments['source'] as String).readAsBytes());
+          return null;
+        case 'inspectDocument':
+          return {'byteLength': 3, 'sha256': 'a' * 64};
+        case 'deleteDocument':
+          removed.add(call.arguments['uri'] as String);
+          return null;
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+    await openAndroidStorageManager(encodings: encodings);
+    final original = video.copyWith(
+        audioOnly: true,
+        downloadComplete: true,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    await db.upsertDownload(original);
+    final file = File(await original.effectivePath);
+    await file.writeAsBytes([9, 8]);
+    await expectLater(
+        manager.exportMusic(original), throwsA(isA<PlatformException>()));
+    expect(db.getDownloadByVideoId(original.videoId)!.exportedMusic!.complete,
+        isFalse);
+    await openAndroidStorageManager(encodings: encodings);
+    failWrite = false;
+    expect(
+        await Future.wait(
+            [manager.exportMusic(original), manager.exportMusic(original)]),
+        [true, true]);
+    expect(await manager.exportMusic(original), isTrue);
+    expect(previousDestinations, [null, row]);
+    expect(encodings, [MusicDownloadFormat.mp3, MusicDownloadFormat.mp3]);
+    expect(written, [0, 9, 8]);
+    expect(await file.readAsBytes(), [9, 8]);
+    expect(db.getDownloadByVideoId(original.videoId)!.storageUri, isNull);
+    await manager.deleteVideo(original);
+    expect(removed, isEmpty);
+  });
+
+  test(
+      'export reads legacy granted documents without modifying or fetching the source',
+      () async {
+    const shared = 'content://media/external_primary/audio/media';
+    const row = '$shared/49';
+    final encodings = <MusicDownloadFormat>[];
+    String? localInput;
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      switch (call.method) {
+        case 'sharedMusicFolder':
+          return shared;
+        case 'readDocument':
+          expect(call.arguments['uri'], document);
+          expect(call.arguments['folderUri'], folder);
+          localInput = call.arguments['destination'] as String;
+          await File(localInput!).writeAsBytes([4, 6]);
+          return null;
+        case 'prepareDocument':
+          expect(call.arguments['name'], endsWith('.m4a'));
+          expect(call.arguments['mime'], 'audio/mp4');
+          return row;
+        case 'writeDocument':
+          expect(call.arguments['uri'], row);
+          expect(await File(call.arguments['source'] as String).readAsBytes(),
+              [2, 4, 6]);
+          return null;
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+    await openAndroidStorageManager(encodings: encodings);
+    await MusicDownloadFormat.m4a.save(db);
+    final original = video.copyWith(
+        audioOnly: true,
+        downloadComplete: true,
+        folderUri: folder,
+        storageUri: document,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    await db.upsertDownload(original);
+    expect(await manager.exportMusic(original), isTrue);
+    expect(db.getDownloadByVideoId(original.videoId)!.storageUri, document);
+    expect(encodings, [MusicDownloadFormat.m4a]);
+    expect(await File(localInput!).exists(), isFalse);
   });
 
   test('audio-only MP4 saves selected language as M4A across a restart',
@@ -344,6 +524,136 @@ void main() {
     expect(
         await File(await completed.effectivePath).readAsBytes(), [1, 2, 3, 4]);
   });
+
+  for (final (name, outputFormat, opusBitrate, requested, expected) in const [
+    (
+      'Music automatic picks higher-bitrate AAC for default MP3 output',
+      MusicDownloadFormat.mp3,
+      96000,
+      null,
+      DownloadContainer.mp4
+    ),
+    (
+      'Music automatic picks higher-bitrate Opus for Ogg output',
+      MusicDownloadFormat.opus,
+      192000,
+      null,
+      DownloadContainer.webm
+    ),
+    (
+      'explicit M4A source preserves lower-bitrate AAC for M4A output',
+      MusicDownloadFormat.m4a,
+      192000,
+      DownloadContainer.mp4,
+      DownloadContainer.mp4
+    ),
+    (
+      'Video audio-only retains WebM with Music metadata',
+      null,
+      96000,
+      null,
+      DownloadContainer.webm
+    ),
+  ]) {
+    test('$name after restarting the download queue', () async {
+      const media = {
+        '/aac': [140],
+        '/opus': [251]
+      };
+      final paths = <String>[];
+      mediaServer!.listen((request) async {
+        final path = request.uri.path;
+        paths.add(path);
+        final bytes = media[path];
+        if (bytes == null) {
+          request.response.statusCode = HttpStatus.notFound;
+        } else {
+          request.response.add(bytes);
+        }
+        await request.response.close();
+      });
+      final origin = 'http://127.0.0.1:${mediaServer!.port}';
+      final track = Video(
+          videoId: video.videoId,
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+          adaptiveFormats: [
+            AdaptiveFormat(null, '160000', null, '$origin/aac', '140',
+                'audio/mp4', '1', '1', '', null, 'aac', null, null),
+            AdaptiveFormat(null, '$opusBitrate', null, '$origin/opus', '251',
+                'audio/webm', '1', '1', '', null, 'opus', null, null),
+          ]);
+      service = _DownloadService((_) async => track);
+      await manager.deleteVideo(video);
+      await manager.usePrivateFolder();
+      final preference = outputFormat ?? MusicDownloadFormat.m4a;
+      if (preference != MusicDownloadFormat.mp3) await preference.save(db);
+      final added = outputFormat != null
+          ? await manager.addDownload(track.videoId,
+              audioOnly: true,
+              quality: highestAudioDownloadQuality,
+              container: requested,
+              video: track)
+          : await manager.addDownload(track.videoId,
+              audioOnly: true, video: track);
+      expect(added, isTrue);
+      await manager.close();
+      final nextPreference = preference == MusicDownloadFormat.mp3
+          ? MusicDownloadFormat.m4a
+          : MusicDownloadFormat.mp3;
+      await nextPreference.save(db);
+      final encoderInputs = <List<int>>[];
+      final encoderCodecs = <String?>[];
+      manager = DownloadManagerCubit(const DownloadManagerState(), _Player(),
+          encodeMusic: ({
+        required input,
+        required output,
+        required video,
+        required token,
+        inputFormat,
+        sourceCodec,
+      }) async {
+        final bytes = await File(input).readAsBytes();
+        encoderInputs.add(bytes);
+        encoderCodecs.add(sourceCodec);
+        await File(output).writeAsBytes([7, ...bytes]);
+      });
+      await manager.addDownloads([]);
+      final queued = manager.state.videos.single;
+      expect(queued.quality,
+          outputFormat != null ? highestAudioDownloadQuality : '720p');
+      expect(queued.musicFormat, outputFormat);
+      expect(queued.container, requested);
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.single.downloadComplete ||
+          state.videos.single.downloadFailed);
+
+      final completed = db.getDownloadByVideoId(track.videoId)!;
+      final expectedPath = expected == DownloadContainer.mp4 ? '/aac' : '/opus';
+      expect(completed.downloadComplete, isTrue);
+      expect(paths, [expectedPath]);
+      expect(completed.container, expected);
+      expect(completed.musicFormat, outputFormat);
+      final bytes = media[expectedPath]!;
+      if (outputFormat == null) {
+        expect(encoderInputs, isEmpty);
+      } else {
+        expect(encoderInputs, [bytes]);
+        expect(encoderCodecs,
+            [expected == DownloadContainer.mp4 ? 'aac' : 'opus']);
+      }
+      final extension = switch (outputFormat) {
+        null => 'webm',
+        MusicDownloadFormat.mp3 => 'mp3',
+        MusicDownloadFormat.opus => 'ogg',
+        MusicDownloadFormat.m4a => 'm4a',
+      };
+      final file = File(await completed.effectivePath);
+      expect(file.path, endsWith('.$extension'));
+      expect(await file.readAsBytes(),
+          outputFormat == null ? bytes : [7, ...bytes]);
+    });
+  }
 
   test('default audio discovered only in DASH remains downloadable', () async {
     final paths = <String>[];

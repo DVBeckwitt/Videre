@@ -30,6 +30,8 @@ import 'package:simple_pip_mode/simple_pip.dart';
 
 import '../../downloads/models/downloaded_video.dart';
 import '../../downloads/services/download_playback_source.dart';
+import '../../music/models/local_music_track.dart';
+import '../../music/services/local_music_library.dart';
 import '../../playlists/models/playlist.dart';
 import '../../playlists/models/playlist_reference.dart';
 import '../../playlists/services/playlist_load_session.dart';
@@ -57,6 +59,7 @@ import '../models/backend_recovery.dart';
 import '../models/playback_recovery.dart';
 import '../models/playback_learning_clock.dart';
 import '../models/music_audio_quality.dart';
+import '../models/local_music_playback.dart';
 
 export '../../videos/models/db/progress.dart' show playbackHistoryRevision;
 
@@ -120,6 +123,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   final PlaylistLoadSession? _initialPlaylistLoader;
   final int _initialPlaylistIndex;
   final bool? _initialPlaylistAudio;
+  final List<LocalMusicTrack>? _initialLocalMusic;
   PlaylistReference? _playlistReference;
   PlaylistLoadSession? _playlistLoader;
   StreamSubscription<PlaylistLoadSnapshot>? _playlistLoadSubscription;
@@ -298,12 +302,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       {bool resume = false,
       PlaylistReference? playlistReference,
       PlaylistLoadSession? playlistLoader,
+      List<LocalMusicTrack>? initialLocalMusic,
       int startIndex = 0,
       bool? playlistAudio,
       Future<void> Function(Duration)? playbackRecoveryDelay,
       Future<bool> Function()? videoFocusActivation,
       int Function()? learningTimeMicroseconds})
       : _resumeOnReady = resume,
+        _initialLocalMusic = initialLocalMusic,
         _learningTimeMicroseconds = learningTimeMicroseconds,
         _activateVideoFocus = videoFocusActivation,
         _waitForPlaybackRecovery =
@@ -314,6 +320,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _initialPlaylistAudio = playlistAudio {
     _profileDatabase = db.forProfile(db.profileId);
     _runtimePlayers.add(this);
+    LocalMusicLibrary.instance.addListener(_localLibraryChanged);
     // Metadata can be pending before any decoder mounts and registers its own
     // native teardown. The parent must invalidate that pending work as well.
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
@@ -345,6 +352,58 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   PlaybackSession? get savedSession => PlaybackSession.decode(
       _profileDatabase.getSettings(playbackSessionSetting)?.value);
+
+  void _localLibraryChanged() {
+    if (isClosed || _isDisposing || _switchingProfile || state.isClosing) {
+      return;
+    }
+    final entries = state.offlineVideos;
+    if (!entries.any((entry) => isLocalMusicPlaybackId(entry.videoId))) return;
+    final removed = entries
+        .where((entry) => localMusicTrackForPlayback(entry.videoId) == null)
+        .map((entry) => entry.videoId)
+        .toSet();
+    if (removed.isEmpty) return;
+    if (removed.length == entries.length ||
+        removed.contains(state.currentQueueId) ||
+        _backendSwitchPending) {
+      // Synchronously invalidate pending opens, then stop any native reader.
+      // A forgotten folder must not become the resumable session again.
+      _sessionTransitionPending = true;
+      hide();
+      for (final stop in List.of(_beforeProfileSwitch)) {
+        unawaited(stop());
+      }
+      final handler = _mediaSessionHandler;
+      if (handler != null && _sessionOwner == this) {
+        unawaited(handler.clearSession());
+      }
+      emit(state.copyWith(
+          offlineVideos: [],
+          offlineCurrentlyPlaying: null,
+          playedVideos: [],
+          playQueue: ListQueue<String>()));
+      final database = _profileDatabase;
+      _sessionWrite = _sessionWrite.then((_) async {
+        final saved = PlaybackSession.decode(
+            database.getSettings(playbackSessionSetting)?.value);
+        if (removed.contains(saved?.currentId)) {
+          await database.saveSetting(SettingsValue(playbackSessionSetting, ''));
+        }
+      }).catchError((Object error) {
+        log.warning(
+            'Could not clear the unavailable local Music session', error);
+      });
+      return;
+    }
+    emit(state.copyWith(
+        offlineVideos:
+            entries.where((v) => !removed.contains(v.videoId)).toList(),
+        playedVideos:
+            state.playedVideos.where((id) => !removed.contains(id)).toList(),
+        playQueue: ListQueue.of(
+            state.playQueue.where((id) => !removed.contains(id)))));
+  }
 
   void _bindPlaylist(PlaylistReference? reference, List<Video> entries,
       {PlaylistLoadSession? loader,
@@ -560,7 +619,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     // An older TV screen may close after its replacement has begun playing.
     return _sessionWrite = _sessionWrite.then((_) async {
       if (_sessionOwner == this) {
-        if (watchRepository != null && watchRevision != null) {
+        if (!isLocalMusicPlaybackId(id) &&
+            watchRepository != null &&
+            watchRevision != null) {
           await watchRepository.saveSessionIfCurrent(
               id, watchRevision, setting);
         } else {
@@ -585,9 +646,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         sourceEntries:
             saved.playlistEntries.isEmpty ? null : saved.playlistEntries);
     final offline = saved.offlineIds
-        .map(_profileDatabase.getDownloadByVideoId)
+        .map((id) {
+          if (!isLocalMusicPlaybackId(id)) {
+            return _profileDatabase.getDownloadByVideoId(id);
+          }
+          final track = localMusicTrackForPlayback(id);
+          return track == null
+              ? null
+              : localMusicPlaybackEntry(track, _profileDatabase.profileId);
+        })
         .whereType<DownloadedVideo>()
-        .where((v) => v.downloadComplete)
+        .where((v) => isLocalMusicPlaybackId(v.videoId) || v.downloadComplete)
         .toList();
     final ids = {
       ...saved.videos.map(playbackQueueId),
@@ -615,6 +684,25 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _requestedPlaying = null;
     final saved = savedSession;
     if (saved == null) return;
+    if (isLocalMusicPlaybackId(saved.currentId)) {
+      final generation = _videoSwitchGeneration;
+      final profile = _profileDatabase.profileId;
+      final library = LocalMusicLibrary.instance;
+      await library.initialize();
+      if (library.enabled && !library.loaded) await library.refresh();
+      if (isClosed ||
+          _isDisposing ||
+          _switchingProfile ||
+          generation != _videoSwitchGeneration ||
+          profile != db.profileId ||
+          savedSession?.currentId != saved.currentId) {
+        return;
+      }
+      if (library.trackById(saved.currentId) == null) {
+        setEvent(const MediaEvent(state: MediaState.error));
+        return;
+      }
+    }
     restoreSession();
     final videos = state.videos.isNotEmpty ? state.videos : state.offlineVideos;
     final current =
@@ -641,6 +729,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> playRemoteVideo(String videoId, int position, bool playing,
       {bool Function()? isActive}) async {
+    if (isLocalMusicPlaybackId(videoId)) return;
     final generation = _videoSwitchGeneration;
     final video =
         await service.getVideo(videoId).timeout(const Duration(seconds: 10));
@@ -937,7 +1026,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final online = state.currentlyPlaying;
     if (online != null) return online;
     final offline = state.offlineCurrentlyPlaying;
-    return offline == null
+    return offline == null || isLocalMusicPlaybackId(offline.videoId)
         ? null
         : Video(
             videoId: offline.videoId,
@@ -1148,7 +1237,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (lifecycle == AppLifecycleState.resumed) {
       // AudioService can outlive the Activity that held these parameters.
       unawaited(_updateAutoPip(state));
-      if (!_switchingProfile) unawaited(service.syncHistory());
+      if (!_switchingProfile && !isLocalMusicPlaybackId(state.currentQueueId)) {
+        unawaited(service.syncHistory());
+      }
     } else {
       _checkpointLearning(force: true);
       unawaited(_saveSession(state));
@@ -1260,7 +1351,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         !isClosed &&
         startupGeneration == _videoSwitchGeneration;
     final startVideos = state.videos;
-    if (startVideos.isEmpty) restoreSession();
+    if (startVideos.isEmpty && _initialLocalMusic == null) restoreSession();
     emit(state.copyWith(
         orientation: getOrientation(),
         forwardStep: settings.state.skipStep,
@@ -1293,6 +1384,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       mediaHandler = handler;
       BackButtonInterceptor.add(handleBackButton,
           name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    } else if (_initialLocalMusic != null && startupActive()) {
+      await playLocalMusic(_initialLocalMusic,
+          startIndex: _initialPlaylistIndex);
     } else if (startVideos.isNotEmpty && startupActive()) {
       final reference = _initialPlaylistReference;
       final switching = reference == null
@@ -1429,6 +1523,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    LocalMusicLibrary.instance.removeListener(_localLibraryChanged);
     await _finishLearning();
     _runtimePlayers.remove(this);
     if (identical(_podcastOwner, _podcasts)) _podcastOwner = null;
@@ -1697,6 +1792,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (isClosed || _isDisposing || _switchingProfile) return;
     final videoId = state.currentlyPlaying?.videoId ??
         state.offlineCurrentlyPlaying?.videoId;
+    if (isLocalMusicPlaybackId(videoId)) return;
     final length = state.currentlyPlaying?.lengthSeconds ??
         state.offlineCurrentlyPlaying?.lengthSeconds ??
         0;
@@ -2039,6 +2135,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       bool selectedByUser = false,
       bool retainOnFailure = false}) async {
     if (isClosed || _switchingProfile) return;
+    final device = isLocalMusicPlaybackId(video.videoId);
+    if (device) {
+      final track = localMusicTrackForPlayback(video.videoId);
+      if (video is! DownloadedVideo ||
+          track == null ||
+          video.profileId != _profileDatabase.profileId) {
+        setEvent(const MediaEvent(state: MediaState.error));
+        return;
+      }
+      // Data supplied by another caller or an obsolete queue entry grants no
+      // read permission and must not supply a URI, title or artwork override.
+      video = localMusicPlaybackEntry(track, _profileDatabase.profileId);
+    }
     if (_sleepAtEndQueueId != null &&
         _sleepAtEndQueueId != playbackQueueId(video)) {
       // Muzza SleepTimer.kt pauses on a media-item transition. Recovery of the
@@ -2229,10 +2338,18 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final length = currentlyPlaying?.lengthSeconds ??
           offlineCurrentlyPlaying?.lengthSeconds ??
           0;
-      await _bindWatchSession(video.videoId,
-          intentional: backendRequest == null && !retainOnFailure);
+      if (device) {
+        _watchRepository = null;
+        _watchAccount = null;
+        _watchVideoId = null;
+        _watchRevision = null;
+      } else {
+        await _bindWatchSession(video.videoId,
+            intentional: backendRequest == null && !retainOnFailure);
+      }
       if (!active() || _switchingProfile) return;
-      final progress = _profileDatabase.getVideoProgress(video.videoId);
+      final progress =
+          device ? 0.0 : _profileDatabase.getVideoProgress(video.videoId);
       var resumeAt = startAt ??
           Duration(seconds: progress < 0.9 ? (length * progress).floor() : 0);
       final preparedIntervals = _sponsorIntervals(
@@ -2321,7 +2438,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (!active()) return;
       _clearMetadataRetry();
       _backendSwitchPending = false;
-      if (retainOnFailure ||
+      if (device ||
+          retainOnFailure ||
           (video is Video &&
               (state.backendRecovery != null || video.musicMetadata != null))) {
         pause();
@@ -2428,11 +2546,41 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _switchingProfile ||
         offlineVids.any(
             (video) => video.profileId != _profileDatabase.profileId)) return;
+    if (offlineVids.any((video) => isLocalMusicPlaybackId(video.videoId))) {
+      return;
+    }
     _requestedPlaying = null;
     _sessionTransitionPending = true;
     _bindPlaylist(null, []);
     log.fine('Playing ${offlineVids.length} offline videos');
     await _playVideos(offlineVids);
+  }
+
+  Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
+      {int startIndex = 0}) async {
+    if (isClosed ||
+        _isDisposing ||
+        _switchingProfile ||
+        _profileDatabase.profileId != db.profileId) return;
+    final entries = <DownloadedVideo>[];
+    final seen = <String>{};
+    for (final requested in tracks) {
+      final track = localMusicTrackForPlayback(requested.playbackId);
+      if (track == null || !seen.add(track.playbackId)) {
+        setEvent(const MediaEvent(state: MediaState.error));
+        return;
+      }
+      entries.add(localMusicPlaybackEntry(track, _profileDatabase.profileId));
+    }
+    if (startIndex < 0 || startIndex >= entries.length) {
+      setEvent(const MediaEvent(state: MediaState.error));
+      return;
+    }
+    _requestedPlaying = null;
+    _sessionTransitionPending = true;
+    _bindPlaylist(null, []);
+    setAudio(true);
+    await _playVideos(entries, startIndex: startIndex);
   }
 
   /// Paired immediately with playVideo by an explicit watch command. A
@@ -2878,6 +3026,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   List<DownloadedVideo>? _offlineMusicSelection(
       List<Video> selection, List<DownloadedVideo>? downloads) {
     if (state.offlineCurrentlyPlaying == null ||
+        isLocalMusicPlaybackId(state.offlineCurrentlyPlaying?.videoId) ||
         !state.offlineVideos
             .any((video) => playbackQueueId(video) == state.currentQueueId)) {
       return null;
@@ -3101,7 +3250,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<List<SponsorSegment>> _loadSponsorSegments(
       String videoId, List<SponsorSegmentType> types) async {
-    if (types.isEmpty ||
+    if (isLocalMusicPlaybackId(videoId) ||
+        types.isEmpty ||
         isClosed ||
         _isDisposing ||
         _switchingProfile ||
@@ -3344,6 +3494,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     } else if (state.offlineVideos.isNotEmpty) {
       final e = state.offlineVideos[index];
       if (e.musicMetadata != null && e.profileId != profile) return null;
+      if (isLocalMusicPlaybackId(e.videoId)) {
+        final track = localMusicTrackForPlayback(e.videoId);
+        if (track == null) return null;
+        return MediaItem(
+            id: track.playbackId,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            duration: track.durationMs > 0
+                ? Duration(milliseconds: track.durationMs)
+                : Duration(seconds: e.lengthSeconds),
+            artUri: track.artPath == null ? null : Uri.file(track.artPath!));
+      }
       final artwork = e.musicMetadata == null
           ? Uri.file(await e.thumbnailPath)
           : (await e.existingSongArtwork)?.uri;
@@ -3356,6 +3519,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           artUri: artwork);
     }
     return null;
+  }
+
+  /// The document provider can omit duration tags on an otherwise seekable
+  /// audio file. Publish the decoder's duration only for the admitted song.
+  void reportLocalMusicDuration(String id, Duration duration) {
+    final track = localMusicTrackForPlayback(id);
+    final current = state.offlineCurrentlyPlaying;
+    if (isClosed ||
+        _switchingProfile ||
+        state.isClosing ||
+        track == null ||
+        track.durationMs > 0 ||
+        current == null ||
+        current.videoId != id ||
+        current.lengthSeconds > 0 ||
+        duration <= Duration.zero) {
+      return;
+    }
+    final seconds = (duration.inMilliseconds + 999) ~/ 1000;
+    final updated = current.copyWith(lengthSeconds: seconds);
+    emit(state.copyWith(offlineCurrentlyPlaying: updated, offlineVideos: [
+      for (final entry in state.offlineVideos)
+        if (entry.videoId == id) updated else entry
+    ]));
+    final handler = _mediaSessionHandler;
+    final item = handler?.mediaItem.value;
+    if (_sessionOwner == this && item != null && item.id == id) {
+      handler!.mediaItem
+          .add(item.copyWith(duration: Duration(seconds: seconds)));
+    }
   }
 
   void setSpeed(double d) {

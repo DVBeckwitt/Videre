@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -25,6 +26,7 @@ import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -158,6 +160,28 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return true;
       }).timeout(const Duration(seconds: 5));
+
+  testWidgets(
+      'the Music Library opens the on-device setup without launching a picker',
+      (tester) async {
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final nativeCalls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      nativeCalls.add(call.method);
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    await show(tester);
+    expect(nativeCalls, isEmpty);
+    final device = find.byKey(const ValueKey('music-library-tab-onDevice'));
+    await tester.ensureVisible(device);
+    await tester.tap(device);
+    await tester.pumpAndSettle();
+    expect(find.text('Choose music folder'), findsOneWidget);
+    expect(nativeCalls, ['getFolder']);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   for (final cancel in [false, true]) {
     testWidgets(
@@ -767,6 +791,13 @@ void main() {
       complete.copyWith(
           videoId: 'foreignsong', profileId: 'another', title: 'Other person'),
       complete.copyWith(
+          videoId: 'alreadyshared',
+          musicFormat: MusicDownloadFormat.mp3,
+          storageUri: 'content://documents/public-track'),
+      complete.copyWith(
+          videoId: 'legacyshared',
+          storageUri: 'content://documents/legacy-track'),
+      complete.copyWith(
           videoId: 'videofile01', audioOnly: false, title: 'Video'),
       complete.copyWith(
           videoId: 'spokenword1', musicMetadata: null, title: 'Speech'),
@@ -778,6 +809,14 @@ void main() {
     expect(find.byKey(const ValueKey('music-download-abcdefghijk')),
         findsOneWidget);
     expect(find.byKey(const ValueKey('music-download-queuedmusic')),
+        findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('export-music-abcdefghijk')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('export-music-queuedmusic')), findsNothing);
+    expect(
+        find.byKey(const ValueKey('export-music-alreadyshared')), findsNothing);
+    expect(find.byKey(const ValueKey('export-music-legacyshared')),
         findsOneWidget);
     expect(
         find.byKey(const ValueKey('music-download-foreignsong')), findsNothing);
