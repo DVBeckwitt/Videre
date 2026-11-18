@@ -66,6 +66,7 @@ class _ConfiguredHomeView extends StatefulWidget {
 
 class _ConfiguredHomeViewState extends State<_ConfiguredHomeView> {
   final _nested = GlobalKey<NestedScrollViewState>();
+  final _compactFeeds = GlobalKey();
   bool _scrolled = false;
 
   @override
@@ -132,6 +133,8 @@ class _ConfiguredHomeViewState extends State<_ConfiguredHomeView> {
 
     final shelf = widget.continueWatching;
     final smallSources = Padding(
+      // Carry compact feeds and their scroll positions between header layouts.
+      key: _compactFeeds,
       padding: const EdgeInsets.only(left: innerHorizontalPadding),
       child: Column(children: summaries),
     );

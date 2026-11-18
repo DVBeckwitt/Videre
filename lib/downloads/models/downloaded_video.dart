@@ -177,7 +177,10 @@ sealed class DownloadedVideo with _$DownloadedVideo implements IdedVideo {
   String get fileName {
     final id = _fileId;
     final name = title.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
-    final shortened = String.fromCharCodes(name.runes.take(50));
+    // Android omits dotfiles from its audio index, including in SAF folders.
+    final visibleName =
+        storeAsMusic ? name.replaceFirst(RegExp(r'^[.\s]+'), '') : name;
+    final shortened = String.fromCharCodes(visibleName.runes.take(50));
     return '${shortened.isEmpty ? id : shortened}_$id.$extension';
   }
 

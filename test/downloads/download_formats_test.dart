@@ -1,5 +1,6 @@
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -99,6 +100,20 @@ void main() {
     expect(restored, selected);
     expect(restored.extension, 'm4a');
     expect(restored.mimeType, 'audio/mp4');
+  });
+
+  test('a Music title starting with a dot produces a visible export file', () {
+    const song = DownloadedVideo(
+        videoId: 'abc',
+        title: '... Song',
+        lengthSeconds: 5,
+        quality: highestAudioDownloadQuality,
+        audioOnly: true,
+        musicFormat: MusicDownloadFormat.mp3);
+    expect(song.fileName, 'Song_abc.mp3');
+    expect(song.title, '... Song');
+    expect(song.copyWith(title: '. .').fileName, 'abc_abc.mp3');
+    expect(song.copyWith(musicFormat: null).fileName, '... Song_abc.webm');
   });
 
   test('Invidious caption language keys and optional audio metadata parse', () {

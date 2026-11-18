@@ -48,6 +48,18 @@ class _Feeds extends Service {
 
 class _SubscriptionFeed extends Service {
   final pages = <int>[];
+  int popularRequests = 0;
+
+  @override
+  Future<List<Video>> getPopular() async {
+    popularRequests++;
+    return List.generate(
+        10,
+        (index) => Video(
+            videoId: 'popular${index.toString().padLeft(4, '0')}',
+            title: 'Popular video $index',
+            author: 'Creator'));
+  }
 
   @override
   Future<bool> isLoggedIn() async => true;
@@ -82,7 +94,7 @@ void main() {
     final layout = HomeLayout()
       ..showBigSource = true
       ..bigSource = HomeDataSource.subscription
-      ..smallSources = [];
+      ..smallSources = [HomeDataSource.popular];
     late TestAppCubit app;
     late TestSettingsCubit settings;
     late TestPlayerCubit player;
@@ -123,14 +135,27 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
-    ScrollPosition feedPosition() => tester
-        .state<ScrollableState>(find
-            .descendant(
-                of: find.byType(GridView), matching: find.byType(Scrollable))
-            .first)
-        .position;
+    final subscriptionGrid = find.byWidgetPredicate((widget) =>
+        widget is GridView && widget.scrollDirection == Axis.vertical);
+    final popularGrid = find.descendant(
+        of: find.byKey(const ValueKey(HomeDataSource.popular),
+            skipOffstage: false),
+        matching: find.byType(GridView, skipOffstage: false),
+        skipOffstage: false);
+    ScrollableState gridState(Finder grid) => tester.state<ScrollableState>(find
+        .descendant(
+            of: grid,
+            matching: find.byType(Scrollable, skipOffstage: false),
+            skipOffstage: false)
+        .first);
+    final popularState = gridState(popularGrid);
+    await tester.drag(popularGrid, const Offset(-220, 0));
+    await tester.pumpAndSettle();
+    final popularOffset = popularState.position.pixels;
+    expect(popularOffset, greaterThan(0));
+    expect(feeds.popularRequests, 1);
     expect(feeds.pages, [1]);
-    final position = feedPosition();
+    final position = gridState(subscriptionGrid).position;
     position.jumpTo(position.maxScrollExtent);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
@@ -142,7 +167,11 @@ void main() {
     expect(secondPage, findsOneWidget);
     final offset = position.pixels;
     final rowTop = tester.getTopLeft(secondPage).dy;
-    final shelf = find.byKey(PageStorageKey('flow-resume-${db.profileId}'));
+    final shelf = find.descendant(
+        of: find.byType(NestedScrollView),
+        matching: find.byKey(PageStorageKey('flow-resume-${db.profileId}'),
+            skipOffstage: false),
+        skipOffstage: false);
     expect(shelf, findsNothing);
     expect(offset, greaterThan(0));
     const id = 'resume00001';
@@ -160,9 +189,12 @@ void main() {
       playbackHistoryRevision.value++;
       await tester.pumpAndSettle();
       expect(feeds.pages, [1, 2], reason: 'shelf visible: $showShelf');
+      expect(feeds.popularRequests, 1, reason: 'shelf visible: $showShelf');
+      expect(gridState(popularGrid), same(popularState));
+      expect(gridState(popularGrid).position.pixels, closeTo(popularOffset, 1));
       expect(shelf, showShelf ? findsOneWidget : findsNothing);
-      expect(feedPosition(), same(position));
-      expect(feedPosition().pixels, closeTo(offset, 1));
+      expect(gridState(subscriptionGrid).position, same(position));
+      expect(position.pixels, closeTo(offset, 1));
       expect(secondPage, findsOneWidget);
       expect(tester.getTopLeft(secondPage).dy, closeTo(rowTop, 1));
     }
