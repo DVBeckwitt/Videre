@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/foundation.dart' show listEquals, mapEquals;
@@ -18,6 +19,7 @@ import '../../../recommendations/subscription_recommendations.dart';
 import '../../../recommendations/subscription_revision.dart';
 import '../../../recommendations/views/recommendation_settings.dart';
 import '../../../router.dart';
+import '../../../settings/models/errors/invidious_service_error.dart';
 import '../../../settings/states/settings.dart';
 import '../../../utils/interfaces/db.dart';
 import '../../../utils/models/paginated_list.dart';
@@ -119,6 +121,18 @@ List<Video> continuingVideos(IDbClient owner, {int limit = 12}) {
       .toList();
 }
 
+typedef _PreparedTab = ({
+  List<Video> found,
+  List<Video> ranked,
+  Map<String, String> reasons,
+  bool available,
+});
+
+typedef _TabRequest = ({String tab, List<String> queries, Video? seed});
+
+String _requestKey(_TabRequest request) =>
+    jsonEncode([request.tab, request.queries, request.seed?.videoId]);
+
 class _FlowVideoHomeState extends State<FlowVideoHome>
     with WidgetsBindingObserver {
   late final String _profile = db.profileId;
@@ -130,10 +144,18 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   late HomeTabsLayout _layout = _settings.state.homeTabsLayout;
   late String? _selectedTab = _initialSelection(_layout);
   bool _feedsVisited = false;
-  bool _discoveryStarted = false;
+  bool _discoveryPrepared = false;
+  String? _enteredQuery;
+  bool _catalogKnown = false;
+  Video? _discoverySeed;
+  final _preparedTabs = <String, _PreparedTab?>{};
+  Object? _preparation;
+  bool _preparationStopped = false;
+  DateTime? _retryNotBefore;
+  late String _region = _settings.state.country.code;
   late final int _session = _app.state.sessionRevision;
   late final RecommendationCandidates _sources =
-      RecommendationCandidates(db, isCurrent: () => _current);
+      RecommendationCandidates(db, isCurrent: () => _sessionCurrent);
   late final _subscriptionSource = SubscriptionRecommendationSource(db);
   final ScrollController _scroll = ScrollController();
   final Set<Key> _impressionKeys = {};
@@ -142,6 +164,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   final Map<String, Video> _impressionBatch = {};
   Timer? _impressionFlush;
   bool _impressionSurface = false;
+  bool _discoveryVisible = false;
   bool _visibilityScheduled = false;
   int _viewportGeneration = 0;
   AppLifecycleState? _lifecycle;
@@ -170,8 +193,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   bool get _current =>
       _sessionCurrent &&
       _selectedTab != null &&
-      _selectedTab != HomeTabsLayout.yourFeeds &&
-      (_selectedTab != HomeTabsLayout.discover || _discoveryStarted);
+      _selectedTab != HomeTabsLayout.yourFeeds;
 
   bool get _sessionCurrent {
     if (!mounted || !widget.active) {
@@ -204,8 +226,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _appChanges = _app.stream.listen(_appChanged);
     _settingsChanges = _settings.stream.listen(_layoutChanged);
     _feedsVisited = _selectedTab == HomeTabsLayout.yourFeeds;
-    if (_selectedTab == HomeTabsLayout.yourFeeds ||
-        (_selectedTab?.startsWith('topic:') ?? false)) {
+    if (_selectedTab == HomeTabsLayout.yourFeeds) {
       unawaited(_resolveTopicCatalog());
     } else {
       unawaited(_load());
@@ -230,7 +251,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     final order = _layout.enabledOrder;
     if (!_sessionCurrent ||
         order?.isEmpty == true ||
-        (order != null && !order.any((id) => id.startsWith('topic:')))) {
+        (order != null &&
+            !order.any((id) =>
+                id.startsWith('topic:') || id == HomeTabsLayout.discover))) {
       return;
     }
     final revision = _revision;
@@ -243,9 +266,15 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         generation == _engine.generation(RecommendationDomain.video);
     final local =
         RecommendationCandidates(db, isCurrent: () => _sessionCurrent);
-    final result = await _engine.rankVideos(local.localVideos());
+    final candidates = local.localVideos();
+    final result = await _engine.rankVideos(candidates);
     if (!valid()) return;
+    final previous = _selectedTab;
+    final previousInterest = _selectedInterest;
     setState(() {
+      _catalogKnown = true;
+      _discoverySeed = _engine.eligibleVideos(candidates).firstOrNull;
+      _discoveryQueries = result.discoveryQueries;
       _interests = result.interests;
       final enabled = _layout.orderedIds(_availableTabIds);
       if (!enabled.contains(_selectedTab)) _selectedTab = enabled.firstOrNull;
@@ -253,17 +282,27 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       _selectedInterest = _interests
           .where((value) => HomeTabsLayout.topicId(value.id) == _selectedTab)
           .firstOrNull;
-      _videos = [];
-      _loading = false;
-      _discovering = false;
     });
-    if (_selectedTab == HomeTabsLayout.forYou) {
+    if (previous != _selectedTab ||
+        (previousInterest == null && _selectedInterest != null)) {
+      _resetSelection();
+      _discoveryQueries = result.discoveryQueries;
       await _load();
       unawaited(_warmSubscriptions());
     }
   }
 
   void _layoutChanged(SettingsState settings) {
+    if (_region != settings.country.code) {
+      _region = settings.country.code;
+      _resetConnection();
+      if (_selectedTab == HomeTabsLayout.yourFeeds) {
+        unawaited(_resolveTopicCatalog());
+      } else {
+        unawaited(_load());
+        unawaited(_warmSubscriptions());
+      }
+    }
     final next = settings.homeTabsLayout;
     if (!mounted || next.encode() == _layout.encode()) return;
     final enabled = next.orderedIds([
@@ -286,51 +325,194 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _clearImpressions();
     _revision++;
     _subscriptionRevision++;
-    final selected = _selectedTab;
     setState(() {
       _layout = next;
       _selectedTab = nextSelected;
-      _selectedInterest = null;
-      _videos = [];
-      _feedsVisited |= _selectedTab == HomeTabsLayout.yourFeeds;
-      _loading = false;
-      _discovering = false;
-    });
-    if (selected != _selectedTab && _current) {
-      final interest = _interests
-          .where((value) => HomeTabsLayout.topicId(value.id) == _selectedTab)
+      _selectedInterest = _interests
+          .where((value) => HomeTabsLayout.topicId(value.id) == nextSelected)
           .firstOrNull;
-      if (interest != null) {
-        setState(() => _selectedInterest = interest);
-      } else if (_selectedTab?.startsWith('topic:') ?? false) {
-        unawaited(_resolveTopicCatalog());
-      } else {
-        unawaited(_load());
-        unawaited(_warmSubscriptions());
-      }
-    } else if (_selectedTab == HomeTabsLayout.yourFeeds) {
+      _resetSelection();
+      _feedsVisited |= nextSelected == HomeTabsLayout.yourFeeds;
+    });
+    if (nextSelected == HomeTabsLayout.yourFeeds) {
       unawaited(_resolveTopicCatalog());
+    } else {
+      unawaited(_load());
+      unawaited(_warmSubscriptions());
     }
   }
 
-  void _selectHomeTab(String id) {
+  void _resetSelection() {
+    _videos = [];
+    _interestVideos.clear();
+    _loading = false;
+    _discovering = false;
+    _failed = false;
+    _discoveryPrepared = false;
+    _enteredQuery = null;
+  }
+
+  void _selectHomeTab(String id, {RecommendationInterest? interest}) {
+    if (_selectedTab == id) return;
+    final request = _tabRequests()[id];
+    final prepared = request == null ? null : _readyTab(request);
     _clearImpressions();
     _revision++;
     _subscriptionRevision++;
     setState(() {
       _selectedTab = id;
-      _selectedInterest = null;
-      if (id == HomeTabsLayout.discover) _videos = [];
-      _loading = false;
-      _discovering = false;
+      _selectedInterest = interest;
+      _resetSelection();
+      if (prepared != null) {
+        final pool = interest == null ? _discovered : _interestVideos;
+        pool
+          ..clear()
+          ..addAll(prepared.found);
+        _videos = prepared.ranked;
+        _reasons = prepared.reasons;
+        _available = prepared.available;
+        _discoveryPrepared = true;
+      }
       _feedsVisited |= id == HomeTabsLayout.yourFeeds;
     });
-    if (id == HomeTabsLayout.forYou) {
+    if (prepared != null) return;
+    if (id == HomeTabsLayout.yourFeeds) {
+      if (_interests.isEmpty) unawaited(_resolveTopicCatalog());
+    } else if (id != HomeTabsLayout.discover) {
       unawaited(_load());
       unawaited(_warmSubscriptions());
-    } else if (id == HomeTabsLayout.yourFeeds && _interests.isEmpty) {
-      unawaited(_resolveTopicCatalog());
     }
+  }
+
+  // The native catalog supplies at most four learned topics with bounded queries.
+  Map<String, _TabRequest> _tabRequests() {
+    if (!_catalogKnown) return {};
+    final enabled = _layout.orderedIds(_availableTabIds);
+    final topics = {
+      for (final item in _interests) HomeTabsLayout.topicId(item.id): item
+    };
+    final requested = <String, _TabRequest>{};
+    for (final id in enabled) {
+      if (id == HomeTabsLayout.discover) {
+        if (_discoveryQueries.isNotEmpty || _discoverySeed != null) {
+          requested[id] = (
+            tab: id,
+            queries: _discoveryQueries,
+            seed: _discoveryQueries.isEmpty ? _discoverySeed : null
+          );
+        }
+      } else if (topics[id] case final item?) {
+        requested[id] = (tab: id, queries: item.queries, seed: null);
+      }
+    }
+    return requested;
+  }
+
+  _PreparedTab? _readyTab(_TabRequest request) {
+    final batch = _preparedTabs[_requestKey(request)];
+    if (batch == null) return null;
+    final found = _engine
+        .eligibleVideos(batch.found)
+        .map((video) => video.videoId)
+        .toSet();
+    return batch.ranked.any((video) => found.contains(video.videoId))
+        ? batch
+        : null;
+  }
+
+  _PreparedTab _snapshot(List<Video> found, List<Video> candidates,
+          RecommendationResult<Video> ranked) =>
+      (
+        found: found,
+        ranked: ranked.available
+            ? ranked.items.map((item) => item.item).toList()
+            : _engine.eligibleVideos(candidates),
+        reasons: {
+          for (final item in ranked.items) item.item.videoId: item.reason
+        },
+        available: ranked.available,
+      );
+
+  bool get _coolingDown => _retryNotBefore?.isAfter(DateTime.now()) == true;
+
+  bool _instanceRejected(Object error) {
+    if (error is! InvidiousServiceError ||
+        !(error.isRateLimited ||
+            error.retryAfterIsInvalid ||
+            (error.retryAfter ?? Duration.zero) > Duration.zero ||
+            error.isAuthenticationFailure ||
+            error.isGatewayAccessFailure)) {
+      return false;
+    }
+    _preparationStopped = true;
+    if (error.retryAfter case final delay? when delay > Duration.zero) {
+      _retryNotBefore = DateTime.now().add(delay);
+    }
+    return true;
+  }
+
+  // Resolve one advertised batch at a time. Candidate lookup caches overlapping
+  // queries for this instance. Empty batches stay absent until an explicit
+  // refresh or a new catalog/connection supplies different inputs.
+  void _prepareTabs(Map<String, _TabRequest> requests) {
+    final keys = requests.values.map(_requestKey).toSet();
+    _preparedTabs.removeWhere((key, _) => !keys.contains(key));
+    if (!_discoveryVisible ||
+        !_sessionCurrent ||
+        _app.state.server == null ||
+        _preparation != null ||
+        _preparationStopped ||
+        _coolingDown ||
+        _loading ||
+        _selectedTab == null) {
+      return;
+    }
+    final next = requests.values
+        .where((request) =>
+            request.tab != _selectedTab &&
+            !_preparedTabs.containsKey(_requestKey(request)))
+        .firstOrNull;
+    if (next == null) return;
+    final key = _requestKey(next);
+    final token = _preparation = Object();
+    final generation = _engine.generation(RecommendationDomain.video);
+    bool current() =>
+        identical(token, _preparation) &&
+        _discoveryVisible &&
+        _sessionCurrent &&
+        _selectedTab != next.tab &&
+        _engine.generation(RecommendationDomain.video) == generation &&
+        _tabRequests().values.any((entry) => _requestKey(entry) == key);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        if (!current()) return;
+        final videos = await _sources.discoverVideos(
+            queries: next.queries, seed: next.seed, isCurrent: current);
+        if (!current()) return;
+        final found = _engine.eligibleVideos(videos);
+        if (found.isEmpty) {
+          _preparedTabs[key] = null;
+          return;
+        }
+        final follows = _followedVideos;
+        final candidates = next.tab == HomeTabsLayout.discover
+            ? [...found, ...follows, ..._sources.localVideos()]
+            : found;
+        final ranked = await _engine.rankVideos(candidates,
+            subscriptionChannels: _followedChannels);
+        if (current() &&
+            (next.tab != HomeTabsLayout.discover ||
+                identical(follows, _followedVideos))) {
+          _preparedTabs[key] = _snapshot(found, candidates, ranked);
+        }
+      } catch (error) {
+        if (current() && !_instanceRejected(error)) _preparedTabs[key] = null;
+      } finally {
+        if (mounted && identical(token, _preparation)) {
+          setState(() => _preparation = null);
+        }
+      }
+    });
   }
 
   bool get _impressionsActive =>
@@ -341,9 +523,34 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       _selectedInterest == null &&
       _engine.learningEnabled(RecommendationDomain.video);
 
+  void _setDiscoveryVisible(bool discoveryVisible) {
+    if (_discoveryVisible == discoveryVisible) return;
+    _discoveryVisible = discoveryVisible;
+    if (!discoveryVisible) {
+      _preparation = null;
+    } else if (!_coolingDown) {
+      _preparationStopped = false;
+    }
+    if (_discoveryTab) {
+      if (discoveryVisible) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _discoveryVisible && _discoveryTab && !_loading) {
+            unawaited(_load());
+          }
+        });
+      } else if (_discovering) {
+        _revision++;
+        _discovering = false;
+        _loading = false;
+      }
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!mounted || state == _lifecycle) return;
+    // Backgrounding can suspend frames before build observes the new state.
+    if (state != AppLifecycleState.resumed) _setDiscoveryVisible(false);
     _clearImpressions();
     setState(() => _lifecycle = state);
   }
@@ -440,16 +647,24 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     _followedVideos = const [];
   }
 
+  void _invalidateDiscoverSnapshot() {
+    final request = _tabRequests()[HomeTabsLayout.discover];
+    if (request != null) _preparedTabs.remove(_requestKey(request));
+  }
+
   void _subscriptionsChanged() {
-    if (!_current) return;
+    if (!_sessionCurrent) return;
     setState(() {
       _revision++;
       _discovering = false;
       _sources.clearVideoDiscovery();
+      _invalidateDiscoverSnapshot();
       _retireSubscriptions();
     });
-    unawaited(_load());
-    unawaited(_warmSubscriptions(forceRefresh: true));
+    if (_current) {
+      unawaited(_load());
+      unawaited(_warmSubscriptions(forceRefresh: true));
+    }
   }
 
   void _appChanged(AppState next) {
@@ -463,7 +678,15 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
             previous.sessionRecoveryRequired == next.sessionRecoveryRequired)) {
       return;
     }
+    if (previous.server != next.server ||
+        previous.profileId != next.profileId) {
+      _preparationStopped = false;
+      _retryNotBefore = null;
+    }
     _resetConnection();
+    if (_selectedTab == HomeTabsLayout.yourFeeds) {
+      unawaited(_resolveTopicCatalog());
+    }
     if (!_current) return;
     unawaited(_load());
     unawaited(_warmSubscriptions());
@@ -479,11 +702,17 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       _revision++;
       _loading = false;
       _discovering = false;
-      _failed = false;
       _available = false;
+      _discoveryPrepared = false;
+      _enteredQuery = null;
+      _failed = false;
       _selectedInterest = null;
       _interests = const [];
       _discoveryQueries = const [];
+      _preparedTabs.clear();
+      _catalogKnown = false;
+      _discoverySeed = null;
+      _preparation = null;
       _videos = [];
       _reasons = {};
       _discovered.clear();
@@ -529,6 +758,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
             listEquals(batch.videos, _followedVideos)) {
           continue;
         }
+        _invalidateDiscoverSnapshot();
         _followedChannels = batch.channels;
         _followedVideos = batch.videos;
         _rerankSubscriptions();
@@ -555,9 +785,17 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     if (generation != _tasteGeneration) {
       _clearImpressions();
       _tasteGeneration = generation;
+      _discovering = false;
+      _discoveryPrepared = false;
+      _enteredQuery = null;
+      _failed = false;
       _selectedInterest = null;
       _interests = const [];
       _discoveryQueries = const [];
+      _preparedTabs.clear();
+      _catalogKnown = false;
+      _discoverySeed = null;
+      _preparation = null;
       _discovered.clear();
       _interestVideos.clear();
       _sources.clearVideoDiscovery();
@@ -587,45 +825,92 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     }
   }
 
-  Future<void> _load({
-    String? query,
-    List<String> queries = const [],
-    Video? seed,
-  }) async {
-    if (!_current) return;
+  bool get _discoveryTab =>
+      _selectedTab == HomeTabsLayout.discover ||
+      (_selectedTab?.startsWith('topic:') ?? false);
+
+  Future<void> _load({bool refresh = false}) async {
+    if (!_current || (_discoveryTab && !_discoveryVisible)) return;
+    if (refresh && !_coolingDown) {
+      _preparationStopped = false;
+      _preparedTabs.removeWhere((_, batch) => batch == null);
+    }
+    final selected = _selectedInterest;
+    if (selected == null && (_selectedTab?.startsWith('topic:') ?? false)) {
+      await _resolveTopicCatalog();
+      return;
+    }
+    final discover = _selectedTab == HomeTabsLayout.discover;
+    if (_discovering ||
+        (_failed && !refresh && (discover || selected != null))) {
+      return;
+    }
+    final prepare =
+        (discover || selected != null) && (refresh || !_discoveryPrepared);
+    if (prepare && _coolingDown) {
+      setState(() => _failed = true);
+      return;
+    }
     final revision = ++_revision;
     final generation = _engine.generation(RecommendationDomain.video);
     bool requestCurrent() =>
         _current &&
+        (!prepare || _discoveryVisible) &&
         revision == _revision &&
         generation == _engine.generation(RecommendationDomain.video);
     setState(() {
       _loading = true;
-      _discovering = query != null || queries.isNotEmpty || seed != null;
+      _discovering = prepare;
       _failed = false;
     });
     try {
-      final selected = _selectedInterest;
-      if (_discovering) {
-        final found = await _sources.discoverVideos(
-            query: query,
-            queries: queries,
-            seed: seed,
-            isCurrent: requestCurrent);
-        if (!requestCurrent()) return;
-        final destination = selected == null ? _discovered : _interestVideos;
-        destination
-          ..clear()
-          ..addAll(found);
+      final local = selected == null ? _sources.localVideos() : const <Video>[];
+      RecommendationResult<Video>? initialRank;
+      String? preparedKey;
+      if (prepare) {
+        if (discover && _enteredQuery == null && _discoveryQueries.isEmpty) {
+          // A restored Discover tab may be opened before For you has ranked.
+          initialRank = await _engine.rankVideos(
+              [..._discovered, ..._followedVideos, ...local],
+              subscriptionChannels: _followedChannels);
+          if (!requestCurrent()) return;
+          _discoveryQueries = initialRank.discoveryQueries;
+        }
+        final queries = selected?.queries ?? _discoveryQueries;
+        final seed =
+            discover ? _engine.eligibleVideos(local).firstOrNull : null;
+        if (_enteredQuery != null || queries.isNotEmpty || seed != null) {
+          final found = await _sources.discoverVideos(
+              query: _enteredQuery,
+              queries: queries,
+              seed: seed,
+              isCurrent: requestCurrent);
+          if (!requestCurrent()) return;
+          final destination = discover ? _discovered : _interestVideos;
+          destination
+            ..clear()
+            ..addAll(found);
+          _discoveryPrepared = true;
+          if (_enteredQuery == null) {
+            final request = (
+              tab: _selectedTab!,
+              queries: queries,
+              seed: queries.isEmpty ? seed : null
+            );
+            preparedKey = _requestKey(request);
+          }
+          initialRank = null;
+        }
       }
       // The ranker caps the pool after admission and deduplication. Start
       // with the requested discovery so a full history cannot hide its feed.
       final candidates = selected == null
-          ? [..._discovered, ..._followedVideos, ..._sources.localVideos()]
+          ? [..._discovered, ..._followedVideos, ...local]
           : List<Video>.of(_interestVideos);
       _subscriptionRankWaiting = false;
-      final result = await _engine.rankVideos(candidates,
-          subscriptionChannels: _followedChannels);
+      final result = initialRank ??
+          await _engine.rankVideos(candidates,
+              subscriptionChannels: _followedChannels);
       if (!requestCurrent()) return;
       if (_subscriptionRankWaiting) {
         // A follow changed after this rank started. Never put its old cards
@@ -636,7 +921,17 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         return;
       }
       setState(() {
+        if (preparedKey != null) {
+          final found = discover ? _discovered : _interestVideos;
+          _preparedTabs[preparedKey] = found.isEmpty
+              ? null
+              : _snapshot(List.of(found), candidates, result);
+        }
         _available = result.available;
+        _catalogKnown = true;
+        if (selected == null) {
+          _discoverySeed = _engine.eligibleVideos(local).firstOrNull;
+        }
         _interests = result.interests;
         _discoveryQueries = result.discoveryQueries;
         _videos = result.available
@@ -648,27 +943,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         _loading = false;
         _discovering = false;
       });
-      // Recover topic selection from a local rank without making an implicit
-      // discovery request. Clicking the topic remains the explicit fetch.
-      if (selected == null && (_selectedTab?.startsWith('topic:') ?? false)) {
-        final interest = _interests
-            .where((value) => HomeTabsLayout.topicId(value.id) == _selectedTab)
-            .firstOrNull;
-        if (interest != null) {
-          setState(() {
-            _selectedInterest = interest;
-            _videos = [];
-          });
-        } else if (mounted) {
-          setState(() {
-            _selectedTab = _layout.orderedIds(_availableTabIds).firstOrNull;
-            _feedsVisited |= _selectedTab == HomeTabsLayout.yourFeeds;
-            if (_selectedTab != HomeTabsLayout.forYou) _videos = [];
-          });
-        }
-      }
-    } catch (_) {
+    } catch (error) {
       if (!requestCurrent()) return;
+      if (prepare) _instanceRejected(error);
       setState(() {
         _failed = true;
         _loading = false;
@@ -678,20 +955,13 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   }
 
   Future<void> _discover() async {
+    final manualSearch =
+        _catalogKnown && _discoveryQueries.isEmpty && _discoverySeed == null;
     _selectHomeTab(HomeTabsLayout.discover);
-    _discoveryStarted = true;
     if (!_current || _loading) return;
-    _selectedInterest = null;
     final generation = _engine.generation(RecommendationDomain.video);
-    final seed =
-        _engine.eligibleVideos(_sources.localVideos(limit: 80)).firstOrNull;
-    if (!mounted ||
-        !_current ||
-        generation != _engine.generation(RecommendationDomain.video)) {
-      return;
-    }
-    if (_discoveryQueries.isNotEmpty || seed != null) {
-      await _load(queries: _discoveryQueries, seed: seed);
+    if (!manualSearch) {
+      if (!_discoveryPrepared) await _load();
       return;
     }
     final locals = AppLocalizations.of(context)!;
@@ -700,7 +970,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       context: context,
       useRootNavigator: false,
       builder: (context) => AlertDialog(
-        title: Text(locals.flowDiscoverVideos),
+        title: Text(locals.flowSearchTopic),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           Text(locals.flowDiscoveryHint),
           const SizedBox(height: 16),
@@ -731,20 +1001,14 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       ),
     );
     if (_current &&
+        _selectedTab == HomeTabsLayout.discover &&
         generation == _engine.generation(RecommendationDomain.video) &&
         result != null) {
-      await _load(query: result);
+      _enteredQuery = result;
+      _discoveryPrepared = false;
+      _failed = false;
+      await _load();
     }
-  }
-
-  Future<void> _selectInterest(RecommendationInterest interest) async {
-    _selectHomeTab(HomeTabsLayout.topicId(interest.id));
-    if (!_current) return;
-    _clearImpressions();
-    _selectedInterest = interest;
-    _interestVideos.clear();
-    _videos = [];
-    await _load(queries: interest.queries);
   }
 
   Future<void> _feedback(Video video, RecommendationFeedback feedback) async {
@@ -776,10 +1040,10 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     super.dispose();
   }
 
-  Widget _discoveryChip(AppLocalizations locals) => ActionChip(
+  Widget _discoveryChip(String label, {required bool enabled}) => ActionChip(
         key: const ValueKey('video-home-discover'),
-        onPressed: _loading ? null : _discover,
-        label: Text(locals.flowDiscoverVideos),
+        onPressed: _loading || !enabled ? null : _discover,
+        label: Text(label),
       );
 
   Widget _status(BuildContext context, List<Video> videos, Widget? notice) {
@@ -798,21 +1062,19 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
           ),
         if (_failed)
           TextButton.icon(
-            onPressed: _loading ? null : () => _load(),
+            onPressed: _loading ? null : () => _load(refresh: true),
             icon: const Icon(Icons.refresh),
             label: Text(locals.couldntFetchVideos),
           ),
         if (notice != null) notice,
-        if (videos.isEmpty && !_loading && _selectedInterest != null)
-          TextButton.icon(
-            onPressed: () => _selectInterest(_selectedInterest!),
-            icon: const Icon(Icons.search),
-            label: Text(locals.flowDiscoverVideos),
-          ),
-        if (videos.isEmpty && !_loading && _selectedInterest == null)
+        if (videos.isEmpty && !_loading && !_failed)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Text(locals.flowRecommendationHint, style: style),
+            child: Text(
+                _selectedInterest != null || _discoveryPrepared
+                    ? locals.nVideos(0)
+                    : locals.flowRecommendationHint,
+                style: style),
           ),
         if (_discovering)
           Padding(
@@ -1028,13 +1290,23 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   @override
   Widget build(BuildContext context) {
     final routeVisible = ModalRoute.isCurrentOf(context) != false;
-    final overlay = context.select((PlayerCubit player) {
+    final (playerCoversHome, floatingVideo) =
+        context.select((PlayerCubit player) {
       final state = player.state;
-      // A floating video can cover parts of a card without changing its clip.
-      return state.isPip ||
-          (!state.isHidden && (!state.isMini || !state.isAudio));
+      return (
+        state.isPip || (!state.isHidden && !state.isMini),
+        !state.isHidden && !state.isAudio
+      );
     });
-    final surface = routeVisible && !overlay && TickerMode.of(context);
+    final homeVisible = widget.active &&
+        routeVisible &&
+        TickerMode.of(context) &&
+        !playerCoversHome;
+    final discoveryVisible = homeVisible &&
+        (_lifecycle == null || _lifecycle == AppLifecycleState.resumed);
+    _setDiscoveryVisible(discoveryVisible);
+    // A floating video can cover individual cards while Home itself is visible.
+    final surface = homeVisible && !floatingVideo;
     if (_impressionSurface != surface) {
       _impressionSurface = surface;
       if (!surface) _clearImpressions();
@@ -1045,6 +1317,19 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     final continuing = _layout.continueWatching
         ? _engine.eligibleVideos(continuingVideos(_owner))
         : const <Video>[];
+    final requests = _tabRequests();
+    _prepareTabs(requests);
+    final ready = {
+      for (final request in requests.values)
+        if (_readyTab(request) != null) request.tab,
+    };
+    final pinned = _layout.enabledOrder ?? const <String>[];
+    final discoverReady = ready.contains(HomeTabsLayout.discover);
+    final manualSearch =
+        _catalogKnown && !requests.containsKey(HomeTabsLayout.discover);
+    final onDiscover = _selectedTab == HomeTabsLayout.discover ||
+        discoverReady ||
+        manualSearch;
     final tabChips = <String, Widget>{
       HomeTabsLayout.forYou: ChoiceChip(
         key: const ValueKey('video-home-for-you'),
@@ -1059,15 +1344,25 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
           selected: _selectedTab == HomeTabsLayout.yourFeeds,
           onSelected: (_) => _selectHomeTab(HomeTabsLayout.yourFeeds),
         ),
-      HomeTabsLayout.discover: _discoveryChip(locals),
+      if (onDiscover || pinned.contains(HomeTabsLayout.discover))
+        HomeTabsLayout.discover: _discoveryChip(
+            manualSearch ? locals.flowSearchTopic : locals.flowDiscoverVideos,
+            enabled: onDiscover),
       for (final interest in _interests)
-        HomeTabsLayout.topicId(interest.id): ChoiceChip(
-          key: ValueKey('flow-interest-${interest.id}'),
-          label: Text(interest.label,
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          selected: _selectedTab == HomeTabsLayout.topicId(interest.id),
-          onSelected: _loading ? null : (_) => _selectInterest(interest),
-        ),
+        if (_selectedInterest?.id == interest.id ||
+            pinned.contains(HomeTabsLayout.topicId(interest.id)) ||
+            ready.contains(HomeTabsLayout.topicId(interest.id)))
+          HomeTabsLayout.topicId(interest.id): ChoiceChip(
+            key: ValueKey('flow-interest-${interest.id}'),
+            label: Text(interest.label,
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+            selected: _selectedTab == HomeTabsLayout.topicId(interest.id),
+            onSelected:
+                _loading || !ready.contains(HomeTabsLayout.topicId(interest.id))
+                    ? null
+                    : (_) => _selectHomeTab(HomeTabsLayout.topicId(interest.id),
+                        interest: interest),
+          ),
     };
     final enabledIds = _layout.orderedIds(tabChips.keys);
     final chips = [for (final id in enabledIds) tabChips[id]!];
@@ -1104,7 +1399,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       items: _engine.eligibleVideos(_videos),
       match: videoCommunityMatches,
       builder: (context, videos, notice) => RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () => _load(refresh: true),
         child: CustomScrollView(
           key: const PageStorageKey('flow-video-home'),
           controller: _scroll,

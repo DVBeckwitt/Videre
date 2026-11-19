@@ -155,6 +155,8 @@ class _NativeAudio implements AudioPlayer {
   ProcessingState nativeProcessingState = ProcessingState.ready;
   Duration nativePosition = Duration.zero;
   int playCalls = 0;
+  int pauseCalls = 0;
+  int stopCalls = 0;
   bool disposed = false;
   void Function()? onLoad;
   Completer<void>? loadGate;
@@ -229,7 +231,16 @@ class _NativeAudio implements AudioPlayer {
   }
 
   @override
-  Future<void> pause() async => nativePlaying = false;
+  Future<void> pause() async {
+    pauseCalls++;
+    nativePlaying = false;
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCalls++;
+    nativePlaying = false;
+  }
 
   @override
   Future<void> dispose() async => disposed = true;
@@ -544,6 +555,62 @@ void main() {
       await controller.close();
     }
   });
+
+  for (final initiallyPlaying in [true, false]) {
+    test(
+        'a backward Music seek uses the mounted decoder, playing=$initiallyPlaying',
+        () async {
+      const start = Duration(milliseconds: 87840);
+      const target = Duration(milliseconds: 32115);
+      final video = _video('song', preferred).copyWith(
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      final controller = _MediaSessionPlayer(
+          PlayerState.init([video]).copyWith(
+              isAudio: true,
+              isHidden: false,
+              currentlyPlaying: video,
+              position: start),
+          settings);
+      controller.audioSession = await AudioSession.instance;
+      final handler = app_main.mediaHandler = MediaHandler(controller);
+      final native = _NativeAudio();
+      final audio =
+          _Audio(AudioPlayerState(video: video), controller, settings, native);
+      final commands = controller.stream
+          .map((s) => s.mediaCommand)
+          .distinct()
+          .listen((command) {
+        if (command != null) audio.handleCommand(command);
+      });
+      try {
+        await audio.playVideo(false, startAt: start);
+        if (!initiallyPlaying) await handler.pause();
+        await _flush();
+        expect(native.position, start);
+        expect(native.playing, initiallyPlaying);
+        expect(native.seeks, isEmpty);
+        final source = native.sources.single;
+        final transport =
+            (native.playCalls, native.pauseCalls, native.stopCalls);
+        await handler.seek(target);
+        expect(controller.state.position, target);
+        await Future<void>.delayed(Duration.zero);
+        expect(native.seeks, [target]);
+        expect(native.position, target);
+        expect(native.sources.single, same(source));
+        expect(native.disposed, isFalse);
+        expect(
+            (native.playCalls, native.pauseCalls, native.stopCalls), transport);
+        expect(native.playing, initiallyPlaying);
+        expect(controller.state.isPlaying, initiallyPlaying);
+        expect(retryService.metadataCalls, 0);
+      } finally {
+        await commands.cancel();
+        await audio.close();
+        await controller.close();
+      }
+    });
+  }
 
   test('a pending player switch supersedes ordinary audio while detaching EQ',
       () async {

@@ -172,6 +172,7 @@ void main() {
   final lookups = <String, Future<Object> Function(MusicCatalogService)>{
     'search': (music) => music.searchSongs('Song'),
     'discovery search': (music) => music.getDiscoverySongs(),
+    'genre search': (music) => music.getGenreSongs('pop'),
     'artist': (music) => music.getArtist(channelId),
     'playlist': (music) => music.getPlaylist(playlistId),
     'mix': (music) => music.getPlaylist(mixId),

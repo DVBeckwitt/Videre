@@ -22,6 +22,8 @@ import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
 import '../../home/models/home_tabs_layout.dart';
+import '../../music/models/music_layout.dart';
+import '../../music/models/song_transition.dart';
 import '../../player/models/video_display_mode.dart';
 import '../../player/states/player.dart';
 import '../../recommendations/recommendation_service.dart';
@@ -538,6 +540,19 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setPhoneNavigation(PhoneNavigation layout) =>
       _set(phoneNavigationSettingName, layout.encode());
 
+  Future<void> setSongTransitionMode(SongTransitionMode mode) =>
+      _saveSettingInOrder(songTransitionModeSettingName, () => mode.name);
+
+  Future<void> setSongTransitionSeconds(int seconds) {
+    RangeError.checkValueInInterval(
+        seconds, minSongTransitionSeconds, maxSongTransitionSeconds, 'seconds');
+    return _saveSettingInOrder(
+        songTransitionSecondsSettingName, seconds.toString);
+  }
+
+  Future<void> setMusicLayout(MusicLayout layout) =>
+      _saveSettingInOrder(musicLayoutSettingName, layout.encode);
+
   Future<void> setHomeTabsLayout(HomeTabsLayout layout) async {
     final owner = db.forProfile(db.profileId);
     final session = appCubit.state.sessionRevision;
@@ -779,6 +794,24 @@ sealed class SettingsState with _$SettingsState {
 
   HomeTabsLayout get homeTabsLayout =>
       HomeTabsLayout.decode(_get(homeTabsLayoutSettingName)?.value);
+
+  SongTransitionMode get songTransitionMode =>
+      SongTransitionMode.fromStorage(
+          _get(songTransitionModeSettingName)?.value) ??
+      SongTransitionMode.seamless;
+
+  int get songTransitionSeconds {
+    final saved =
+        int.tryParse(_get(songTransitionSecondsSettingName)?.value ?? '');
+    return saved != null &&
+            saved >= minSongTransitionSeconds &&
+            saved <= maxSongTransitionSeconds
+        ? saved
+        : defaultSongTransitionSeconds;
+  }
+
+  MusicLayout get musicLayout =>
+      MusicLayout.decode(_get(musicLayoutSettingName)?.value);
 
   HomeContentMode get homeContentMode =>
       _get(homeContentModeSettingName)?.value == HomeContentMode.music.name

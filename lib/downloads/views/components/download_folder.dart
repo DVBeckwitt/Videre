@@ -1,4 +1,5 @@
 import 'package:clipious/utils/motion.dart';
+import 'package:clipious/utils.dart' show selectKeys;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -23,24 +24,27 @@ enum _Destination { standard, private, custom }
 
 class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
   bool _busy = false;
+  bool _editingAudio = false;
   String? _error;
 
-  Future<void> _change(_Destination destination) async {
+  Future<void> _change(_Destination destination,
+      {required bool audioOnly}) async {
     if (_busy) return;
     final manager = context.read<DownloadManagerCubit>();
     final locals = AppLocalizations.of(context)!;
     setState(() {
       _busy = true;
+      _editingAudio = audioOnly;
       _error = null;
     });
     try {
       switch (destination) {
         case _Destination.standard:
-          await manager.useDefaultFolder();
+          await manager.useDefaultFolder(audioOnly: audioOnly);
         case _Destination.private:
-          await manager.usePrivateFolder();
+          await manager.usePrivateFolder(audioOnly: audioOnly);
         case _Destination.custom:
-          await manager.chooseFolder();
+          await manager.chooseFolder(audioOnly: audioOnly);
       }
     } on PlatformException catch (error) {
       if (mounted) {
@@ -63,65 +67,87 @@ class _DownloadFolderDialogState extends State<_DownloadFolderDialog> {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final state = context.watch<DownloadManagerCubit>().state;
-    final selected = state.folderUri != null
-        ? _Destination.custom
-        : state.usePrivateStorage
-            ? _Destination.private
-            : _Destination.standard;
+    Widget section({required bool audioOnly}) {
+      final type = audioOnly ? 'audio' : 'video';
+      final heading =
+          audioOnly ? locals.downloadFolderAudio : locals.downloadFolderVideo;
+      final folderName = audioOnly ? state.audioFolderName : state.folderName;
+      final folderUri = audioOnly ? state.audioFolderUri : state.folderUri;
+      final selected = folderUri != null
+          ? _Destination.custom
+          : audioOnly && !state.usePrivateAudioStorage
+              ? _Destination.standard
+              : _Destination.private;
+      Widget option(_Destination value, String title, String subtitle) {
+        final active = selected == value;
+        return Semantics(
+          key: ValueKey('download-folder-$type-${value.name}'),
+          inMutuallyExclusiveGroup: true,
+          checked: active,
+          label: heading,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            autofocus: !audioOnly && active,
+            leading: Icon(active
+                ? Icons.radio_button_checked
+                : Icons.radio_button_unchecked),
+            title: Text(title),
+            subtitle: Text(subtitle),
+            onTap: _busy ? null : () => _change(value, audioOnly: audioOnly),
+          ),
+        );
+      }
 
-    Widget option(_Destination value, String title, String subtitle) {
-      final active = selected == value;
-      return Semantics(
-        inMutuallyExclusiveGroup: true,
-        checked: active,
-        child: ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(active
-              ? Icons.radio_button_checked
-              : Icons.radio_button_unchecked),
-          title: Text(title),
-          subtitle: Text(subtitle),
-          onTap: _busy ? null : () => _change(value),
-        ),
-      );
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Semantics(
+            header: true,
+            child:
+                Text(heading, style: Theme.of(context).textTheme.titleMedium)),
+        if (audioOnly)
+          option(_Destination.standard, locals.downloadFolderDefault,
+              locals.downloadFolderDefaultDetails),
+        option(_Destination.private, locals.downloadFolderPrivate,
+            locals.downloadFolderPrivateDetails),
+        option(_Destination.custom, locals.downloadFolderChoose,
+            folderName ?? locals.downloadFolderCustomDetails),
+        if (_editingAudio == audioOnly && _busy)
+          const MotionLoadingIndicator(child: LinearProgressIndicator()),
+        if (_editingAudio == audioOnly && _error != null)
+          Semantics(
+              liveRegion: true,
+              child: Text(_error!,
+                  style:
+                      TextStyle(color: Theme.of(context).colorScheme.error))),
+      ]);
     }
 
     return PopScope(
       canPop: !_busy,
-      child: AlertDialog(
-        title: Text(locals.downloadFolder),
-        content: SingleChildScrollView(
-            child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            option(_Destination.standard, locals.downloadFolderDefault,
-                locals.downloadFolderDefaultDetails),
-            option(_Destination.private, locals.downloadFolderPrivate,
-                locals.downloadFolderPrivateDetails),
-            option(_Destination.custom, locals.downloadFolderChoose,
-                state.folderName ?? locals.downloadFolderCustomDetails),
-            const SizedBox(height: 12),
-            Text(locals.downloadFolderExistingFiles),
-            if (_busy)
-              const Padding(
-                  padding: EdgeInsets.only(top: 16),
-                  child:
-                      MotionLoadingIndicator(child: LinearProgressIndicator())),
-            if (_error != null)
-              Padding(
-                  padding: const EdgeInsets.only(top: 16),
-                  child: Text(_error!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error))),
-          ],
-        )),
-        actions: [
-          TextButton(
-              onPressed: _busy ? null : () => Navigator.of(context).pop(),
-              child: Text(locals.ok)),
-        ],
-      ),
+      child: Shortcuts(
+          shortcuts: {
+            for (final key in selectKeys)
+              SingleActivator(key): const ActivateIntent()
+          },
+          child: AlertDialog(
+            title: Text(locals.downloadFolder),
+            content: SingleChildScrollView(
+                child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                section(audioOnly: false),
+                const Divider(height: 24),
+                section(audioOnly: true),
+                const SizedBox(height: 12),
+                Text(locals.downloadFolderExistingFiles),
+              ],
+            )),
+            actions: [
+              TextButton(
+                  onPressed: _busy ? null : () => Navigator.of(context).pop(),
+                  child: Text(locals.ok)),
+            ],
+          )),
     );
   }
 }

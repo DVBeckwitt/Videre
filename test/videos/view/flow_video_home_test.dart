@@ -11,6 +11,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/subscription_management/models/subscription.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -34,7 +35,8 @@ import '../../test_settings_cubit.dart';
 class _FeedService extends Service {
   int requests = 0;
   int historyDeletes = 0;
-  List<Video> Function(String?)? discoveryResults;
+  final queries = <String?>[];
+  FutureOr<List<Video>> Function(String?)? discoveryResults;
   List<Subscription> follows = [];
 
   @override
@@ -60,7 +62,8 @@ class _FeedService extends Service {
   }) async {
     await beforeRequest();
     requests++;
-    return discoveryResults?.call(query) ?? [];
+    queries.add(query);
+    return discoveryResults?.call(query) ?? const <Video>[];
   }
 
   @override
@@ -137,6 +140,13 @@ void main() {
     await app.close();
     await db.close();
   });
+
+  Future<void> connect() async {
+    const server = Server(url: 'https://invidious.example');
+    await db.upsertServer(server);
+    await db.useServer(server);
+    app.setServer(server);
+  }
 
   Future<void> remember(String id, String title, double progress,
       {bool music = false}) async {
@@ -321,7 +331,9 @@ void main() {
     final discover = find.byKey(const ValueKey('video-home-discover'));
     final forYou = find.byKey(const ValueKey('video-home-for-you'));
     expect(find.text('Configured feed'), findsOneWidget);
-    expect(calls, isEmpty);
+    expect((calls.single.arguments as Map)['candidates'],
+        contains(predicate((dynamic value) => value['id'] == 'video000001')));
+    expect(api.requests, 0);
     expect(tester.getTopLeft(yourFeeds).dx,
         lessThan(tester.getTopLeft(discover).dx));
     expect(
@@ -343,8 +355,140 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('enabling only a topic from all-off resolves it locally',
+  testWidgets(
+      'For you publishes ready discoveries and learned topics before taps',
       (tester) async {
+    await tester.runAsync(connect);
+    discoveryQueries = ['discover query'];
+    interestChips = [
+      for (final id in ['science', 'nature', 'books', 'space', 'art'])
+        {
+          'id': id,
+          'label': id,
+          'queries': ['$id query']
+        },
+    ];
+    final gate = Completer<void>();
+    api.discoveryResults = (query) async {
+      await gate.future;
+      return switch (query) {
+        'discover query' => const [
+            Video(videoId: 'discover001', title: 'Ready discovery')
+          ],
+        'science query' => const [
+            Video(videoId: 'science0001', title: 'Ready science')
+          ],
+        'space query' => const [
+            Video(videoId: 'spaces00001', title: 'Ready space')
+          ],
+        _ => const <Video>[],
+      };
+    };
+    await show(tester, settle: false);
+    await tester.pump();
+    await tester.pump();
+    expect(api.queries, isNotEmpty);
+    final discover = find.byKey(const ValueKey('video-home-discover'));
+    final science = find.byKey(const ValueKey('flow-interest-science'));
+    expect(discover, findsNothing);
+    expect(science, findsNothing);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(
+        api.queries,
+        unorderedEquals([
+          'discover query',
+          'science query',
+          'nature query',
+          'books query',
+          'space query'
+        ]));
+    expect(find.byKey(const ValueKey('flow-interest-nature')), findsNothing);
+    expect(find.byKey(const ValueKey('flow-interest-books')), findsNothing);
+    expect(find.byKey(const ValueKey('flow-interest-space')), findsOneWidget);
+    expect(find.byKey(const ValueKey('flow-interest-art')), findsNothing);
+    expect(discover, findsOneWidget);
+    expect(science, findsOneWidget);
+    expect(find.text('Ready discovery'), findsNothing);
+    expect(find.text('Ready science'), findsNothing);
+
+    final preparedRanks = calls.length;
+    await tester.ensureVisible(science);
+    await tester.tap(science);
+    await tester.pump();
+    expect(find.text('Ready science'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    await tester.ensureVisible(discover);
+    await tester.tap(discover);
+    await tester.pump();
+    expect(find.text('Ready discovery'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(calls, hasLength(preparedRanks));
+    expect(find.byKey(const ValueKey('video-discovery-query')), findsNothing);
+    expect(api.requests, 5,
+        reason: 'Opening ready suggestions only changes the view');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('For you prepares only enabled suggestions while Home is visible',
+      (tester) async {
+    discoveryQueries = ['disabled discover'];
+    interestChips = [
+      for (final id in ['enabled', 'disabled'])
+        {
+          'id': id,
+          'label': id,
+          'queries': ['$id topic']
+        },
+    ];
+    await tester.runAsync(() async {
+      await connect();
+      await settings.setHomeTabsLayout(HomeTabsLayout(enabledOrder: [
+        HomeTabsLayout.forYou,
+        HomeTabsLayout.topicId('enabled')
+      ]));
+    });
+    api.discoveryResults =
+        (_) => const [Video(videoId: 'enabled0001', title: 'Enabled video')];
+    await show(tester, active: false);
+    expect(api.queries, isEmpty);
+    await show(tester);
+    expect(api.queries, ['enabled topic']);
+    expect(find.byKey(const ValueKey('flow-interest-enabled')), findsOneWidget);
+    expect(find.byKey(const ValueKey('flow-interest-disabled')), findsNothing);
+    expect(find.byKey(const ValueKey('video-home-discover')), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('an instance cooldown stops preparation across all suggestions',
+      (tester) async {
+    await tester.runAsync(connect);
+    discoveryQueries = ['new videos'];
+    interestChips = [
+      for (final id in ['science', 'nature'])
+        {
+          'id': id,
+          'label': id,
+          'queries': ['$id videos']
+        },
+    ];
+    api.discoveryResults = (_) => throw InvidiousServiceError('Rate limited',
+        statusCode: 429, retryAfter: const Duration(minutes: 2));
+    await show(tester);
+    expect(api.requests, 1);
+    expect(find.byKey(const ValueKey('video-home-discover')), findsNothing);
+    expect(find.byKey(const ValueKey('flow-interest-science')), findsNothing);
+    expect(find.byKey(const ValueKey('flow-interest-nature')), findsNothing);
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
+    await show(tester, active: false);
+    await show(tester);
+    expect(api.requests, 1, reason: 'Re-entry must respect Retry-After.');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('enabling only a topic loads its videos once', (tester) async {
+    await tester.runAsync(connect);
     interestChips = [
       {
         'id': 'science',
@@ -365,14 +509,24 @@ void main() {
     expect(chip, findsOneWidget);
     expect(tester.widget<ChoiceChip>(chip).selected, isTrue);
     expect(find.byKey(const ValueKey('video-home-for-you')), findsNothing);
-    expect(calls, hasLength(1));
-    expect(api.requests, 0, reason: 'Config reconciliation is local only');
+    expect(find.text('No videos'), findsOneWidget);
+    expect(find.text('Discover videos'), findsNothing);
+    expect(api.requests, 1);
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
+    expect(api.requests, 1);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('saved topic chips resolve while Your feeds is selected',
+  testWidgets(
+      'pinned topics keep their chip while Your feeds prepares their results',
       (tester) async {
-    await tester.runAsync(() => remember('video000001', 'Local science', 0));
+    await tester.runAsync(() async {
+      await connect();
+      await remember('video000001', 'Local science', 0);
+    });
+    final gate = Completer<List<Video>>();
+    api.discoveryResults = (_) => gate.future;
     interestChips = [
       {
         'id': 'science',
@@ -387,17 +541,31 @@ void main() {
             ])));
     await show(tester, configuredFeed: const Text('Configured feed'));
     expect(find.text('Configured feed'), findsOneWidget);
-    expect(find.byKey(const ValueKey('flow-interest-science')), findsOneWidget);
+    final topic = find.byKey(const ValueKey('flow-interest-science'));
+    expect(tester.widget<ChoiceChip>(topic).onSelected, isNull);
     expect(find.byKey(const ValueKey('video-home-for-you')), findsNothing);
     expect((calls.single.arguments as Map)['candidates'],
         contains(predicate((dynamic value) => value['id'] == 'video000001')));
-    expect(api.requests, 0);
+    expect(api.queries, ['science videos']);
+    gate.complete(const [Video(videoId: 'science0001', title: 'Ready topic')]);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(topic).onSelected, isNotNull);
+    await tester.ensureVisible(topic);
+    await tester.tap(topic);
+    await tester.pump();
+    expect(find.text('Ready topic'), findsOneWidget);
+    expect(api.requests, 1);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets(
-      'cold saved topic stays selected without an implicit remote fetch',
+      'cold saved topic displays matching videos on its first active visit',
       (tester) async {
+    api.discoveryResults = (query) => query == 'science videos'
+        ? const [
+            Video(videoId: 'science0001', title: 'Restored science result')
+          ]
+        : [];
     interestChips = [
       {
         'id': 'science',
@@ -406,18 +574,132 @@ void main() {
       },
     ];
     await tester.runAsync(() async {
+      await connect();
       await remember('video000001', 'Unfiltered local item', 0);
       await settings.setHomeTabsLayout(HomeTabsLayout(enabledOrder: [
         HomeTabsLayout.topicId('science'),
       ]));
     });
+    await show(tester, active: false);
+    expect(calls, isEmpty);
+    expect(api.requests, 0);
     await show(tester);
     final chip = find.byKey(const ValueKey('flow-interest-science'));
     expect(tester.widget<ChoiceChip>(chip).selected, isTrue);
     expect(find.text('Unfiltered local item'), findsNothing);
-    expect(find.text('Discover videos'), findsOneWidget);
-    expect(calls, hasLength(1));
+    expect(find.text('Restored science result'), findsOneWidget);
+    expect(find.text('Discover videos'), findsNothing);
+    expect(api.requests, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'restored Discover loads once with a seed and retries a failed request',
+      (tester) async {
+    discoveryQueries = ['interesting stories'];
+    await tester.runAsync(() async {
+      await connect();
+      await settings.setHomeTabsLayout(
+          HomeTabsLayout(enabledOrder: [HomeTabsLayout.discover]));
+    });
+    api.discoveryResults = (_) => throw StateError('temporarily unavailable');
+    await show(tester, active: false);
     expect(api.requests, 0);
+    await show(tester);
+    expect(api.requests, 1);
+    final retry = find.text('Could not fetch videos. Tap to try again.');
+    expect(retry, findsOneWidget);
+    expect(find.byKey(const ValueKey('video-discovery-query')), findsNothing);
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
+    expect(api.requests, 1);
+    api.discoveryResults = (query) => query == 'interesting stories'
+        ? const [Video(videoId: 'stories0001', title: 'A discovered story')]
+        : [];
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(api.requests, 2);
+    expect(find.text('A discovered story'), findsOneWidget);
+    await show(tester, active: false);
+    await show(tester);
+    expect(api.requests, 2);
+    expect(find.text('A discovered story'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'covered or background Home waits to prepare Discover until visible',
+      (tester) async {
+    discoveryQueries = ['interesting stories'];
+    await tester.runAsync(() async {
+      await connect();
+      await settings.setHomeTabsLayout(
+          HomeTabsLayout(enabledOrder: [HomeTabsLayout.discover]));
+    });
+    await tester.runAsync(player.close);
+    player = TestPlayerCubit(
+        PlayerState.init(null).copyWith(
+            currentlyPlaying: const Video(videoId: 'playing0001'),
+            isHidden: false,
+            isMini: false),
+        settings);
+    final lifecycle = tester.binding.lifecycleState;
+    addTearDown(() => tester.binding.handleAppLifecycleStateChanged(
+        lifecycle ?? AppLifecycleState.detached));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await show(tester);
+    expect(api.requests, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+    expect(api.requests, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(api.requests, 1);
+    player.showBigPlayer();
+    await tester.pumpAndSettle();
+    player.showMiniPlayer();
+    await tester.pumpAndSettle();
+    expect(api.requests, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'pausing during seed ranking defers the network lookup until resume',
+      (tester) async {
+    await tester.runAsync(() async {
+      await connect();
+      await settings.setHomeTabsLayout(
+          HomeTabsLayout(enabledOrder: [HomeTabsLayout.discover]));
+    });
+    final pending = Completer<Map<String, Object?>>();
+    final ranked = {
+      'state': <String, Object?>{},
+      'summary': {
+        'discoveryQueries': ['saved interest']
+      },
+      'ranked': <Object?>[],
+    };
+    var rankings = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      rankings++;
+      return rankings == 1 ? await pending.future : ranked;
+    });
+    final lifecycle = tester.binding.lifecycleState;
+    addTearDown(() => tester.binding.handleAppLifecycleStateChanged(
+        lifecycle ?? AppLifecycleState.detached));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await show(tester, settle: false);
+    await tester.pump();
+    expect(rankings, 1);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    pending.complete(ranked);
+    await tester.idle();
+    expect(api.requests, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(api.requests, 1);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -485,15 +767,18 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets(
-      'opening For you ranks local metadata without loading remote feeds',
+  testWidgets('For you alone ranks local metadata without loading remote feeds',
       (tester) async {
-    await tester.runAsync(() => remember('video000001', 'Local video', 0));
+    await tester.runAsync(() async {
+      await remember('video000001', 'Local video', 0);
+      await settings.setHomeTabsLayout(
+          HomeTabsLayout(enabledOrder: [HomeTabsLayout.forYou]));
+    });
     await show(tester);
     expect(api.requests, 0);
     expect(calls, isNotEmpty);
     expect(find.text('Local video'), findsOneWidget);
-    expect(find.text('Discover videos'), findsOneWidget);
+    expect(find.text('Discover videos'), findsNothing);
     final card = find.byKey(const ValueKey('flow-video-video000001'));
     final overflow = find.descendant(
       of: card,
@@ -571,9 +856,13 @@ void main() {
     expect(
         find.text('Watch or save videos to shape your local recommendations.'),
         findsOneWidget);
-    await tester
-        .ensureVisible(find.byKey(const ValueKey('video-home-discover')));
-    await tester.tap(find.byKey(const ValueKey('video-home-discover')));
+    final manualSearch = find.byKey(const ValueKey('video-home-discover'));
+    expect(
+        find.descendant(
+            of: manualSearch, matching: find.text('Search a topic')),
+        findsOneWidget);
+    await tester.ensureVisible(manualSearch);
+    await tester.tap(manualSearch);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('video-discovery-query')), findsOneWidget);
     expect(api.requests, 0);
@@ -638,7 +927,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('explicit discovery admits subscribed videos with a full history',
+  testWidgets('prepared discovery admits subscribed videos with a full history',
       (tester) async {
     const account =
         Server(url: 'https://invidious.example', authToken: 'test-only');
@@ -672,9 +961,10 @@ void main() {
       ];
     };
     await show(tester);
-    final firstRank = (calls.last.arguments as Map)['candidates'] as List;
-    expect(firstRank, hasLength(81));
-    expect(api.requests, 1);
+    final rankedPools =
+        calls.map((call) => (call.arguments as Map)['candidates'] as List);
+    expect(rankedPools.any((pool) => pool.length == 81), isTrue);
+    expect(api.requests, 3);
     await tester
         .ensureVisible(find.byKey(const ValueKey('video-home-discover')));
     await tester.tap(find.byKey(const ValueKey('video-home-discover')));

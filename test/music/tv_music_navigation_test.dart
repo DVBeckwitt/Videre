@@ -8,11 +8,14 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/music/views/screens/music.dart';
+import 'package:clipious/music/views/screens/music_layout_editor.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
+import 'package:clipious/network/content_link.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/router.dart';
@@ -37,7 +40,11 @@ class _App extends Cubit<AppState> implements AppCubit {
   bool get isLoggedIn => false;
 
   @override
-  bool tryOpenPastedAppLink(String text) => false;
+  Future<PastedLinkAction> submitPastedAppLink(String text,
+          {bool music = false,
+          Future<bool?> Function()? chooseOpen,
+          bool Function()? isCurrent}) async =>
+      PastedLinkAction.unrecognized;
 
   void setSession(AppState value) => emit(value);
 
@@ -77,6 +84,15 @@ class _Settings extends Cubit<SettingsState> implements SettingsCubit {
       ...state.settings,
       tvAppLayoutSettingName: SettingsValue(
           tvAppLayoutSettingName, pages.map((page) => page.name).join(',')),
+    }));
+  }
+
+  @override
+  Future<void> setMusicLayout(MusicLayout layout) async {
+    emit(state.copyWith(settings: {
+      ...state.settings,
+      musicLayoutSettingName:
+          SettingsValue(musicLayoutSettingName, layout.encode()),
     }));
   }
 
@@ -243,9 +259,11 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Finder musicMenuIcon(IconData icon, int index) => find.descendant(
-      of: find.byKey(ValueKey('tv-music-page-$index')),
-      matching: find.byIcon(icon));
+  Finder musicMenuIcon(MusicDestination destination) => find.descendant(
+      of: find.byKey(ValueKey('tv-music-page-${destination.name}')),
+      matching: find.byIcon(destination == MusicDestination.library
+          ? Icons.library_music
+          : destination.icon));
 
   Finder musicSearchIcon() => find.descendant(
       of: find.byKey(const ValueKey('tv-music-search')),
@@ -273,11 +291,13 @@ void main() {
     expect(find.byType(MusicHomePage), findsOneWidget);
     expect(modeDestination(HomeContentMode.videos), findsOneWidget);
 
-    final home = musicMenuIcon(Icons.home_outlined, 0);
+    final home = musicMenuIcon(MusicDestination.home);
     expect(Focus.of(tester.element(home)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(Focus.of(tester.element(musicMenuIcon(Icons.search, 1))).hasFocus,
+    expect(
+        Focus.of(tester.element(musicMenuIcon(MusicDestination.search)))
+            .hasFocus,
         isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.select);
     await tester.pumpAndSettle();
@@ -307,13 +327,47 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'TV moves focus in saved Music order and keeps the selected page during edits',
+      (tester) async {
+    await settings.setMusicLayout(MusicLayout(
+      destinations: const [
+        MusicDestination.home,
+        MusicDestination.library,
+        MusicDestination.search
+      ],
+      shortcuts: const [MusicShortcut.charts],
+    ));
+    await mount(tester);
+    await select(tester, modeIcon(HomeContentMode.music));
+    final library = musicMenuIcon(MusicDestination.library);
+    final search = musicMenuIcon(MusicDestination.search);
+    expect(find.byKey(const ValueKey('music-home-charts')), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-home-search')), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(Focus.of(tester.element(library)).hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(Focus.of(tester.element(search)).hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    final before = tester.state(find.byType(MusicScreen));
+    await settings.setMusicLayout(const MusicLayout.defaults());
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(search).dy, lessThan(tester.getCenter(library).dy));
+    expect(Focus.of(tester.element(search)).hasFocus, isTrue);
+    expect(tester.state(find.byType(MusicScreen)), same(before));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Music query and scroll survive switching modes with no refetch',
       (tester) async {
     settings.setVideoLayout([HomeDataSource.history]);
     await mount(tester);
     expect(find.byKey(const ValueKey('tv-home-page-search')), findsNothing);
     await select(tester, modeIcon(HomeContentMode.music));
-    await select(tester, musicMenuIcon(Icons.search, 1));
+    await select(tester, musicMenuIcon(MusicDestination.search));
     await tester.enterText(find.byKey(const ValueKey('music-search')), 'kept');
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pumpAndSettle();
@@ -351,7 +405,7 @@ void main() {
       (tester) async {
     await mount(tester);
     await select(tester, modeIcon(HomeContentMode.music));
-    await select(tester, musicMenuIcon(Icons.search, 1));
+    await select(tester, musicMenuIcon(MusicDestination.search));
     await tester.enterText(
         find.byKey(const ValueKey('music-search')), 'private');
     await tester.testTextInput.receiveAction(TextInputAction.search);
@@ -368,10 +422,9 @@ void main() {
     expect(find.byType(MusicScreen, skipOffstage: false), findsNothing);
     expect(find.byType(MusicHomePage), findsOneWidget);
     expect(
-        Focus.of(tester.element(musicMenuIcon(Icons.home_outlined, 0)))
-            .hasFocus,
+        Focus.of(tester.element(musicMenuIcon(MusicDestination.home))).hasFocus,
         isTrue);
-    await select(tester, musicMenuIcon(Icons.search, 1));
+    await select(tester, musicMenuIcon(MusicDestination.search));
     expect(
         tester
             .widget<TextField>(find.byKey(const ValueKey('music-search')))
@@ -412,7 +465,8 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('TV remote opens Home tabs settings and Back restores Settings',
+  testWidgets(
+      'TV remote opens Music layout and Home tabs and returns to Settings',
       (tester) async {
     const channel = MethodChannel('videre/recommendations');
     final messenger =
@@ -425,6 +479,18 @@ void main() {
     await mount(tester, router: router);
     await select(tester, find.byIcon(Icons.settings));
     expect(find.byType(TVSettingsScreen), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    final musicLayout = find.ancestor(
+        of: find.text('Customize Music layout'),
+        matching: find.byType(ListTile));
+    expect(Focus.of(tester.element(musicLayout)).hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(find.byType(MusicLayoutEditor), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(Focus.of(tester.element(musicLayout)).hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     final homeTabs = find.text('Home tabs');

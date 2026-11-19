@@ -7,6 +7,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
@@ -17,6 +18,7 @@ import 'package:clipious/recommendations/subscription_recommendations.dart';
 import 'package:clipious/recommendations/subscription_revision.dart';
 import 'package:clipious/recommendations/views/recommendation_settings.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/interfaces/db.dart';
@@ -33,9 +35,11 @@ import 'music_recommendation_collection.dart';
 import '../screens/music.dart';
 
 typedef _DailyMix = ({String label, List<String> seeds});
+typedef _MixScope = ({DateTime day, int generation, Object proxy});
 typedef _LocalShelf = ({String id, String title, List<MusicTrack> tracks});
 
 final _recordingId = RegExp(r'^[A-Za-z0-9_-]{11}$');
+const _maxQuickPicks = 12;
 
 List<String> _trackIds(Object? value, int limit) => value is List
     ? value
@@ -102,7 +106,8 @@ class _ProfileMusicShelves extends StatefulWidget {
   State<_ProfileMusicShelves> createState() => _ProfileMusicShelvesState();
 }
 
-class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
+class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
+    with WidgetsBindingObserver {
   late final RecommendationService _recommendations;
   late final MusicLibraryService _library;
   late final RecommendationCandidates _candidates;
@@ -110,6 +115,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
   Map<String, String> _subscriptionChannels = const {};
   List<MusicTrack> _subscribedMusic = const [];
   bool _active = false;
+  bool _pageVisible = false;
   int _subscriptionLoad = 0;
   late int _tasteGeneration;
   List<RecommendedItem<MusicTrack>> _picks = const [];
@@ -121,9 +127,16 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
   Map<String, MusicTrack> _mixCovers = const {};
   Set<String> _hiddenArtists = const {};
   String? _timeBucket;
-  final _expandedMixes = <String, List<MusicTrack>>{};
-  ({DateTime day, int generation, Object proxy})? _mixScope;
+  // An empty list is a completed search below the display minimum. A null
+  // entry is a failed request that can be retried on a later visit.
+  final _preparedMixes = <String, List<MusicTrack>?>{};
+  _MixScope? _mixScope;
+  DateTime? _mixRetryAfter;
+  int _mixVisit = 0;
+  bool _preparingMix = false;
   int _generation = 0;
+  late Future<void> _ranking;
+  final _pickFocus = <int, FocusNode>{};
 
   bool get _current {
     if (!mounted || !identical(widget.database, db)) return false;
@@ -140,6 +153,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    NetworkProxy.instance.addBeforeApply(_proxyChanging);
     _recommendations = RecommendationService.forProfile(
         widget.database, widget.session.profileId);
     _library = MusicLibraryService.forProfile(
@@ -159,10 +174,26 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final active = TickerMode.of(context);
+    _pageVisible =
+        TickerMode.of(context) && (ModalRoute.isCurrentOf(context) ?? true);
+    _updateActivity(WidgetsBinding.instance.lifecycleState);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) =>
+      _updateActivity(state);
+
+  void _updateActivity(AppLifecycleState? lifecycle) {
+    final active = _pageVisible &&
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed);
     if (active == _active) return;
     _active = active;
+    _mixVisit++;
     if (active) {
+      if (_mixRetryAfter?.isAfter(DateTime.now()) != true) {
+        _preparedMixes.removeWhere((_, tracks) => tracks == null);
+      }
+      unawaited(_prepareNextMix());
       unawaited(_warmSubscriptions());
     } else {
       _subscriptionLoad++;
@@ -171,6 +202,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     _generation++;
     _subscriptionLoad++;
     _recommendations.changes.removeListener(_recommendationsChanged);
@@ -178,6 +211,9 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
     _library.changes.removeListener(_refresh);
     communityFilters.changes.removeListener(_refresh);
     playbackHistoryRevision.removeListener(_historyChanged);
+    for (final node in _pickFocus.values) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -185,6 +221,8 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
     final generation = _recommendations.generation(RecommendationDomain.music);
     if (generation != _tasteGeneration) {
       _tasteGeneration = generation;
+      _dailyMixes = const [];
+      _preparedMixes.clear();
       _subscriptionLoad++;
       _subscriptionChannels = const {};
       _subscribedMusic = const [];
@@ -245,7 +283,9 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
     _refresh();
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh() => _ranking = _refreshShelves();
+
+  Future<void> _refreshShelves() async {
     final generation = ++_generation;
     if (!_current) return;
     final history =
@@ -290,7 +330,9 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
         ];
     setState(() {
       // An unavailable native ranker is not replaced with an invented score.
-      _picks = ranked.available ? ranked.items.take(12).toList() : const [];
+      _picks = ranked.available
+          ? ranked.items.take(_maxQuickPicks).toList()
+          : const [];
       _onRepeat = resolve(onRepeat);
       _rotation = resolve(rotation.where((id) => !repeatIds.contains(id)));
       _rediscover = resolve(rediscover.where((id) => !repeatIds.contains(id)));
@@ -299,22 +341,60 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
           : null;
       _hiddenArtists = hiddenArtists;
       _mixCovers = tracks;
-      _dailyMixes = [
-        for (final mix in dailyMixes)
-          if (tracks.keys.toSet().intersection(mix.seeds.toSet()).length >= 2)
-            (
-              label: mix.label,
-              seeds: mix.seeds.where(tracks.containsKey).toList()
-            ),
-      ];
+      _dailyMixes = dailyMixes
+          .map((mix) => (
+                label: mix.label,
+                seeds: mix.seeds.where(tracks.containsKey).take(3).toList()
+              ))
+          .where((mix) => mix.seeds.length >= 2)
+          .toList();
+      final keys = _dailyMixes.map(_mixKey).toSet();
+      _preparedMixes.removeWhere((key, _) => !keys.contains(key));
     });
+    unawaited(_prepareNextMix());
   }
 
-  void _open(MusicTrack track) {
-    if (_current) {
-      context.router.push(MusicRoute(
-          videoId: track.videoId, artistCredits: track.artistCredits));
-    }
+  Future<void> _open(MusicTrack track, Iterable<MusicTrack> tracks) async {
+    if (!_current) return;
+    final songs = _recommendations.eligibleMusic(tracks);
+    final index = songs.indexWhere((song) => song.videoId == track.videoId);
+    if (index < 0) return;
+    await context.router.push(MusicRoute(
+        videoId: track.videoId,
+        artistCredits: songs[index].artistCredits,
+        queue: [for (final song in songs) song.toVideo()],
+        startIndex: index));
+  }
+
+  Future<void> _openQuickPick(MusicTrack track) async {
+    final tracks = _picks.map((pick) => pick.item);
+    if (!isTv || !_current) return _open(track, tracks);
+    final origin = ModalRoute.of(context);
+    final slot =
+        _picks.indexWhere((pick) => pick.item.videoId == track.videoId);
+    if (slot < 0) return;
+    await _open(track, tracks);
+    await WidgetsBinding.instance.endOfFrame;
+    // Playback can change the order or remove the played song while this
+    // route is covered. Wait for the active ranking and its rows to mount.
+    final restoredFocus = FocusManager.instance.primaryFocus;
+    bool canRestore() =>
+        _current &&
+        _active &&
+        origin?.isCurrent == true &&
+        FocusManager.instance.primaryFocus == restoredFocus;
+    Future<void> ranking;
+    do {
+      if (!canRestore()) return;
+      ranking = _ranking;
+      await ranking;
+      await WidgetsBinding.instance.endOfFrame;
+    } while (!identical(ranking, _ranking));
+    if (!canRestore() || _picks.isEmpty) return;
+    final index =
+        _picks.indexWhere((pick) => pick.item.videoId == track.videoId);
+    _pickFocus[index >= 0 ? index : math.min(slot, _picks.length - 1)]
+        ?.requestFocus();
   }
 
   List<MusicTrack> _eligible(Iterable<MusicTrack> tracks) => _current
@@ -353,7 +433,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
         _ => null,
       };
 
-  void _openShelf(String title, List<MusicTrack> tracks, {_DailyMix? mix}) {
+  void _openShelf(String title, List<MusicTrack> tracks) {
     if (!_current) return;
     final proxy = NetworkProxy.instance.config;
     final token = _recommendations.generation(RecommendationDomain.music);
@@ -365,66 +445,104 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
         builder: (_) => MusicRecommendationCollection(
               title: title,
               tracks: tracks,
-              cover: mix == null ? null : _mixCovers[mix.seeds.first],
               isCurrent: current,
               eligible: _eligible,
               changes: Listenable.merge(
                   [_recommendations.changes, communityFilters.changes]),
-              load: mix == null
-                  ? null
-                  : (routeCurrent) =>
-                      _loadMix(mix, () => current() && routeCurrent()),
             )));
   }
 
-  Future<List<MusicTrack>> _loadMix(
-      _DailyMix mix, bool Function() current) async {
-    final scope = (
-      day: DateUtils.dateOnly(DateTime.now()),
-      generation: _recommendations.generation(RecommendationDomain.music),
-      proxy: NetworkProxy.instance.config,
-    );
-    if (scope != _mixScope) {
-      _expandedMixes.clear();
-      _mixScope = scope;
-    }
-    final seeds = _eligible([
-      for (final id in mix.seeds)
-        if (_mixCovers[id] case final track?) track,
-    ]).take(3).map((track) => track.videoId).toList(growable: false);
-    if (!current() || seeds.length < 2) return const [];
-    final key = seeds.join(',');
-    final cached = _expandedMixes[key];
-    if (cached != null) {
-      final eligible = _eligible(cached);
-      if (eligible.length >= 4) return eligible;
-      _expandedMixes.remove(key);
-    }
+  _MixScope get _currentMixScope => (
+        day: DateUtils.dateOnly(DateTime.now()),
+        generation: _recommendations.generation(RecommendationDomain.music),
+        proxy: NetworkProxy.instance.config,
+      );
 
-    // Flow MusicViewModel.buildDailyMixSections: recall related lanes from
-    // learned seeds, then rank in the Discover surface and dedup across mixes.
-    // Videre loads just the chosen mix through the selected Invidious instance.
-    final related =
-        await musicCatalogService.getRelatedSongs(seeds, isCurrent: current);
-    if (!current() || _mixScope != scope) return const [];
-    final ranked =
-        await _recommendations.rankMusic(related, surface: 'discover');
-    if (!current() || _mixScope != scope || ranked.cancelled) return const [];
-    if (!ranked.available) throw const MusicCatalogUnsupported();
-    final used = {
-      for (final mixTracks in _expandedMixes.values)
-        for (final track in mixTracks) track.videoId,
-    };
-    final tracks = _eligible(ranked.items.map((item) => item.item))
-        .where((track) => !used.contains(track.videoId))
-        .take(14)
-        .toList();
-    if (tracks.length < 4) return const [];
-    if (_expandedMixes.length >= 3) {
-      _expandedMixes.remove(_expandedMixes.keys.first);
+  String _mixKey(_DailyMix mix) => (mix.seeds.toList()..sort()).join(',');
+
+  Future<void> _proxyChanging() async {
+    setState(() {
+      _mixVisit++;
+      _preparedMixes.clear();
+      _mixScope = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_prepareNextMix());
+    });
+  }
+
+  Future<void> _prepareNextMix() async {
+    if (!_active ||
+        !_current ||
+        _preparingMix ||
+        widget.session.server == null) {
+      return;
     }
-    _expandedMixes[key] = tracks;
-    return tracks;
+    final scope = _currentMixScope;
+    if (scope != _mixScope) {
+      _preparedMixes.clear();
+      _mixScope = scope;
+      _mixRetryAfter = null;
+    }
+    if (_mixRetryAfter?.isAfter(DateTime.now()) == true) return;
+    final mix = _dailyMixes
+        .where((mix) => !_preparedMixes.containsKey(_mixKey(mix)))
+        .firstOrNull;
+    if (mix == null) return;
+    final key = _mixKey(mix);
+    final visit = _mixVisit;
+    bool current() =>
+        _current &&
+        _active &&
+        visit == _mixVisit &&
+        scope == _currentMixScope &&
+        _dailyMixes.any((mix) => _mixKey(mix) == key);
+
+    // Prepare one group at a time, even if history changes during a request.
+    // The selected instance verifies the recordings before they enter a mix.
+    _preparingMix = true;
+    try {
+      final related = await musicCatalogService.getRelatedSongs(mix.seeds,
+          isCurrent: current);
+      if (!current()) return;
+      final ranked =
+          await _recommendations.rankMusic(related, surface: 'discover');
+      if (!current()) return;
+      if (!ranked.available) {
+        _preparedMixes[key] = null;
+        return;
+      }
+      final used = _preparedMixes.values.nonNulls
+          .expand((tracks) => tracks)
+          .map((track) => track.videoId)
+          .toSet();
+      final tracks = _eligible(ranked.items.map((item) => item.item))
+          .where((track) => used.add(track.videoId))
+          .take(14)
+          .toList();
+      setState(
+          () => _preparedMixes[key] = tracks.length >= 4 ? tracks : const []);
+    } catch (error) {
+      if (!current()) return;
+      _preparedMixes[key] = null;
+      // An instance-wide rejection applies to the remaining groups as well.
+      if (error is InvidiousServiceError &&
+          (error.isRateLimited ||
+              error.retryAfterIsInvalid ||
+              (error.retryAfter ?? Duration.zero) > Duration.zero ||
+              error.isAuthenticationFailure ||
+              error.isGatewayAccessFailure)) {
+        if (error.retryAfter case final delay? when delay > Duration.zero) {
+          _mixRetryAfter = DateTime.now().add(delay);
+        }
+        for (final pending in _dailyMixes) {
+          _preparedMixes.putIfAbsent(_mixKey(pending), () => null);
+        }
+      }
+    } finally {
+      _preparingMix = false;
+      if (mounted) unawaited(_prepareNextMix());
+    }
   }
 
   Widget _shelf(BuildContext context, _LocalShelf shelf) {
@@ -491,6 +609,13 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
     final onRepeat = _eligible(_onRepeat);
     final rediscover = _eligible(_rediscover);
     final rotation = _eligible(_rotation);
+    final mixes = [
+      if (_mixScope == _currentMixScope)
+        for (final mix in _dailyMixes)
+          if (_preparedMixes[_mixKey(mix)] case final prepared?)
+            if (_eligible(prepared) case final tracks when tracks.length >= 4)
+              (mix: mix, tracks: tracks),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -506,7 +631,10 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
           ),
           _QuickPickRows(
             picks: _picks,
-            onOpen: _open,
+            focusForSlot: isTv
+                ? (slot) => _pickFocus.putIfAbsent(slot, FocusNode.new)
+                : null,
+            onOpen: _openQuickPick,
             onFeedback: _feedback,
             isCurrent: () => _current,
           ),
@@ -518,6 +646,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
             itemCount: _history.length,
             itemBuilder: (context, index) {
               final track = _history[index];
+              Future<void> open() => _open(track, _history);
               return MusicCatalogCard(
                 key: ValueKey('music-keep-listening-${track.videoId}'),
                 title: track.title,
@@ -528,29 +657,31 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves> {
                     prettyDurationCustom(Duration(seconds: seconds)),
                 ].join(' • '),
                 song: track,
-                badge: MusicLibraryActions(videos: [track.toVideo()]),
-                onOpen: () => _open(track),
-                onLongPress: () =>
-                    MusicLibraryActions.showSongMenu(context, track.toVideo()),
+                badge: MusicLibraryActions(
+                    videos: [track.toVideo()], onPlay: open),
+                onOpen: open,
+                onLongPress: () => MusicLibraryActions.showSongMenu(
+                    context, track.toVideo(),
+                    onPlay: open),
                 showPlayIndicator: true,
               );
             },
           ),
         ],
-        if (_dailyMixes.isNotEmpty) ...[
+        if (mixes.isNotEmpty) ...[
           _ShelfHeading(title: locals.musicDailyMixes),
           MusicCatalogShelf(
             key: const ValueKey('music-daily-mixes'),
-            itemCount: _dailyMixes.length,
+            itemCount: mixes.length,
             itemBuilder: (_, index) {
-              final mix = _dailyMixes[index];
+              final (:mix, :tracks) = mixes[index];
               final title = locals.musicDailyMixTitle(mix.label);
               return MusicCatalogCard(
                 key: ValueKey('music-daily-mix-$index'),
                 title: title,
                 thumbnails:
                     _mixCovers[mix.seeds.first]?.displayThumbnails ?? const [],
-                onOpen: () => _openShelf(title, const [], mix: mix),
+                onOpen: () => _openShelf(title, tracks),
               );
             },
           ),
@@ -595,64 +726,164 @@ class _ShelfHeading extends StatelessWidget {
       );
 }
 
-class _QuickPickRows extends StatelessWidget {
+const _quickPickGap = 12.0;
+
+double _quickPickStride(double viewport) =>
+    math.min(420.0, viewport * 0.9) + _quickPickGap;
+
+/// The scrollable keeps its full width so multiple columns can be visible on
+/// tablets. Each page of a swipe is one column, including the gap after it.
+class _QuickPickScrollPhysics extends PageScrollPhysics {
+  final int Function() dragColumn;
+
+  const _QuickPickScrollPhysics(this.dragColumn, {super.parent});
+
+  @override
+  _QuickPickScrollPhysics applyTo(ScrollPhysics? ancestor) =>
+      _QuickPickScrollPhysics(dragColumn, parent: buildParent(ancestor));
+
+  @override
+  double applyPhysicsToUserOffset(ScrollMetrics position, double offset) {
+    final delta = super.applyPhysicsToUserOffset(position, offset);
+    final step = _quickPickStride(position.viewportDimension);
+    final origin = dragColumn();
+    final next = (position.pixels - delta)
+        .clamp((origin - 1) * step, (origin + 1) * step);
+    return position.pixels - next;
+  }
+
+  @override
+  Simulation? createBallisticSimulation(
+      ScrollMetrics position, double velocity) {
+    final step = _quickPickStride(position.viewportDimension);
+    final column = position.pixels / step;
+    // A long drag can reach the next anchor before release. Discard its
+    // remaining fling velocity there so it cannot advance a second column.
+    final onAnchor = (position.pixels - column.round() * step).abs() < 0.001;
+    return super.createBallisticSimulation(
+        position.copyWith(viewportDimension: step), onAnchor ? 0 : velocity);
+  }
+
+  @override
+  double adjustPositionForNewDimensions({
+    required ScrollMetrics oldPosition,
+    required ScrollMetrics newPosition,
+    required bool isScrolling,
+    required double velocity,
+  }) {
+    if (!isScrolling &&
+        oldPosition.viewportDimension != newPosition.viewportDimension) {
+      final column =
+          (oldPosition.pixels / _quickPickStride(oldPosition.viewportDimension))
+              .round();
+      return (column * _quickPickStride(newPosition.viewportDimension))
+          .clamp(newPosition.minScrollExtent, newPosition.maxScrollExtent);
+    }
+    return super.adjustPositionForNewDimensions(
+        oldPosition: oldPosition,
+        newPosition: newPosition,
+        isScrolling: isScrolling,
+        velocity: velocity);
+  }
+
+  @override
+  bool get allowImplicitScrolling => true;
+}
+
+class _QuickPickRows extends StatefulWidget {
   final List<RecommendedItem<MusicTrack>> picks;
-  final ValueChanged<MusicTrack> onOpen;
+  final FocusNode Function(int)? focusForSlot;
+  final Future<void> Function(MusicTrack) onOpen;
   final void Function(MusicTrack, RecommendationFeedback) onFeedback;
   final bool Function() isCurrent;
 
   const _QuickPickRows(
       {required this.picks,
+      required this.focusForSlot,
       required this.onOpen,
       required this.onFeedback,
       required this.isCurrent});
 
   @override
+  State<_QuickPickRows> createState() => _QuickPickRowsState();
+}
+
+class _QuickPickRowsState extends State<_QuickPickRows> {
+  int _dragColumn = 0;
+
+  @override
   Widget build(BuildContext context) {
     final scaler = MediaQuery.textScalerOf(context);
     final rowHeight = math.max(64.0, 20 + scaler.scale(14) * 1.4 * 2);
+    final picks = widget.picks;
     final rows = math.min(4, picks.length);
-    return LayoutBuilder(
-        builder: (context, bounds) => SizedBox(
-              height: rows * rowHeight,
-              child: ListView.separated(
-                key: const ValueKey('music-quick-picks'),
-                primary: false,
-                scrollDirection: Axis.horizontal,
-                physics: const AlwaysScrollableScrollPhysics(),
-                itemCount: (picks.length / rows).ceil(),
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, lane) => SizedBox(
-                  width: math.min(
-                      420.0, bounds.maxWidth * (picks.length > rows ? 0.9 : 1)),
-                  child: Column(children: [
-                    for (final pick in picks.skip(lane * rows).take(rows))
-                      SizedBox(
-                          height: rowHeight,
-                          child: _QuickPickRow(
-                            key: ValueKey(
-                                'music-quick-pick-${pick.item.videoId}'),
-                            pick: pick,
-                            onOpen: () => onOpen(pick.item),
-                            onFeedback: (feedback) =>
-                                onFeedback(pick.item, feedback),
-                            isCurrent: isCurrent,
-                          )),
-                  ]),
-                ),
+    final columns = (picks.length / rows).ceil();
+    return LayoutBuilder(builder: (context, bounds) {
+      final width = bounds.maxWidth;
+      final step = _quickPickStride(width);
+      final visibleColumns =
+          ((width + _quickPickGap) / step).floor().clamp(1, columns);
+      // Align the last column on phones, or the last group of columns on
+      // larger screens, to the same leading edge as the first.
+      final endPadding = columns > visibleColumns
+          ? math.max(0.0, width - (visibleColumns * step - _quickPickGap))
+          : 0.0;
+      return NotificationListener<ScrollStartNotification>(
+          onNotification: (notice) {
+            if (notice.depth == 0 && notice.dragDetails != null) {
+              _dragColumn = (notice.metrics.pixels / step).round();
+            }
+            return false;
+          },
+          child: SizedBox(
+            height: rows * rowHeight,
+            child: ListView.separated(
+              key: const ValueKey('music-quick-picks'),
+              primary: false,
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsetsDirectional.only(end: endPadding),
+              // All three TV lanes can receive returning remote focus,
+              // including a song that moved outside the viewport.
+              cacheExtent: widget.focusForSlot == null ? null : columns * step,
+              physics: _QuickPickScrollPhysics(() => _dragColumn),
+              itemCount: columns,
+              separatorBuilder: (_, __) => const SizedBox(width: _quickPickGap),
+              itemBuilder: (context, lane) => SizedBox(
+                width:
+                    columns > 1 ? step - _quickPickGap : math.min(420.0, width),
+                child: Column(children: [
+                  for (final (slot, pick)
+                      in picks.indexed.skip(lane * rows).take(rows))
+                    SizedBox(
+                        height: rowHeight,
+                        child: _QuickPickRow(
+                          key:
+                              ValueKey('music-quick-pick-${pick.item.videoId}'),
+                          pick: pick,
+                          focusNode: widget.focusForSlot?.call(slot),
+                          onOpen: () => widget.onOpen(pick.item),
+                          onFeedback: (feedback) =>
+                              widget.onFeedback(pick.item, feedback),
+                          isCurrent: widget.isCurrent,
+                        )),
+                ]),
               ),
-            ));
+            ),
+          ));
+    });
   }
 }
 
 class _QuickPickRow extends StatelessWidget {
   final RecommendedItem<MusicTrack> pick;
-  final VoidCallback onOpen;
+  final FocusNode? focusNode;
+  final Future<void> Function() onOpen;
   final ValueChanged<RecommendationFeedback> onFeedback;
   final bool Function() isCurrent;
   const _QuickPickRow(
       {super.key,
       required this.pick,
+      required this.focusNode,
       required this.onOpen,
       required this.onFeedback,
       required this.isCurrent});
@@ -665,6 +896,7 @@ class _QuickPickRow extends StatelessWidget {
     final recommendation = MusicSongRecommendation(
         reason: pick.reason, onFeedback: onFeedback, isCurrent: isCurrent);
     return ListTile(
+      focusNode: focusNode,
       contentPadding: const EdgeInsetsDirectional.only(start: 2, end: 4),
       horizontalTitleGap: 12,
       minLeadingWidth: 0,
@@ -672,7 +904,7 @@ class _QuickPickRow extends StatelessWidget {
       onTap: onOpen,
       onLongPress: () => MusicLibraryActions.showSongMenu(
           context, track.toVideo(),
-          recommendation: recommendation),
+          onPlay: onOpen, recommendation: recommendation),
       onFocusChange: (focused) {
         if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
       },
@@ -704,7 +936,9 @@ class _QuickPickRow extends StatelessWidget {
           style: theme.textTheme.bodyMedium
               ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
       trailing: MusicLibraryActions(
-          videos: [track.toVideo()], recommendation: recommendation),
+          videos: [track.toVideo()],
+          onPlay: onOpen,
+          recommendation: recommendation),
     );
   }
 }

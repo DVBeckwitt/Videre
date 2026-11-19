@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:audio_service/audio_service.dart' show AudioProcessingState;
 import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -23,6 +25,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -67,11 +70,22 @@ class _MetadataService extends Service {
   }
 }
 
+class _MediaSessionPlayer extends PlayerCubit {
+  _MediaSessionPlayer(super.initialState, super.settings);
+
+  @override
+  Future<void> onReady() async {}
+}
+
 class _Pages extends PlaylistLoadSession {
   final controller = StreamController<PlaylistLoadSnapshot>.broadcast();
   Playlist value;
   bool finished = false;
   int owners = 0;
+  Object? failure;
+
+  @override
+  Object? get error => failure;
 
   _Pages(this.value, PlaylistReference reference)
       : super(playlist: value, database: db, reference: reference);
@@ -81,7 +95,7 @@ class _Pages extends PlaylistLoadSession {
   @override
   bool get complete => finished;
   @override
-  bool get loading => !finished;
+  bool get loading => !finished && failure == null;
   @override
   Stream<PlaylistLoadSnapshot> get changes => controller.stream;
   @override
@@ -89,11 +103,17 @@ class _Pages extends PlaylistLoadSession {
   @override
   void release() => owners--;
 
-  void publish(List<Video> videos, {bool complete = false}) {
+  @override
+  Future<void> retry() async {
+    if (failure != null) publish(value.videos);
+  }
+
+  void publish(List<Video> videos, {bool complete = false, Object? error}) {
     value = value.copyWith(videos: videos);
     finished = complete;
-    controller.add(
-        PlaylistLoadSnapshot(value, loading: !complete, complete: complete));
+    failure = error;
+    controller.add(PlaylistLoadSnapshot(value,
+        loading: loading, complete: complete, error: error));
   }
 }
 
@@ -101,7 +121,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late TestAppCubit app;
   late TestSettingsCubit settings;
-  late TestPlayerCubit player;
+  late PlayerCubit player;
   late _MetadataService metadata;
   late Service previousService;
   late PlaylistReference reference;
@@ -655,6 +675,172 @@ void main() {
         player.appendPlaylistVideos(ordered,
             reference: reference, generation: generation),
         isFalse);
+  });
+
+  for (final latePage in [false, true]) {
+    test(
+        'time awaiting a new Music page counts towards its gap (late=$latePage)',
+        () async {
+      await settings.setSongTransitionMode(SongTransitionMode.pause);
+      await settings.setSongTransitionSeconds(1);
+      final ordered = assignPlaylistEntryIds(entries
+          .take(2)
+          .map((video) => video.copyWith(
+              adaptiveFormats: const [],
+              formatStreams: const [],
+              musicMetadata:
+                  MusicMetadata(title: video.videoId, artist: 'Artist')))
+          .toList());
+      final pages = _Pages(
+          Playlist(
+              title: 'Test',
+              playlistId: reference.playlistId,
+              author: '',
+              videoCount: ordered.length,
+              videos: [ordered.first]),
+          reference);
+      addTearDown(pages.controller.close);
+      await player.playPlaylist(pages.videos,
+          reference: reference, playlistLoader: pages, audio: true);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      final waiting = Completer<void>();
+      void waitingForPage() {
+        if (!waiting.isCompleted) waiting.complete();
+      }
+
+      player.playlistLoadingRevision.addListener(waitingForPage);
+      final elapsed = Stopwatch()..start();
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await waiting.future.timeout(const Duration(seconds: 3));
+      player.playlistLoadingRevision.removeListener(waitingForPage);
+      if (latePage) {
+        await Future<void>.delayed(const Duration(milliseconds: 1050));
+      }
+      expect(player.state.currentlyPlaying?.videoId, 'a');
+      final next =
+          player.stream.firstWhere((s) => s.currentlyPlaying?.videoId == 'b');
+      pages.publish(ordered, complete: true);
+      await Future<void>.delayed(Duration.zero);
+      final target = player.openingMusicEntry ?? player.state.currentlyPlaying;
+      expect(target?.videoId, latePage ? 'b' : 'a');
+      await next.timeout(const Duration(seconds: 3));
+      expect(elapsed.elapsedMilliseconds, greaterThanOrEqualTo(990));
+    });
+  }
+
+  group('Music waiting for a playlist page', () {
+    late List<Video> songs;
+    late _Pages pages;
+    late MediaHandler handler;
+
+    setUp(() async {
+      await player.close();
+      player = _MediaSessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = handler = MediaHandler(player);
+      songs = assignPlaylistEntryIds([
+        for (final song in entries.take(2))
+          song.copyWith(
+              adaptiveFormats: const [],
+              formatStreams: const [],
+              musicMetadata: MusicMetadata(title: song.videoId, artist: 'Band'))
+      ]);
+      pages = _Pages(
+          Playlist(
+              title: 'Waiting',
+              playlistId: reference.playlistId,
+              author: '',
+              videoCount: 2,
+              videos: [songs.first]),
+          reference);
+      addTearDown(pages.controller.close);
+      await player.playPlaylist(pages.videos,
+          audio: true, reference: reference, playlistLoader: pages);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      final waiting = Completer<void>();
+      void changed() {
+        if (!waiting.isCompleted) waiting.complete();
+      }
+
+      player.playlistLoadingRevision.addListener(changed);
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await waiting.future.timeout(const Duration(seconds: 2));
+      player.playlistLoadingRevision.removeListener(changed);
+      expect(handler.playbackState.value.playing, isTrue);
+      expect(handler.playbackState.value.processingState,
+          AudioProcessingState.buffering);
+    });
+
+    for (final change in ['autoplay off', 'repeat one', 'focus loss']) {
+      test('changing $change ends the active page wait immediately', () async {
+        switch (change) {
+          case 'autoplay off':
+            await settings.setAutoplayQueue(false);
+          case 'repeat one':
+            await settings.setRepeatMode(PlayerRepeat.repeatOne);
+          case 'focus loss':
+            player.handleAudioInterruption(
+                AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+        }
+        await Future<void>.delayed(Duration.zero);
+        final session = handler.playbackState.value;
+        expect(
+            session.playing &&
+                session.processingState == AudioProcessingState.buffering,
+            isFalse,
+            reason: 'No page should hold the service after $change');
+        pages.publish(songs, complete: true);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(player.state.currentQueueId, playbackQueueId(songs.first));
+      });
+    }
+
+    for (final change in ['none', 'autoplay off', 'focus loss']) {
+      test('page failure releases the service and retry honors $change',
+          () async {
+        final stopped =
+            handler.playbackState.firstWhere((state) => !state.playing);
+        pages.publish([songs.first], error: StateError('Page unavailable'));
+        await stopped.timeout(const Duration(seconds: 2));
+        if (change == 'autoplay off') await settings.setAutoplayQueue(false);
+        if (change == 'focus loss') {
+          player.handleAudioInterruption(
+              AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+        }
+        player.retryPlaylistLoading();
+        expect(pages.loading, isTrue);
+        pages.publish(songs, complete: true);
+        if (change == 'none') {
+          await player.stream
+              .firstWhere((state) =>
+                  state.currentQueueId == playbackQueueId(songs.last))
+              .timeout(const Duration(seconds: 2));
+        } else {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(player.state.currentQueueId, playbackQueueId(songs.first));
+          expect(player.state.playQueue, [playbackQueueId(songs.last)]);
+          expect(handler.playbackState.value.playing, isFalse);
+        }
+      });
+    }
+
+    test('explicit Next after a page failure can advance with autoplay off',
+        () async {
+      final stopped =
+          handler.playbackState.firstWhere((state) => !state.playing);
+      pages.publish([songs.first], error: StateError('Page unavailable'));
+      await stopped.timeout(const Duration(seconds: 2));
+      await settings.setAutoplayQueue(false);
+      await handler.skipToNext();
+      player.retryPlaylistLoading();
+      final next = player.stream.firstWhere(
+          (state) => state.currentQueueId == playbackQueueId(songs.last));
+      pages.publish(songs, complete: true);
+      await next.timeout(const Duration(seconds: 2));
+      expect(player.state.playedVideos, [playbackQueueId(songs.first)]);
+    });
   });
 
   test('a page boundary waits for metadata then continues with the next entry',

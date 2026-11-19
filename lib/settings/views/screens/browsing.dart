@@ -15,6 +15,7 @@ import '../../../utils/views/components/select_list_dialog.dart';
 import '../../../utils.dart';
 import '../components/app_customizer.dart';
 import '../../../home/views/screens/home_tabs_editor.dart';
+import '../../../music/views/screens/music_layout_editor.dart';
 import 'community_filter_settings.dart';
 
 @RoutePage()
@@ -243,6 +244,11 @@ class BrowsingSettingsScreen extends StatelessWidget {
                                 .map((e) => e.getLabel(locals)))
                         .join(', ')),
                     onPressed: (ctx) => customizeApp(ctx),
+                  ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.library_music_outlined),
+                    title: Text(locals.customizeMusicLayout),
+                    onPressed: MusicLayoutEditor.open,
                   ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.tab_outlined),

@@ -1,6 +1,7 @@
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
+import 'package:clipious/music/views/screens/music_layout_editor.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
@@ -239,6 +240,11 @@ class TVSettingsScreen extends StatelessWidget {
                   description:
                       state.appLayout.map((e) => e.getLabel(locals)).join(", "),
                   onSelected: (context) => openAppLayout(context),
+                ),
+                SettingsTile(
+                  title: locals.customizeMusicLayout,
+                  onSelected: (context) => MusicLayoutEditor.open(context,
+                      includeSearchShortcut: true),
                 ),
                 SettingsTile(
                   title: locals.homeTabs,

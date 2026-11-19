@@ -8,7 +8,7 @@ services. The Kotlin recommendation package has its own attribution ledger.
 
 | Flow source at the pinned revision | Videre destination | Referenced presentation and adaptation |
 |---|---|---|
-| [HomeScreen.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/screens/home/HomeScreen.kt), [HomeFeedGrid.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/screens/home/HomeFeedGrid.kt) | `lib/home/views/components/home.dart`, `flow_video_home.dart` in the same directory | Compact header, topic chips, continuation shelf and responsive feed hierarchy. For you ranks locally known or explicitly discovered candidates; Your feeds retains Videre's configured layout. Topic chips now use FlowNeuro's learned interest groups and stable chip selection; submitted search history remains an optional learning input. |
+| [HomeScreen.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/screens/home/HomeScreen.kt), [HomeFeedGrid.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/screens/home/HomeFeedGrid.kt) | `lib/home/views/components/home.dart`, `flow_video_home.dart` in the same directory | Compact header, topic chips, continuation shelf and responsive feed hierarchy. For you ranks local and discovered candidates. Your feeds retains Videre's configured layout. Topic chips use FlowNeuro's learned interest groups. Submitted search history remains an optional learning input. |
 | [VideoCardStacked.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/shared/card/VideoCardStacked.kt) | `video_in_list.dart`, `video_thumbnail.dart`, `video_metrics.dart`, `compact_video.dart`, `recommendation_actions.dart` in `lib/videos/views/components/` | Prominent rounded artwork, neutral titles, restrained secondary metadata, accessible overflow actions and local recommendation explanations/feedback. Videre retains its duration/progress badges, guarded artwork loader and existing playback actions. |
 | [SearchScreen.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/screens/search/SearchScreen.kt), [SearchHistoryMatching.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/search/SearchHistoryMatching.kt), [SearchSuggestionsPanel.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/search/SearchSuggestionsPanel.kt), [SearchFilterBar.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/search/SearchFilterBar.kt) | `lib/search/states/search.dart`, `lib/search/views/screens/search.dart`, `lib/search/views/components/search_history_matching.dart`, `search_suggestions_panel.dart` | Translates prefix-first history matching and the first-eight reveal rule, separates fill from submit, preserves results while editing, and restores the submitted query on Back. Type and recent-upload chips use Videre's existing Invidious service. |
 | [ChannelContent.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/screens/channel/ChannelContent.kt), [ChannelHeaderSection.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/channel/ChannelHeaderSection.kt), [ChannelTabRow.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/channel/ChannelTabRow.kt), [ChannelFilterBar.kt](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/ui/components/channel/ChannelFilterBar.kt) | `lib/channels/views/screens/channel.dart`, `lib/channels/views/components/info.dart`, `sort_dropdown_button.dart` | Shared collapsible banner and identity, pinned top tabs, expandable About, featured and compact uploads, and a menu chip for sort. The lead item comes from the latest visible uploads available through Invidious. |
@@ -26,14 +26,15 @@ re-ranking, and menu controls retain their focus when switching modes.
 
 Opening For you ranks local metadata and existing follows. With learning enabled,
 an active Home can read a bounded followed-channel candidate pool through the
-selected Invidious instance. Inferred topic searches still require an explicit
-action. Continue
-Watching uses cached history and excludes completed, watched, music and excluded
-entries. Discover videos and interest chips request bounded candidates through
-the selected Invidious instance. The native bridge uses the pinned
+selected Invidious instance. Continue Watching uses cached history and excludes
+completed, watched, music and excluded entries. Active Video Home prepares
+recommendations for enabled learned topics and seeded Discover. Topic suggestions
+appear as results become available. Selecting one shows the prepared videos.
+A profile without a topic or video to start from can enter a search. The
+native bridge uses the pinned
 `HomeChipPolicies.interestQueries` and `NeuroDiscovery.generateQueries`.
-An explicit Discover action sends Flow's topic queries; the separately bounded
-subscription warm start supplies followed-channel candidates. These views add no direct YouTube connection,
+Discover sends Flow's topic queries. The separately bounded subscription warm
+start supplies followed-channel candidates. These views add no direct YouTube connection,
 extractor, media resolver or upstream artwork loader. Share/playback actions
 continue through Videre's existing services. A missing native ranker displays
 eligible unranked items with an explicit status; it does not invent scores or

@@ -22,6 +22,7 @@ import '../../../../globals.dart';
 import '../../../../settings/states/settings.dart';
 import '../../../states/search.dart';
 import '../../../states/tv_search.dart';
+import '../../components/pasted_link_dialog.dart';
 import '../../screens/search.dart';
 
 @RoutePage()
@@ -81,6 +82,8 @@ class TvSearchScreen extends StatelessWidget {
                 create: (context) => SearchCubit(
                     SearchState.init(query: query, searchNow: searchNow),
                     settings,
+                    chooseOpen: () => choosePastedLinkAction(context),
+                    isLinkSourceActive: () => isPastedLinkSourceActive(context),
                     showSuggestionsWithResults: true),
               )
             ],
@@ -108,8 +111,18 @@ class TvSearchScreen extends StatelessWidget {
                         autocorrect: true,
                         focusNode: tvCubit.searchFocus,
                         onSubmitted: (value) async {
+                          // The full-screen TV keyboard calls this immediately
+                          // before popping. Let its search route regain focus.
+                          if (ModalRoute.of(context)?.isCurrent == false) {
+                            await WidgetsBinding.instance.endOfFrame;
+                            if (!context.mounted || searchCubit.isClosed) {
+                              return;
+                            }
+                          }
                           await searchCubit.search(value);
-                          searchCubit.getSuggestions(hideResult: false);
+                          if (!searchCubit.isClosed) {
+                            searchCubit.getSuggestions(hideResult: false);
+                          }
                         },
                         textInputAction: TextInputAction.search,
                       ),

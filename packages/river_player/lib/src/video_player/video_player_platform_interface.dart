@@ -222,6 +222,7 @@ class DataSource {
     this.initialDashHeight,
     this.retryDashTrackFromLoadId,
     this.fastDashStartupFallback = false,
+    this.videoOnly = false,
     this.loadId,
     this.asset,
     this.package,
@@ -253,6 +254,10 @@ class DataSource {
   /// This has nothing to do with the video's file type. It's just the place
   /// from which the video is fetched from.
   final DataSourceType sourceType;
+
+  /// Suppress native audio tracks and media-session ownership for a visual
+  /// accompaniment whose transport and audio are owned by another player.
+  final bool videoOnly;
 
   /// The URI to the video file.
   ///

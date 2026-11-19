@@ -6,9 +6,11 @@ import '../../../app/states/app.dart';
 import '../../../downloads/models/music_download_format.dart';
 import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../music/models/song_transition.dart';
 import '../../../music/services/music_community_cover_preferences.dart';
 import '../../../music/services/music_lyrics_preferences.dart';
 import '../../../utils.dart' show selectKeys;
+import '../../states/settings.dart';
 
 class MusicProviderSettings extends StatelessWidget {
   const MusicProviderSettings({super.key});
@@ -16,7 +18,48 @@ class MusicProviderSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final (mode, seconds) = context.select((SettingsCubit settings) => (
+          settings.state.songTransitionMode,
+          settings.state.songTransitionSeconds
+        ));
+    final settings = context.read<SettingsCubit>();
+    String modeLabel(SongTransitionMode value) => switch (value) {
+          SongTransitionMode.seamless => locals.musicTransitionSeamless,
+          SongTransitionMode.pause => locals.musicTransitionPause,
+          SongTransitionMode.fade => locals.musicTransitionFade,
+          SongTransitionMode.crossfade => locals.musicTransitionCrossfade,
+        };
     return Column(mainAxisSize: MainAxisSize.min, children: [
+      _MusicChoice<SongTransitionMode>(
+        tileKey: const ValueKey('music-transition-setting'),
+        icon: Icons.multitrack_audio_rounded,
+        title: locals.musicTransitionSetting,
+        subtitle: locals.musicTransitionSummary(modeLabel(mode)),
+        values: SongTransitionMode.values,
+        read: () => mode,
+        label: modeLabel,
+        description: (value) => value == SongTransitionMode.crossfade
+            ? locals.musicTransitionCrossfadeHelp
+            : null,
+        optionKey: (value) => ValueKey('music-transition-${value.name}'),
+        save: settings.setSongTransitionMode,
+      ),
+      if (mode != SongTransitionMode.seamless)
+        _MusicChoice<int>(
+          tileKey: const ValueKey('music-transition-duration-setting'),
+          icon: Icons.timer_outlined,
+          title: locals.musicTransitionDuration,
+          values: [
+            for (var value = minSongTransitionSeconds;
+                value <= maxSongTransitionSeconds;
+                value++)
+              value
+          ],
+          read: () => seconds,
+          label: locals.musicTransitionSeconds,
+          optionKey: (value) => ValueKey('music-transition-seconds-$value'),
+          save: settings.setSongTransitionSeconds,
+        ),
       _ProviderSwitch(
         tileKey: const ValueKey('music-lrclib-setting'),
         icon: Icons.lyrics_outlined,
@@ -35,22 +78,50 @@ class MusicProviderSettings extends StatelessWidget {
         read: isCommunityCoverArtEnabled,
         write: setCommunityCoverArtEnabled,
       ),
-      Semantics(container: true, child: const _MusicDownloadFormatSetting()),
+      _MusicChoice<MusicDownloadFormat>(
+        tileKey: const ValueKey('music-download-format-setting'),
+        icon: Icons.audio_file_outlined,
+        title: locals.musicDownloadFormatSetting,
+        values: MusicDownloadFormat.values,
+        read: () => MusicDownloadFormat.forDatabase(db),
+        label: (format) => format.label,
+        optionKey: (format) => ValueKey('music-download-format-${format.name}'),
+        save: (format) => format.save(db),
+      ),
     ]);
   }
 }
 
-class _MusicDownloadFormatSetting extends StatefulWidget {
-  const _MusicDownloadFormatSetting();
+class _MusicChoice<T extends Object> extends StatefulWidget {
+  final Key tileKey;
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final List<T> values;
+  final T Function() read;
+  final String Function(T) label;
+  final String? Function(T)? description;
+  final Key Function(T) optionKey;
+  final Future<void> Function(T) save;
+
+  const _MusicChoice(
+      {required this.tileKey,
+      required this.icon,
+      required this.title,
+      this.subtitle,
+      required this.values,
+      required this.read,
+      required this.label,
+      this.description,
+      required this.optionKey,
+      required this.save});
 
   @override
-  State<_MusicDownloadFormatSetting> createState() =>
-      _MusicDownloadFormatSettingState();
+  State<_MusicChoice<T>> createState() => _MusicChoiceState<T>();
 }
 
-class _MusicDownloadFormatSettingState
-    extends State<_MusicDownloadFormatSetting> {
-  Future<void> _selectFormat() async {
+class _MusicChoiceState<T extends Object> extends State<_MusicChoice<T>> {
+  Future<void> _select() async {
     final app = context.read<AppCubit>();
     final database = db;
     final profile = database.profileId;
@@ -65,9 +136,10 @@ class _MusicDownloadFormatSettingState
         !app.state.globalLoading &&
         !app.state.sessionRecoveryRequired;
     if (!isCurrent()) return;
-    final current = MusicDownloadFormat.forDatabase(database);
+    final current = widget.read();
+    final options = widget;
     final locals = AppLocalizations.of(context)!;
-    final format = await showDialog<MusicDownloadFormat>(
+    final selected = await showDialog<T>(
       context: context,
       builder: (context) => Shortcuts(
         shortcuts: {
@@ -75,16 +147,20 @@ class _MusicDownloadFormatSettingState
             SingleActivator(key): const ActivateIntent()
         },
         child: SimpleDialog(
-          title: Text(locals.musicDownloadFormatSetting),
+          title: Text(options.title),
           children: [
-            for (final format in MusicDownloadFormat.values)
+            for (final value in options.values)
               ListTile(
-                key: ValueKey('music-download-format-${format.name}'),
-                autofocus: format == current,
-                selected: format == current,
-                title: Text(format.label),
-                trailing: format == current ? const Icon(Icons.check) : null,
-                onTap: () => Navigator.pop(context, format),
+                key: options.optionKey(value),
+                autofocus: value == current,
+                selected: value == current,
+                title: Text(options.label(value)),
+                subtitle: switch (options.description?.call(value)) {
+                  final String text => Text(text),
+                  null => null,
+                },
+                trailing: value == current ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(context, value),
               ),
             Align(
                 alignment: AlignmentDirectional.centerEnd,
@@ -95,9 +171,9 @@ class _MusicDownloadFormatSettingState
         ),
       ),
     );
-    if (format == null || format == current || !isCurrent()) return;
+    if (selected == null || selected == current || !isCurrent()) return;
     try {
-      await format.save(database);
+      await options.save(selected);
       if (isCurrent()) setState(() {});
     } catch (_) {
       if (mounted && isCurrent()) {
@@ -110,23 +186,25 @@ class _MusicDownloadFormatSettingState
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppCubit>().state;
-    return Shortcuts(
-      shortcuts: {
-        for (final key in selectKeys)
-          SingleActivator(key): const ActivateIntent()
-      },
-      child: ListTile(
-        key: const ValueKey('music-download-format-setting'),
-        leading: const Icon(Icons.audio_file_outlined),
-        title: Text(AppLocalizations.of(context)!.musicDownloadFormatSetting),
-        subtitle: Text(MusicDownloadFormat.forDatabase(db).label),
-        onTap: db.profileId == app.profileId &&
-                !app.globalLoading &&
-                !app.sessionRecoveryRequired
-            ? _selectFormat
-            : null,
-      ),
-    );
+    return Semantics(
+        container: true,
+        child: Shortcuts(
+          shortcuts: {
+            for (final key in selectKeys)
+              SingleActivator(key): const ActivateIntent()
+          },
+          child: ListTile(
+            key: widget.tileKey,
+            leading: Icon(widget.icon),
+            title: Text(widget.title),
+            subtitle: Text(widget.subtitle ?? widget.label(widget.read())),
+            onTap: db.profileId == app.profileId &&
+                    !app.globalLoading &&
+                    !app.sessionRecoveryRequired
+                ? _select
+                : null,
+          ),
+        ));
   }
 }
 

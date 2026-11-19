@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -23,6 +24,74 @@ class DownloadFolder {
   }
 
   Map<String, String> toJson() => {'uri': uri, 'name': name};
+}
+
+typedef DownloadDestination = ({DownloadFolder? folder, bool usePrivate});
+
+const defaultDownloadDestination = (folder: null, usePrivate: false);
+const privateDownloadDestination = (folder: null, usePrivate: true);
+
+/// Device-local choices for new jobs. Each queued job retains its own URI.
+class DownloadFolderPreferences {
+  final DownloadDestination video;
+  final DownloadDestination audio;
+  final DownloadFolder? legacyMusicFolder;
+
+  const DownloadFolderPreferences({
+    this.video = defaultDownloadDestination,
+    this.audio = defaultDownloadDestination,
+    this.legacyMusicFolder,
+  });
+
+  factory DownloadFolderPreferences.decode(String? raw) {
+    try {
+      final saved = raw == null ? null : jsonDecode(raw);
+      final music =
+          saved is Map ? DownloadFolder.fromJson(saved['musicFolder']) : null;
+      if (saved is Map &&
+          (saved.containsKey('video') || saved.containsKey('audio'))) {
+        return DownloadFolderPreferences(
+            video: _destination(saved['video']),
+            audio: _destination(saved['audio']),
+            legacyMusicFolder: music);
+      }
+      // A single older destination applied to every download. The optional
+      // pre-Android-10 Music tree was only a fallback for public song exports.
+      final shared = music != null && DownloadFolder.fromJson(saved) == null
+          ? defaultDownloadDestination
+          : _destination(saved);
+      return DownloadFolderPreferences(
+          video: shared, audio: shared, legacyMusicFolder: music);
+    } on FormatException {
+      return const DownloadFolderPreferences(
+          video: privateDownloadDestination, audio: privateDownloadDestination);
+    }
+  }
+
+  static DownloadDestination _destination(dynamic value) {
+    if (value == null) return defaultDownloadDestination;
+    final folder = DownloadFolder.fromJson(value);
+    // A malformed custom preference must never publish a file unintentionally.
+    return folder == null
+        ? privateDownloadDestination
+        : (folder: folder, usePrivate: false);
+  }
+
+  String? encode() {
+    Object? value(DownloadDestination destination) =>
+        destination.folder?.toJson() ??
+        (destination.usePrivate ? 'private' : null);
+    if (video == defaultDownloadDestination &&
+        audio == defaultDownloadDestination &&
+        legacyMusicFolder == null) {
+      return null;
+    }
+    return jsonEncode({
+      'video': value(video),
+      'audio': value(audio),
+      if (legacyMusicFolder != null) 'musicFolder': legacyMusicFolder!.toJson(),
+    });
+  }
 }
 
 class DownloadStorage {

@@ -15,6 +15,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
 import 'package:clipious/player/models/video_display_mode.dart';
@@ -72,6 +73,46 @@ Future<void> main() async {
     messenger.setMockMethodCallHandler(pathProvider, null);
     await documents.delete(recursive: true);
     WorkmanagerPlatform.instance = originalWorkmanager;
+  });
+
+  test('song transitions persist per profile and reject unusable durations',
+      () async {
+    final other = await db.createProfile('Other listener');
+    expect(settingsCubit.state.songTransitionMode, SongTransitionMode.seamless);
+    expect(settingsCubit.state.songTransitionSeconds, 3);
+    for (final mode in SongTransitionMode.values) {
+      await settingsCubit.setSongTransitionMode(mode);
+      expect(settingsCubit.state.songTransitionMode, mode);
+      expect(SettingsState.init().songTransitionMode, mode);
+    }
+    await Future.wait([
+      settingsCubit.setSongTransitionSeconds(1),
+      settingsCubit.setSongTransitionSeconds(10)
+    ]);
+    expect(SettingsState.init().songTransitionSeconds, 10);
+    expect(() => settingsCubit.setSongTransitionSeconds(11), throwsRangeError);
+    expect(() => settingsCubit.setSongTransitionSeconds(0), throwsRangeError);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+    await db.useProfile(other.id);
+    expect(
+        SettingsState.init().songTransitionMode, SongTransitionMode.seamless);
+    expect(SettingsState.init().songTransitionSeconds, 3);
+    await db.restoreBackup(backup, replace: true);
+    expect(
+        SettingsState.init().songTransitionMode, SongTransitionMode.crossfade);
+    expect(SettingsState.init().songTransitionSeconds, 10);
+    for (final invalid in [
+      SettingsValue(songTransitionModeSettingName, 'unsupported'),
+      SettingsValue(songTransitionSecondsSettingName, '11'),
+      SettingsValue(songTransitionSecondsSettingName, '-1'),
+      SettingsValue(songTransitionSecondsSettingName, 'NaN'),
+    ]) {
+      expect(UserBackup.validSetting(invalid), isFalse);
+      await db.saveSetting(invalid);
+    }
+    expect(
+        SettingsState.init().songTransitionMode, SongTransitionMode.seamless);
+    expect(SettingsState.init().songTransitionSeconds, 3);
   });
 
   test('motion follows Android by default and persists each choice', () async {
@@ -571,9 +612,9 @@ Future<void> main() async {
     ('phone', SettingsScreen()),
     ('TV', TVSettingsScreen()),
   ]) {
-    Future<void> showSettings(WidgetTester tester) async {
+    Future<void> showSettings(WidgetTester tester, {double? width}) async {
       tester.view.physicalSize =
-          name == 'TV' ? const Size(1280, 720) : const Size(360, 720);
+          Size(width ?? (name == 'TV' ? 1280 : 360), 720);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
@@ -639,6 +680,103 @@ Future<void> main() async {
       expect(isLrclibEnabled(), isFalse);
       expect(isCommunityCoverArtEnabled(), isTrue);
     });
+
+    for (final width in name == 'TV' ? [1280.0] : [360.0, 800.0]) {
+      final surface = width == 800 ? 'tablet' : name;
+      testWidgets('$surface edits automatic song transitions in YT Music',
+          (tester) async {
+        final tv = name == 'TV';
+        app.isTv = tv;
+        await showSettings(tester, width: width);
+        Finder keyed(String key) => find.byKey(ValueKey(key));
+        final setting = keyed('music-transition-setting');
+        final duration = keyed('music-transition-duration-setting');
+        Future<void> open(Finder tile) async {
+          await tester.ensureVisible(tile);
+          await tester.pumpAndSettle();
+          if (tv) {
+            final label =
+                find.descendant(of: tile, matching: find.byType(Text)).first;
+            Focus.of(tester.element(label)).requestFocus();
+            await tester.pumpAndSettle();
+            await tester.sendKeyEvent(LogicalKeyboardKey.select);
+          } else {
+            await tester.tap(tile);
+          }
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> choose(String key, int steps) async {
+          if (tv) {
+            final direction = steps > 0
+                ? LogicalKeyboardKey.arrowDown
+                : LogicalKeyboardKey.arrowUp;
+            for (var i = 0; i < steps.abs(); i++) {
+              await tester.sendKeyEvent(direction);
+              await tester.pumpAndSettle();
+            }
+            await tester.sendKeyEvent(LogicalKeyboardKey.select);
+          } else {
+            await tester.ensureVisible(keyed(key));
+            await tester.tap(keyed(key));
+          }
+          await tester.pumpAndSettle();
+        }
+
+        expect(settingsCubit.state.songTransitionMode,
+            SongTransitionMode.seamless);
+        expect(duration, findsNothing);
+        await tester.ensureVisible(setting);
+        await tester.pumpAndSettle();
+        expect(tester.getSemantics(find.text('Song transition options')).label,
+            allOf(contains('Seamless'), contains('automatically')));
+        await open(setting);
+        for (final mode in SongTransitionMode.values) {
+          expect(keyed('music-transition-${mode.name}'), findsOneWidget);
+        }
+        await choose('music-transition-pause', 1);
+        expect(
+            settingsCubit.state.songTransitionMode, SongTransitionMode.pause);
+        expect(find.descendant(of: duration, matching: find.text('3 seconds')),
+            findsOneWidget);
+        await open(duration);
+        for (var seconds = 1; seconds <= 10; seconds++) {
+          expect(keyed('music-transition-seconds-$seconds'), findsOneWidget);
+        }
+        expect(keyed('music-transition-seconds-0'), findsNothing);
+        expect(keyed('music-transition-seconds-11'), findsNothing);
+        final seconds = tv ? 1 : 10;
+        await choose('music-transition-seconds-$seconds', seconds - 3);
+        expect(SettingsState.init().songTransitionSeconds, seconds);
+
+        for (final mode in [
+          SongTransitionMode.fade,
+          SongTransitionMode.crossfade
+        ]) {
+          await open(setting);
+          await choose('music-transition-${mode.name}', 1);
+          expect(SettingsState.init().songTransitionMode, mode);
+          expect(settingsCubit.state.songTransitionSeconds, seconds);
+        }
+        await open(setting);
+        if (tv) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+          await tester.pumpAndSettle();
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        } else {
+          await tester.tap(find.text('Cancel'));
+        }
+        await tester.pumpAndSettle();
+        expect(keyed('music-transition-fade'), findsNothing);
+        expect(SettingsState.init().songTransitionMode,
+            SongTransitionMode.crossfade);
+        await open(setting);
+        await choose('music-transition-seamless', -3);
+        expect(settingsCubit.state.songTransitionMode,
+            SongTransitionMode.seamless);
+        expect(duration, findsNothing);
+      });
+    }
 
     testWidgets('$name selects and cancels the YT Music download format',
         (tester) async {

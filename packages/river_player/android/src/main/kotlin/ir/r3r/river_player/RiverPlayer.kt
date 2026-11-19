@@ -157,6 +157,14 @@ internal class RiverPlayer(
     private val trackSelector: DefaultTrackSelector = DefaultTrackSelector(context)
     private val loadControl: LoadControl
     private var isInitialized = false
+    var videoOnly = false
+        set(value) {
+            if (field == value) return
+            field = value
+            trackSelector.setParameters(
+                trackSelector.buildUponParameters().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, value)
+            )
+        }
     private var dashStartupRetry: DashStartupLoadErrorPolicy? = null
     private var hadInitialDashHeight = false
     private var surface: Surface? = null

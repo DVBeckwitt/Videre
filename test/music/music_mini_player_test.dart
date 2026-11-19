@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
@@ -82,6 +83,7 @@ void main() {
     player = _Player(
         PlayerState.init([song, next]).copyWith(
             currentlyPlaying: song,
+            playQueue: ListQueue.of([next.videoId]),
             isAudio: true,
             isMini: true,
             isHidden: false,
@@ -184,6 +186,11 @@ void main() {
     await tester.drag(key('music-mini-expand'), const Offset(-140, 0));
     await tester.pump();
     expect(player.nextCalls, 1);
+    await player.seed(player.state.copyWith(
+        currentlyPlaying: next,
+        playedVideos: [song.videoId],
+        playQueue: ListQueue<String>()));
+    await tester.pump();
     await tester.drag(key('music-mini-expand'), const Offset(140, 0));
     await tester.pump();
     expect(player.previousCalls, 1);

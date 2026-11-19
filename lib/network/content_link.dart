@@ -4,6 +4,8 @@ import '../utils/models/sharelink.dart';
 
 enum ContentLinkKind { video, channel, playlist, search, home, unresolved }
 
+enum PastedLinkAction { handled, searchAsText, unrecognized }
+
 /// Interprets incoming links as content identifiers.
 class ContentLink {
   final ContentLinkKind kind;
@@ -41,21 +43,38 @@ class ContentLink {
   static final _address = RegExp(
       r'(?<![\w@.:/-])(?:https?:\/\/|\/\/)?(?:[\w-]+\.)+[\w-]+\.?[^\s<>"\x27]*',
       caseSensitive: false);
-  static final _scheme = RegExp(r'^[A-Za-z][A-Za-z0-9+.-]*:');
+  static final _httpScheme = RegExp(r'^https?://', caseSensitive: false);
+  static final _invalidAddressCharacter =
+      RegExp(r'''[\s\x00-\x1f\x7f<>"'\\]''');
   static final _trailingPunctuation = RegExp(r'[.,!?;:)\]]+$');
 
   // Paste handling matches one complete address. In a share, the sender may
   // include titles or other text around the address, so scan whole tokens.
   static ContentLink? parseAddress(String address,
       {Server? server, bool allowLandingFallback = false}) {
-    final text = address.trim();
-    final match = _address.matchAsPrefix(text);
-    if (match == null || match.end != text.length) return null;
-    final uri = _addressUri(text);
+    final uri = completeWebAddress(address);
     return uri == null
         ? null
         : parse(uri,
             server: server, allowLandingFallback: allowLandingFallback);
+  }
+
+  /// Recognizes a complete address locally, including an explicit URL for a
+  /// self-hosted instance. Search can skip remote suggestions before submit.
+  static Uri? completeWebAddress(String address) {
+    final text = address.trim();
+    if (_invalidAddressCharacter.hasMatch(text)) return null;
+    if (!_httpScheme.hasMatch(text)) {
+      final match = _address.matchAsPrefix(text);
+      if (match == null || match.end != text.length) return null;
+    }
+    try {
+      final uri = _addressUri(text);
+      if (uri == null || uri.host.isEmpty || uri.port > 65535) return null;
+      return uri;
+    } on FormatException {
+      return null;
+    }
   }
 
   static ContentLink? firstInText(String text,
@@ -88,7 +107,7 @@ class ContentLink {
   }
 
   static Uri? _addressUri(String address) => Uri.tryParse(
-        _scheme.hasMatch(address)
+        _httpScheme.hasMatch(address)
             ? address
             : address.startsWith('//')
                 ? 'https:$address'
@@ -96,7 +115,9 @@ class ContentLink {
       );
 
   static ContentLink? parse(Uri uri,
-      {Server? server, bool allowLandingFallback = false}) {
+      {Server? server,
+      bool allowLandingFallback = false,
+      bool instanceMusic = false}) {
     final host = uri.host.replaceFirst(RegExp(r'\.+$'), '');
     if (!const {'http', 'https'}.contains(uri.scheme) ||
         uri.userInfo.isNotEmpty ||
@@ -130,11 +151,43 @@ class ContentLink {
       }
       // A selected instance is an identifier source, never a new server choice.
       return _parseContent(
-          uri.replace(pathSegments: parts.sublist(prefix.length)),
-          'youtube.com');
+              uri.replace(pathSegments: parts.sublist(prefix.length)),
+              'youtube.com')
+          ?._forInstanceSearch(instanceMusic);
     } on FormatException {
       return null;
     }
+  }
+
+  /// An unfamiliar site can supply an explicit content ID for confirmation.
+  /// Only canonical content paths qualify, never redirects or resolver input.
+  static ContentLink? unfamiliarInstanceContent(Uri uri,
+      {required bool music}) {
+    if (!const {'http', 'https'}.contains(uri.scheme) ||
+        uri.host.isEmpty ||
+        uri.authority.contains('@') ||
+        youtubeHosts.contains(uri.host.replaceFirst(RegExp(r'\.+$'), ''))) {
+      return null;
+    }
+    try {
+      final parts = uri.pathSegments;
+      if (parts.isEmpty ||
+          !const {'watch', 'channel', 'playlist'}.contains(parts.first)) {
+        return null;
+      }
+      return _parseContent(uri, 'youtube.com')?._forInstanceSearch(music);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  ContentLink _forInstanceSearch(bool preferMusic) {
+    // Automatic upload/liked-video playlists have a Videos destination only.
+    if (!preferMusic ||
+        (kind == ContentLinkKind.playlist && !_musicPlaylistId.hasMatch(id))) {
+      return this;
+    }
+    return ContentLink._(kind, id, true, timestamp);
   }
 
   static ContentLink? _parseContent(Uri uri, String host, [int depth = 0]) {

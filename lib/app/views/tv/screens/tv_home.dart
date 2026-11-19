@@ -9,6 +9,7 @@ import 'package:clipious/app/states/tv_home.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/views/components/flow_video_home.dart';
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
@@ -55,11 +56,13 @@ class _TvHomeContentState extends State<_TvHomeContent> {
   final popularTitle = GlobalKey(debugLabel: 'popular title');
   final subscriptionTitle = GlobalKey(debugLabel: 'subscription title');
   final trendingTitle = GlobalKey(debugLabel: 'trending title');
-  final _visitedMusicPages = <int>{};
-  final _musicMenuKeys = List.generate(3, (_) => GlobalKey());
+  final _visitedMusicPages = <MusicDestination>{};
+  final _musicMenuKeys = {
+    for (final destination in MusicDestination.values) destination: GlobalKey(),
+  };
   final _musicDestination = GlobalKey();
   final _pageStorage = PageStorageBucket();
-  int _musicPage = 0;
+  MusicDestination _musicPage = MusicDestination.home;
   bool _videosVisited = false;
   bool _switchingMode = false;
 
@@ -72,13 +75,13 @@ class _TvHomeContentState extends State<_TvHomeContent> {
     });
   }
 
-  void _openMusicPage(int index) {
+  void _openMusicPage(MusicDestination destination) {
     setState(() {
-      _musicPage = index;
-      _visitedMusicPages.add(index);
+      _musicPage = destination;
+      _visitedMusicPages.add(destination);
     });
     // Home shortcuts also leave focus on a visible control in the new page.
-    _focusMenuItem(_musicMenuKeys[index]);
+    _focusMenuItem(_musicMenuKeys[destination]!);
   }
 
   Future<void> _openMode(HomeContentMode mode) async {
@@ -89,7 +92,7 @@ class _TvHomeContentState extends State<_TvHomeContent> {
       await settings.setHomeContentMode(mode);
       if (mounted && settings.state.homeContentMode == mode) {
         _focusMenuItem(mode == HomeContentMode.music
-            ? _musicMenuKeys[_musicPage]
+            ? _musicMenuKeys[_musicPage]!
             : _musicDestination);
       }
     } catch (_) {
@@ -135,6 +138,71 @@ class _TvHomeContentState extends State<_TvHomeContent> {
       ),
     );
   }
+
+  Widget _musicMenuItem(
+      TvHomeCubit home,
+      bool expanded,
+      MusicDestination destination,
+      AppLocalizations locals,
+      ColorScheme colors) {
+    final label = destination.label(locals);
+    final selected = _musicPage == destination;
+    return Padding(
+      key: ValueKey(destination),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        child: TvButton(
+          key: ValueKey('tv-music-page-${destination.name}'),
+          autofocus: selected,
+          onFocusChanged: home.menuItemFocusChanged,
+          onPressed: (_) => _openMusicPage(destination),
+          unfocusedColor:
+              selected ? colors.secondaryContainer : Colors.transparent,
+          child: Padding(
+            key: _musicMenuKeys[destination],
+            padding: const EdgeInsets.all(8),
+            child: Row(children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Icon(destination == MusicDestination.library
+                    ? Icons.library_music
+                    : destination.icon),
+              ),
+              if (expanded) Expanded(child: MenuItemText(label)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _musicContent() => IndexedStack(
+        index: _musicPage.index,
+        children: [
+          for (final destination in MusicDestination.values)
+            ExcludeFocus(
+              excluding: destination != _musicPage,
+              child: TickerMode(
+                enabled: destination == _musicPage,
+                child: _visitedMusicPages.contains(destination)
+                    ? switch (destination) {
+                        MusicDestination.home => MusicHomePage(
+                            onSearch: () =>
+                                _openMusicPage(MusicDestination.search),
+                            onLibrary: () =>
+                                _openMusicPage(MusicDestination.library)),
+                        MusicDestination.search =>
+                          const MusicScreen(embedded: true),
+                        MusicDestination.library => const MusicLibraryPage(),
+                      }
+                    : const SizedBox.shrink(),
+              ),
+            ),
+        ],
+      );
 
   Widget _videoDestination(
       TvHomeCubit home, bool expanded, HomeDataSource source, String label,
@@ -252,6 +320,8 @@ class _TvHomeContentState extends State<_TvHomeContent> {
               final mode = context
                   .select((SettingsCubit value) => value.state.homeContentMode);
               final music = mode == HomeContentMode.music;
+              final musicOrder = context.select((SettingsCubit settings) =>
+                  settings.state.musicLayout.destinations);
               if (music) _visitedMusicPages.add(_musicPage);
               if (!music) _videosVisited = true;
               var appLayout = context
@@ -336,56 +406,9 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                             homeState,
                                             HomeContentMode.videos,
                                             locals.videos),
-                                        ...[
-                                          (locals.home, Icons.home_outlined),
-                                          (locals.search, Icons.search),
-                                          (
-                                            locals.musicLibrary,
-                                            Icons.library_music
-                                          ),
-                                        ].indexed.map((entry) => Padding(
-                                              padding: const EdgeInsets.only(
-                                                  bottom: 8),
-                                              child: Semantics(
-                                                button: true,
-                                                selected:
-                                                    _musicPage == entry.$1,
-                                                label: entry.$2.$1,
-                                                child: TvButton(
-                                                  key: ValueKey(
-                                                      'tv-music-page-${entry.$1}'),
-                                                  autofocus: entry.$1 == 0,
-                                                  onFocusChanged: homeCubit
-                                                      .menuItemFocusChanged,
-                                                  onPressed: (_) =>
-                                                      _openMusicPage(entry.$1),
-                                                  unfocusedColor: _musicPage ==
-                                                          entry.$1
-                                                      ? colors
-                                                          .secondaryContainer
-                                                      : Colors.transparent,
-                                                  child: Padding(
-                                                    key: _musicMenuKeys[
-                                                        entry.$1],
-                                                    padding:
-                                                        const EdgeInsets.all(8),
-                                                    child: Row(children: [
-                                                      Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .only(right: 8),
-                                                        child:
-                                                            Icon(entry.$2.$2),
-                                                      ),
-                                                      if (homeState)
-                                                        Expanded(
-                                                            child: MenuItemText(
-                                                                entry.$2.$1)),
-                                                    ]),
-                                                  ),
-                                                ),
-                                              ),
-                                            ))
+                                        for (final destination in musicOrder)
+                                          _musicMenuItem(homeCubit, homeState,
+                                              destination, locals, colors),
                                       ] else ...[
                                         for (final page in allowedPages) ...[
                                           if (page == HomeDataSource.search)
@@ -557,7 +580,8 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                           key:
                                               const ValueKey('tv-music-search'),
                                           tooltip: locals.search,
-                                          onPressed: () => _openMusicPage(1),
+                                          onPressed: () => _openMusicPage(
+                                              MusicDestination.search),
                                           icon: const Icon(Icons.search),
                                         ),
                                     ],
@@ -697,42 +721,7 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                             padding: const EdgeInsets.only(
                                                 right: TvOverscan.horizontal,
                                                 bottom: TvOverscan.vertical),
-                                            child: IndexedStack(
-                                              index: _musicPage,
-                                              children: [
-                                                for (var index = 0;
-                                                    index < 3;
-                                                    index++)
-                                                  ExcludeFocus(
-                                                    excluding:
-                                                        index != _musicPage,
-                                                    child: TickerMode(
-                                                      enabled:
-                                                          index == _musicPage,
-                                                      child:
-                                                          _visitedMusicPages
-                                                                  .contains(
-                                                                      index)
-                                                              ? switch (index) {
-                                                                  0 => MusicHomePage(
-                                                                      onSearch: () =>
-                                                                          _openMusicPage(
-                                                                              1),
-                                                                      onLibrary:
-                                                                          () =>
-                                                                              _openMusicPage(2)),
-                                                                  1 => const MusicScreen(
-                                                                      embedded:
-                                                                          true),
-                                                                  _ =>
-                                                                    const MusicLibraryPage(),
-                                                                }
-                                                              : const SizedBox
-                                                                  .shrink(),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
+                                            child: _musicContent(),
                                           ),
                                         ),
                                       ),

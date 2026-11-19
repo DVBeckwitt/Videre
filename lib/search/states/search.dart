@@ -21,6 +21,8 @@ const _compactResultsSetting = 'video-search-compact-results';
 class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
   final SettingsCubit settings;
   final bool showSuggestionsWithResults;
+  final Future<bool?> Function()? chooseOpen;
+  final bool Function()? isLinkSourceActive;
   final compactResults = ValueNotifier<bool>(
       db.getSettings(_compactResultsSetting)?.value == 'true');
   Timer? _suggestionTimer;
@@ -33,7 +35,9 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
       _submittedQuery.isNotEmpty && !state.showResults;
 
   SearchCubit(super.initialState, this.settings,
-      {this.showSuggestionsWithResults = false}) {
+      {this.showSuggestionsWithResults = false,
+      this.chooseOpen,
+      this.isLinkSourceActive}) {
     onInit();
   }
 
@@ -43,7 +47,9 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
     state.queryController.addListener(getSuggestions);
     getHistory();
     if (state.searchNow) {
-      search(state.queryController.value.text);
+      // A search route already specifies the action. Its query can contain a
+      // URL, but only a new submission can ask to open that URL.
+      unawaited(_submit(state.queryController.text, checkForLink: false));
     }
   }
 
@@ -112,9 +118,7 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
     emit(state.copyWith(showResults: !hideResult, suggestions: []));
     if (query.isEmpty ||
         settings.state.distractionFreeMode ||
-        ContentLink.parseAddress(query,
-                server: settings.appCubit.state.server) !=
-            null) {
+        ContentLink.completeWebAddress(query) != null) {
       return;
     }
 
@@ -137,15 +141,28 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
             settings.state.useSearchHistory ? db.getSearchHistory() : []));
   }
 
-  Future<void> search(String value) async {
+  Future<void> search(String value) => _submit(value, checkForLink: true);
+
+  Future<void> _submit(String value, {required bool checkForLink}) async {
     final query = value.trim();
     if (query.isEmpty) return;
-    if (settings.appCubit.tryOpenPastedAppLink(query)) {
+    var recordHistory = true;
+    if (checkForLink && ContentLink.completeWebAddress(query) != null) {
+      // Ignore a second IME submission while the choice dialog has focus.
+      if (isLinkSourceActive?.call() == false) return;
       _setQueryWithoutSuggestions(query);
+      final request = _suggestionRequest;
+      bool current() =>
+          !isClosed &&
+          request == _suggestionRequest &&
+          (isLinkSourceActive?.call() ?? true);
       if (state.suggestions.isNotEmpty) {
         emit(state.copyWith(suggestions: const []));
       }
-      return;
+      final action = await settings.appCubit.submitPastedAppLink(query,
+          chooseOpen: chooseOpen, isCurrent: current);
+      if (!current() || action == PastedLinkAction.handled) return;
+      if (action == PastedLinkAction.searchAsText) recordHistory = false;
     }
     _submittedQuery = query;
     if (!showSuggestionsWithResults) {
@@ -160,7 +177,7 @@ class SearchCubit<T extends SearchState> extends Cubit<SearchState> {
       suggestions: showSuggestionsWithResults ? state.suggestions : const [],
     ));
 
-    if (settings.state.useSearchHistory) {
+    if (recordHistory && settings.state.useSearchHistory) {
       final recommendations =
           RecommendationService.forProfile(db, db.profileId);
       final generation = recommendations.generation(RecommendationDomain.video);

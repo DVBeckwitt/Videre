@@ -131,6 +131,49 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('TV paste allows cancellation or searching the URL as text',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.upsertServer(
+          const Server(url: 'https://instance.example', inUse: true));
+      await app.initState();
+    });
+    await mountSearch(tester);
+    const address = 'https://other.example/playlist?list=PLmix';
+    final field = tester.widget<TvTextField>(find.byType(TvTextField));
+    Future<void> submitFromKeyboard() async {
+      final navigator = Navigator.of(tester.element(find.byType(TvTextField)));
+      unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => TvTextFieldScreen(
+          controller: field.controller,
+          textInputAction: TextInputAction.search,
+          onSubmitted: field.onSubmitted,
+        ),
+      )));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), address);
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+    }
+
+    await submitFromKeyboard();
+    expect(fakeService.requests, isEmpty);
+    final dialog = find.byType(AlertDialog);
+    final locals = MaterialLocalizations.of(tester.element(dialog));
+    await tester.tap(find.text(locals.cancelButtonLabel));
+    await tester.pumpAndSettle();
+    expect(fakeService.requests, isEmpty);
+    expect(field.controller.text, address);
+
+    await submitFromKeyboard();
+    await tester.tap(find.text('Search as text'));
+    await tester.pumpAndSettle();
+    expect(fakeService.requests.map((request) => request.query),
+        [address, address, address]);
+    expect(db.getSearchHistory(), isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('TV search ignores results completed after leaving the screen',
       (tester) async {
     fakeService.deferred = true;

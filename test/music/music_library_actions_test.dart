@@ -130,7 +130,8 @@ class _PlaybackPlayer extends TestPlayerCubit {
   }
 
   @override
-  Future<void> playOfflineVideos(List<DownloadedVideo> videos) async {
+  Future<void> playOfflineVideos(List<DownloadedVideo> videos,
+      {int startIndex = 0}) async {
     offlineCalls.add(List.of(videos));
   }
 }

@@ -22,10 +22,12 @@ import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_player.dart';
+import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_sponsor_notice.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
+import 'package:clipious/network/content_link.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -40,6 +42,7 @@ import 'package:clipious/playlists/views/components/playlist_information.dart';
 import 'package:clipious/recommendations/candidate_sources.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/search/views/components/pasted_link_dialog.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
@@ -50,6 +53,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -59,6 +63,8 @@ enum _MusicSearch { songs, artists, playlists }
 class MusicScreen extends StatefulWidget {
   final String? videoId;
   final List<MusicArtistCredit> artistCredits;
+  final List<Video> queue;
+  final int startIndex;
   final String? playlistId;
   final String? artistId;
   final String? initialQuery;
@@ -69,6 +75,8 @@ class MusicScreen extends StatefulWidget {
       {super.key,
       this.videoId,
       this.artistCredits = const [],
+      this.queue = const [],
+      this.startIndex = 0,
       this.playlistId,
       this.artistId,
       this.initialQuery,
@@ -109,9 +117,18 @@ class MusicScreen extends StatefulWidget {
   }
 
   static Future<void> playTracks(BuildContext context, List<Video> videos,
+          {PlaylistReference? reference,
+          int? startIndex,
+          Duration startAt = Duration.zero}) =>
+      _playTracks(context, videos,
+          reference: reference, startIndex: startIndex, startAt: startAt);
+
+  static Future<void> _playTracks(BuildContext context, List<Video> videos,
       {PlaylistReference? reference,
       int? startIndex,
-      Duration startAt = Duration.zero}) async {
+      required Duration startAt,
+      ModalRoute<dynamic>? songLauncher,
+      bool Function()? isCurrent}) async {
     if (videos.isEmpty) return;
     if (reference != null && reference.profileId != db.profileId) return;
     final artistRoute = ModalRoute.of(context);
@@ -122,20 +139,85 @@ class MusicScreen extends StatefulWidget {
               reference: reference,
               startIndex: startIndex ?? 0,
               startAt: startAt)));
-    } else if (reference != null) {
-      await context.read<PlayerCubit>().playPlaylist(videos,
-          reference: reference,
-          startIndex: startIndex ?? 0,
-          audio: true,
-          startAt: startAt);
-    } else {
-      await context.read<PlayerCubit>().playVideo(videos,
-          audio: true, startAt: startAt, startIndex: startIndex);
+      return;
     }
-    if (artistRoute is _TvPlayingArtistRoute &&
-        artistRoute.isCurrent &&
-        context.mounted) {
-      Navigator.of(context).pop();
+    final player = context.read<PlayerCubit>();
+    final returnRoute = songLauncher ??
+        (artistRoute is _TvPlayingArtistRoute ? artistRoute : null);
+    final before = player.state;
+    final failure =
+        returnRoute == null ? null : player.musicSelectionFailureRevision.value;
+    final playback = reference == null
+        ? player.playVideo(videos,
+            audio: true, startAt: startAt, startIndex: startIndex)
+        : player.playPlaylist(videos,
+            reference: reference,
+            startIndex: startIndex ?? 0,
+            audio: true,
+            startAt: startAt);
+    if (returnRoute == null) return playback;
+    final request = player.musicSelectionRequestRevision;
+    bool current() =>
+        context.mounted &&
+        !player.isClosed &&
+        player.musicSelectionRequestRevision == request &&
+        returnRoute.isCurrent &&
+        (isCurrent?.call() ?? true);
+    bool playable(Video video) =>
+        !video.filtered &&
+        (reference == null || (!video.filterHide && video.isUpcoming != true));
+    final assigned = reference == null
+        ? assignPlaybackQueueIds(videos.where(playable))
+        : assignPlaylistEntryIds(videos).where(playable);
+    final queue = assigned.map(playbackQueueId).toList();
+    final selected = videos.take(startIndex ?? 0).where(playable).length;
+    bool matchesQueue(PlayerState state) =>
+        listEquals(state.videos.map(playbackQueueId).toList(), queue);
+    // Replaying the active occurrence can have an identical queue throughout
+    // preparation. In that case its completed request confirms the handoff.
+    final selectedId = queue.elementAtOrNull(selected);
+    final wasCurrent =
+        before.currentQueueId == selectedId && matchesQueue(before);
+    bool popped = false;
+    void returnAfterCommit({bool completed = false}) {
+      final state = player.state;
+      // With no old song to keep playing, the newly expanded queue owns the
+      // screen even while its first decoder is still starting.
+      final firstQueue = before.currentQueueId == null &&
+          state.currentQueueId == null &&
+          !identical(state, before);
+      if (popped ||
+          returnRoute.isFirst ||
+          !current() ||
+          player.musicSelectionFailureRevision.value != failure ||
+          (wasCurrent && !completed) ||
+          selectedId == null ||
+          !state.isAudio ||
+          state.isHidden ||
+          state.isMini ||
+          (!firstQueue && state.currentQueueId != selectedId) ||
+          !matchesQueue(state)) {
+        return;
+      }
+      popped = true;
+      returnRoute.navigator!.pop();
+    }
+
+    final subscription = returnRoute.isFirst
+        ? null
+        : player.stream.listen((_) => returnAfterCommit());
+    try {
+      returnAfterCommit();
+      await playback;
+      if (current() && player.musicSelectionFailureRevision.value != failure) {
+        if (songLauncher != null) {
+          throw StateError('The selected song could not be started.');
+        }
+        return;
+      }
+      returnAfterCommit(completed: true);
+    } finally {
+      unawaited(subscription?.cancel());
     }
   }
 
@@ -160,10 +242,14 @@ class MusicScreenState extends State<MusicScreen> {
   bool _retryingSong = false;
   Object? _failure;
   bool _searched = false;
-  bool _explicitSong = false;
+  String? _submittedQuery;
+  MusicTrack? _resolvedSong;
   bool _showCommunityHidden = false;
   bool _starting = false;
+  int _playRequest = 0;
+  ({List<Video> videos, int startIndex, Duration startAt})? _tvSong;
   int _generation = 0;
+  int? _abandonedSongRequest;
   Future<void> Function()? _retry;
 
   bool get _hasBrowsePage => _collection != null || _artistPage != null;
@@ -197,6 +283,9 @@ class MusicScreenState extends State<MusicScreen> {
   @override
   void initState() {
     super.initState();
+    _loading = widget.videoId != null &&
+        widget.playlistId == null &&
+        _sameSession(context.read<AppCubit>().state);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _openInitial();
     });
@@ -206,6 +295,8 @@ class MusicScreenState extends State<MusicScreen> {
   void didUpdateWidget(MusicScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoId != widget.videoId ||
+        oldWidget.startIndex != widget.startIndex ||
+        !listEquals(oldWidget.queue, widget.queue) ||
         oldWidget.playlistId != widget.playlistId ||
         oldWidget.artistId != widget.artistId ||
         oldWidget.startAt != widget.startAt ||
@@ -213,6 +304,8 @@ class MusicScreenState extends State<MusicScreen> {
       // Clearing every route argument has no replacement request to invalidate
       // the old one. Revoke it before opening the new destination either way.
       _generation++;
+      _tvSong = null;
+      _resolvedSong = null;
       _loading = false;
       _retryingSong = false;
       _failure = null;
@@ -249,9 +342,11 @@ class MusicScreenState extends State<MusicScreen> {
       _retryingSong = false;
       _failure = null;
       _searched = false;
-      _explicitSong = false;
+      _submittedQuery = null;
+      _resolvedSong = null;
       _showCommunityHidden = false;
       _starting = false;
+      _tvSong = null;
       _songs = [];
       _artists = [];
       _playlists = [];
@@ -305,14 +400,27 @@ class MusicScreenState extends State<MusicScreen> {
     }
   }
 
-  Future<void> _submit({bool learn = false}) async {
-    final query = _search.text.trim();
+  Future<void> _submit({bool learn = false, String? retryQuery}) async {
+    final query = retryQuery ?? _search.text.trim();
     if (query.isEmpty) return;
     final app = context.read<AppCubit>();
     final session = app.state;
     if (!_sameSession(session)) return;
     FocusManager.instance.primaryFocus?.unfocus();
-    if (learn && app.tryOpenPastedAppLink(query)) return;
+    if (learn && ContentLink.completeWebAddress(query) != null) {
+      if (!isPastedLinkSourceActive(context)) return;
+      final generation = _generation;
+      bool current() =>
+          _active(generation, session) &&
+          _search.text.trim() == query &&
+          isPastedLinkSourceActive(context);
+      final action = await app.submitPastedAppLink(query,
+          music: true,
+          chooseOpen: () => choosePastedLinkAction(context),
+          isCurrent: current);
+      if (!current() || action == PastedLinkAction.handled) return;
+      if (action == PastedLinkAction.searchAsText) learn = false;
+    }
     // Only an explicit text-field/button submission is a preference signal.
     // Initial routes, filter changes and retries reuse the query without
     // treating it as another search by the person.
@@ -320,7 +428,7 @@ class MusicScreenState extends State<MusicScreen> {
     final type = _type;
     setState(() {
       _searched = true;
-      _explicitSong = false;
+      _submittedQuery = query;
       _showCommunityHidden = false;
       _collection = null;
       _artistPage = null;
@@ -342,7 +450,7 @@ class MusicScreenState extends State<MusicScreen> {
           setState(() => _playlists = playlists);
         }
       }
-    }, _submit);
+    }, () => _submit(retryQuery: query));
   }
 
   Future<void> _learnSearch(String query, AppState session) async {
@@ -395,12 +503,21 @@ class MusicScreenState extends State<MusicScreen> {
   }
 
   Future<void> _openSong(String id, {Duration startAt = Duration.zero}) async {
+    final route = ModalRoute.of(context);
     await _run((generation, session) async {
       final owner = db;
-      bool current() =>
-          identical(owner, db) &&
-          owner.profileId == session.profileId &&
-          _active(generation, session);
+      bool current() {
+        if (!identical(owner, db) ||
+            owner.profileId != session.profileId ||
+            !_active(generation, session) ||
+            _abandonedSongRequest == generation) {
+          return false;
+        }
+        if (route == null || route.isCurrent) return true;
+        if (!route.isFirst) _abandonedSongRequest = generation;
+        return false;
+      }
+
       try {
         unawaited(context
             .read<PlayerCubit>()
@@ -432,16 +549,26 @@ class MusicScreenState extends State<MusicScreen> {
       if (!current()) return;
       setState(() {
         _retryingSong = false;
-        _songs = [song];
-        _type = _MusicSearch.songs;
-        _searched = true;
-        _explicitSong = true;
-        _showCommunityHidden = false;
-        _collection = null;
-        _artistPage = null;
-        _browseHistory.clear();
+        _resolvedSong = song;
       });
-      await _play([song], loadedVideo: song.playbackVideo, startAt: startAt);
+      final metadata = song.toVideo();
+      final loaded = song.playbackVideo;
+      final resolved = loaded != null && loaded.videoId == song.videoId
+          ? loaded.preservingMusicMetadataFrom(metadata)
+          : metadata;
+      final index = widget.startIndex;
+      final fromShelf = index >= 0 &&
+          index < widget.queue.length &&
+          widget.queue[index].videoId == song.videoId;
+      final videos = fromShelf ? List.of(widget.queue) : [resolved];
+      if (fromShelf) {
+        videos[index] =
+            resolved.copyWith(queueEntryId: videos[index].queueEntryId);
+      }
+      await _playVideos(videos,
+          startIndex: fromShelf ? index : null,
+          startAt: startAt,
+          songLauncher: route);
     }, () => _openSong(id, startAt: startAt));
   }
 
@@ -491,30 +618,42 @@ class MusicScreenState extends State<MusicScreen> {
   }
 
   Future<void> _play(List<MusicTrack> tracks,
+          {PlaylistReference? reference,
+          int? startIndex,
+          Duration startAt = Duration.zero}) =>
+      _playVideos(tracks.map((track) => track.toVideo()).toList(),
+          reference: reference, startIndex: startIndex, startAt: startAt);
+
+  Future<void> _playVideos(List<Video> videos,
       {PlaylistReference? reference,
       int? startIndex,
       Duration startAt = Duration.zero,
-      Video? loadedVideo}) async {
+      ModalRoute<dynamic>? songLauncher}) async {
     final session = context.read<AppCubit>().state;
-    if (_starting || tracks.isEmpty || !_sameSession(session)) return;
-    final videos = tracks.map((track) => track.toVideo()).toList();
-    if (loadedVideo != null &&
-        videos.length == 1 &&
-        loadedVideo.videoId == videos.single.videoId) {
-      videos[0] = loadedVideo.preservingMusicMetadataFrom(videos.single);
+    if (videos.isEmpty || !_sameSession(session)) return;
+    if (songLauncher != null && isTv) {
+      // This route owns the TV player and returns directly to its caller.
+      setState(() => _tvSong =
+          (videos: videos, startIndex: startIndex ?? 0, startAt: startAt));
+      return;
     }
-    setState(() => _starting = true);
+    final request = ++_playRequest;
+    final generation = _generation;
+    bool current() => request == _playRequest && _active(generation, session);
     try {
-      await MusicScreen.playTracks(context, videos,
-          reference: reference, startIndex: startIndex, startAt: startAt);
+      await MusicScreen._playTracks(context, videos,
+          reference: reference,
+          startIndex: startIndex,
+          startAt: startAt,
+          songLauncher: songLauncher,
+          isCurrent: current);
     } catch (_) {
-      if (!mounted) return;
-      if (_sameSession(session)) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
+      if (!mounted || !current() || ModalRoute.isCurrentOf(context) == false) {
+        return;
       }
-    } finally {
-      if (_sameSession(session)) setState(() => _starting = false);
+      if (songLauncher != null) rethrow;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
     }
   }
 
@@ -647,14 +786,17 @@ class MusicScreenState extends State<MusicScreen> {
     );
   }
 
-  Widget _song(MusicTrack track,
-      {int? index,
-      List<MusicTrack>? queue,
+  Widget _song(List<MusicTrack> queue, int index,
+      {bool numbered = true,
       PlaylistReference? reference,
       List<CommunityMatch> matches = const []}) {
+    final track = queue[index];
+    final row = numbered ? '$index' : 'search-$index';
+    Future<void> play() =>
+        _play(queue, reference: reference, startIndex: index);
     return ListTile(
-      key: ValueKey('music-song-${index ?? 'search'}-${track.videoId}'),
-      leading: index == null
+      key: ValueKey('music-song-$row-${track.videoId}'),
+      leading: !numbered
           ? SizedBox.square(
               dimension: 56,
               child: CommunityMusicArtwork(
@@ -674,44 +816,24 @@ class MusicScreenState extends State<MusicScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _artistByline(track.artists, track.artistCredits),
-          if (index == null && track.albumTitle != null)
+          if (!numbered && track.albumTitle != null)
             Text(track.albumTitle!,
                 maxLines: 1, overflow: TextOverflow.ellipsis),
           if (matches.isNotEmpty) CommunityMatchLabels(matches: matches),
         ],
       ),
-      trailing: MusicLibraryActions(
-          videos: [track.toVideo()],
-          onPlay: () => reference != null && queue != null && index != null
-              ? _play(queue, reference: reference, startIndex: index)
-              : _play(index == null || queue == null
-                  ? [track]
-                  : queue.skip(index).toList())),
-      onLongPress: _starting
-          ? null
-          : () => MusicLibraryActions.showSongMenu(context, track.toVideo(),
-              onPlay: () => reference != null && queue != null && index != null
-                  ? _play(queue, reference: reference, startIndex: index)
-                  : _play(index == null || queue == null
-                      ? [track]
-                      : queue.skip(index).toList())),
-      onTap: _starting
-          ? null
-          : () => reference != null && queue != null && index != null
-              ? _play(queue, reference: reference, startIndex: index)
-              : _play(index == null || queue == null
-                  ? [track]
-                  : queue.skip(index).toList()),
+      trailing: MusicLibraryActions(videos: [track.toVideo()], onPlay: play),
+      onLongPress: () => MusicLibraryActions.showSongMenu(
+          context, track.toVideo(),
+          onPlay: play),
+      onTap: play,
     );
   }
 
   Widget _results() {
     final locals = AppLocalizations.of(context)!;
     if (_loading) {
-      return Center(
-          child: _retryingSong
-              ? const VideoRetryNotice()
-              : const CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator());
     }
     if (_failure != null) {
       return Center(
@@ -751,9 +873,10 @@ class MusicScreenState extends State<MusicScreen> {
       return ListenableBuilder(
         listenable: communityFilters.changes,
         builder: (_, __) {
-          final results = musicTrackResults(_songs,
-              showHidden: _explicitSong || _showCommunityHidden);
-          final hasNotice = !_explicitSong && results.hidden > 0;
+          final results =
+              musicTrackResults(_songs, showHidden: _showCommunityHidden);
+          final queue = [for (final (track, _) in results.visible) track];
+          final hasNotice = results.hidden > 0;
           return ListView.builder(
             itemCount: results.visible.length + (hasNotice ? 1 : 0),
             itemBuilder: (_, index) {
@@ -765,9 +888,9 @@ class MusicScreenState extends State<MusicScreen> {
                       () => _showCommunityHidden = !_showCommunityHidden),
                 );
               }
-              final (track, matches) =
-                  results.visible[index - (hasNotice ? 1 : 0)];
-              return _song(track, matches: matches);
+              final trackIndex = index - (hasNotice ? 1 : 0);
+              return _song(queue, trackIndex,
+                  numbered: false, matches: results.visible[trackIndex].$2);
             },
           );
         },
@@ -836,7 +959,7 @@ class MusicScreenState extends State<MusicScreen> {
           const SizedBox(height: 12),
           FilledButton.icon(
               key: const ValueKey('music-play-all'),
-              onPressed: _starting || collection.tracks.isEmpty
+              onPressed: collection.tracks.isEmpty
                   ? null
                   : () => _play(collection.tracks, reference: reference),
               icon: const Icon(Icons.play_arrow),
@@ -862,8 +985,7 @@ class MusicScreenState extends State<MusicScreen> {
             padding: const EdgeInsets.all(24),
             child: Text(locals.musicEmptyCollection)),
       for (var i = 0; i < collection.tracks.length; i++)
-        _song(collection.tracks[i],
-            index: i, queue: collection.tracks, reference: reference),
+        _song(collection.tracks, i, reference: reference),
     ]);
   }
 
@@ -899,13 +1021,13 @@ class MusicScreenState extends State<MusicScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: FilledButton.icon(
                 key: const ValueKey('music-play-artist-songs'),
-                onPressed: _starting ? null : () => _play(artistPage.songs),
+                onPressed: () => _play(artistPage.songs),
                 icon: const Icon(Icons.play_arrow),
                 label: Text(locals.musicPlayAll)),
           ),
         ),
         for (var i = 0; i < artistPage.songs.length; i++)
-          _song(artistPage.songs[i], index: i, queue: artistPage.songs),
+          _song(artistPage.songs, i),
       ],
       if (artistPage.songs.isEmpty)
         Padding(
@@ -927,10 +1049,27 @@ class MusicScreenState extends State<MusicScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final locals = AppLocalizations.of(context)!;
-    final colors = Theme.of(context).colorScheme;
-    final searchOutline = OutlineInputBorder(
-        borderRadius: BorderRadius.circular(32), borderSide: BorderSide.none);
+    // A newer page can cover a launcher during lookup. Wait until that page
+    // leaves before dismissing the abandoned launcher, so its Back destination
+    // is the original browsing screen and its own navigation stays intact.
+    if (widget.videoId != null && widget.playlistId == null) {
+      final route = ModalRoute.of(context);
+      if (route != null && route.isActive && !route.isFirst) {
+        if (!route.isCurrent && _loading && _resolvedSong == null) {
+          _abandonedSongRequest = _generation;
+        } else if (route.isCurrent && _abandonedSongRequest == _generation) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted &&
+                _abandonedSongRequest == _generation &&
+                route.isCurrent &&
+                !route.isFirst) {
+              _abandonedSongRequest = null;
+              route.navigator!.pop();
+            }
+          });
+        }
+      }
+    }
     return BlocListener<AppCubit, AppState>(
       listenWhen: (before, after) =>
           before.profileId != after.profileId ||
@@ -939,114 +1078,181 @@ class MusicScreenState extends State<MusicScreen> {
           (!before.globalLoading && after.globalLoading) ||
           (!before.sessionRecoveryRequired && after.sessionRecoveryRequired),
       listener: (context, state) => _clearForSession(),
-      child: PopScope(
-        canPop: !TickerMode.of(context) ||
-            (_shortcutBack == null && (!_hasBrowsePage || _returnToOrigin)),
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop || !TickerMode.of(context)) return;
-          if (_hasBrowsePage && !_returnToOrigin) {
-            _backToSearch();
-          } else {
-            _shortcutBack?.call();
-          }
+      child: switch (_tvSong) {
+        final song? => _MusicTvPlayer(
+            videos: song.videos,
+            startIndex: song.startIndex,
+            startAt: song.startAt),
+        null when widget.videoId != null && widget.playlistId == null =>
+          _openingPlayer(context),
+        null => _browser(context),
+      },
+    );
+  }
+
+  Widget _openingPlayer(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final song = _resolvedSong;
+    final retry = _retry;
+    final Widget body;
+    if (_loading) {
+      body = _retryingSong
+          ? const VideoRetryNotice()
+          : const CircularProgressIndicator();
+    } else if (_failure != null && retry != null) {
+      body = _MusicPlaybackFailure(onRetry: retry);
+    } else if (song != null) {
+      // The expanded player normally owns the screen by now. An interrupted
+      // queue admission can be tried again without leaving the song.
+      body = Column(mainAxisSize: MainAxisSize.min, children: [
+        Text(song.title, textAlign: TextAlign.center),
+        if (song.artists.isNotEmpty)
+          Text(song.artists.join(', '), textAlign: TextAlign.center),
+        const SizedBox(height: 16),
+        FilledButton.icon(
+            autofocus: isTv,
+            onPressed: () {
+              final player = context.read<PlayerCubit>();
+              if (!player.state.isHidden &&
+                  player.state.isAudio &&
+                  player.state.currentlyPlaying?.videoId == song.videoId) {
+                player.showBigPlayer();
+              } else {
+                retry?.call();
+              }
+            },
+            icon: const Icon(Icons.play_arrow),
+            label: Text(locals.musicPlay)),
+      ]);
+    } else {
+      body = Text(locals.musicPlaybackError, textAlign: TextAlign.center);
+    }
+    return MusicPlayerOpening(
+      onBack: ModalRoute.of(context)?.canPop == true
+          ? () => Navigator.of(context).maybePop()
+          : null,
+      child: body,
+    );
+  }
+
+  Widget _browser(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final colors = Theme.of(context).colorScheme;
+    final searchOutline = OutlineInputBorder(
+        borderRadius: BorderRadius.circular(32), borderSide: BorderSide.none);
+    return PopScope(
+      canPop: !TickerMode.of(context) ||
+          (_shortcutBack == null && (!_hasBrowsePage || _returnToOrigin)),
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || !TickerMode.of(context)) return;
+        if (_hasBrowsePage && !_returnToOrigin) {
+          _backToSearch();
+        } else {
+          _shortcutBack?.call();
+        }
+      },
+      child: Shortcuts(
+        shortcuts: {
+          LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
         },
-        child: Shortcuts(
-          shortcuts: {
-            LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
-          },
-          child: Scaffold(
-            appBar: widget.embedded && !_hasBrowsePage
-                ? null
-                : AppBar(
-                    title: Text(locals.music),
-                    leading: !_hasBrowsePage
-                        ? null
-                        : IconButton(
-                            tooltip: _browseHistory.isEmpty && !_returnToOrigin
-                                ? locals.musicBackToSearch
-                                : MaterialLocalizations.of(context)
-                                    .backButtonTooltip,
-                            onPressed: () {
-                              if (_returnToOrigin) {
-                                Navigator.of(context).maybePop();
-                              } else {
-                                _backToSearch();
-                              }
-                            },
-                            icon: const Icon(Icons.arrow_back)),
+        child: Scaffold(
+          appBar: widget.embedded && !_hasBrowsePage
+              ? null
+              : AppBar(
+                  title: Text(locals.music),
+                  leading: !_hasBrowsePage
+                      ? null
+                      : IconButton(
+                          tooltip: _browseHistory.isEmpty && !_returnToOrigin
+                              ? locals.musicBackToSearch
+                              : MaterialLocalizations.of(context)
+                                  .backButtonTooltip,
+                          onPressed: () {
+                            if (_returnToOrigin) {
+                              Navigator.of(context).maybePop();
+                            } else {
+                              _backToSearch();
+                            }
+                          },
+                          icon: const Icon(Icons.arrow_back)),
+                ),
+          body: SafeArea(
+            child: Padding(
+              padding: isTv
+                  ? EdgeInsets.symmetric(
+                      horizontal: TvOverscan.horizontal,
+                      vertical: TvOverscan.vertical)
+                  : EdgeInsets.zero,
+              child: Column(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  child: TextField(
+                    key: const ValueKey('music-search'),
+                    controller: _search,
+                    focusNode: _queryFocus,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => _submit(learn: true),
+                    decoration: InputDecoration(
+                        hintText: locals.musicInvidiousSearchHint,
+                        filled: true,
+                        fillColor: colors.surfaceContainerHigh,
+                        border: searchOutline,
+                        focusedBorder: searchOutline.copyWith(
+                            borderSide: BorderSide(color: colors.primary)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
+                        suffixIcon: IconButton(
+                            autofocus: isTv,
+                            tooltip: locals.search,
+                            onPressed: () => _submit(learn: true),
+                            icon: const Icon(Icons.search))),
                   ),
-            body: SafeArea(
-              child: Padding(
-                padding: isTv
-                    ? EdgeInsets.symmetric(
-                        horizontal: TvOverscan.horizontal,
-                        vertical: TvOverscan.vertical)
-                    : EdgeInsets.zero,
-                child: Column(children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                    child: TextField(
-                      key: const ValueKey('music-search'),
-                      controller: _search,
-                      focusNode: _queryFocus,
-                      textInputAction: TextInputAction.search,
-                      onSubmitted: (_) => _submit(learn: true),
-                      decoration: InputDecoration(
-                          hintText: locals.musicInvidiousSearchHint,
-                          filled: true,
-                          fillColor: colors.surfaceContainerHigh,
-                          border: searchOutline,
-                          focusedBorder: searchOutline.copyWith(
-                              borderSide: BorderSide(color: colors.primary)),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 14),
-                          suffixIcon: IconButton(
-                              autofocus: isTv,
-                              tooltip: locals.search,
-                              onPressed: () => _submit(learn: true),
-                              icon: const Icon(Icons.search))),
-                    ),
+                ),
+                if (isTv)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: _resumeAction()),
+                  )
+                else
+                  _resumeAction(),
+                if (!_hasBrowsePage)
+                  SingleChildScrollView(
+                    key: const ValueKey('music-search-filters'),
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(children: [
+                      for (final type in _MusicSearch.values)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                              label: Text(_searchLabel(type, locals)),
+                              selected: _type == type,
+                              backgroundColor: colors.surfaceContainerHigh,
+                              selectedColor: colors.secondaryContainer,
+                              side: BorderSide.none,
+                              shape: const StadiumBorder(),
+                              showCheckmark: false,
+                              onSelected: (_) {
+                                if (_type == type) return;
+                                setState(() => _type = type);
+                                // A pasted address needs a submission before
+                                // changing result types can search its text.
+                                final query = _search.text.trim();
+                                if (query.isNotEmpty &&
+                                    (query == _submittedQuery ||
+                                        ContentLink.completeWebAddress(query) ==
+                                            null)) {
+                                  _submit();
+                                }
+                              }),
+                        ),
+                    ]),
                   ),
-                  if (isTv)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: _resumeAction()),
-                    )
-                  else
-                    _resumeAction(),
-                  if (!_hasBrowsePage)
-                    SingleChildScrollView(
-                      key: const ValueKey('music-search-filters'),
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Row(children: [
-                        for (final type in _MusicSearch.values)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ChoiceChip(
-                                label: Text(_searchLabel(type, locals)),
-                                selected: _type == type,
-                                backgroundColor: colors.surfaceContainerHigh,
-                                selectedColor: colors.secondaryContainer,
-                                side: BorderSide.none,
-                                shape: const StadiumBorder(),
-                                showCheckmark: false,
-                                onSelected: (_) {
-                                  if (_type == type) return;
-                                  setState(() => _type = type);
-                                  if (_search.text.trim().isNotEmpty) {
-                                    _submit();
-                                  }
-                                }),
-                          ),
-                      ]),
-                    ),
-                  const SizedBox(height: 8),
-                  Expanded(child: _results()),
-                ]),
-              ),
+                const SizedBox(height: 8),
+                Expanded(child: _results()),
+              ]),
             ),
           ),
         ),
@@ -1093,7 +1299,8 @@ class _MusicTvPlayer extends StatelessWidget {
           playlistReference: reference,
           startIndex: startIndex,
           playlistAudio: true),
-      child: Shortcuts(
+      child: MusicSelectionFeedback(
+          child: Shortcuts(
         shortcuts: {
           LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
         },
@@ -1154,7 +1361,7 @@ class _MusicTvPlayer extends StatelessWidget {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 }

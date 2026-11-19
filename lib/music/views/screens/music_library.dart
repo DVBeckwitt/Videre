@@ -75,11 +75,19 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   void _error() => ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
 
-  Future<void> _openBookmark(MusicLibraryEntry entry) async {
+  Future<void> _openBookmark(
+      MusicLibraryEntry entry, List<_LibraryItem> items) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent || entry.kind == MusicLibraryKind.album) return;
     if (entry.kind == MusicLibraryKind.song) {
-      await _play([entry.toVideo()]);
+      final songs = [
+        for (final item in items)
+          if (item.bookmark case final song?
+              when song.kind == MusicLibraryKind.song)
+            song.toVideo(),
+      ];
+      final index = songs.indexWhere((song) => song.videoId == entry.id);
+      if (index >= 0) await _play(songs, startIndex: index);
       return;
     }
     await Navigator.of(context).push<void>(MaterialPageRoute(
@@ -124,7 +132,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     }
   }
 
-  Widget _bookmarkActions(MusicLibraryEntry entry) {
+  Widget _bookmarkActions(
+      MusicLibraryEntry entry, Future<void> Function() onOpen) {
     final locals = AppLocalizations.of(context)!;
     final removeLabel = switch (entry.kind) {
       MusicLibraryKind.song => locals.musicRemoveSong,
@@ -133,7 +142,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       MusicLibraryKind.playlist => locals.musicRemovePlaylist,
     };
     return entry.kind == MusicLibraryKind.song
-        ? MusicLibraryActions(videos: [entry.toVideo()])
+        ? MusicLibraryActions(videos: [entry.toVideo()], onPlay: onOpen)
         : IconButton(
             tooltip: removeLabel,
             onPressed: () => _removeBookmark(entry),
@@ -149,7 +158,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         fallback: fallback);
   }
 
-  Widget _bookmark(MusicLibraryEntry entry) {
+  Widget _bookmark(MusicLibraryEntry entry, Future<void> Function() onOpen) {
     return ListTile(
         key: ValueKey('music-saved-${entry.kind.name}-${entry.id}'),
         leading: entry.kind == MusicLibraryKind.artist
@@ -167,11 +176,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ? null
             : Text(entry.subtitle,
                 maxLines: 1, overflow: TextOverflow.ellipsis),
-        trailing: _bookmarkActions(entry),
+        trailing: _bookmarkActions(entry, onOpen),
         onLongPress: entry.kind != MusicLibraryKind.song
             ? null
-            : () => MusicLibraryActions.showSongMenu(context, entry.toVideo()),
-        onTap: () => _openBookmark(entry));
+            : () => MusicLibraryActions.showSongMenu(context, entry.toVideo(),
+                onPlay: onOpen),
+        onTap: onOpen);
   }
 
   String _label(_LibraryFilter filter, AppLocalizations locals) =>
@@ -408,11 +418,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           ? AppLocalizations.of(context)!.watchLater
           : item.playlist?.title ?? item.bookmark!.title;
 
-  void _openItem(_LibraryItem item) {
+  Future<void> _openItem(_LibraryItem item, List<_LibraryItem> items) async {
     if (item.playlist case final playlist?) {
       setState(() => _playlistId = playlist.playlistId);
     } else {
-      _openBookmark(item.bookmark!);
+      await _openBookmark(item.bookmark!, items);
     }
   }
 
@@ -461,14 +471,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   onTap: () => _selectFilter(shortcut));
             }
             final item = items[index - shortcuts.length];
-            if (item.bookmark case final bookmark?) return _bookmark(bookmark);
+            if (item.bookmark case final bookmark?) {
+              return _bookmark(bookmark, () => _openItem(item, items));
+            }
             return ListTile(
                 key: _itemKey(item),
                 leading: const Icon(Icons.queue_music),
                 title: Text(_itemTitle(item)),
                 subtitle: Text(AppLocalizations.of(context)!.onDevice),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => _openItem(item));
+                onTap: () => _openItem(item, items));
           });
     }
     final savedCovers = library.coversBySongId;
@@ -504,7 +516,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               mainAxisExtent: width + titleHeight * 2 + subtitleHeight + 10),
           itemBuilder: (_, index) => index < shortcuts.length
               ? _gridShortcut(shortcuts[index], locals)
-              : _gridItem(items[index - shortcuts.length], savedCovers));
+              : _gridItem(items[index - shortcuts.length], savedCovers,
+                  () => _openItem(items[index - shortcuts.length], items)));
     });
   }
 
@@ -523,7 +536,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   }
 
   Widget _gridItem(
-      _LibraryItem item, Map<String, List<ImageObject>> savedCovers) {
+      _LibraryItem item,
+      Map<String, List<ImageObject>> savedCovers,
+      Future<void> Function() onOpen) {
     final entry = item.bookmark;
     final song = item.playlist?.videos.firstOrNull;
     final music = song?.musicMetadata;
@@ -563,12 +578,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   images: images,
                   instanceOnly: true,
                   decoration: const BoxDecoration())),
-      action: entry == null ? null : _bookmarkActions(entry),
+      action: entry == null ? null : _bookmarkActions(entry, onOpen),
       plays: plays,
-      onOpen: () => _openItem(item),
+      onOpen: onOpen,
       onLongPress: entry?.kind != MusicLibraryKind.song
           ? null
-          : () => MusicLibraryActions.showSongMenu(context, entry!.toVideo()),
+          : () => MusicLibraryActions.showSongMenu(context, entry!.toVideo(),
+              onPlay: onOpen),
     );
   }
 
@@ -678,6 +694,13 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 video.musicMetadata != null)
             .toList();
         if (videos.isEmpty) return _empty();
+        Future<void> playFrom(DownloadedVideo selected) =>
+            _downloadAction(selected, (_) {
+              final completed =
+                  videos.where((video) => video.downloadComplete).toList();
+              return context.read<PlayerCubit>().playOfflineVideos(completed,
+                  startIndex: completed.indexOf(selected));
+            });
         return ListView.builder(
             itemCount: videos.length,
             itemBuilder: (context, index) {
@@ -720,15 +743,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                 videoThumbnails:
                                     video.musicMetadata!.thumbnails),
                             downloads: [video],
-                            onPlay: () => _downloadAction(
-                                video,
-                                (_) => context
-                                    .read<PlayerCubit>()
-                                    .playOfflineVideos([video]))),
-                    onTap: !video.downloadComplete
-                        ? null
-                        : () => _downloadAction(
-                            video, (_) => context.read<PlayerCubit>().playOfflineVideos([video])),
+                            onPlay: () => playFrom(video)),
+                    onTap:
+                        !video.downloadComplete ? null : () => playFrom(video),
                     trailing: video.downloadComplete
                         ? MusicDownloadExportAction(video: video, compact: true)
                         : IconButton(
@@ -742,7 +759,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                 : paused
                                     ? Icons.play_arrow
                                     : Icons.pause),
-                            onPressed: () => _downloadAction(video, (manager) => retry || paused ? manager.retryDownload(video) : manager.pauseDownload(video)))),
+                            onPressed: () => _downloadAction(
+                                video,
+                                (manager) => retry || paused
+                                    ? manager.retryDownload(video)
+                                    : manager.pauseDownload(video)))),
                 if (!video.downloadComplete && progress != null && !paused)
                   LinearProgressIndicator(
                       value: progress.total > 0

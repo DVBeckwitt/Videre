@@ -90,6 +90,7 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
             'retryDashTrackFromLoadId': dataSource.retryDashTrackFromLoadId,
           if (dataSource.fastDashStartupFallback)
             'fastDashStartupFallback': true,
+          if (dataSource.videoOnly) 'videoOnly': true,
           'headers': dataSource.headers,
           'useCache': dataSource.useCache,
           'maxCacheSize': dataSource.maxCacheSize,

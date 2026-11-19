@@ -9,6 +9,7 @@ import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/podcasts/views/podcast_player_controls.dart';
 
 import '../../../player/states/player.dart';
+import '../../../music/views/components/music_selection_feedback.dart';
 import '../../../player/views/components/mini_player_aware.dart';
 import '../../../utils.dart';
 import '../../states/app.dart';
@@ -74,6 +75,7 @@ class MainScreen extends StatelessWidget {
                           child: PodcastPlaybackBar(controller: podcasts))),
                 if (!globalLoading && !podcasts.active)
                   const Positioned.fill(child: PlayerRetryIndicator()),
+                const MusicSelectionFeedback(),
                 if (globalLoading)
                   Positioned(
                       child: Container(

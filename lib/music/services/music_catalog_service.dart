@@ -7,9 +7,20 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/videos/models/video.dart';
 
 MusicCatalogService musicCatalogService = InvidiousMusicCatalogService();
+
+const musicExploreGenres = ['pop', 'jazz', 'classical', 'electronic'];
+
+bool musicDiscoveryMustStop(Object error) =>
+    error is InvidiousServiceError &&
+    (error.isRateLimited ||
+        error.retryAfterIsInvalid ||
+        (error.retryAfter ?? Duration.zero) > Duration.zero ||
+        error.isAuthenticationFailure ||
+        error.isGatewayAccessFailure);
 
 class MusicCatalogException implements Exception {
   final String message;
@@ -44,12 +55,22 @@ abstract class MusicCatalogService {
   /// Bounded discovery verified against full Invidious video metadata. An
   /// artist seed narrows the search and excludes the profile's saved songs.
   /// Callers can revoke the request when its screen or session is replaced.
+  /// [onInstanceFailure] stops further batches while this one can still
+  /// return recordings verified before the instance rejected a request.
   Future<List<MusicTrack>> getDiscoverySongs(
-          {String? artist, bool Function()? isCurrent}) async =>
+          {String? artist,
+          bool Function()? isCurrent,
+          void Function(InvidiousServiceError)? onInstanceFailure}) async =>
       throw const MusicCatalogUnsupported();
 
-  /// Fetch music related to up to three learned recordings in one explicit
-  /// request. The catalog verifies each returned song against full metadata.
+  /// Finds verified recordings for one of the Music Home Explore genres.
+  Future<List<MusicTrack>> getGenreSongs(String genre,
+          {bool Function()? isCurrent,
+          void Function(InvidiousServiceError)? onInstanceFailure}) async =>
+      throw const MusicCatalogUnsupported();
+
+  /// Fetches one batch related to up to three learned recordings. The catalog
+  /// verifies each returned song against full metadata.
   Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
           {bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
@@ -63,6 +84,12 @@ abstract class MusicCatalogService {
   Future<MusicTrack> getSong(String videoId,
           {VideoLoadObserver? loadObserver}) async =>
       throw const MusicCatalogUnsupported();
+
+  /// A visual counterpart for the active online recording, if its selected
+  /// instance supplies one. Local files and downloaded recordings stay local.
+  Future<Video?> findMusicVideo(Video song,
+          {required bool Function() isCurrent}) async =>
+      null;
 
   /// Loads display details for explicitly selected saved IDs. Reports null
   /// for an unavailable recording and stops on connection-wide failures.

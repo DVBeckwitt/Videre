@@ -159,7 +159,7 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 result.success(null)
             }
             PLAY_METHOD -> {
-                setupNotification(player)
+                if (!player.videoOnly) setupNotification(player)
                 player.play()
                 result.success(null)
             }
@@ -221,6 +221,7 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
                 if (mixWitOthers != null) {
                     player.setMixWithOthers(mixWitOthers)
                 }
+                result.success(null)
             }
             DISPOSE_METHOD -> {
                 dispose(player, textureId)
@@ -237,6 +238,7 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
     ) {
         val dataSource = call.argument<Map<String, Any?>>(DATA_SOURCE_PARAMETER)!!
         dataSources.put(getTextureId(player)!!, dataSource)
+        player.videoOnly = dataSource["videoOnly"] == true
         val key = getParameter(dataSource, KEY_PARAMETER, "")
         val headers: Map<String, String> = getParameter(dataSource, HEADERS_PARAMETER, HashMap())
         val overriddenDuration: Number = getParameter(dataSource, OVERRIDDEN_DURATION_PARAMETER, 0)
@@ -454,7 +456,7 @@ class RiverPlayerPlugin : FlutterPlugin, ActivityAware, MethodCallHandler {
         player.dispose()
         videoPlayers.remove(textureId)
         dataSources.remove(textureId)
-        stopPipHandler()
+        if (!player.videoOnly) stopPipHandler()
     }
 
     private fun stopPipHandler() {

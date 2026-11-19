@@ -11,17 +11,40 @@ bottom **Search** button opens Music Search and focuses its search field.
 From a video tab the same button opens video search. Music Search finds songs,
 channels, and public playlists through the selected Invidious instance.
 
-To move **Music** or **Search** on a phone, open **Settings → Browsing →
-Customize app sections**. You can also choose Music as your startup tab.
+To move **Music** or **Search** in the main phone navigation, open **Settings →
+Browsing → Customize app sections**. You can also choose Music as your startup tab.
+To change the buttons inside Music, open **Customize Music layout** in Browsing
+settings. Reorder **Home**, **Search**, and **Library**, and choose which Music
+Home shortcuts appear and in what order. Each profile keeps its own layout.
+On TV, open the same editor from **Settings** and use a button’s menu to move
+it earlier or later with the remote.
+
+Paste a song, artist channel, or public Music playlist link from a saved
+Invidious instance into Music Search to open it in Music. A timestamped watch
+link starts at that position. Video Search opens the same links in Videos.
+For a recognized content ID on an unfamiliar host, choose **Open on current
+instance** to open it through your selected server, or **Search as text** to
+search for the address.
 
 ## Home and Search
 
-**Home** centers on saved music, with suggestions based on saved artists, genre
-searches, and shortcuts to **Search** and **Library**. Suggestions open explicit
-Invidious searches; opening Home does not automatically fetch a general feed.
-On a recommended song in **Quick Picks**, tap **⋮** for **Play next**, **Add to
-queue**, and recommendation feedback such as **More like this**. Holding a song
-also opens its actions.
+**Home** shows saved music, listening history, and recommendations. While Music
+Home is open, Videre asks your selected Invidious instance for Discover songs
+and prepares selections for saved artists and genres. The **Discover music**
+shortcut appears when it can take you to songs. Artist and genre choices
+appear as their tracks become available. Select one to see its prepared list.
+
+Swipe horizontally in **Quick Picks** to move one column at a time. Tap **⋮**
+on a song for **Play next**, **Add to queue**, and recommendation feedback such
+as **More like this**. Holding a song also opens its actions.
+Tapping a song in Quick Picks or Discover music opens **Now playing** while the
+song loads. Press Back once to return to the same place in the list. On phones
+and tablets the song continues in the mini player.
+
+When your listening history suggests a **Daily mix**, Home looks up related
+songs. A mix appears once it has at least four eligible tracks. Tap its cover
+to see the track list, play an individual song, or choose **Play all**.
+
 **Top charts** opens public Top 100 Songs and Music Videos playlists from
 [YouTube Music Global Charts](https://www.youtube.com/channel/UCrKZcyOJVWnJ60zM1XWllNw)
 for Worldwide and supported countries. The picker puts your browsing country
@@ -31,24 +54,27 @@ playlist through your Invidious instance using the
 Track counts and playback availability depend on the returned playlist and
 instance.
 
-In **Discover music**, choose **Load music** for general suggestions or tap
-an artist under **Explore by saved artist** for suggestions based on saved music.
-The artist search skips songs already saved to your profile. Discovery searches
-your selected instance, then checks each candidate's detailed metadata and only
-shows videos categorized as Music.
+Under **Explore by saved artist**, choosing an artist switches to songs already
+found for that artist. The artist search skips songs already saved to your
+profile. Discovery checks each candidate's detailed metadata and only shows
+videos categorized as Music.
 Live, upcoming, missing-category, and unrelated results are excluded. This uses
 the instance's upload categories; it cannot independently verify the audio or
 correct an uploader's inaccurate category. Explicit Search skips this category
 check.
 
-Each discovery load inspects at most eight unique candidates and returns up to
-six tracks. It does not download media, poll in the background, or keep searching
+General Discover and each of up to three saved-artist selections inspect at
+most eight unique candidates and return up to six tracks. Explore checks up to
+four candidates per genre for Pop, Jazz, Classical, and Electronic. Opening a
+ready genre shows the verified songs and playback controls immediately.
+Discovery does not download media, poll in the background, or keep searching
 until the shelf is full. Existing bounded same-route metadata retries can add
 requests when the instance fails. On onion or SOCKS connections, candidate checks
 run one at a time. Other connections check at most two candidates concurrently.
 An instance cooldown stops further checks and keeps tracks already verified.
-Refresh is explicit, and session changes discard old results. An unavailable
-instance never causes a direct catalog fallback.
+Press **Refresh** for another selection or **Retry** after a connection failure.
+Session changes discard old results. An unavailable instance never causes a
+direct catalog fallback.
 Discovery uses the instance's original titles and artwork without optional
 DeArrow enrichment or related-video lookups. Your content filters apply to both
 search candidates and verified details; editing those manual filters invalidates
@@ -119,6 +145,36 @@ In the expanded Music player, tap a linked artist name to open that artist’s
 Music page while the song continues. Songs with only an artist name display it
 as plain text.
 
+When a song has a matching music video, tap **Video** beside **Lyrics** to
+watch it in the artwork area. Tap **Cover** to switch back. Both views share
+the song’s audio, playback position and queue. Videre can use the playing
+upload itself or find an official video for the same recording on your
+selected instance. Local songs and audio-only downloads keep their artwork.
+
+Swipe the artwork or mini player to move to an adjacent song in the queue.
+While a song plays, Videre prepares the next and previous songs and buffers
+their opening audio. With queue autoplay enabled, the next song uses the same
+buffer when the current song ends. If you swipe before a song is ready, the
+player shows your selection while loading finishes.
+
+With the phone locked, queue autoplay follows the same order and song
+transition settings. Use the lock-screen media controls to pause, resume
+or skip a song.
+
+For rewinding within a song on Android, the audio player keeps up to 90 seconds
+of recently played audio in memory. The available window can be shorter for
+high-bitrate tracks. Seeking further back uses the normal playback source.
+
+Under **Settings → YT Music → Song transition options**, choose how queued
+songs change automatically for your profile. **Seamless** is the default and
+starts the next song as soon as it is ready. **Pause between songs** inserts
+silence. **Fade out then in** lowers the ending song’s volume, then raises the
+next song’s volume from silence. **Crossfade** plays both songs together as the
+first fades out and the next fades in. For any timed mode, **Transition duration**
+can be set from 1 to 10 seconds and defaults to 3 seconds. Fades shorten for
+very short songs. Crossfade begins once the next song has buffered. Tapping
+Next or swiping still skips immediately.
+
 Music playback keeps song titles, artists, albums, and artwork in the player,
 queue, local playlists, offline downloads, and Android media notification.
 Shuffle, repeat, seeking, playback speed, and the sleep timer reuse the existing
@@ -178,8 +234,8 @@ phones and tablets. Downloaded Music retains its labels and can play offline.
 Library's Downloads filter shows Music downloads for the active profile, with
 progress, pause, resume, and retry controls. Select a completed download to play
 it offline.
-The existing download folder, Wi-Fi preference, retry, and profile ownership
-rules apply. TV does not offer downloads.
+The Wi-Fi preference, retry, and profile ownership rules apply. TV does not
+offer downloads.
 
 Music downloads select the highest available compatible audio bitrate by default.
 Under **Settings → YT Music**, choose **MP3** (the default), **Opus** (Ogg), or
@@ -189,9 +245,10 @@ exports.
 
 On Android 10 and later, the default Music destination is **Music/Videre**.
 Select this folder in another player to discover the songs. On Android 7–9,
-choose a shared folder when prompted. **Download folder** also lets you choose
-private app storage or another location. To share an existing private song,
-open **Downloads** and choose **Export a copy of this song**.
+choose a shared folder when prompted. Under **Settings → Download folders**,
+**Audio downloads** can use private app storage or a chosen folder independently
+of **Video downloads**. Changes apply to new downloads. To share an existing
+private song, open **Downloads** and choose **Export a copy of this song**.
 
 **Music → Library → On this device** plays audio already on your device.
 Local playback starts off. Choose a folder using Android's picker to grant

@@ -10,6 +10,7 @@ import 'package:clipious/player/views/components/remote_control.dart';
 import 'package:clipious/settings/states/settings.dart';
 
 import '../../../../main.dart';
+import '../../../../music/views/components/music_selection_feedback.dart';
 import '../../../../music/views/screens/music.dart';
 import '../../../../playlists/models/playlist_reference.dart';
 import '../../../../playlists/services/playlist_load_session.dart';
@@ -70,10 +71,11 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
                     if (widget.receiveRemote && !_openedReceiver) {
                       _openedReceiver = true;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (context.mounted)
+                        if (context.mounted) {
                           RemoteControlButton.show(
                               context, context.read<PlayerCubit>(),
                               startReceiving: true);
+                        }
                       });
                     }
                     if (!state.hasVideo) {
@@ -99,6 +101,7 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
                   },
                 ),
                 const Positioned.fill(child: PlayerRetryIndicator()),
+                const MusicSelectionFeedback(),
               ],
             ),
           ),

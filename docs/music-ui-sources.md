@@ -8,7 +8,7 @@ network clients, assets and branding are not embedded in this UI.
 
 | Muzza reference | Videre implementation | Adaptation |
 |---|---|---|
-| [HomeScreen](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/screens/HomeScreen.kt) and [HomeViewModel](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/viewmodels/HomeViewModel.kt) | `lib/music/views/components/music_recommendation_shelves.dart`, `lib/music/views/screens/music_discovery.dart` | Compact four-row Quick Picks use the local Flow music ranker. Keep Listening uses this profile's actual music history. Discovery remains an explicit bounded Invidious request and then ranks locally. |
+| [HomeScreen](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/screens/HomeScreen.kt) and [HomeViewModel](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/viewmodels/HomeViewModel.kt) | `lib/music/views/components/music_recommendation_shelves.dart`, `lib/music/views/screens/music_discovery.dart` | Compact four-row Quick Picks use the local Flow music ranker. Keep Listening uses this profile's actual music history. Discover automatically fetches a bounded selection through Invidious and ranks it locally. |
 | [Player](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Player.kt), [Thumbnail](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Thumbnail.kt) and [MiniPlayer](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/MiniPlayer.kt) | `music_player.dart`, `music_mini_player.dart`, `music_track_swipe.dart` in `lib/music/views/components/` | Artwork, compact/full hierarchy, seek and transport remain presentation over the mounted decoder. Horizontal swipes use shared previous/next commands and retire on queue-occurrence, profile, session or width changes. Buttons remain available to keyboards, accessibility services and TV remotes. |
 | [Queue](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/player/Queue.kt) | `MusicQueue` in `music_player.dart` | Explicit drag handles and Move up/Move down actions use Videre's queue operations. The current occurrence stays highlighted; duplicate recordings retain distinct identities. |
 | [LibraryMixScreen](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/screens/library/LibraryMixScreen.kt) and [LibraryPlaylistsScreen](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/screens/library/LibraryPlaylistsScreen.kt) | `lib/music/views/screens/music_library.dart` | Saved/title sorting and list/grid presentation operate on Videre's real songs, playlists and channels. A display sort does not rewrite library order. No album catalog is invented. |
@@ -27,11 +27,12 @@ native media-cache implementation.
 
 All browsing, metadata, artwork and playback continue through Videre's existing
 Invidious admission and transport. Music Home can warm an existing subscription
-pool while learning is enabled. Discovery and Daily Mix expansion require an
-explicit action. A missing native ranker hides Quick Picks and preserves the
-ordinary library/history surfaces; it does not manufacture rankings or contact
-another service. Explicit exclusions still apply to discovery when native
-ranking is unavailable.
+pool while learning is enabled. Active Music Home prepares Discover songs,
+saved-artist selections, genre lists, and eligible Daily Mixes. It exposes a
+recommendation shortcut only when the corresponding list contains eligible
+tracks. Opening that shortcut uses the prepared list. A missing native ranker
+hides Quick Picks. Library and history remain available, and user exclusions
+still apply to discovery.
 
 Typed search submissions and successful single-song saves can supply local
 learning signals. Initial search shortcuts, retries, search-kind switches,
@@ -60,12 +61,13 @@ queue. A recommendation collection needs no saved playlist or account identifier
 and [Muzza LocalPlaylistScreen](https://github.com/Maloy-Android/Muzza/blob/9e6cdc6be158e9699cf689970f30f279dddc2895/app/src/main/java/com/maloy/muzza/ui/screens/playlist/LocalPlaylistScreen.kt).
 
 Flow's daily mix expansion recalls related lanes for the learned seeds, ranks the
-deduplicated pool as Discover, and requires at least four tracks. In Videre the
-explicit Load Mix action recalls up to three seeds through the selected Invidious
-instance and verifies up to eight results, with at most six Music tracks per
-request. Ranking runs locally and excludes tracks used in mixes already loaded in
-the same session. Mixes stay sparse when the model has limited history or the
-instance supplies too few eligible tracks. [Flow MusicBrainMixes](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/data/recommendation/music/MusicBrainMixes.kt).
+deduplicated pool as Discover, and requires at least four tracks. Videre prepares
+up to three mixes in sequence on Music Home. Each uses up to three seed tracks
+from listening history. Videre verifies up to eight candidates through the
+selected Invidious instance and accepts at most six Music tracks per batch.
+Ranking runs locally and excludes tracks already used by another mix. The shelf
+displays only ready mixes, and opening one shows its prepared track list.
+[Flow MusicBrainMixes](https://github.com/Flow-Tube/Flow/blob/565d1f7a3da4ca8e54463b029f151ef87415858a/app/src/main/java/io/github/aedev/flow/data/recommendation/music/MusicBrainMixes.kt).
 
 ## Immediate recommendations from existing follows
 

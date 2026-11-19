@@ -3,6 +3,8 @@ import '../home/models/phone_navigation.dart';
 import '../home/models/home_tabs_layout.dart';
 import '../content_filter/community_filter.dart';
 import '../music/models/music_library_entry.dart';
+import '../music/models/music_layout.dart';
+import '../music/models/song_transition.dart';
 import '../recommendations/recommendation_models.dart';
 import '../recommendations/recommendation_snapshot.dart';
 
@@ -332,6 +334,9 @@ class UserBackup {
     if (name == homeTabsLayoutSettingName) {
       return HomeTabsLayout.tryDecode(value) != null;
     }
+    if (name == musicLayoutSettingName) {
+      return MusicLayout.tryDecode(value) != null;
+    }
     if (name == 'recommendations-video-v1' ||
         name == 'recommendations-music-v1') {
       return validRecommendationSetting(setting);
@@ -370,6 +375,10 @@ class UserBackup {
     const ranges = {
       onOpenSettingName: (0, 10),
       playerRepeat: (0, 2),
+      songTransitionSecondsSettingName: (
+        minSongTransitionSeconds,
+        maxSongTransitionSeconds
+      ),
       searchHistoryLimitSettingName: (1, 100000),
       skipStepSettingName: (1, 600),
       lastVideoQualitySettingName: (0, 16384),
@@ -386,6 +395,8 @@ class UserBackup {
           number <= (name == lastSpeedSettingName ? 10 : 200);
     }
     return switch (name) {
+      songTransitionModeSettingName =>
+        SongTransitionMode.fromStorage(value) != null,
       musicDownloadFormatSettingName =>
         const {'mp3', 'opus', 'm4a'}.contains(value),
       'home-content-mode' => const ['videos', 'music'].contains(value),

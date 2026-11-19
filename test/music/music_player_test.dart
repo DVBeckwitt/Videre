@@ -3,9 +3,11 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -19,6 +21,7 @@ import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
@@ -45,12 +48,14 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/selected_server.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/caption.dart';
+import 'package:clipious/videos/models/format_stream.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/video_transcript.dart';
@@ -73,9 +78,27 @@ class _ArtistCatalog extends MusicCatalogService {
       songs: const [MusicTrack(videoId: 'next', title: 'Artist track')]);
 }
 
+class _MusicVideoCatalog extends MusicCatalogService {
+  final requests = <({
+    Video song,
+    bool Function() isCurrent,
+    Completer<Video?> result,
+  })>[];
+
+  @override
+  Future<Video?> findMusicVideo(Video song,
+      {required bool Function() isCurrent}) {
+    final result = Completer<Video?>();
+    requests.add((song: song, isCurrent: isCurrent, result: result));
+    return result.future;
+  }
+}
+
 class _Player extends TestPlayerCubit {
   int nextCalls = 0;
   int previousCalls = 0;
+  Zone? transportZone;
+  Future<void>? switching;
   int playlistRetries = 0;
   final localQueueRequests = <List<LocalMusicTrack>>[];
   final musicPlayRequests = <List<Video>>[];
@@ -84,21 +107,40 @@ class _Player extends TestPlayerCubit {
 
   _Player(super.initialState, super.settings);
 
+  Future<void> startSongs(List<Video> songs, int index) =>
+      super.playVideo(songs, audio: true, startIndex: index);
+
   Future<void> seed(PlayerState next) async {
     // Start session persistence outside the widget test's fake frame clock.
     await TestWidgetsFlutterBinding.instance.runAsync(() async => emit(next));
   }
 
   @override
-  void playNext({bool userInitiated = true}) => nextCalls++;
+  void playNext({bool userInitiated = true}) {
+    nextCalls++;
+    transportZone?.run(() => super.playNext(userInitiated: userInitiated));
+  }
 
   @override
-  void playPrevious() => previousCalls++;
+  void playPrevious() {
+    previousCalls++;
+    transportZone?.run(() => super.playPrevious());
+  }
+
+  @override
+  Future<void> switchToVideo(Video video, {Duration? startAt}) =>
+      switching = super.switchToVideo(video, startAt: startAt);
 
   @override
   Future<void> playVideo(List<Video> videos,
       {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
     musicPlayRequests.add(videos);
+    await seed(state.copyWith(
+        videos: videos,
+        currentlyPlaying: videos[startIndex ?? 0],
+        isHidden: false,
+        isMini: false,
+        isAudio: audio == true));
   }
 
   @override
@@ -122,6 +164,20 @@ class _Player extends TestPlayerCubit {
     sought = position;
     super.seek(position);
   }
+}
+
+class _PendingAudioFocus extends Fake implements AudioSession {
+  final activation = Completer<bool>();
+
+  @override
+  Future<bool> setActive(bool active,
+          {AVAudioSessionSetActiveOptions? avAudioSessionSetActiveOptions,
+          AndroidAudioFocusGainType? androidAudioFocusGainType,
+          AndroidAudioAttributes? androidAudioAttributes,
+          bool? androidWillPauseWhenDucked,
+          AudioSessionConfiguration fallbackConfiguration =
+              const AudioSessionConfiguration.music()}) =>
+      active ? activation.future : Future.value(true);
 }
 
 class _Settings extends TestSettingsCubit {
@@ -225,6 +281,40 @@ void main() {
     await tester.pump();
   }
 
+  testWidgets('a failed song selection reports above the visible player route',
+      (tester) async {
+    var actions = 0;
+    // A listener mounting after an earlier failure should not replay it.
+    player.musicSelectionFailureRevision.value++;
+    await pump(tester,
+        child: const MusicSelectionFeedback(child: Text('Playing')));
+    expect(find.byType(SnackBar), findsNothing);
+    final original = player.state.currentlyPlaying;
+    final context = tester.element(find.text('Playing'));
+    unawaited(Navigator.of(context).push<void>(MaterialPageRoute(
+      builder: (_) => Scaffold(
+          body: Center(
+              child: TextButton(
+        onPressed: () => actions++,
+        child: const Text('Artist page'),
+      ))),
+    )));
+    await tester.pumpAndSettle();
+    for (var i = 1; i <= 2; i++) {
+      player.musicSelectionFailureRevision.value++;
+      await tester.pumpAndSettle();
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.text(AppLocalizations.of(context)!.musicPlaybackError),
+          findsOneWidget);
+      await tester.tap(find.text('Artist page'));
+      expect(actions, i);
+      expect(player.state.currentlyPlaying, same(original));
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(find.byType(SnackBar), findsNothing);
+    }
+  });
+
   Future<void> tap(WidgetTester tester, String key) async {
     final target = find.byKey(ValueKey(key));
     await tester.ensureVisible(target);
@@ -249,6 +339,307 @@ void main() {
     await tester.pump();
     await tester.pump();
   }
+
+  Future<_MusicVideoCatalog> seedVideoSong(WidgetTester tester,
+      {bool downloadOnly = false}) async {
+    final previous = musicCatalogService;
+    final catalog = _MusicVideoCatalog();
+    musicCatalogService = catalog;
+    addTearDown(() => musicCatalogService = previous);
+    await tester.runAsync(() async {
+      await db
+          .upsertServer(const Server(url: 'https://inv.example', inUse: true));
+      await app.initState();
+    });
+    final source = song.copyWith(
+        videoId: 'musicArt001',
+        queueEntryId: 'occurrence-1',
+        downloadPlaybackOnly: downloadOnly,
+        playbackConnection: BackendPlayback(app.state.server!));
+    await player.seed(player.state
+        .copyWith(videos: [source, next], currentlyPlaying: source));
+    return catalog;
+  }
+
+  Video clipFor(Video original) => Video(
+          videoId: 'musicVid001',
+          title: 'Song (Official Video)',
+          lengthSeconds: original.lengthSeconds,
+          playbackConnection: original.playbackConnection,
+          formatStreams: [
+            FormatStream('https://inv.example/visual.mp4', '18', 'video/mp4',
+                'medium', 'mp4', 'h264', '360p', '360p', '640x360')
+          ]);
+  const videoToggleKey = 'music-player-video-toggle';
+  final videoToggle = find.byKey(const ValueKey(videoToggleKey));
+  final videoSurface = find.byKey(const ValueKey('music-player-video'));
+
+  for (final television in [false, true]) {
+    testWidgets('music video switches only the artwork (TV: $television)',
+        (tester) async {
+      final catalog = await seedVideoSong(tester);
+      final mountedIds = <String>[];
+      await pump(tester,
+          size: television ? const Size(960, 640) : const Size(320, 568),
+          scale: television ? 1 : 1.8,
+          child: MusicPlayer(
+              television: television,
+              videoSurfaceBuilder: (video, _) {
+                mountedIds.add(video.videoId);
+                return const SizedBox.expand();
+              }));
+      expect(videoToggle, findsNothing);
+      final request = catalog.requests.single;
+      expect(request.song, player.state.currentlyPlaying);
+      expect(request.isCurrent(), isTrue);
+      final clip = clipFor(request.song);
+      request.result.complete(clip);
+      await tester.pumpAndSettle();
+      final lyrics = find.byKey(const ValueKey('music-player-lyrics'));
+      await tester.ensureVisible(videoToggle);
+      await tester.pumpAndSettle();
+      expect(lyrics.hitTestable(), findsOneWidget);
+      expect(videoToggle.hitTestable(), findsOneWidget);
+      expect(find.byTooltip('Show music video'), findsOneWidget);
+      expect(
+          (tester.getCenter(videoToggle) - tester.getCenter(lyrics)).distance,
+          lessThan(160));
+      if (television) {
+        final icon =
+            find.descendant(of: videoToggle, matching: find.byType(Icon));
+        Focus.of(tester.element(icon)).requestFocus();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      } else {
+        await tester.tap(videoToggle);
+      }
+      await tester.pumpAndSettle();
+      expect(mountedIds, contains(clip.videoId));
+      expect(videoSurface, findsOneWidget);
+      expect(find.byTooltip('Show cover art'), findsOneWidget);
+      final before = player.state;
+      const elapsed = Duration(seconds: 42);
+      await player.seed(before.copyWith(position: elapsed));
+      await tester.pumpAndSettle();
+      expect(catalog.requests, hasLength(1));
+      expect(videoSurface, findsOneWidget);
+      await tap(tester, videoToggleKey);
+      expect(videoSurface, findsNothing);
+      expect(find.byTooltip('Show music video'), findsOneWidget);
+      expect(player.state.currentQueueId, before.currentQueueId);
+      expect(player.state.playQueue, orderedEquals(before.playQueue));
+      expect(player.state.position, elapsed);
+      expect(player.state.isPlaying, before.isPlaying);
+      expect(player.musicPlayRequests, isEmpty);
+      expect(player.sought, isNull);
+      await tap(tester, 'music-player-lyrics');
+      await tester.pumpAndSettle();
+      expect(find.text('Enable LRCLIB lyrics?'), findsOneWidget);
+      await pressAndroidBack(tester);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('switching the tablet queue layout keeps the inline song video',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    await pump(tester,
+        size: const Size(960, 640),
+        child: MusicPlayer(
+            videoSurfaceBuilder: (_, __) => const SizedBox.expand()));
+    final lookup = catalog.requests.single;
+    lookup.result.complete(clipFor(lookup.song));
+    await tester.pumpAndSettle();
+    await tap(tester, videoToggleKey);
+    final surface = tester.element(videoSurface);
+    await tap(tester, 'music-player-close-queue');
+    await tester.pumpAndSettle();
+    expect(catalog.requests, hasLength(1));
+    expect(tester.element(videoSurface), same(surface));
+    expect(find.byTooltip('Show cover art'), findsOneWidget);
+    await tap(tester, 'music-player-queue');
+    await tester.pumpAndSettle();
+    expect(catalog.requests, hasLength(1));
+    expect(tester.element(videoSurface), same(surface));
+  });
+
+  testWidgets('music video drops a late match for another queue occurrence',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    await pump(tester);
+    final first = catalog.requests.single;
+    final second = first.song.copyWith(queueEntryId: 'occurrence-2');
+    await player.seed(player.state.copyWith(
+        videos: [first.song, second, next], currentlyPlaying: second));
+    await tester.pumpAndSettle();
+    expect(first.isCurrent(), isFalse);
+    expect(catalog.requests, hasLength(2));
+    expect(catalog.requests.last.isCurrent(), isTrue);
+    first.result.complete(clipFor(first.song));
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsNothing);
+    catalog.requests.last.result.complete(null);
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsNothing);
+    expect(videoSurface, findsNothing);
+  });
+
+  testWidgets(
+      'new filters retire a cached video on toggle and a song on resume',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    var surfaces = 0;
+    await pump(tester, child: MusicPlayer(videoSurfaceBuilder: (_, __) {
+      surfaces++;
+      return const SizedBox.expand();
+    }));
+    final request = catalog.requests.single;
+    request.result.complete(clipFor(request.song));
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsOneWidget);
+    await tester
+        .runAsync(() => db.saveFilter(VideoFilter(value: 'Official Video')));
+    await tap(tester, videoToggleKey);
+    expect(surfaces, 0);
+    expect(videoToggle, findsNothing);
+
+    // A different visual can still accompany the same unfiltered recording.
+    final fresh = catalog.requests.last;
+    expect(fresh, isNot(request));
+    fresh.result
+        .complete(clipFor(request.song).copyWith(title: 'Another visual'));
+    await tester.pumpAndSettle();
+    await tap(tester, videoToggleKey);
+    expect(videoSurface, findsOneWidget);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    addTearDown(() => tester.binding
+        .handleAppLifecycleStateChanged(AppLifecycleState.resumed));
+    await tester
+        .runAsync(() => db.saveFilter(VideoFilter(value: request.song.title!)));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsNothing);
+    expect(videoSurface, findsNothing);
+    expect(catalog.requests, hasLength(2));
+    expect(player.state.currentQueueId, request.song.queueEntryId);
+  });
+
+  testWidgets('a community filter revision retires the current video lookup',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    await pump(tester);
+    final stale = catalog.requests.single;
+    await tester.runAsync(communityFilters.reloadForProfile);
+    expect(stale.isCurrent(), isFalse);
+    await tester.pump();
+    final current = catalog.requests.last;
+    expect(current, isNot(stale));
+    stale.result.complete(clipFor(stale.song));
+    current.result.complete(null);
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsNothing);
+  });
+
+  testWidgets('music video lookup starts when the playing song is hydrated',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    final hydrated = player.state.currentlyPlaying!;
+    final placeholder = hydrated.copyWith(playbackConnection: null);
+    await player.seed(player.state.copyWith(currentlyPlaying: placeholder));
+    await pump(tester);
+    expect(catalog.requests, isEmpty);
+    await player.seed(player.state.copyWith(currentlyPlaying: hydrated));
+    await tester.pumpAndSettle();
+    final request = catalog.requests.single;
+    expect(request.song.playbackConnection, hydrated.playbackConnection);
+    request.result.complete(clipFor(hydrated));
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsOneWidget);
+  });
+
+  testWidgets('music video failure restores the cover without restarting audio',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    late VoidCallback failVideo;
+    await pump(tester, child: MusicPlayer(videoSurfaceBuilder: (_, onFailure) {
+      failVideo = onFailure;
+      return const SizedBox.expand();
+    }));
+    final request = catalog.requests.single;
+    request.result.complete(clipFor(request.song));
+    await tester.pumpAndSettle();
+    final before = player.state;
+    await tap(tester, videoToggleKey);
+    expect(videoSurface, findsOneWidget);
+    failVideo();
+    await tester.pumpAndSettle();
+    expect(videoSurface, findsNothing);
+    expect(find.byKey(const ValueKey('music-player-artwork')), findsOneWidget);
+    expect(player.state.currentQueueId, before.currentQueueId);
+    expect(player.state.playQueue, orderedEquals(before.playQueue));
+    expect(player.state.position, before.position);
+    expect(player.state.isPlaying, before.isPlaying);
+    expect(player.musicPlayRequests, isEmpty);
+    expect(player.sought, isNull);
+  });
+
+  testWidgets('minimizing the player retires a pending music video lookup',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    await pump(tester);
+    final original = catalog.requests.single;
+    await player.seed(player.state.copyWith(isMini: true));
+    await tester.pumpAndSettle();
+    expect(original.isCurrent(), isFalse);
+    original.result.complete(clipFor(original.song));
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsNothing);
+    expect(videoSurface, findsNothing);
+    expect(catalog.requests, hasLength(1));
+    await player.seed(player.state.copyWith(isMini: false));
+    await tester.pumpAndSettle();
+    final reopened = catalog.requests.last;
+    expect(reopened, isNot(original));
+    expect(reopened.isCurrent(), isTrue);
+    reopened.result.complete(null);
+    await tester.pumpAndSettle();
+    expect(videoToggle, findsNothing);
+  });
+
+  testWidgets('a retired music video cannot interrupt the next song',
+      (tester) async {
+    final catalog = await seedVideoSong(tester);
+    late VoidCallback failCurrent;
+    await pump(tester, child: MusicPlayer(videoSurfaceBuilder: (_, onFailure) {
+      failCurrent = onFailure;
+      return const SizedBox.expand();
+    }));
+    final first = catalog.requests.single;
+    first.result.complete(clipFor(first.song));
+    await tester.pumpAndSettle();
+    await tap(tester, videoToggleKey);
+    final lateFailure = failCurrent;
+    final second = next.copyWith(
+        videoId: 'musicArt002',
+        queueEntryId: 'occurrence-2',
+        playbackConnection: first.song.playbackConnection);
+    await player.seed(player.state
+        .copyWith(videos: [first.song, second], currentlyPlaying: second));
+    await tester.pumpAndSettle();
+    expect(videoSurface, findsNothing);
+    expect(videoToggle, findsNothing);
+    final request = catalog.requests.last;
+    expect(request.song, second);
+    request.result.complete(clipFor(second).copyWith(videoId: 'musicVid002'));
+    await tester.pumpAndSettle();
+    await tap(tester, videoToggleKey);
+    lateFailure();
+    await tester.pumpAndSettle();
+    expect(videoSurface, findsOneWidget);
+    expect(player.state.currentlyPlaying, second);
+    expect(player.musicPlayRequests, isEmpty);
+  });
 
   Future<List<LocalMusicTrack>> seedDeviceQueue(WidgetTester tester,
       {String? embeddedArt}) async {
@@ -306,6 +697,74 @@ void main() {
         offlineCurrentlyPlaying: entries.first,
         playQueue: ListQueue.of([entries.last.videoId])));
     return tracks;
+  }
+
+  testWidgets(
+      'music video lookup skips download-only, offline and device songs',
+      (tester) async {
+    final catalog = await seedVideoSong(tester, downloadOnly: true);
+    await pump(tester);
+    expect(catalog.requests, isEmpty);
+    expect(videoToggle, findsNothing);
+    final source = player.state.currentlyPlaying!;
+    final saved = DownloadedVideo(
+        videoId: source.videoId,
+        title: source.title!,
+        lengthSeconds: source.lengthSeconds!,
+        quality: 'audio',
+        musicMetadata: source.musicMetadata,
+        audioOnly: true,
+        downloadComplete: true);
+    await player.seed(player.state.copyWith(
+        currentlyPlaying: null,
+        offlineCurrentlyPlaying: saved,
+        videos: [],
+        offlineVideos: [saved]));
+    await tester.pumpAndSettle();
+    expect(catalog.requests, isEmpty);
+    expect(videoToggle, findsNothing);
+    await seedDeviceQueue(tester);
+    await tester.pumpAndSettle();
+    expect(catalog.requests, isEmpty);
+    expect(videoToggle, findsNothing);
+  });
+
+  for (final queue in [
+    [next],
+    [song, next]
+  ]) {
+    testWidgets(
+        'Back minimizes the selected song from a ${queue.length}-song queue while its source opens',
+        (tester) async {
+      await player
+          .seed(player.state.copyWith(videos: queue, currentlyPlaying: null));
+      expect(player.openingSongTitle, isNull);
+      final audio = _PendingAudioFocus();
+      player.audioSession = audio;
+      late Future<void> startup;
+      await tester.runAsync(() async {
+        startup = player.startSongs(queue, queue.length - 1);
+      });
+      await pump(tester, child: const Stack(children: [Player(844)]));
+      expect(find.byType(MusicPlayerOpening), findsOneWidget);
+      expect(find.text('Next'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byKey(const ValueKey('music-player-play')), findsNothing);
+
+      BackButtonInterceptor.add(player.handleBackButton,
+          name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+      await pressAndroidBack(tester);
+      expect(player.state.isMini, isTrue);
+      expect(player.state.videos.map((v) => v.videoId),
+          queue.map((v) => v.videoId));
+      expect(find.byType(MusicPlayerOpening), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() async {
+        audio.activation.completeError(StateError('Audio focus interrupted'));
+        await startup;
+      });
+      expect(player.openingSongTitle, isNull);
+    });
   }
 
   for (final tv in [false, true]) {
@@ -1183,24 +1642,97 @@ void main() {
     }
   });
 
-  testWidgets('artwork swipes use the queue without seeking the current song',
-      (tester) async {
-    await pump(tester);
-    final artwork = find.byKey(const ValueKey('music-player-artwork'));
-    await tester.drag(artwork, const Offset(-150, 0));
-    await tester.pump();
-    expect(player.nextCalls, 1);
-    await tester.drag(artwork, const Offset(150, 0));
-    await tester.pump();
-    expect(player.previousCalls, 1);
-    expect(player.sought, isNull);
-  });
+  for (final mini in [false, true]) {
+    testWidgets(
+        '${mini ? "Mini player" : "Artwork"} swipes immediately show the selected song while audio focus is pending',
+        (tester) async {
+      final last = next.copyWith(
+          videoId: 'third',
+          musicMetadata: const MusicMetadata(title: 'Third', artist: 'Singer'));
+      await player.seed(player.state.copyWith(
+          videos: [song, next, last],
+          playQueue: ListQueue.of([next.videoId, last.videoId]),
+          isMini: mini));
+      final audio = _PendingAudioFocus();
+      player.audioSession = audio;
+      player.transportZone = await tester.runAsync(() async => Zone.current);
+      await pump(tester,
+          child: mini
+              ? const Align(
+                  alignment: Alignment.bottomCenter, child: MusicMiniPlayer())
+              : const MusicPlayer());
+      final swipe = find
+          .byKey(ValueKey(mini ? 'music-mini-expand' : 'music-player-artwork'));
+      final center = tester.getCenter(swipe);
+      Future<void> renderTransport() async {
+        // Let the real player deliver its state stream before the first frame.
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+      }
+
+      // There is no earlier occurrence at the beginning of the queue.
+      final blocked = await tester.startGesture(center);
+      await blocked.moveBy(const Offset(110, 0));
+      await tester.pump();
+      expect(tester.getCenter(swipe), center);
+      await blocked.up();
+      expect(player.previousCalls, 0);
+
+      // A short deliberate fling is enough. The selected artwork and text
+      // must be centered in the first frame, before the old decoder changes.
+      await tester.fling(swipe, const Offset(-50, 0), 1200);
+      await renderTransport();
+      expect(player.nextCalls, 1);
+      expect(player.state.currentlyPlaying, song);
+      expect(player.openingMusicEntry?.videoId, 'next');
+      expect(find.text('Next'), findsOneWidget);
+      expect(find.text('Song'), findsNothing);
+      expect(tester.getCenter(swipe), center);
+      if (mini) {
+        final progress = tester.widget<LinearProgressIndicator>(
+            find.byKey(const ValueKey('music-mini-progress')));
+        expect(progress.value, isNull);
+      } else {
+        final progress = tester.widget<Slider>(
+            find.byKey(const ValueKey('music-player-progress')));
+        expect(progress.value, 0);
+        expect(progress.onChanged, isNull);
+        expect(
+            find.byKey(const ValueKey('music-player-queue')), findsOneWidget);
+      }
+      await tester.drag(swipe, const Offset(-150, 0));
+      await renderTransport();
+      expect(find.text('Third'), findsOneWidget);
+      expect(tester.getCenter(swipe), center);
+      await tester.drag(swipe, const Offset(-150, 0));
+      await tester.pump();
+      expect(player.nextCalls, 2);
+      expect(find.text('Third'), findsOneWidget);
+      await tester.drag(swipe, const Offset(150, 0));
+      await renderTransport();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Next'), findsOneWidget);
+      expect(tester.getCenter(swipe), center);
+      expect(player.previousCalls, 1);
+      expect(player.sought, isNull);
+      expect(player.state.currentlyPlaying, song);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() async {
+        audio.activation.completeError(StateError('Audio focus interrupted'));
+        await player.switching;
+      });
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('held artwork swipe retires when a duplicate occurrence changes',
       (tester) async {
     final songs = assignPlaybackQueueIds([song, song]);
-    await player.seed(
-        player.state.copyWith(videos: songs, currentlyPlaying: songs.first));
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of([playbackQueueId(songs.last)])));
     await pump(tester);
     final gesture = await tester.startGesture(
         tester.getCenter(find.byKey(const ValueKey('music-player-artwork'))));

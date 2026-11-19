@@ -24,6 +24,7 @@ import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
@@ -70,8 +71,9 @@ class _Catalog extends MusicCatalogService {
   final searches = <String>[];
   final responses = <Completer<List<MusicTrack>>>[];
   // Create this in the requesting widget's async zone, not setUp's outer zone.
-  late final song = Completer<MusicTrack>();
+  late var song = Completer<MusicTrack>();
   VideoLoadObserver? songObserver;
+  final songRequests = <String>[];
   final artistRequests = <String>[];
   final playlistRequests = <String>[];
   Completer<MusicArtistPage>? pendingArtist;
@@ -120,6 +122,7 @@ class _Catalog extends MusicCatalogService {
 
   @override
   Future<MusicTrack> getSong(String id, {VideoLoadObserver? loadObserver}) {
+    songRequests.add(id);
     songObserver = loadObserver;
     return song.future;
   }
@@ -138,6 +141,27 @@ class _Player extends TestPlayerCubit {
   int resumes = 0;
   int shows = 0;
   bool? sponsorFailureIsAsync;
+  Completer<void>? playbackStartup;
+  bool holdSelections = false;
+  final pendingSelections = <Completer<void>>[];
+  int _selectionRevision = 0;
+  // A committed selection persists the playback session in the fixture DB.
+  // Keep those writes on the same real clock as setUp and tearDown.
+  final _databaseZone = Zone.current;
+
+  @override
+  int get musicSelectionRequestRevision => _selectionRevision;
+
+  void commitSelection(List<Video> videos, int index, {bool mini = false}) {
+    final queue = assignPlaybackQueueIds(videos);
+    _databaseZone.run(() => emit(state.copyWith(
+        videos: queue,
+        currentlyPlaying: queue[index],
+        isAudio: true,
+        isHidden: false,
+        isMini: mini,
+        isPlaying: true)));
+  }
 
   @override
   Future<List<SponsorSegment>> prepareSponsorSegments(String videoId) {
@@ -162,8 +186,21 @@ class _Player extends TestPlayerCubit {
   @override
   Future<void> playVideo(List<Video> videos,
       {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
-    calls.add(
-        (videos: videos, audio: audio, startAt: startAt, startIndex: null));
+    _selectionRevision++;
+    calls.add((
+      videos: videos,
+      audio: audio,
+      startAt: startAt,
+      startIndex: startIndex
+    ));
+    if (holdSelections) {
+      final pending = Completer<void>();
+      pendingSelections.add(pending);
+      await pending.future;
+    } else if (playbackStartup case final startup?) {
+      commitSelection(videos, startIndex ?? 0);
+      await startup.future;
+    }
   }
 
   @override
@@ -375,7 +412,7 @@ void main() {
           videoThumbnails: [ImageObject(null, frame, 320, 180)])
     ]);
     await tester.pumpAndSettle();
-    final result = find.byKey(ValueKey('music-song-search-${first.videoId}'));
+    final result = find.byKey(ValueKey('music-song-search-0-${first.videoId}'));
     final community = tester.widget<CommunityMusicArtwork>(find.descendant(
         of: result, matching: find.byType(CommunityMusicArtwork)));
     expect(community.allowLookup, isFalse);
@@ -661,6 +698,255 @@ void main() {
     });
   }
 
+  testWidgets('admitting a routed song restores its caller before startup ends',
+      (tester) async {
+    final startup = Completer<void>();
+    player.playbackStartup = startup;
+    addTearDown(() {
+      if (!startup.isCompleted) startup.complete();
+    });
+    await show(tester, screen: const MusicScreen(initialQuery: 'jazz music'));
+    catalog.responses.single.complete([first, second]);
+    await tester.pumpAndSettle();
+    final origin = tester.state(find.byType(MusicScreen));
+    final navigator = Navigator.of(origin.context);
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(
+            videoId: second.videoId,
+            queue: [
+              first.toVideo(),
+              Video(videoId: second.videoId, title: 'Cached title'),
+              first.toVideo()
+            ],
+            startIndex: 1))));
+    await tester.pump();
+    final songRoute = find.byWidgetPredicate(
+        (widget) => widget is MusicScreen && widget.videoId == second.videoId,
+        skipOffstage: false);
+    Finder inSongRoute(Finder matching) =>
+        find.descendant(of: songRoute, matching: matching, skipOffstage: false);
+    expect(inSongRoute(find.text('Now playing', skipOffstage: false)),
+        findsOneWidget);
+    expect(
+        inSongRoute(find.byType(TextField, skipOffstage: false)), findsNothing);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
+    expect(find.byKey(const ValueKey('music-search-filters')), findsNothing);
+    catalog.song.complete(second);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final played = player.calls.single;
+    expect(played.videos.map((video) => video.videoId),
+        [first.videoId, second.videoId, first.videoId]);
+    expect(played.startIndex, 1);
+    expect(played.videos[1].title, second.title);
+    expect(catalog.songRequests, [second.videoId]);
+    expect(player.playbackStartup!.isCompleted, isFalse);
+    expect(player.state.isMini, isFalse);
+    expect(tester.state(find.byType(MusicScreen)), same(origin));
+    expect(find.text('jazz music'), findsOneWidget);
+    expect(find.text('First song'), findsOneWidget);
+    expect(navigator.canPop(), isFalse);
+    player.playbackStartup!.complete();
+    await tester.pumpAndSettle();
+    expect(catalog.searches, ['jazz music']);
+  });
+
+  testWidgets(
+      'a routed replacement waits for its queue and selected occurrence',
+      (tester) async {
+    player.holdSelections = true;
+    player.commitSelection([second.toVideo()], 0, mini: true);
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    final queue = assignPlaybackQueueIds(
+        [first.toVideo(), second.toVideo(), first.toVideo()]);
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) =>
+            MusicScreen(videoId: first.videoId, queue: queue, startIndex: 2))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    catalog.song.complete(first);
+    await tester.pump();
+    expect(player.calls.single.startIndex, 2);
+    expect(player.state.currentQueueId, second.videoId);
+    expect(find.text('Origin'), findsNothing);
+
+    // Both end rows have the same upload ID. Only the tapped occurrence
+    // in its original queue may dismiss this launcher.
+    Future<void> commit(List<Video> videos, int index) async {
+      await tester.runAsync(() async {
+        player.commitSelection(videos, index);
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+    }
+
+    await commit(queue, 0);
+    expect(find.text('Origin'), findsNothing);
+    await commit([queue.last, queue.first], 0);
+    expect(find.text('Origin'), findsNothing);
+    await commit(queue, 2);
+    expect(find.text('Origin'), findsOneWidget);
+    expect(navigator.canPop(), isFalse);
+    expect(player.pendingSelections.single.isCompleted, isFalse);
+    player.pendingSelections.single.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a failed routed replacement preserves playback and offers Retry',
+      (tester) async {
+    player.holdSelections = true;
+    player.commitSelection([first.toVideo()], 0, mini: true);
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(videoId: second.videoId))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    catalog.song.complete(second);
+    await tester.pump();
+    player.musicSelectionFailureRevision.value++;
+    player.pendingSelections.single.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('Origin'), findsNothing);
+    expect(player.state.currentlyPlaying?.videoId, first.videoId);
+    expect(player.state.isPlaying, isTrue);
+    expect(player.state.isMini, isTrue);
+    await tester.tap(find.text('Retry'));
+    await tester.pump();
+    expect(player.calls, hasLength(2));
+    player.commitSelection(player.calls.last.videos, 0);
+    player.pendingSelections.last.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Origin'), findsOneWidget);
+  });
+
+  testWidgets('a covered song launcher cannot take over a newer route',
+      (tester) async {
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(videoId: first.videoId))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final observer = catalog.songObserver!;
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const Scaffold(body: Text('New page')))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(observer.isCurrent(), isFalse);
+    catalog.song.complete(first);
+    await tester.pumpAndSettle();
+    expect(find.text('New page'), findsOneWidget);
+    expect(player.calls, isEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Origin'), findsOneWidget);
+    expect(navigator.canPop(), isFalse);
+    expect(player.calls, isEmpty);
+  });
+
+  testWidgets(
+      'leaving a covering page before song details arrive restores the source',
+      (tester) async {
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(videoId: first.videoId))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const Scaffold(body: Text('New page')))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    // The pending catalog lookup sends no retry or progress events while the
+    // other page is open. Back should still return directly to the source.
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    catalog.song.complete(first);
+    await tester.pumpAndSettle();
+    expect(player.calls, isEmpty);
+    expect(find.text('Origin'), findsOneWidget);
+    expect(navigator.canPop(), isFalse);
+  });
+
+  testWidgets('replaying a song after a rejected launch returns to its caller',
+      (tester) async {
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(videoId: first.videoId))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    catalog.song.complete(first);
+    await tester.pumpAndSettle();
+    expect(player.calls, hasLength(1));
+    expect(player.state.videos, isEmpty);
+    expect(find.text('First song'), findsOneWidget);
+
+    player.playbackStartup = Completer<void>()..complete();
+    await tester.tap(find.text('Play'));
+    await tester.pumpAndSettle();
+    expect(player.calls, hasLength(2));
+    expect(player.state.videos.single.videoId, first.videoId);
+    expect(find.text('Origin'), findsOneWidget);
+    expect(navigator.canPop(), isFalse);
+  });
+
+  testWidgets('one TV Back from a routed song returns to its original page',
+      (tester) async {
+    isTv = true;
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const audioSession = MethodChannel('com.ryanheise.audio_session');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final audioConfiguration = Completer<void>();
+    messenger.setMockMethodCallHandler(
+        audioSession, (_) => audioConfiguration.future);
+    addTearDown(() {
+      audioConfiguration.complete();
+      messenger.setMockMethodCallHandler(audioSession, null);
+      isTv = false;
+    });
+    await show(tester, screen: const MusicScreen(playlistId: 'PLpublic'));
+    await tester.pumpAndSettle();
+    final origin = tester.state(find.byType(MusicScreen));
+    unawaited(Navigator.of(origin.context).push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(
+            videoId: second.videoId,
+            queue: [first.toVideo(), second.toVideo(), first.toVideo()],
+            startIndex: 1))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('Now playing'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
+    catalog.song.complete(second);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    final tvPlayer =
+        tester.element(find.byType(Scaffold).last).read<PlayerCubit>();
+    expect(tvPlayer, isNot(same(player)));
+    expect(tvPlayer.state.videos.map((video) => video.videoId),
+        [first.videoId, second.videoId, first.videoId]);
+    expect(catalog.songRequests, [second.videoId]);
+
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    expect(tester.state(find.byType(MusicScreen)), same(origin));
+    expect(find.text('Public playlist'), findsOneWidget);
+    expect(catalog.playlistRequests, ['PLpublic']);
+  });
+
   testWidgets('song links show retry feedback and clear it before playback',
       (tester) async {
     await show(tester,
@@ -669,6 +955,7 @@ void main() {
     catalog.songObserver!.onRetry();
     await tester.pump();
     expect(find.text('Retrying video details…'), findsOneWidget);
+    expect(find.byKey(const ValueKey('music-search')), findsNothing);
 
     final route =
         BackendPlayback(const Server(url: 'https://instance.example'));
@@ -738,7 +1025,12 @@ void main() {
   }
 
   testWidgets('song retry failure keeps a manual retry action', (tester) async {
-    await show(tester, screen: const MusicScreen(videoId: 'firstsong01'));
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => MusicScreen(videoId: first.videoId))));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     catalog.songObserver!.onRetry();
     await tester.pump();
     expect(find.text('Retrying video details…'), findsOneWidget);
@@ -752,6 +1044,14 @@ void main() {
     expect(retry, findsOneWidget);
     expect(tester.widget<FilledButton>(retry).onPressed, isNotNull);
     expect(player.calls, isEmpty);
+    catalog.song = Completer<MusicTrack>();
+    player.playbackStartup = Completer<void>()..complete();
+    await tester.tap(retry);
+    await tester.pump();
+    catalog.song.complete(first);
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.single.videoId, first.videoId);
+    expect(find.text('Origin'), findsOneWidget);
   });
 
   testWidgets('a playlist may contain the same song more than once',
@@ -909,10 +1209,89 @@ void main() {
     await tester.pumpAndSettle();
     expect(player.calls.single.videos.map((v) => v.videoId),
         [first.videoId, second.videoId]);
+    await tester.ensureVisible(find.text('Second song'));
+    await tester.tap(find.text('Second song'));
+    await tester.pumpAndSettle();
+    expect(player.calls.last.videos.map((v) => v.videoId),
+        [first.videoId, second.videoId]);
+    expect(player.calls.last.startIndex, 1);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(find.text('Artist description'), findsNothing);
     expect(find.text('Artist'), findsOneWidget);
+  });
+
+  testWidgets('a later search row supersedes an unfinished playback selection',
+      (tester) async {
+    player.holdSelections = true;
+    await show(tester, screen: const MusicScreen(initialQuery: 'songs'));
+    catalog.responses.single.complete([first, second]);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(first.title));
+    await tester.pump();
+    expect(player.calls.single.startIndex, 0);
+    await tester.tap(find.text(second.title));
+    await tester.pump();
+    expect(player.calls.map((call) => call.startIndex), [0, 1]);
+    expect(player.pendingSelections.first.isCompleted, isFalse);
+    player.commitSelection(player.calls.last.videos, 1);
+    player.pendingSelections.last.complete();
+    await tester.pump();
+    player.pendingSelections.first
+        .completeError(StateError('Obsolete selection'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SnackBar), findsNothing);
+    expect(tester.takeException(), isNull);
+    expect(player.state.currentQueueId, second.videoId);
+    expect(catalog.searches, ['songs']);
+  });
+
+  testWidgets('search rows and both Play menus keep the visible song queue',
+      (tester) async {
+    await tester.runAsync(installCommunityMusicFilters);
+    await show(tester);
+    await search(tester, 'songs');
+    const hidden = MusicTrack(
+        videoId: 'hiddenmusic',
+        title: 'Listed song',
+        uploaderChannelId: musicListedUploader);
+    catalog.responses.single.complete([first, hidden, first, second]);
+    await tester.pumpAndSettle();
+
+    final selected =
+        find.byKey(ValueKey('music-song-search-1-${first.videoId}'));
+    await tester.ensureVisible(selected);
+    await tester.tap(selected);
+    await tester.pumpAndSettle();
+    await tester.longPress(selected);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+    expect(player.calls, hasLength(2));
+    for (final call in player.calls) {
+      expect(call.videos.map((v) => v.videoId),
+          [first.videoId, first.videoId, second.videoId]);
+      expect(call.startIndex, 1);
+    }
+
+    final reveal = find.textContaining('Show hidden results');
+    await tester.ensureVisible(reveal);
+    await tester.tap(reveal);
+    await tester.pumpAndSettle();
+    final actions = find.descendant(
+        of: find.byKey(ValueKey('music-song-search-2-${first.videoId}')),
+        matching: find.byTooltip('Music actions'));
+    await tester.ensureVisible(actions);
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+    expect(player.calls, hasLength(3));
+    expect(player.calls.last.videos.map((v) => v.videoId),
+        [first.videoId, hidden.videoId, first.videoId, second.videoId]);
+    expect(player.calls.last.startIndex, 2);
+    expect(catalog.searches, ['songs']);
+    expect(catalog.songObserver, isNull);
   });
 
   testWidgets('song artist links open the matching artist', (tester) async {

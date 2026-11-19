@@ -10,6 +10,7 @@ import '../../../settings/states/settings.dart';
 import '../../../home/views/components/flow_video_home.dart';
 import '../../models/search_date.dart';
 import '../components/search_filters.dart';
+import '../components/pasted_link_dialog.dart';
 import '../components/search_suggestions_panel.dart';
 import '../../states/search.dart';
 
@@ -40,9 +41,11 @@ class _SearchScreenState extends State<SearchScreen> {
   Widget build(BuildContext context) {
     final settings = context.read<SettingsCubit>();
     return BlocProvider(
-      create: (_) => SearchCubit<SearchState>(
+      create: (context) => SearchCubit<SearchState>(
           SearchState.init(query: widget.query, searchNow: widget.searchNow),
-          settings),
+          settings,
+          chooseOpen: () => choosePastedLinkAction(context),
+          isLinkSourceActive: () => isPastedLinkSourceActive(context)),
       child: BlocBuilder<SearchCubit, SearchState>(builder: (context, state) {
         final locals = AppLocalizations.of(context)!;
         final search = context.read<SearchCubit>();

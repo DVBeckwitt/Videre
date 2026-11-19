@@ -19,6 +19,7 @@ import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -38,6 +39,7 @@ import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/app_customizer.dart';
 import 'package:clipious/settings/views/components/phone_navigation_editor.dart';
@@ -245,6 +247,16 @@ class _TestMusicCatalog extends MusicCatalogService {
   int trendingCalls = 0;
   Completer<void>? pendingArtist;
 
+  List<MusicTrack> discoverySongs = const [];
+
+  @override
+  Future<List<MusicTrack>> getDiscoverySongs(
+      {String? artist,
+      bool Function()? isCurrent,
+      void Function(InvidiousServiceError)? onInstanceFailure}) async {
+    return isCurrent?.call() == false ? const [] : discoverySongs;
+  }
+
   @override
   Future<List<MusicTrack>> getTrendingSongs() async {
     trendingCalls++;
@@ -302,12 +314,14 @@ Future<void> _selectPhoneTab(
   await tester.pumpAndSettle();
 }
 
-Finder _musicSection(int index) => find.byKey(ValueKey('music-section-$index'));
+Finder _musicSection(MusicDestination section) =>
+    find.byKey(ValueKey('music-section-${section.name}'));
 
-Future<void> _selectMusicSection(WidgetTester tester, int index) async {
-  await tester.ensureVisible(_musicSection(index));
+Future<void> _selectMusicSection(
+    WidgetTester tester, MusicDestination section) async {
+  await tester.ensureVisible(_musicSection(section));
   await tester.pumpAndSettle();
-  await tester.tap(_musicSection(index));
+  await tester.tap(_musicSection(section));
   await tester.pumpAndSettle();
 }
 
@@ -1291,18 +1305,30 @@ void main() {
         ['Home', 'Subscriptions', 'History', 'Music', 'Search']);
     expect(primary.selectedIndex, 3);
 
-    await _selectMusicSection(tester, 1);
+    await _selectMusicSection(tester, MusicDestination.search);
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
-    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
+            .selected,
+        isTrue);
     final field = find.byKey(const ValueKey('music-search'));
     await tester.enterText(field, 'retained song');
-    await _selectMusicSection(tester, 2);
-    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    await _selectMusicSection(tester, MusicDestination.library);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+            .selected,
+        isTrue);
     expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
         findsOneWidget);
 
     await _selectPhoneTab(tester, PhoneNavigationItem.search);
-    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
+            .selected,
+        isTrue);
     expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
     expect(tester.widget<TextField>(field).controller!.text, 'retained song');
     tester.testTextInput.hide();
@@ -1311,18 +1337,82 @@ void main() {
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 3);
-    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+            .selected,
+        isTrue);
 
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     expect(
         tester.widget<NavigationBar>(navigation).selectedIndex, historyIndex);
     expect(find.text('History'), findsWidgets);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
-    await _selectMusicSection(tester, 0);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+            .selected,
+        isTrue);
+    await _selectMusicSection(tester, MusicDestination.home);
     expect(find.text('Saved songs'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'reordering Music retains the current page, query and shortcut Back destination',
+      (tester) async {
+    (musicCatalogService as _TestMusicCatalog).discoverySongs = const [
+      MusicTrack(
+          videoId: 'discovers01',
+          title: 'Discovered recording',
+          artists: ['Artist']),
+    ];
+    await _pumpHomepage(tester, const Size(390, 844));
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await _selectMusicSection(tester, MusicDestination.search);
+    final field = find.byKey(const ValueKey('music-search'));
+    await tester.enterText(field, 'kept during reorder');
+    await _selectMusicSection(tester, MusicDestination.library);
+    final settings = tester
+        .element(_musicSection(MusicDestination.library))
+        .read<SettingsCubit>();
+    final layout = MusicLayout(
+      destinations: const [
+        MusicDestination.home,
+        MusicDestination.library,
+        MusicDestination.search
+      ],
+      shortcuts: const [MusicShortcut.discover, MusicShortcut.library],
+    );
+    await tester.runAsync(() => settings.setMusicLayout(layout));
+    await tester.pumpAndSettle();
+    final library = _musicSection(MusicDestination.library);
+    final search = _musicSection(MusicDestination.search);
+    expect(tester.widget<ChoiceChip>(library).selected, isTrue);
+    expect(tester.getCenter(library).dx, lessThan(tester.getCenter(search).dx));
+    expect(find.byKey(const ValueKey('music-library-shortcut-songs')),
+        findsOneWidget);
+
+    await _selectPhoneTab(tester, PhoneNavigationItem.search);
+    expect(tester.widget<ChoiceChip>(search).selected, isTrue);
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    expect(tester.widget<TextField>(field).controller!.text,
+        'kept during reorder');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(library).selected, isTrue);
+
+    await _selectMusicSection(tester, MusicDestination.home);
+    final discover = find.byKey(const ValueKey('music-home-discover'));
+    final libraryShortcut = find.byKey(const ValueKey('music-home-library'));
+    expect(tester.getCenter(discover).dx,
+        lessThan(tester.getCenter(libraryShortcut).dx));
+    expect(find.byKey(const ValueKey('music-home-charts')), findsNothing);
+    await tester.tap(libraryShortcut);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ChoiceChip>(library).selected, isTrue);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('choosing Music Home overrides a Search shortcut in progress',
@@ -1332,9 +1422,13 @@ void main() {
     await tester.tap(_phoneTab(PhoneNavigationItem.search));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 30));
-    await tester.tap(_musicSection(0));
+    await tester.tap(_musicSection(MusicDestination.home));
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(_musicSection(0)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.home))
+            .selected,
+        isTrue);
     expect(tester.testTextInput.isVisible, isFalse);
   });
 
@@ -1349,6 +1443,25 @@ void main() {
     expect(tester.testTextInput.isVisible, isFalse);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
     expect(tester.testTextInput.isVisible, isFalse);
+  });
+
+  testWidgets('opening Settings during Music Search cancels keyboard focus',
+      (tester) async {
+    await _pumpHomepage(tester, const Size(320, 720));
+    await _selectPhoneTab(tester, PhoneNavigationItem.music);
+    await tester.tap(_phoneTab(PhoneNavigationItem.search));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 30));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Browsing'), findsOneWidget);
+    expect(tester.testTextInput.isVisible, isFalse);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Browsing'), findsNothing);
+    expect(tester.testTextInput.isVisible, isFalse);
+    await _selectPhoneTab(tester, PhoneNavigationItem.search);
+    expect(tester.testTextInput.isVisible, isTrue);
   });
 
   testWidgets('Music may start first and move out of the primary bar',
@@ -1375,10 +1488,18 @@ void main() {
         of: find.byType(AppBar), matching: find.byTooltip('Search'));
     await tester.tap(appBarSearch);
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
+            .selected,
+        isTrue);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(_musicSection(0)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.home))
+            .selected,
+        isTrue);
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
 
@@ -1446,14 +1567,14 @@ void main() {
 
       expectPage(pages.first);
       if (pages.first == PhoneNavigationItem.music) {
-        await _selectMusicSection(tester, 2);
+        await _selectMusicSection(tester, MusicDestination.library);
       }
       for (var i = 1; i < pages.length; i++) {
         await tester.dragFrom(const Offset(350, 500), const Offset(-320, 0));
         await tester.pumpAndSettle();
         expectPage(pages[i]);
         if (pages[i] == PhoneNavigationItem.music) {
-          await _selectMusicSection(tester, 2);
+          await _selectMusicSection(tester, MusicDestination.library);
         }
       }
       for (var i = pages.length - 2; i >= 0; i--) {
@@ -1461,7 +1582,11 @@ void main() {
         await tester.pumpAndSettle();
         expectPage(pages[i]);
         if (pages[i] == PhoneNavigationItem.music) {
-          expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+          expect(
+              tester
+                  .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+                  .selected,
+              isTrue);
         }
       }
       expect(tester.takeException(), isNull);
@@ -1527,7 +1652,7 @@ void main() {
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     final videoTab = tester.widget<NavigationBar>(navigation).selectedIndex;
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    await _selectMusicSection(tester, 1);
+    await _selectMusicSection(tester, MusicDestination.search);
     await tester.enterText(
         find.byKey(const ValueKey('music-search')), 'kept query');
     await tester.testTextInput.receiveAction(TextInputAction.search);
@@ -1537,7 +1662,11 @@ void main() {
     expect(find.text('Channel uploads'), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
+            .selected,
+        isTrue);
     expect(find.text('Channel uploads'), findsNothing);
     expect(find.text('Search result kept query'), findsOneWidget);
 
@@ -1549,7 +1678,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
+            .selected,
+        isTrue);
     expect(find.text('Channel uploads'), findsOneWidget,
         reason:
             'The hidden Music detail must not consume the video Back action');
@@ -1638,18 +1771,30 @@ void main() {
     await select('Music');
     expect(rail, findsOneWidget);
     expect(tester.widget<NavigationRail>(rail).selectedIndex, 4);
-    await _selectMusicSection(tester, 1);
-    expect(tester.widget<ChoiceChip>(_musicSection(1)).selected, isTrue);
+    await _selectMusicSection(tester, MusicDestination.search);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.search))
+            .selected,
+        isTrue);
     await tester.dragFrom(const Offset(950, 420), const Offset(-740, 0));
     await tester.pumpAndSettle();
-    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+            .selected,
+        isTrue);
     await select('Home');
     expect(find.descendant(of: rail, matching: find.text('Subscriptions')),
         findsOneWidget);
     expect(
         find.descendant(of: rail, matching: find.text('Search')), findsNothing);
     await select('Music');
-    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+            .selected,
+        isTrue);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -1681,14 +1826,22 @@ void main() {
     final navigation = find.byType(NavigationBar);
     await _selectPhoneTab(tester, PhoneNavigationItem.history);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    await _selectMusicSection(tester, 2);
-    expect(tester.widget<ChoiceChip>(_musicSection(2)).selected, isTrue);
+    await _selectMusicSection(tester, MusicDestination.library);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.library))
+            .selected,
+        isTrue);
     app.restartSession();
     await tester.pumpAndSettle();
     expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
     expect(find.byType(MusicModeScreen), findsNothing);
     await _selectPhoneTab(tester, PhoneNavigationItem.music);
-    expect(tester.widget<ChoiceChip>(_musicSection(0)).selected, isTrue);
+    expect(
+        tester
+            .widget<ChoiceChip>(_musicSection(MusicDestination.home))
+            .selected,
+        isTrue);
     expect(find.text('Saved songs'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1734,7 +1887,7 @@ void main() {
       final player = tester.element(find.byType(Player)).read<PlayerCubit>();
       final before = player.state;
       await _selectPhoneTab(tester, PhoneNavigationItem.music);
-      await _selectMusicSection(tester, 1);
+      await _selectMusicSection(tester, MusicDestination.search);
       expect(tester.element(find.byType(Player)).read<PlayerCubit>(),
           same(player));
       expect(player.state, same(before));
@@ -1745,57 +1898,119 @@ void main() {
     });
   }
 
-  testWidgets(
-      'download folder can be selected, cancelled and reset from an empty library',
+  testWidgets('download folders can be selected and reset independently',
       (tester) async {
     const channel = MethodChannel('videre/download_storage');
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-    messenger.setMockMethodCallHandler(
-        channel,
-        (_) async => {
-              'uri': 'content://documents/tree/primary%3AVidere',
-              'name': 'Videre files'
-            });
+    const videoFolder = {
+      'uri': 'content://documents/tree/primary%3AVideos',
+      'name': 'Family videos'
+    };
+    const audioFolder = {
+      'uri': 'content://documents/tree/primary%3ASongs',
+      'name': 'Saved songs'
+    };
+    Map<String, String>? result = videoFolder;
+    var unavailable = false;
+    final initialUris = <String?>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method != 'pickFolder') return null;
+      initialUris.add(call.arguments['initialUri'] as String?);
+      if (unavailable) throw PlatformException(code: 'PICKER_UNAVAILABLE');
+      return result;
+    });
     await _pumpHomepage(tester, const Size(390, 844));
     await tester.tap(find.byIcon(Icons.download));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Download folder'));
+    final entryPoint = find.byTooltip('Download folders');
+    await tester.tap(entryPoint);
     await tester.pumpAndSettle();
-    void expectDestination(String label) {
-      expect(
-          find.descendant(
-              of: find.widgetWithText(ListTile, label),
-              matching: find.byIcon(Icons.radio_button_checked)),
-          findsOneWidget);
+    expect(find.text('Video downloads'), findsOneWidget);
+    expect(find.text('Audio downloads'), findsOneWidget);
+    Finder option(String id) => find.byKey(ValueKey('download-folder-$id'));
+    Future<void> select(String id) async {
+      final tile = option(id);
+      await tester.ensureVisible(tile);
+      await tester.pumpAndSettle();
+      await tester.tap(tile);
+      await tester.pumpAndSettle();
     }
 
-    expectDestination('Default locations');
-    await tester.tap(find.text('Choose folder'));
-    await tester.pumpAndSettle();
-    expect(find.text('Videre files'), findsOneWidget);
-    expectDestination('Choose folder');
-    messenger.setMockMethodCallHandler(channel, (_) async => null);
-    await tester.tap(find.text('Choose folder'));
-    await tester.pumpAndSettle();
-    expect(find.text('Videre files'), findsOneWidget);
-    expectDestination('Choose folder');
-    messenger.setMockMethodCallHandler(channel,
-        (_) async => throw PlatformException(code: 'PICKER_UNAVAILABLE'));
-    await tester.tap(find.text('Choose folder'));
-    await tester.pumpAndSettle();
+    Future<void> expectSelected(String id, bool expected) async {
+      final tile = option(id);
+      await tester.ensureVisible(tile);
+      await tester.pumpAndSettle();
+      final node = tester.getSemantics(tile);
+      final flags = node.flagsCollection;
+      expect(
+          node.label,
+          contains(
+              id.startsWith('video-') ? 'Video downloads' : 'Audio downloads'));
+      expect(flags.isInMutuallyExclusiveGroup, isTrue, reason: id);
+      expect(flags.isChecked, expected, reason: id);
+    }
+
+    expect(option('video-standard'), findsNothing);
+    await expectSelected('video-private', true);
+    await expectSelected('audio-standard', true);
+    await select('video-custom');
+    expect(find.text('Family videos'), findsOneWidget);
+    await expectSelected('video-custom', true);
+    await expectSelected('audio-standard', true);
+    result = audioFolder;
+    await select('audio-custom');
+    expect(find.text('Saved songs'), findsOneWidget);
+    await expectSelected('audio-custom', true);
+    await expectSelected('video-custom', true);
+    result = null;
+    await select('video-custom');
+    await select('audio-custom');
+    expect(find.text('Family videos'), findsOneWidget);
+    expect(find.text('Saved songs'), findsOneWidget);
+    expect(initialUris, [null, null, videoFolder['uri'], audioFolder['uri']]);
+    unavailable = true;
+    await select('audio-custom');
     expect(
         find.textContaining('No folder picker is available.'), findsOneWidget);
-    expectDestination('Choose folder');
-    await tester.ensureVisible(find.text('App storage (private)'));
-    await tester.tap(find.text('App storage (private)'));
+    await expectSelected('audio-custom', true);
+
+    // Both handset and TV use this dialog. Move up from Video's custom
+    // folder and choose its private destination using only the remote.
+    final current = option('video-custom');
+    await tester.ensureVisible(current);
     await tester.pumpAndSettle();
-    expectDestination('App storage (private)');
-    expect(find.text('Videre files'), findsNothing);
+    Focus.of(tester.element(
+            find.descendant(of: current, matching: find.text('Family videos'))))
+        .requestFocus();
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    await expectSelected('video-private', true);
+    await expectSelected('video-custom', false);
+    expect(find.text('Family videos'), findsNothing);
+    expect(find.text('Saved songs'), findsOneWidget);
+
+    unavailable = false;
+    result = videoFolder;
+    await select('video-custom');
+    await select('audio-private');
+    await expectSelected('audio-private', true);
+    await expectSelected('video-custom', true);
+    expect(find.text('Saved songs'), findsNothing);
+    await select('audio-standard');
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
+    await tester.tap(entryPoint);
+    await tester.pumpAndSettle();
+    await expectSelected('audio-standard', true);
+    await expectSelected('audio-private', false);
+    await expectSelected('video-custom', true);
+    expect(find.text('Family videos'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

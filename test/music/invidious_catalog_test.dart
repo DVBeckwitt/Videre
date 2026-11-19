@@ -12,6 +12,7 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/notifications/models/db/channel_notifications.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -20,6 +21,7 @@ import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,6 +50,45 @@ Map<String, Object?> _song({int index = 0, String id = _songId}) => {
     };
 
 String _discoveryId(int index) => index.toString().padLeft(11, 'v');
+
+Map<String, Object?> _musicVideo(String id,
+        {String title = 'Test artist - Test song (Official Music Video)',
+        String author = 'Test artist',
+        String authorId = _channelId,
+        bool playable = false}) =>
+    {
+      ..._song(id: id),
+      'title': title,
+      'author': author,
+      'authorId': authorId,
+      'genre': 'Music',
+      if (playable)
+        'formatStreams': [
+          {
+            'url': 'https://invidious.example/videoplayback?itag=18&id=$id',
+            'itag': '18',
+            'type': 'video/mp4; codecs="avc1.42001E, mp4a.40.2"',
+            'quality': 'medium',
+            'resolution': '360p',
+            'size': '640x360',
+          },
+        ],
+    };
+
+Future<Video> _playingSong({bool artTrack = true}) async =>
+    Video.fromJson(artTrack
+            ? _musicVideo(_songId,
+                title: 'Test song',
+                author: 'Test artist - Topic',
+                playable: true)
+            : _musicVideo(_songId, playable: true))
+        .copyWith(
+            musicMetadata: MusicMetadata(
+                title: 'Test song',
+                artist: 'Test artist',
+                isArtTrack: artTrack),
+            playbackConnection:
+                BackendPlayback(await db.getCurrentlySelectedServer()));
 
 Map<String, Object?> _discoveryVideo(int index, {String? genre = 'Music'}) => {
       ..._song(id: _discoveryId(index)),
@@ -109,6 +150,179 @@ void main() {
 
   test('the production catalog defaults to Invidious', () {
     expect(musicCatalogService, isA<InvidiousMusicCatalogService>());
+  });
+
+  group('finding the playing song’s music video', () {
+    test('an already playing official video reuses its admitted media',
+        () async {
+      final song = await _playingSong(artTrack: false);
+      final result = await catalog.findMusicVideo(song, isCurrent: () => true);
+      expect(result?.videoId, _songId);
+      expect(result?.formatStreams?.single.url, song.formatStreams!.single.url);
+      expect(result?.playbackConnection, same(song.playbackConnection));
+      expect(requests, isEmpty);
+    });
+
+    test('a saved display title can recover the official video for the same ID',
+        () async {
+      final song = (await _playingSong(artTrack: false))
+          .copyWith(title: 'Test song', author: 'Test artist');
+      respond = (request) async => _json(
+          request.url.path == '/api/v1/search'
+              ? [
+                  for (var i = 1; i <= 3; i++)
+                    _musicVideo(_discoveryId(i), title: 'Test song'),
+                  _musicVideo(_songId),
+                ]
+              : _musicVideo(_songId, playable: true),
+          request);
+      final result = await catalog.findMusicVideo(song, isCurrent: () => true);
+      expect(result?.videoId, _songId);
+      expect(result?.title, contains('Official Music Video'));
+      expect(requests.map((request) => request.url.path),
+          ['/api/v1/search', '/api/v1/videos/$_songId']);
+    });
+
+    test('art track finds a playable official upload on the active instance',
+        () async {
+      await db.saveSetting(SettingsValue(dearrowSettingName, 'true'));
+      final selector = BackendSelector('ROUTE', const [
+        BackendOption('saved', 'Saved'),
+        BackendOption('playing', 'Playing'),
+      ]);
+      final selected = selector.withSelection(
+          await db.getCurrentlySelectedServer(), 'saved');
+      await db.upsertServer(selected);
+      final connection = BackendPlayback.manual(selected, 'playing');
+      final song = (await _playingSong()).copyWith(
+          playbackConnection: connection, backendPlayback: connection);
+      final alternate = _discoveryId(1);
+      respond = (request) async {
+        expect(request.url.origin, 'https://invidious.example');
+        expect(request.headers['Cookie'], 'ROUTE=playing');
+        if (request.url.path == '/api/v1/search') {
+          final query = request.url.queryParameters['q']!.toLowerCase();
+          expect(query, contains('test artist'));
+          expect(query, contains('test song'));
+          return _json([_musicVideo(alternate)..remove('genre')], request);
+        }
+        expect(request.url.path, '/api/v1/videos/$alternate');
+        return _json(_musicVideo(alternate, playable: true), request);
+      };
+      final result = await catalog.findMusicVideo(song, isCurrent: () => true);
+      expect(result?.videoId, alternate);
+      expect(result?.formatStreams?.single.url, contains('id=$alternate'));
+      expect(result?.playbackConnection, same(connection));
+      expect(requests.map((request) => request.url.path),
+          ['/api/v1/search', '/api/v1/videos/$alternate']);
+    });
+
+    test('rejects lookalikes, lyric videos, static artwork and missing media',
+        () async {
+      final song = await _playingSong();
+      final unplayable = _discoveryId(5);
+      respond = (request) async {
+        if (request.url.path == '/api/v1/search') {
+          return _json([
+            _musicVideo(_songId,
+                title: 'Test song', author: 'Test artist - Topic'),
+            _musicVideo(_discoveryId(1),
+                title: 'Test artist - Test song (Official Lyric Video)'),
+            _musicVideo(_discoveryId(2),
+                title: 'Test artist - Another song (Official Music Video)'),
+            _musicVideo(_discoveryId(3),
+                author: 'Unofficial fan uploads',
+                authorId: 'UC1111111111111111111111'),
+            _musicVideo(_discoveryId(4),
+                title: 'Test artist - Test song (Official Audio)'),
+            _musicVideo(unplayable),
+          ], request);
+        }
+        final id = request.url.pathSegments.last;
+        return _json(_musicVideo(id, playable: id != unplayable), request);
+      };
+      expect(await catalog.findMusicVideo(song, isCurrent: () => true), isNull);
+      expect(requests.map((request) => request.url.path),
+          ['/api/v1/search', '/api/v1/videos/$unplayable']);
+    });
+
+    test('a track change while searching discards results before detail lookup',
+        () async {
+      final song = await _playingSong();
+      final started = Completer<void>();
+      final resume = Completer<void>();
+      var current = true;
+      respond = (request) async {
+        started.complete();
+        await resume.future;
+        return _json([_musicVideo(_discoveryId(1))], request);
+      };
+      final pending = catalog.findMusicVideo(song, isCurrent: () => current);
+      await started.future;
+      current = false;
+      resume.complete();
+      expect(
+          await pending.onError((error, stackTrace) => null,
+              test: (error) =>
+                  error is MusicCatalogException || error is StateError),
+          isNull);
+      expect(requests.map((request) => request.url.path), ['/api/v1/search']);
+    });
+
+    for (final (reason, mismatch) in [
+      ('different duration', {'lengthSeconds': 215}),
+      ('missing duration', {'lengthSeconds': 0}),
+      (
+        'different song',
+        {'title': 'Test artist - Another song (Official Music Video)'}
+      ),
+    ]) {
+      test('rejects candidate whose full detail shows $reason', () async {
+        final song = await _playingSong();
+        final id = _discoveryId(1);
+        respond = (request) async => _json(
+            request.url.path == '/api/v1/search'
+                ? [_musicVideo(id)]
+                : {..._musicVideo(id, playable: true), ...mismatch},
+            request);
+        expect(
+            await catalog.findMusicVideo(song, isCurrent: () => true), isNull);
+        expect(requests.map((request) => request.url.path),
+            ['/api/v1/search', '/api/v1/videos/$id']);
+      });
+    }
+
+    test('multiple matching but unavailable uploads have a bounded lookup',
+        () async {
+      final song = await _playingSong();
+      respond = (request) async => _json(
+          request.url.path == '/api/v1/search'
+              ? [for (var i = 0; i < 25; i++) _musicVideo(_discoveryId(i))]
+              : _musicVideo(request.url.pathSegments.last),
+          request);
+      expect(await catalog.findMusicVideo(song, isCurrent: () => true), isNull);
+      expect(requests.where((request) => request.url.path == '/api/v1/search'),
+          hasLength(1));
+      final details = requests
+          .where((request) => request.url.path.startsWith('/api/v1/videos/'));
+      expect(details.length, inInclusiveRange(1, 3));
+    });
+
+    test('download-only and inactive connections cannot start a lookup',
+        () async {
+      final song = await _playingSong();
+      expect(
+          await catalog.findMusicVideo(
+              song.copyWith(downloadPlaybackOnly: true),
+              isCurrent: () => true),
+          isNull);
+      final other = await db.createProfile('Other listener');
+      await db.useProfile(other.id);
+      await db.upsertServer(
+          Server(profileId: other.id, url: 'https://invidious.example'));
+      expect(await catalog.findMusicVideo(song, isCurrent: () => true), isNull);
+      expect(requests, isEmpty);
+    });
   });
 
   test('a configured instance prefix is stripped only for its own origin', () {
@@ -492,6 +706,7 @@ void main() {
       () => contract.searchPlaylists('playlist'),
       contract.getTrendingSongs,
       contract.getDiscoverySongs,
+      () => contract.getGenreSongs('pop'),
       () => contract.getSong(_songId),
       () => contract.getArtist(_channelId),
       () => contract.getPlaylist(_playlistId),
@@ -556,6 +771,86 @@ void main() {
     expect(requests.every((request) => request.url.host == 'invidious.example'),
         isTrue);
   });
+
+  test('genre search inspects at most four recordings on the selected instance',
+      () async {
+    respond = (request) async {
+      expect(request.url.origin, 'https://invidious.example');
+      if (request.url.path == '/api/v1/search') {
+        expect(request.url.queryParameters['q'], 'jazz music');
+        expect(request.url.queryParameters['type'], 'video');
+        return _json(
+            [for (var index = 0; index < 6; index++) _discoveryVideo(index)],
+            request);
+      }
+      final index = int.parse(request.url.pathSegments.last.substring(10));
+      return _json(
+          _discoveryVideo(index, genre: index == 1 ? 'Sports' : 'Music'),
+          request);
+    };
+
+    final songs = await catalog.getGenreSongs('jazz');
+    expect(songs.map((song) => song.videoId), [
+      for (final index in [0, 2, 3]) _discoveryId(index)
+    ]);
+    expect(requests.map((request) => request.url.path), [
+      '/api/v1/search',
+      for (var index = 0; index < 4; index++)
+        '/api/v1/videos/${_discoveryId(index)}',
+    ]);
+  });
+
+  test('unsupported and cancelled genres make no instance requests', () async {
+    expect(await catalog.getGenreSongs('unsupported'), isEmpty);
+    await expectLater(catalog.getGenreSongs('pop', isCurrent: () => false),
+        throwsA(isA<MusicCatalogException>()));
+    expect(requests, isEmpty);
+  });
+
+  test('genre verification forwards instance cooldowns before the next batch',
+      () async {
+    await NetworkProxy.instance.initialize(
+        saved: '{"enabled":true,"host":"127.0.0.1","port":19050}',
+        configureNative: false);
+    respond = (request) async => request.url.path == '/api/v1/search'
+        ? _json([_discoveryVideo(0), _discoveryVideo(1)], request)
+        : http.Response('Rate limited', 429,
+            headers: {'retry-after': '120'}, request: request);
+    await expectLater(
+        catalog.getGenreSongs('pop'),
+        throwsA(isA<InvidiousServiceError>().having((error) => error.retryAfter,
+            'Retry-After', const Duration(minutes: 2))));
+    expect(requests.map((request) => request.url.path),
+        ['/api/v1/search', '/api/v1/videos/${_discoveryId(0)}']);
+  });
+
+  for (final genre in [false, true]) {
+    test(
+        '${genre ? 'genre' : 'artist'} batch reports cooldown and retains verified tracks',
+        () async {
+      respond = (request) async {
+        if (request.url.path == '/api/v1/search') {
+          return _json(
+              [for (var index = 0; index < 4; index++) _discoveryVideo(index)],
+              request);
+        }
+        if (request.url.pathSegments.last == _discoveryId(0)) {
+          return _json(_discoveryVideo(0), request);
+        }
+        return http.Response('Slow down', 429,
+            request: request, headers: {'retry-after': '60'});
+      };
+      final rejections = <InvidiousServiceError>[];
+      final tracks = genre
+          ? await catalog.getGenreSongs('pop',
+              onInstanceFailure: rejections.add)
+          : await catalog.getDiscoverySongs(
+              artist: 'Artist', onInstanceFailure: rejections.add);
+      expect(tracks.single.videoId, _discoveryId(0));
+      expect(rejections.single.retryAfter, const Duration(minutes: 1));
+      expect(requests, hasLength(3));
+    });
+  }
 
   test('artist discovery skips saved songs and verifies only new candidates',
       () async {

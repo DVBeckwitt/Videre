@@ -616,6 +616,8 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
     Key? key,
     String? videoId,
     List<MusicArtistCredit> artistCredits = const [],
+    List<Video> queue = const [],
+    int startIndex = 0,
     String? playlistId,
     String? artistId,
     String? initialQuery,
@@ -628,6 +630,8 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
             key: key,
             videoId: videoId,
             artistCredits: artistCredits,
+            queue: queue,
+            startIndex: startIndex,
             playlistId: playlistId,
             artistId: artistId,
             initialQuery: initialQuery,
@@ -650,6 +654,8 @@ class MusicRoute extends PageRouteInfo<MusicRouteArgs> {
         key: args.key,
         videoId: args.videoId,
         artistCredits: args.artistCredits,
+        queue: args.queue,
+        startIndex: args.startIndex,
         playlistId: args.playlistId,
         artistId: args.artistId,
         initialQuery: args.initialQuery,
@@ -665,6 +671,8 @@ class MusicRouteArgs {
     this.key,
     this.videoId,
     this.artistCredits = const [],
+    this.queue = const [],
+    this.startIndex = 0,
     this.playlistId,
     this.artistId,
     this.initialQuery,
@@ -678,6 +686,10 @@ class MusicRouteArgs {
 
   final List<MusicArtistCredit> artistCredits;
 
+  final List<Video> queue;
+
+  final int startIndex;
+
   final String? playlistId;
 
   final String? artistId;
@@ -690,7 +702,7 @@ class MusicRouteArgs {
 
   @override
   String toString() {
-    return 'MusicRouteArgs{key: $key, videoId: $videoId, artistCredits: $artistCredits, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
+    return 'MusicRouteArgs{key: $key, videoId: $videoId, artistCredits: $artistCredits, queue: $queue, startIndex: $startIndex, playlistId: $playlistId, artistId: $artistId, initialQuery: $initialQuery, startAt: $startAt, embedded: $embedded}';
   }
 }
 

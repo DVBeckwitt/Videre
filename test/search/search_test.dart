@@ -5,6 +5,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/network/content_link.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/search/models/search_date.dart';
 import 'package:clipious/search/models/search_duration.dart';
@@ -24,6 +25,21 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../test_app_cubit.dart';
 import '../test_settings_cubit.dart';
+
+class _PasteTrackingApp extends TestAppCubit {
+  _PasteTrackingApp(super.initialState);
+
+  final pastes = <String>[];
+
+  @override
+  Future<PastedLinkAction> submitPastedAppLink(String text,
+      {bool music = false,
+      Future<bool?> Function()? chooseOpen,
+      bool Function()? isCurrent}) async {
+    pastes.add(text);
+    return PastedLinkAction.handled;
+  }
+}
 
 class _SuggestionsService extends Service {
   final requests = <({String query, Completer<SearchSuggestion> response})>[];
@@ -88,6 +104,28 @@ void main() {
     expect(db.getSearchHistory(), ['cats']);
   });
 
+  test('a routed search treats a URL-shaped query as search text', () async {
+    const query = 'https://instance.example/watch?v=dQw4w9WgXcQ';
+    final routeApp = _PasteTrackingApp(AppState(0, null, HomeLayout()));
+    routeApp.intentDataStreamSubscription = const Stream.empty().listen((_) {});
+    final routeSettings = TestSettingsCubit(SettingsState.init(), routeApp);
+    await routeSettings.setUseSearchHistory(false);
+    final routed = SearchCubit(
+        SearchState.init(query: query, searchNow: true), routeSettings);
+    try {
+      expect(routeApp.pastes, isEmpty);
+      expect(routed.submittedQuery, query);
+      expect(routed.state.showResults, isTrue);
+
+      await routed.search(query);
+      expect(routeApp.pastes, [query]);
+    } finally {
+      await routed.close();
+      await routeSettings.close();
+      await routeApp.close();
+    }
+  });
+
   test('typed history keeps prefix matches ahead of substring matches', () {
     final history = ['wild horses', 'Horse care', 'A horse', 'horses', 'cats'];
     expect(recentOrMatchingSearches(history, ' HORSE '),
@@ -118,17 +156,23 @@ void main() {
     expect(search.state.suggestions, ['birds suggestion']);
   });
 
-  testWidgets('selected instance links do not become suggestion queries',
+  testWidgets('pasted instance addresses do not become suggestion queries',
       (tester) async {
     await tester.runAsync(() async {
       await db.upsertServer(
           const Server(url: 'https://instance.example/iv', inUse: true));
+      await db.upsertServer(const Server(url: 'https://saved.example'));
       await app.initState();
     });
-    search.state.queryController.text =
-        'https://instance.example/iv/watch?v=dQw4w9WgXcQ&t=42';
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(suggestions.requests, isEmpty);
+    for (final base in [
+      'https://instance.example/iv',
+      'https://saved.example',
+      'https://foreign.example',
+    ]) {
+      search.state.queryController.text = '$base/watch?v=dQw4w9WgXcQ&t=42';
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(suggestions.requests, isEmpty, reason: base);
+    }
   });
 
   testWidgets('suggestion errors leave typing and submitting usable',

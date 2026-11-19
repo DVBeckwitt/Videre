@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/views/components/music_mini_player.dart';
+import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/player/states/interfaces/media_player.dart';
 import 'package:clipious/player/models/flow_mini_geometry.dart';
 import 'package:clipious/player/models/flow_watch_layout.dart';
@@ -139,6 +140,8 @@ class _PlayerState extends State<Player> {
             context.select((PlayerCubit value) => value.state.isDragging);
         final bool isClosing =
             context.select((PlayerCubit value) => value.state.isClosing);
+        final openingSong =
+            context.select((PlayerCubit value) => value.openingSongTitle);
         final Video? currentlyPlaying =
             context.select((PlayerCubit value) => value.state.currentlyPlaying);
         final music = context.select((PlayerCubit value) =>
@@ -149,8 +152,11 @@ class _PlayerState extends State<Player> {
             context.select((PlayerCubit value) => value.state.fullScreenState);
         final bool isFullScreen =
             isPip || fullScreen == FullScreenState.fullScreen;
-        _updateMusicFocus(isMusic &&
-            showPlayer &&
+        // Between songs the mounted Music surface can already display and
+        // swipe its pending queue entry, before the decoder finishes opening.
+        final showOpeningSong =
+            openingSong != null && !isMusic && !isMini && !isFullScreen;
+        _updateMusicFocus((isMusic && showPlayer || showOpeningSong) &&
             !isHidden &&
             !isClosing &&
             !isMini &&
@@ -507,7 +513,8 @@ class _PlayerState extends State<Player> {
                                                                           .videoPlayer),
                                                                   leading:
                                                                       IconButton(
-                                                                    focusNode: isMusic
+                                                                    focusNode: isMusic &&
+                                                                            !showOpeningSong
                                                                         ? _minimizeMusicFocus
                                                                         : null,
                                                                     tooltip: MaterialLocalizations.of(
@@ -520,6 +527,8 @@ class _PlayerState extends State<Player> {
                                                                         .showMiniPlayer,
                                                                   ),
                                                                   actions: isHidden ||
+                                                                          openingSong !=
+                                                                              null ||
                                                                           currentlyPlaying ==
                                                                               null
                                                                       ? []
@@ -821,7 +830,28 @@ class _PlayerState extends State<Player> {
               node: _musicSurfaceFocus,
               child: Stack(
                 children: [
-                  surface,
+                  Positioned.fill(
+                      child: ExcludeFocus(
+                          excluding: showOpeningSong,
+                          child: Stack(children: [surface]))),
+                  if (showOpeningSong)
+                    Positioned.fill(
+                      child: BlockSemantics(
+                        child: MusicPlayerOpening(
+                          onBack: cubit.showMiniPlayer,
+                          backFocus: _minimizeMusicFocus,
+                          child:
+                              Column(mainAxisSize: MainAxisSize.min, children: [
+                            Text(openingSong,
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: 16),
+                            const CircularProgressIndicator(),
+                          ]),
+                        ),
+                      ),
+                    ),
                   if (tuckedSide != null &&
                       miniBounds != null &&
                       !miniBounds.isEmpty &&

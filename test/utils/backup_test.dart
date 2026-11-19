@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:clipious/home/models/home_tabs_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 
@@ -739,6 +740,34 @@ void main() {
     }
   });
 
+  test('Music layout backup retains section order and an empty shortcut row',
+      () async {
+    final layout = MusicLayout(destinations: [
+      MusicDestination.library,
+      MusicDestination.home,
+      MusicDestination.search,
+    ], shortcuts: []);
+    await source
+        .saveSetting(SettingsValue(musicLayoutSettingName, layout.encode()));
+    final exported = await source.exportBackup();
+    final profile = await target.createProfile('Music layout destination');
+    final previous = target.forProfile(target.profileId);
+    await target.useProfile(profile.id);
+    await target.restoreBackup(UserBackup.parse(exported.encode()),
+        replace: true);
+    final restored = MusicLayout.tryDecode(
+        target.getSettings(musicLayoutSettingName)?.value);
+    expect(restored?.destinations, layout.destinations);
+    expect(restored?.shortcuts, isEmpty);
+    expect(previous.getSettings(musicLayoutSettingName), isNull);
+
+    final invalid = jsonDecode(exported.encode()) as Map<String, dynamic>;
+    invalid['settings'] = [
+      SettingsValue(musicLayoutSettingName, '{}').toJson()
+    ];
+    expect(() => UserBackup.parse(jsonEncode(invalid)), throwsFormatException);
+  });
+
   test('backup restores motion choices and rejects invalid values', () async {
     for (final value in ['system', 'reduced', 'off']) {
       await source
@@ -899,26 +928,36 @@ void main() {
         isFalse);
   });
 
-  test('download folder grants stay on their device during backup and restore',
-      () async {
-    await source.saveSetting(SettingsValue(
-        downloadFolderSetting,
-        jsonEncode(
-            const DownloadFolder('content://source/tree/folder', 'Source')
-                .toJson())));
-    await target.saveSetting(SettingsValue(
-        downloadFolderSetting,
-        jsonEncode(
-            const DownloadFolder('content://target/tree/folder', 'Target')
-                .toJson())));
-    final backup = await source.exportBackup();
-    expect(backup.encode(), isNot(contains('content://source')));
-    for (final replace in [false, true]) {
-      await target.restoreBackup(backup, replace: replace);
-      expect(target.getSettings(downloadFolderSetting)!.value,
-          contains('content://target'));
-    }
-  });
+  for (final split in [false, true]) {
+    test('download grants stay on their device during backup (split=$split)',
+        () async {
+      String preferences(String device) {
+        final audio =
+            DownloadFolder('content://$device/tree/audio', 'Audio').toJson();
+        if (!split) return jsonEncode(audio);
+        return jsonEncode({
+          'audio': audio,
+          'video':
+              DownloadFolder('content://$device/tree/video', 'Video').toJson(),
+          'musicFolder':
+              DownloadFolder('content://$device/tree/music', 'Music').toJson(),
+        });
+      }
+
+      final local = preferences('target');
+      final incoming =
+          SettingsValue(downloadFolderSetting, preferences('source'));
+      await source.saveSetting(incoming);
+      await target.saveSetting(SettingsValue(downloadFolderSetting, local));
+      final backup = await source.exportBackup();
+      expect(UserBackup.validSetting(incoming), isFalse);
+      expect(backup.encode(), isNot(contains('content://source')));
+      for (final replace in [false, true]) {
+        await target.restoreBackup(backup, replace: replace);
+        expect(target.getSettings(downloadFolderSetting)?.value, local);
+      }
+    });
+  }
 
   test('backup preserves destination notification permission and scheduling',
       () async {

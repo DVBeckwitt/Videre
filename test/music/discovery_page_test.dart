@@ -5,6 +5,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -19,6 +20,7 @@ import 'package:clipious/router.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -39,6 +41,16 @@ const _saved = MusicLibraryEntry(
 const _discovered = MusicTrack(
     videoId: 'discover001', title: 'Discovered recording', artists: ['Artist']);
 
+const _genres = ['pop', 'jazz', 'classical', 'electronic'];
+const _genreLabels = ['Pop', 'Jazz', 'Classical', 'Electronic'];
+
+List<MusicTrack> _genreTracks(String genre) => [
+      for (var i = 1; i <= 2; i++)
+        MusicTrack(
+            videoId: 'genre${_genres.indexOf(genre)}song$i',
+            title: '$genre recording $i'),
+    ];
+
 class _App extends Cubit<AppState> implements AppCubit {
   _App()
       : super(AppState(
@@ -57,22 +69,51 @@ class _Catalog extends MusicCatalogService {
   int discoveryCalls = 0;
   bool holdDiscovery = false;
   final discoveries = <Completer<List<MusicTrack>>>[];
+  final discoveryFailures = <void Function(InvidiousServiceError)?>[];
   final discoveryGuards = <bool Function()?>[];
   final discoveryArtists = <String?>[];
   final relatedSeeds = <List<String>>[];
-  List<MusicTrack> relatedTracks = const [];
+  final relatedGuards = <bool Function()?>[];
+  final relatedResponses = <Completer<List<MusicTrack>>>[];
+  bool holdGenres = false;
+  bool useGenreTracks = false;
+  final genres = <String>[];
+  final genreGuards = <bool Function()?>[];
+  final genreFailures = <void Function(InvidiousServiceError)?>[];
+  final genreResponses = <Completer<List<MusicTrack>>>[];
+
+  @override
+  Future<List<MusicTrack>> getGenreSongs(String genre,
+      {bool Function()? isCurrent,
+      void Function(InvidiousServiceError)? onInstanceFailure}) {
+    genres.add(genre);
+    genreGuards.add(isCurrent);
+    genreFailures.add(onInstanceFailure);
+    if (!holdGenres) {
+      return Future.value(useGenreTracks ? _genreTracks(genre) : []);
+    }
+    final response = Completer<List<MusicTrack>>();
+    genreResponses.add(response);
+    return response.future;
+  }
 
   @override
   Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
-      {bool Function()? isCurrent}) async {
+      {bool Function()? isCurrent}) {
     relatedSeeds.add(seedIds.toList());
-    return relatedTracks;
+    relatedGuards.add(isCurrent);
+    final response = Completer<List<MusicTrack>>();
+    relatedResponses.add(response);
+    return response.future;
   }
 
   @override
   Future<List<MusicTrack>> getDiscoverySongs(
-      {String? artist, bool Function()? isCurrent}) {
+      {String? artist,
+      bool Function()? isCurrent,
+      void Function(InvidiousServiceError)? onInstanceFailure}) {
     discoveryCalls++;
+    discoveryFailures.add(onInstanceFailure);
     discoveryGuards.add(isCurrent);
     discoveryArtists.add(artist);
     if (!holdDiscovery) return Future.value([]);
@@ -99,6 +140,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   final plays = <({List<String> ids, int? startIndex, bool? audio})>[];
 
+  void setAudioPlayer({required bool minimized}) =>
+      emit(state.copyWith(isAudio: true, isHidden: false, isMini: minimized));
+
   @override
   Future<void> playVideo(List<Video> videos,
       {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
@@ -115,6 +159,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
 class _Router extends AppRouter {
   PageRouteInfo? pushed;
+  Future<void> Function()? openPlayer;
 
   _Router() : super(hasServer: true);
 
@@ -122,6 +167,7 @@ class _Router extends AppRouter {
   Future<T?> push<T extends Object?>(PageRouteInfo route,
       {OnNavigationFailure? onFailure}) async {
     pushed = route;
+    await openPlayer?.call();
     return null;
   }
 }
@@ -205,16 +251,23 @@ void main() {
     }
   }
 
-  Future<void> loadDiscovery(WidgetTester tester) async {
-    final load = find.byKey(const ValueKey('music-discovery-load'));
-    await tester.ensureVisible(load);
-    await tester.pumpAndSettle();
-    await tester.tap(load);
-    await tester.pump();
+  void expectSongQueue(List<String> ids, int selected) {
+    final args = router.pushed!.args as MusicRouteArgs;
+    expect(args.videoId, ids[selected]);
+    expect(args.queue.map((video) => video.videoId), ids);
+    expect(args.startIndex, selected);
   }
 
-  testWidgets(
-      'Quick Picks use native ranking and explain it without a catalog call',
+  Future<void> playFromMenu(WidgetTester tester, Finder row) async {
+    router.pushed = null;
+    await tester.tap(
+        find.descendant(of: row, matching: find.byTooltip('Music actions')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('Quick Picks use native ranking and explain the displayed song',
       (tester) async {
     final requests = <Map>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -246,6 +299,11 @@ void main() {
           id: 'quickpick02',
           title: 'Second pick',
           subtitle: 'Artist'));
+      await library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.song,
+          id: 'quickpick03',
+          title: 'Third pick',
+          subtitle: 'Artist'));
     });
     await show(tester);
     expect(find.text('Quick picks'), findsOneWidget);
@@ -254,6 +312,11 @@ void main() {
     expect(tester.getRect(first).top, lessThan(tester.getRect(second).top));
     expect(requests.first['domain'], 'music');
     expect(requests.first['surface'], 'quick_picks');
+    const rankedIds = ['quickpick01', 'quickpick02', 'quickpick03'];
+    await tester.tap(second);
+    expectSongQueue(rankedIds, 1);
+    await playFromMenu(tester, second);
+    expectSongQueue(rankedIds, 1);
     final actions =
         find.descendant(of: first, matching: find.byTooltip('Music actions'));
     await tester.tap(actions);
@@ -297,7 +360,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('From your local listening preferences'), findsNothing);
     expect(catalog.searchCalls, 0);
-    expect(catalog.discoveryCalls, 0);
+    expect(catalog.discoveryArtists, [null, 'Artist', null]);
     expect(catalog.trendingCalls, 0);
   });
 
@@ -307,7 +370,18 @@ void main() {
       await db.upsertHistoryVideo(HistoryVideoCache(
           'listenagain', 'Listened song', 'Artist', '',
           musicMetadata:
-              const MusicMetadata(title: 'Listened song', artist: 'Artist')));
+              const MusicMetadata(title: 'Listened song', artist: 'Artist'))
+        ..created = DateTime.utc(2026, 1, 2));
+      await db.upsertHistoryVideo(HistoryVideoCache(
+          'olderlisten', 'Earlier song', 'Artist', '',
+          musicMetadata:
+              const MusicMetadata(title: 'Earlier song', artist: 'Artist'))
+        ..created = DateTime.utc(2026, 1, 1));
+      await db.upsertHistoryVideo(HistoryVideoCache(
+          'newerlisten', 'Later song', 'Artist', '',
+          musicMetadata:
+              const MusicMetadata(title: 'Later song', artist: 'Artist'))
+        ..created = DateTime.utc(2026, 1, 3));
       await db.upsertHistoryVideo(
           HistoryVideoCache('videohist01', 'Video history', 'Creator', ''));
     });
@@ -319,7 +393,10 @@ void main() {
     await tester.ensureVisible(card);
     await tester.pumpAndSettle();
     await tester.tap(card);
-    expect((router.pushed!.args as MusicRouteArgs).videoId, 'listenagain');
+    const historyIds = ['newerlisten', 'listenagain', 'olderlisten'];
+    expectSongQueue(historyIds, 1);
+    await playFromMenu(tester, card);
+    expectSongQueue(historyIds, 1);
     final next = (await tester.runAsync(() => db.createProfile('Second')))!;
     await tester.runAsync(() => db.useProfile(next.id));
     app.change(app.state.copyWith(profileId: next.id));
@@ -327,7 +404,7 @@ void main() {
     expect(find.text('Listened song'), findsNothing);
     expect(find.text('Keep listening'), findsNothing);
     expect(catalog.searchCalls, 0);
-    expect(catalog.discoveryCalls, 0);
+    expect(catalog.discoveryCalls, 2);
   });
 
   Future<void> saveLearnedTracks(WidgetTester tester) =>
@@ -340,6 +417,158 @@ void main() {
               subtitle: 'Artist $i'));
         }
       });
+
+  for (final rtl in [false, true]) {
+    testWidgets(
+        'Quick Picks snap one column per swipe (${rtl ? 'RTL' : 'LTR'})',
+        (tester) async {
+      if (rtl) {
+        tester.platformDispatcher.localesTestValue = [const Locale('ar')];
+        addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+      }
+      final forward = rtl ? 1.0 : -1.0;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(360, 640);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final ids = List.generate(10, (i) => 'snappick00$i');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('videre/recommendations'),
+              (_) async => {
+                    'ranked': [
+                      for (final id in ids)
+                        {'id': id, 'score': 1.0, 'reason': 'Saved song'},
+                    ],
+                  });
+      await tester.runAsync(() async {
+        for (final id in ids) {
+          await library.save(MusicLibraryEntry(
+              kind: MusicLibraryKind.song, id: id, title: id));
+        }
+      });
+      await show(tester);
+      final shelf = find.byKey(const ValueKey('music-quick-picks'));
+      Finder pick(int index) =>
+          find.byKey(ValueKey('music-quick-pick-${ids[index]}'));
+      final leading = tester.getTopLeft(pick(0)).dx;
+      Future<void> swipe(double distance) async {
+        await tester.fling(shelf, Offset(distance, 0), 2400);
+        await tester.pumpAndSettle();
+      }
+
+      // A short, slow drag returns to the original column.
+      await tester.timedDrag(
+          shelf, Offset(40 * forward, 0), const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(pick(0)).dx, closeTo(leading, 1));
+
+      // A fast swipe advances a single column even with a third available.
+      await swipe(100 * forward);
+      expect(tester.getTopLeft(pick(4)).dx, closeTo(leading, 1));
+      await swipe(100 * forward);
+      final lastColumn = tester.getRect(pick(8));
+      expect(lastColumn.left, closeTo(leading, 1));
+      expect(pick(9).hitTestable(), findsOneWidget);
+      await swipe(100 * forward);
+      expect(tester.getRect(pick(8)).left, closeTo(lastColumn.left, 1));
+
+      await swipe(-100 * forward);
+      expect(tester.getTopLeft(pick(4)).dx, closeTo(leading, 1));
+      await tester.timedDrag(
+          shelf, Offset(-210 * forward, 0), const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(pick(0)).dx, closeTo(leading, 1));
+      await swipe(-100 * forward);
+      expect(tester.getTopLeft(pick(0)).dx, closeTo(leading, 1));
+
+      // A wide gesture can travel past a whole column, but still advances one.
+      tester.view.physicalSize = const Size(830, 800);
+      await tester.pumpAndSettle();
+      final tabletStart = tester.getTopLeft(pick(0)).dx;
+      final shelfBounds = tester.getRect(shelf);
+      await tester.flingFrom(
+          Offset(rtl ? shelfBounds.left + 8 : shelfBounds.right - 8,
+              shelfBounds.center.dy),
+          Offset((shelfBounds.width - 16) * forward, 0),
+          3000);
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(pick(4)).dx, closeTo(tabletStart, 1));
+
+      // When all three columns fit, a swipe cannot page into empty space.
+      tester.view.physicalSize = const Size(1440, 800);
+      await tester.pumpAndSettle();
+      final wideStart = tester.getTopLeft(pick(0)).dx;
+      expect(pick(9).hitTestable(), findsOneWidget);
+      await swipe(100 * forward);
+      expect(tester.getTopLeft(pick(0)).dx, closeTo(wideStart, 1));
+    });
+  }
+
+  for (final retainsSong in [true, false]) {
+    testWidgets(
+        'TV Back restores the Quick Pick ${retainsSong ? 'across lanes' : 'at the nearest remaining slot'}',
+        (tester) async {
+      final previousTv = isTv;
+      isTv = true;
+      addTearDown(() => isTv = previousTv);
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(960, 720);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      var ranking = [1, 2, 3, 4, 5, 6, 7];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              const MethodChannel('videre/recommendations'),
+              (_) async => {
+                    'summary': <String, Object?>{},
+                    'ranked': [
+                      for (final number in ranking)
+                        {
+                          'id': 'learnmusic$number',
+                          'score': 1.0,
+                          'reason': 'Saved song'
+                        },
+                    ],
+                  });
+      await saveLearnedTracks(tester);
+      await show(tester);
+      Finder pickTitle(int number) => find.descendant(
+          of: find.byKey(ValueKey('music-quick-pick-learnmusic$number')),
+          matching: find.text('Learned track $number'));
+      final played = pickTitle(6);
+      final navigator = Navigator.of(tester.element(played));
+      router.openPlayer = () => navigator.push<void>(MaterialPageRoute(
+          builder: (_) => const Scaffold(body: Text('Playing Quick Pick'))));
+      await tester.ensureVisible(played);
+      Focus.of(tester.element(played)).requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Playing Quick Pick'), findsOneWidget);
+      expect((router.pushed!.args as MusicRouteArgs).videoId, 'learnmusic6');
+
+      ranking = retainsSong ? [6, 1, 2, 3, 4, 5, 7] : [1, 2];
+      await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
+          'learnmusic6', 'Learned track 6', 'Artist', '',
+          musicMetadata: const MusicMetadata(
+              title: 'Learned track 6', artist: 'Artist'))));
+      playbackHistoryRevision.value++;
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      if (retainsSong) {
+        expect(tester.getRect(played).top,
+            lessThan(tester.getRect(pickTitle(1)).top));
+      } else {
+        expect(played, findsNothing);
+      }
+      expect(
+          Focus.of(tester.element(pickTitle(retainsSong ? 6 : 2)))
+              .hasPrimaryFocus,
+          isTrue);
+    });
+  }
 
   testWidgets('Flow local shelves respect rank, thresholds and queue position',
       (tester) async {
@@ -378,12 +607,11 @@ void main() {
     expect(player.plays.single.startIndex, 1);
     expect(player.plays.single.audio, isTrue);
     expect(catalog.relatedSeeds, isEmpty);
-    expect(catalog.discoveryCalls, 0);
+    expect(
+        catalog.discoveryArtists, [null, 'Artist 7', 'Artist 6', 'Artist 5']);
   });
 
-  testWidgets(
-      'daily mix recalls only on request and queues ranked related songs',
-      (tester) async {
+  List<String> stubMixRanking() {
     final requests = <String>[];
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -391,7 +619,7 @@ void main() {
         const MethodChannel('videre/recommendations'), (call) async {
       final args = call.arguments as Map;
       final surface = args['surface'] as String;
-      requests.add(surface);
+      if ((args['candidates'] as List).isNotEmpty) requests.add(surface);
       return {
         'ranked': [
           if (surface == 'discover')
@@ -413,28 +641,168 @@ void main() {
         },
       };
     });
-    catalog.relatedTracks = [
-      for (var index = 1; index <= 4; index++)
-        MusicTrack(videoId: 'related000$index', title: 'Related song $index'),
-    ];
+    return requests;
+  }
+
+  final mixTracks = [
+    for (var index = 1; index <= 4; index++)
+      MusicTrack(videoId: 'related000$index', title: 'Related song $index'),
+  ];
+  final mix = find.byKey(const ValueKey('music-daily-mix-0'));
+
+  testWidgets('daily mix opens immediately with its prepared ranked songs',
+      (tester) async {
+    final requests = stubMixRanking();
     await saveLearnedTracks(tester);
     await show(tester);
-    final mix = find.byKey(const ValueKey('music-daily-mix-0'));
+    expect(catalog.relatedSeeds, [
+      ['learnmusic1', 'learnmusic2', 'learnmusic3']
+    ]);
+    expect(mix, findsNothing);
+    final previousRanks =
+        requests.where((surface) => surface == 'quick_picks').length;
+    await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
+        'learnmusic1', 'Learned track 1', 'Artist 1', '',
+        musicMetadata: const MusicMetadata(
+            title: 'Learned track 1', artist: 'Artist 1'))));
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
+    expect(requests.where((surface) => surface == 'quick_picks').length,
+        greaterThan(previousRanks));
+    catalog.relatedResponses.single.complete(mixTracks);
+    await tester.pumpAndSettle();
     expect(mix, findsOneWidget);
-    expect(catalog.relatedSeeds, isEmpty);
+    expect(requests.where((surface) => surface == 'discover'), hasLength(1));
+    await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
+        'learnmusic2', 'Learned track 2', 'Artist 2', '',
+        musicMetadata: const MusicMetadata(
+            title: 'Learned track 2', artist: 'Artist 2'))));
+    playbackHistoryRevision.value++;
+    await tester.pumpAndSettle();
     await tester.ensureVisible(mix);
     await tester.tap(mix);
     await tester.pumpAndSettle();
     expect(find.text('Artist Mix'), findsOneWidget);
-    expect(catalog.relatedSeeds, isEmpty);
-    await tester.tap(find.byKey(const ValueKey('music-collection-load')));
-    await tester.pumpAndSettle();
-    expect(catalog.relatedSeeds.single,
-        ['learnmusic1', 'learnmusic2', 'learnmusic3']);
-    expect(requests.last, 'discover');
+    expect(find.byKey(const ValueKey('music-collection-load')), findsNothing);
+    expect(find.text('Related song 4'), findsOneWidget);
+    expect(catalog.relatedResponses, hasLength(1));
+    expect(requests.where((surface) => surface == 'discover'), hasLength(1));
     await tester.tap(find.byKey(const ValueKey('music-collection-play')));
     expect(player.plays.single.ids,
         ['related0004', 'related0003', 'related0002', 'related0001']);
+  });
+
+  for (final fails in [true, false]) {
+    testWidgets(
+        'daily mix stays hidden after ${fails ? 'failed recall' : 'insufficient tracks'}',
+        (tester) async {
+      stubMixRanking();
+      await saveLearnedTracks(tester);
+      await show(tester);
+      final response = catalog.relatedResponses.single;
+      if (fails) {
+        response.completeError(StateError('Related songs unavailable'));
+      } else {
+        response.complete(mixTracks.take(3).toList());
+      }
+      await tester.pumpAndSettle();
+      expect(mix, findsNothing);
+      expect(find.byKey(const ValueKey('music-daily-mixes')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await show(tester, active: false);
+      await show(tester);
+      expect(mix, findsNothing);
+      if (fails) {
+        expect(catalog.relatedResponses, hasLength(2));
+        catalog.relatedResponses.last.complete(mixTracks);
+        await tester.pumpAndSettle();
+        expect(mix, findsOneWidget);
+      } else {
+        expect(catalog.relatedResponses, hasLength(1));
+      }
+    });
+  }
+
+  testWidgets('daily mix waits for visible Music and drops hidden results',
+      (tester) async {
+    stubMixRanking();
+    await saveLearnedTracks(tester);
+    await show(tester, active: false);
+    expect(catalog.relatedSeeds, isEmpty);
+    await show(tester);
+    final current = catalog.relatedGuards.single!;
+    expect(current(), isTrue);
+    await show(tester, active: false);
+    expect(current(), isFalse);
+    catalog.relatedResponses.single.complete(mixTracks);
+    await tester.pumpAndSettle();
+    await show(tester);
+    expect(catalog.relatedResponses, hasLength(2));
+    expect(mix, findsNothing);
+    catalog.relatedResponses.last.complete(mixTracks);
+    await tester.pumpAndSettle();
+    expect(mix, findsOneWidget);
+  });
+
+  for (final scope in ['profile', 'server', 'proxy']) {
+    testWidgets('daily mix drops a late response after a $scope change',
+        (tester) async {
+      stubMixRanking();
+      await saveLearnedTracks(tester);
+      await show(tester);
+      final current = catalog.relatedGuards.single!;
+      final original = catalog.relatedResponses.single;
+      switch (scope) {
+        case 'profile':
+          final next =
+              (await tester.runAsync(() => db.createProfile('Second')))!;
+          await tester.runAsync(() => db.useProfile(next.id));
+          app.change(app.state.copyWith(profileId: next.id));
+        case 'server':
+          app.change(app.state
+              .copyWith(server: const Server(url: 'https://second.example')));
+        case 'proxy':
+          await tester.runAsync(() =>
+              NetworkProxy.instance.apply(SocksProxyConfig(enabled: true)));
+      }
+      expect(current(), isFalse);
+      original.complete(mixTracks);
+      await tester.pumpAndSettle();
+      expect(mix, findsNothing);
+      if (scope == 'profile') {
+        expect(catalog.relatedResponses, hasLength(1));
+      } else {
+        expect(catalog.relatedResponses, hasLength(2));
+        catalog.relatedResponses.last.complete(mixTracks);
+        await tester.pumpAndSettle();
+        expect(mix, findsOneWidget);
+      }
+    });
+  }
+
+  testWidgets('daily mix ignores background results and resumes on return',
+      (tester) async {
+    final binding = tester.binding;
+    final previous = binding.lifecycleState;
+    addTearDown(() => binding
+        .handleAppLifecycleStateChanged(previous ?? AppLifecycleState.resumed));
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    stubMixRanking();
+    await saveLearnedTracks(tester);
+    await show(tester);
+    final current = catalog.relatedGuards.single!;
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    expect(current(), isFalse);
+    catalog.relatedResponses.single.complete(mixTracks);
+    await tester.pump();
+    expect(catalog.relatedResponses, hasLength(1));
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(mix, findsNothing);
+    expect(catalog.relatedResponses, hasLength(2));
+    catalog.relatedResponses.last.complete(mixTracks);
+    await tester.pumpAndSettle();
+    expect(mix, findsOneWidget);
   });
 
   testWidgets('retained Keep Listening updates while learning is paused',
@@ -452,7 +820,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Keep listening'), findsOneWidget);
     expect(find.text('Newly listened song'), findsOneWidget);
-    expect(catalog.discoveryCalls, 0);
+    expect(catalog.discoveryCalls, 1);
     expect(catalog.searchCalls, 0);
   });
 
@@ -467,18 +835,26 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
     expect(catalog.trendingCalls, 0);
     expect(catalog.searchCalls, 0);
-    expect(catalog.discoveryCalls, 0);
+    expect(catalog.discoveryCalls, 1);
   });
 
-  testWidgets('explicit discovery loads once and opens verified results',
+  testWidgets('visible Home discovers songs once and opens verified results',
       (tester) async {
+    await tester.runAsync(installCommunityMusicFilters);
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     expect(catalog.discoveryCalls, 1);
     expect(
         find.byKey(const ValueKey('music-discovery-loading')), findsOneWidget);
-    catalog.discoveries.single.complete([_discovered]);
+    catalog.discoveries.single.complete([
+      const MusicTrack(videoId: 'priorSong01', title: 'First result'),
+      const MusicTrack(
+          videoId: 'hiddenSong1',
+          title: 'Hidden song',
+          uploaderChannelId: musicListedUploader),
+      _discovered,
+      const MusicTrack(videoId: 'laterSong01', title: 'Last result')
+    ]);
     await tester.pumpAndSettle();
     await show(tester);
     expect(catalog.discoveryCalls, 1);
@@ -486,8 +862,20 @@ void main() {
     await tester.ensureVisible(card);
     await tester.pumpAndSettle();
     await tester.tap(card);
-    expect(
-        (router.pushed!.args as MusicRouteArgs).videoId, _discovered.videoId);
+    expectSongQueue(['priorSong01', _discovered.videoId, 'laterSong01'], 1);
+    final toggle = find.textContaining('Show hidden results');
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(card);
+    await tester.longPress(card);
+    await tester.pumpAndSettle();
+    router.pushed = null;
+    await tester.tap(find.byKey(const ValueKey('music-song-play')));
+    await tester.pumpAndSettle();
+    expectSongQueue(
+        ['priorSong01', 'hiddenSong1', _discovered.videoId, 'laterSong01'], 2);
+    expect(catalog.discoveryCalls, 1);
     expect(catalog.trendingCalls, 0);
   });
 
@@ -512,8 +900,7 @@ void main() {
       (tester) async {
     rankDiscovery();
     catalog.holdDiscovery = true;
-    await show(tester);
-    await loadDiscovery(tester);
+    await show(tester, settle: false);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final refresh = find.byKey(const ValueKey('music-discovery-refresh'));
@@ -544,8 +931,7 @@ void main() {
     var nativeAvailable = true;
     rankDiscovery(available: () => nativeAvailable);
     catalog.holdDiscovery = true;
-    await show(tester);
-    await loadDiscovery(tester);
+    await show(tester, settle: false);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final card = find.byKey(const ValueKey('music-discovery-discover001'));
@@ -590,8 +976,7 @@ void main() {
   testWidgets('external exclusions update retained discovery and stale cards',
       (tester) async {
     catalog.holdDiscovery = true;
-    await show(tester);
-    await loadDiscovery(tester);
+    await show(tester, settle: false);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final card = find.byKey(const ValueKey('music-discovery-discover001'));
@@ -605,53 +990,202 @@ void main() {
     expect(router.pushed, isNull);
     await tester.pumpAndSettle();
     expect(card, findsNothing);
+    expect(find.byKey(const ValueKey('music-home-discover')), findsNothing);
     expect(catalog.discoveryCalls, 1);
   });
 
-  testWidgets('saved artist discovery loads on tap and retries the same artist',
+  Future<void> finishDiscovery(
+      WidgetTester tester, List<MusicTrack> songs) async {
+    catalog.discoveries.last.complete(songs);
+    await tester.pump();
+    await tester.pump();
+  }
+
+  final discoverShortcut = find.byKey(const ValueKey('music-home-discover'));
+  Finder artistChip(String artist) => find.widgetWithText(ChoiceChip, artist);
+  const artistSong =
+      MusicTrack(videoId: 'artist00001', title: 'Prepared artist recording');
+
+  testWidgets('Home prepares at most three distinct saved artists in sequence',
+      (tester) async {
+    await tester.runAsync(() async {
+      for (final artist in ['First', 'Second', 'Third', 'Fourth']) {
+        await library.save(MusicLibraryEntry(
+            kind: MusicLibraryKind.song,
+            id: artist,
+            title: '$artist recording',
+            subtitle: artist));
+      }
+      await library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.artist,
+          id: 'UCsavedchannel',
+          title: 'FOURTH'));
+    });
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    expect(catalog.discoveryArtists, [null]);
+    expect(discoverShortcut, findsNothing);
+    expect(artistChip('FOURTH'), findsNothing);
+
+    await finishDiscovery(tester, [_discovered]);
+    expect(catalog.discoveryArtists, [null, 'FOURTH']);
+    expect(discoverShortcut, findsOneWidget);
+    expect(artistChip('FOURTH'), findsNothing);
+    await finishDiscovery(tester, [artistSong]);
+    expect(catalog.discoveryArtists, [null, 'FOURTH', 'Third']);
+    expect(artistChip('FOURTH'), findsOneWidget);
+    expect(artistChip('Third'), findsNothing);
+
+    await tester.ensureVisible(artistChip('FOURTH'));
+    await tester.tap(artistChip('FOURTH'));
+    await tester.pump();
+    expect(find.text(artistSong.title), findsOneWidget);
+    expect(find.text(_discovered.title), findsNothing);
+    expect(catalog.discoveryArtists, [null, 'FOURTH', 'Third']);
+    expect(find.byKey(const ValueKey('music-discovery-loading')), findsNothing);
+    await tester.tap(artistChip('All music'));
+    await tester.pump();
+    expect(find.text(_discovered.title), findsOneWidget);
+
+    await finishDiscovery(tester, []);
+    expect(catalog.discoveryArtists, [null, 'FOURTH', 'Third', 'Second']);
+    expect(artistChip('Third'), findsNothing);
+    expect(artistChip('Second'), findsNothing);
+    await finishDiscovery(tester, [
+      const MusicTrack(videoId: 'second00001', title: 'Second artist song')
+    ]);
+    expect(artistChip('Second'), findsOneWidget);
+    expect(artistChip('First'), findsNothing);
+    await tester.ensureVisible(artistChip('Second'));
+    await tester.tap(artistChip('Second'));
+    await tester.pumpAndSettle();
+    expect(find.text('Second artist song'), findsOneWidget);
+    expect(catalog.discoveryArtists, [null, 'FOURTH', 'Third', 'Second']);
+    expect(router.pushed, isNull);
+  });
+
+  testWidgets('Discover opens a ready artist when general discovery is empty',
       (tester) async {
     await tester.runAsync(() => library.save(_saved));
     catalog.holdDiscovery = true;
-    await show(tester);
-    expect(catalog.discoveryArtists, isEmpty);
-    final artistChip = find.widgetWithText(ChoiceChip, 'Saved artist');
-    await tester.ensureVisible(artistChip);
+    await show(tester, settle: false);
+    await finishDiscovery(tester, []);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
+    expect(discoverShortcut, findsNothing);
+    expect(artistChip('Saved artist'), findsNothing);
+    await finishDiscovery(tester, [artistSong]);
+    expect(discoverShortcut, findsOneWidget);
+    await tester.ensureVisible(discoverShortcut);
+    await tester.tap(discoverShortcut);
     await tester.pumpAndSettle();
-    await tester.tap(artistChip);
-    await tester.pump();
-    expect(catalog.discoveryArtists, ['Saved artist']);
-    expect(tester.widget<ChoiceChip>(artistChip).selected, isTrue);
-
-    catalog.discoveries.single.completeError(StateError('Unavailable'));
-    await tester.pumpAndSettle();
-    await loadDiscovery(tester);
-    expect(catalog.discoveryArtists, ['Saved artist', 'Saved artist']);
-    catalog.discoveries.last.complete([_discovered]);
-    await tester.pumpAndSettle();
-    expect(find.text('Discovered recording'), findsOneWidget);
-
-    final generic = find.widgetWithText(ChoiceChip, 'All music');
-    await tester.ensureVisible(generic);
-    await tester.pumpAndSettle();
-    await tester.tap(generic);
-    await tester.pump();
-    expect(catalog.discoveryArtists, ['Saved artist', 'Saved artist', null]);
-    expect(find.text('Discovered recording'), findsNothing);
-    catalog.discoveries.last.complete([]);
-    await tester.pumpAndSettle();
+    expect(find.text(artistSong.title), findsOneWidget);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
   });
 
-  testWidgets('a stale discovery chip cannot search from another profile',
+  testWidgets('returning Home resumes artist preparation from the ready cache',
+      (tester) async {
+    await tester.runAsync(() async {
+      await library.save(const MusicLibraryEntry(
+          kind: MusicLibraryKind.artist, id: 'UColderartist', title: 'Older'));
+      await library.save(_saved);
+    });
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    await finishDiscovery(tester, [artistSong]);
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Older']);
+    final pending = catalog.discoveries.last;
+    final current = catalog.discoveryGuards.last!;
+
+    await show(tester, active: false);
+    expect(current(), isFalse);
+    pending.complete([
+      const MusicTrack(videoId: 'stale000001', title: 'Covered recommendation')
+    ]);
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Older']);
+    await show(tester, settle: false);
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Older', 'Older']);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(artistChip('Saved artist'), findsOneWidget);
+    expect(artistChip('Older'), findsNothing);
+    await finishDiscovery(tester, []);
+    expect(find.text('Covered recommendation'), findsNothing);
+  });
+
+  testWidgets(
+      'instance cooldown stops automatic artist batches until a permitted retry',
       (tester) async {
     await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    catalog.discoveries.single.completeError(InvidiousServiceError(
+        'Too many requests',
+        statusCode: 429,
+        retryAfter: const Duration(minutes: 1)));
+    await tester.pumpAndSettle();
+    final retry = find.byKey(const ValueKey('music-discovery-retry'));
+    expect(tester.widget<FilledButton>(retry).onPressed, isNull);
+    expect(discoverShortcut, findsNothing);
+    expect(catalog.discoveryArtists, [null]);
+    await show(tester, active: false);
     await show(tester);
-    final chip = tester
-        .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Saved artist'));
-    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
-    await tester.runAsync(() => db.useProfile(next.id));
-    chip.onSelected!(true);
+    await tester.pump(const Duration(seconds: 30));
+    expect(tester.widget<FilledButton>(retry).onPressed, isNull);
+    expect(catalog.discoveryArtists, [null]);
+    await tester.pump(const Duration(seconds: 31));
+    expect(tester.widget<FilledButton>(retry).onPressed, isNotNull);
+    expect(catalog.discoveryArtists, [null]);
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
     await tester.pump();
-    expect(catalog.discoveryArtists, isEmpty);
+    expect(catalog.discoveryArtists, [null, null]);
+    await finishDiscovery(tester, [_discovered]);
+    expect(catalog.discoveryArtists, [null, null, 'Saved artist']);
+    await finishDiscovery(tester, [artistSong]);
+    expect(artistChip('Saved artist'), findsOneWidget);
+  });
+
+  testWidgets(
+      'a partial response preserves verified songs during an instance cooldown',
+      (tester) async {
+    await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    catalog.discoveryFailures.single!(InvidiousServiceError('Too many requests',
+        statusCode: 429, retryAfter: const Duration(minutes: 1)));
+    await finishDiscovery(tester, [_discovered]);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(discoverShortcut, findsOneWidget);
+    expect(catalog.discoveryArtists, [null]);
+    await show(tester, active: false);
+    await show(tester);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(artistChip('Saved artist'), findsNothing);
+    expect(catalog.discoveryArtists, [null]);
+    await tester.pump(const Duration(minutes: 1));
+    expect(catalog.discoveryArtists, [null]);
+  });
+
+  testWidgets('a failed artist stays hidden and can be prepared on retry',
+      (tester) async {
+    await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, []);
+    catalog.discoveries.last.completeError(StateError('Unavailable'));
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
+    expect(discoverShortcut, findsNothing);
+    expect(artistChip('Saved artist'), findsNothing);
+    final retry = find.byKey(const ValueKey('music-discovery-retry'));
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pump();
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Saved artist']);
+    await finishDiscovery(tester, [artistSong]);
+    expect(find.text(artistSong.title), findsOneWidget);
+    expect(discoverShortcut, findsOneWidget);
   });
 
   testWidgets('hidden discovery has a reveal and keeps its loaded selection',
@@ -659,7 +1193,6 @@ void main() {
     await tester.runAsync(installCommunityMusicFilters);
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     catalog.discoveries.single.complete([
       const MusicTrack(
           videoId: 'discover001',
@@ -670,6 +1203,7 @@ void main() {
 
     expect(find.byKey(const ValueKey('music-discovery-discover001')),
         findsNothing);
+    expect(discoverShortcut, findsNothing);
     expect(find.byKey(const ValueKey('music-discovery-empty')), findsNothing);
     final toggle = find.textContaining('Show hidden results');
     await tester.ensureVisible(toggle);
@@ -694,7 +1228,6 @@ void main() {
     await show(tester, active: false);
     expect(catalog.discoveryCalls, 0);
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     expect(catalog.discoveryCalls, 1);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
@@ -704,11 +1237,108 @@ void main() {
     expect(catalog.discoveryCalls, 1);
   });
 
+  testWidgets(
+      'backgrounded discovery cancels pending work and retains ready songs',
+      (tester) async {
+    final binding = tester.binding;
+    final initialLifecycle = binding.lifecycleState;
+    addTearDown(() => binding.handleAppLifecycleStateChanged(
+        initialLifecycle ?? AppLifecycleState.resumed));
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    catalog.holdDiscovery = true;
+    await show(tester);
+    expect(find.byType(MusicHomePage), findsOneWidget);
+    expect(catalog.discoveryCalls, 0);
+
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    await tester.pump();
+    expect(catalog.discoveryCalls, 1);
+    final current = catalog.discoveryGuards.single!;
+    expect(current(), isTrue);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    expect(current(), isFalse);
+
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    expect(current(), isFalse);
+    await tester.pump();
+    await tester.pump();
+    expect(catalog.discoveryCalls, 2);
+    catalog.discoveries.first.complete([
+      const MusicTrack(videoId: 'stale000001', title: 'Stale recommendation')
+    ]);
+    catalog.discoveries.last.complete([_discovered]);
+    await tester.pumpAndSettle();
+    expect(find.text('Stale recommendation'), findsNothing);
+    expect(find.text('Discovered recording'), findsOneWidget);
+
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryCalls, 2);
+    expect(find.text('Discovered recording'), findsOneWidget);
+  });
+
+  testWidgets('full audio player suspends discovery until Home is uncovered',
+      (tester) async {
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    final firstRequest = catalog.discoveries.single;
+    final current = catalog.discoveryGuards.single!;
+    expect(current(), isTrue);
+
+    player.setAudioPlayer(minimized: false);
+    await tester.pump();
+    expect(current(), isFalse);
+    firstRequest.complete([
+      const MusicTrack(videoId: 'stale000001', title: 'Covered recommendation')
+    ]);
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryCalls, 1);
+    expect(find.text('Covered recommendation'), findsNothing);
+
+    player.setAudioPlayer(minimized: true);
+    await tester.pump();
+    await tester.pump();
+    expect(catalog.discoveryCalls, 2);
+    catalog.discoveries.last.complete([_discovered]);
+    await tester.pumpAndSettle();
+    expect(find.text('Discovered recording'), findsOneWidget);
+
+    player.setAudioPlayer(minimized: false);
+    await tester.pumpAndSettle();
+    player.setAudioPlayer(minimized: true);
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryCalls, 2);
+    expect(find.text('Discovered recording'), findsOneWidget);
+  });
+
+  testWidgets('discovery starts once a usable server session is available',
+      (tester) async {
+    final server = app.state.server;
+    app.change(app.state.copyWith(server: null));
+    catalog.holdDiscovery = true;
+    await show(tester);
+    expect(catalog.discoveryCalls, 0);
+
+    app.change(
+        app.state.copyWith(server: server, sessionRecoveryRequired: true));
+    await tester.pumpAndSettle();
+    expect(catalog.discoveryCalls, 0);
+
+    app.change(app.state.copyWith(sessionRecoveryRequired: false));
+    await tester.pump();
+    await tester.pump();
+    expect(catalog.discoveryCalls, 1);
+    catalog.discoveries.single.complete([_discovered]);
+    await tester.pumpAndSettle();
+    expect(find.text('Discovered recording'), findsOneWidget);
+  });
+
   testWidgets('hiding Home cancels an initial batch before more lookups',
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     final original = catalog.discoveries.single;
     final current = catalog.discoveryGuards.single!;
     await show(tester, active: false);
@@ -718,7 +1348,6 @@ void main() {
     expect(find.text('Discovered recording'), findsNothing);
     expect(catalog.discoveryCalls, 1);
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     expect(catalog.discoveryCalls, 2);
     catalog.discoveries.last.complete([_discovered]);
     await tester.pumpAndSettle();
@@ -729,7 +1358,6 @@ void main() {
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final refresh = find.byKey(const ValueKey('music-discovery-refresh'));
@@ -749,7 +1377,7 @@ void main() {
   });
 
   for (final connection in ['HTTPS', 'onion', 'SOCKS']) {
-    testWidgets('$connection discovery requires an explicit Load music action',
+    testWidgets('$connection discovery starts on entering Home',
         (tester) async {
       if (connection == 'onion') {
         app.change(app.state
@@ -760,14 +1388,9 @@ void main() {
             configureNative: false);
       }
       catalog.holdDiscovery = true;
-      await show(tester);
-      expect(catalog.discoveryCalls, 0);
-      final load = find.byKey(const ValueKey('music-discovery-load'));
-      await tester.ensureVisible(load);
-      await tester.pumpAndSettle();
-      await tester.tap(load);
-      await tester.pump();
+      await show(tester, settle: false);
       expect(catalog.discoveryCalls, 1);
+      expect(find.byKey(const ValueKey('music-discovery-load')), findsNothing);
       expect(find.byKey(const ValueKey('music-discovery-loading')),
           findsOneWidget);
       catalog.discoveries.single.complete([_discovered]);
@@ -780,7 +1403,6 @@ void main() {
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final refresh = find.byKey(const ValueKey('music-discovery-refresh'));
@@ -806,7 +1428,6 @@ void main() {
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     catalog.discoveries.single
         .completeError(const MusicCatalogException('Unavailable'));
     await tester.pumpAndSettle();
@@ -814,7 +1435,7 @@ void main() {
     expect(catalog.discoveryCalls, 1);
     expect(
         find.byKey(const ValueKey('music-discovery-failure')), findsOneWidget);
-    final retry = find.byKey(const ValueKey('music-discovery-load'));
+    final retry = find.byKey(const ValueKey('music-discovery-retry'));
     await tester.ensureVisible(retry);
     await tester.pumpAndSettle();
     await tester.tap(retry);
@@ -837,7 +1458,6 @@ void main() {
         (tester) async {
       catalog.holdDiscovery = true;
       await show(tester, settle: false);
-      await loadDiscovery(tester);
       final original = catalog.discoveries.single;
       final current = catalog.discoveryGuards.single!;
       app.change(switch (transition) {
@@ -856,17 +1476,20 @@ void main() {
       original.complete([_discovered]);
       await tester.pump();
       expect(find.text('Discovered recording'), findsNothing);
+      expect(catalog.discoveryCalls, transition == 'loading' ? 1 : 2);
+      if (transition != 'loading') {
+        expect(catalog.discoveryGuards.last!(), isTrue);
+        catalog.discoveries.last.complete([]);
+      }
       await tester.pumpAndSettle();
-      expect(catalog.discoveryCalls, 1);
       expect(catalog.trendingCalls, 0);
     });
   }
 
-  testWidgets('country changes invalidate discovery and cannot keep a spinner',
+  testWidgets('country changes discard stale songs and load the new region',
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     final original = catalog.discoveries.single;
     await tester
         .runAsync(() => db.saveSetting(SettingsValue(browsingCountry, 'DE')));
@@ -875,25 +1498,27 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.text('Discovered recording'), findsNothing);
-    expect(catalog.discoveryCalls, 1);
+    expect(catalog.discoveryCalls, 2);
+    catalog.discoveries.last.complete([]);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('music-discovery-loading')), findsNothing);
   });
 
-  testWidgets('a proxy change clears discovery and waits for manual reloading',
+  testWidgets('a proxy change clears discovery and refetches automatically',
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     final original = catalog.discoveries.single;
     await tester.runAsync(
         () => NetworkProxy.instance.apply(SocksProxyConfig(enabled: true)));
     expect(catalog.discoveryGuards.single!(), isFalse);
     original.complete([_discovered]);
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
     expect(find.text('Discovered recording'), findsNothing);
-    expect(catalog.discoveryCalls, 1);
-    expect(find.byKey(const ValueKey('music-discovery-load')), findsOneWidget);
+    expect(catalog.discoveryCalls, 2);
+    catalog.discoveries.last.complete([]);
+    await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('music-discovery-loading')), findsNothing);
   });
 
@@ -901,7 +1526,6 @@ void main() {
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final stale = tester.widget<MusicCatalogCard>(
@@ -912,7 +1536,6 @@ void main() {
     stale.onOpen();
     expect(router.pushed, isNull);
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     expect(find.text('Discovered recording'), findsNothing);
     expect(catalog.discoveryCalls, 2);
     catalog.discoveries.last.complete([]);
@@ -924,7 +1547,6 @@ void main() {
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     catalog.discoveries.single.complete([_discovered]);
     await tester.pumpAndSettle();
     final stale = tester.widget<MusicCatalogCard>(
@@ -937,15 +1559,15 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.text('Discovered recording'), findsNothing);
+    expect(catalog.discoveryCalls, 2);
+    catalog.discoveries.last.complete([]);
     await tester.pumpAndSettle();
-    expect(catalog.discoveryCalls, 1);
   });
 
   testWidgets('disposing Home revokes discovery before its response arrives',
       (tester) async {
     catalog.holdDiscovery = true;
     await show(tester, settle: false);
-    await loadDiscovery(tester);
     final current = catalog.discoveryGuards.single!;
     expect(current(), isTrue);
     await tester.pumpWidget(const SizedBox());
@@ -965,94 +1587,215 @@ void main() {
     expect(libraryVisits, 2);
   });
 
-  testWidgets('saved music supplies three distinct local search suggestions',
-      (tester) async {
-    await tester.runAsync(() async {
-      for (final artist in ['First', 'Second', 'Third', 'Fourth']) {
-        await library.save(MusicLibraryEntry(
-            kind: MusicLibraryKind.song,
-            id: artist,
-            title: '$artist recording',
-            subtitle: artist));
-      }
-      await library.save(const MusicLibraryEntry(
-          kind: MusicLibraryKind.artist,
-          id: 'UCsavedchannel',
-          title: 'FOURTH'));
-    });
-    await show(tester);
-    final suggestions = find.byType(ActionChip);
-    expect(suggestions, findsNWidgets(3));
-    expect(find.widgetWithText(ActionChip, 'FOURTH'), findsOneWidget);
-    expect(find.widgetWithText(ActionChip, 'Third'), findsOneWidget);
-    expect(find.widgetWithText(ActionChip, 'Second'), findsOneWidget);
-    expect(find.widgetWithText(ActionChip, 'First'), findsNothing);
-    final selected = find.widgetWithText(ActionChip, 'FOURTH');
-    await tester.ensureVisible(selected);
-    await tester.pumpAndSettle();
-    await tester.tap(selected);
-    expect(
-        (router.pushed!.args as MusicRouteArgs).initialQuery, 'FOURTH music');
-    expect(catalog.searchCalls, 0);
-    expect(catalog.discoveryCalls, 0);
-    expect(catalog.trendingCalls, 0);
-  });
-
-  testWidgets('search suggestions refresh when saved music changes',
-      (tester) async {
-    await show(tester);
-    expect(find.byType(ActionChip), findsNothing);
-    await tester.runAsync(() => library.save(_saved));
-    await tester.pumpAndSettle();
-    expect(find.widgetWithText(ActionChip, 'Saved artist'), findsOneWidget);
-    await tester.runAsync(() => library.remove(_saved.kind, _saved.id));
-    await tester.pumpAndSettle();
-    expect(find.byType(ActionChip), findsNothing);
-    expect(catalog.discoveryCalls, 0);
-  });
-
-  testWidgets('suggestions and their actions stay in their saved music profile',
+  testWidgets(
+      'saving the last prepared artist song removes its discovery choice',
       (tester) async {
     await tester.runAsync(() => library.save(_saved));
-    await show(tester);
-    final stale = tester
-        .widget<ActionChip>(find.widgetWithText(ActionChip, 'Saved artist'));
-    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
-    await tester.runAsync(() => db.useProfile(next.id));
-    final nextLibrary = MusicLibraryService.forProfile(db, next.id);
-    await tester.runAsync(() => nextLibrary.save(const MusicLibraryEntry(
-        kind: MusicLibraryKind.artist,
-        id: 'UCsecondchannel',
-        title: 'Second profile artist')));
-    app.change(app.state.copyWith(profileId: next.id));
-    stale.onPressed!();
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    await finishDiscovery(tester, [artistSong]);
+    final choice = artistChip('Saved artist');
+    await tester.ensureVisible(choice);
+    await tester.tap(choice);
+    await tester.pumpAndSettle();
+    final card = find.byKey(ValueKey('music-discovery-${artistSong.videoId}'));
+    final previousCard = tester.widget<MusicCatalogCard>(card);
+
+    await tester.runAsync(() => library.save(MusicLibraryEntry(
+        kind: MusicLibraryKind.song,
+        id: artistSong.videoId,
+        title: artistSong.title,
+        subtitle: _saved.subtitle)));
+    previousCard.onOpen();
     expect(router.pushed, isNull);
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(ActionChip, 'Saved artist'), findsNothing);
-    expect(find.widgetWithText(ActionChip, 'Second profile artist'),
+    expect(card, findsNothing);
+    expect(choice, findsNothing);
+    expect(find.byKey(ValueKey('music-discovery-${_discovered.videoId}')),
         findsOneWidget);
-    expect(catalog.discoveryCalls, 0);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
   });
 
-  testWidgets('genre tiles open explicit Invidious song searches',
+  testWidgets('removing a saved artist retires its pending and prepared songs',
       (tester) async {
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    await tester.runAsync(() => library.save(_saved));
+    await tester.pump();
+    await tester.pump();
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
+    final pending = catalog.discoveries.last;
+    final current = catalog.discoveryGuards.last!;
+    await tester.runAsync(() => library.remove(_saved.kind, _saved.id));
+    await tester.pump();
+    expect(current(), isFalse);
+    pending.complete([artistSong]);
+    await tester.pumpAndSettle();
+    expect(artistChip('Saved artist'), findsNothing);
+    expect(find.text(artistSong.title), findsNothing);
+
+    await tester.runAsync(() => library.save(_saved));
+    await tester.pump();
+    await tester.pump();
+    expect(catalog.discoveryArtists, [null, 'Saved artist', 'Saved artist']);
+    await finishDiscovery(tester, [artistSong]);
+    await tester.ensureVisible(artistChip('Saved artist'));
+    await tester.tap(artistChip('Saved artist'));
+    await tester.pump();
+    expect(find.text(artistSong.title), findsOneWidget);
+    await tester.runAsync(() => library.remove(_saved.kind, _saved.id));
+    await tester.pumpAndSettle();
+    expect(artistChip('Saved artist'), findsNothing);
+    expect(find.text(artistSong.title), findsNothing);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(catalog.discoveryCalls, 3);
+  });
+
+  testWidgets('prepared artist songs and chip actions stay in their profile',
+      (tester) async {
+    await tester.runAsync(() => library.save(_saved));
+    catalog.holdDiscovery = true;
+    await show(tester, settle: false);
+    await finishDiscovery(tester, [_discovered]);
+    await finishDiscovery(tester, [artistSong]);
+    final stale = tester.widget<ChoiceChip>(artistChip('Saved artist'));
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.change(app.state.copyWith(profileId: next.id));
+    stale.onSelected!(true);
+    await tester.pump();
+    await tester.pump();
+    expect(artistChip('Saved artist'), findsNothing);
+    expect(find.text(artistSong.title), findsNothing);
+    expect(discoverShortcut, findsNothing);
+    expect(catalog.discoveryArtists, [null, 'Saved artist', null]);
+    await finishDiscovery(tester, []);
+    expect(discoverShortcut, findsNothing);
+  });
+
+  testWidgets('genre tiles appear in order after their songs are prepared',
+      (tester) async {
+    catalog.holdGenres = true;
     await show(tester);
-    const queries = [
-      'pop music',
-      'jazz music',
-      'classical music',
-      'electronic music'
-    ];
-    for (var index = 0; index < queries.length; index++) {
+    for (var index = 0; index < _genres.length; index++) {
+      expect(catalog.genres, _genres.take(index + 1).toList());
+      expect(find.byKey(ValueKey('music-explore-$index')), findsNothing);
+      catalog.genreResponses.last.complete(_genreTracks(_genres[index]));
+      await tester.pumpAndSettle();
+      expect(find.text(_genreLabels[index]), findsOneWidget);
+    }
+    for (var index = 0; index < _genres.length; index++) {
+      final genre = _genres[index];
       final tile = find.byKey(ValueKey('music-explore-$index'));
       await tester.ensureVisible(tile);
       await tester.pumpAndSettle();
       await tester.tap(tile);
-      expect(
-          (router.pushed!.args as MusicRouteArgs).initialQuery, queries[index]);
+      await tester.pumpAndSettle();
+      expect(find.text(_genreLabels[index]), findsOneWidget);
+      expect(find.text('$genre recording 1'), findsOneWidget);
+      expect(find.text('$genre recording 2'), findsOneWidget);
+      expect(find.byKey(const ValueKey('music-collection-load')), findsNothing);
+      expect(catalog.genres, _genres);
+      if (index == 0) {
+        await tester.tap(find.byKey(const ValueKey('music-collection-play')));
+        expect(player.plays.single.ids,
+            _genreTracks(genre).map((s) => s.videoId).toList());
+      }
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(tile, findsOneWidget);
     }
+    expect(catalog.genres, _genres);
     expect(catalog.trendingCalls, 0);
     expect(catalog.searchCalls, 0);
+  });
+
+  testWidgets('failed and empty genres do not advertise unavailable songs',
+      (tester) async {
+    catalog.holdGenres = true;
+    await show(tester);
+    catalog.genreResponses.single.completeError(Exception('Unavailable'));
+    await tester.pumpAndSettle();
+    expect(catalog.genres, ['pop', 'jazz']);
+    catalog.genreResponses.last.complete([]);
+    await tester.pumpAndSettle();
+    expect(catalog.genres, ['pop', 'jazz', 'classical']);
+    catalog.genreResponses.last.complete([_genreTracks('classical').first]);
+    await tester.pumpAndSettle();
+    expect(find.text('Pop'), findsNothing);
+    expect(find.text('Jazz'), findsNothing);
+    expect(find.text('Classical'), findsOneWidget);
+    expect(find.text('Electronic'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('hidden Music cancels genre preparation and resumes on return',
+      (tester) async {
+    catalog.holdGenres = true;
+    await show(tester, active: false);
+    expect(catalog.genres, isEmpty);
+    await show(tester);
+    final current = catalog.genreGuards.single!;
+    expect(current(), isTrue);
+    await show(tester, active: false);
+    expect(current(), isFalse);
+    catalog.genreResponses.single.complete(_genreTracks('pop'));
+    await tester.pumpAndSettle();
+    expect(catalog.genres, ['pop']);
+    await show(tester);
+    expect(find.text('Pop'), findsNothing);
+    expect(catalog.genres, ['pop', 'pop']);
+    catalog.genreResponses.last.complete(_genreTracks('pop'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pop'), findsOneWidget);
+  });
+
+  testWidgets('genre keeps verified tracks and stops fetching on rate limit',
+      (tester) async {
+    catalog.holdGenres = true;
+    await show(tester);
+    catalog.genreFailures.single!(InvidiousServiceError('Try later',
+        statusCode: 429, retryAfter: const Duration(minutes: 2)));
+    catalog.genreResponses.single.complete(_genreTracks('pop'));
+    await tester.pumpAndSettle();
+    expect(catalog.genres, ['pop']);
+    expect(find.text('Jazz'), findsNothing);
+    final pop = find.byKey(const ValueKey('music-explore-0'));
+    await tester.ensureVisible(pop);
+    await tester.tap(pop);
+    await tester.pumpAndSettle();
+    expect(find.text('pop recording 1'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(catalog.genres, ['pop']);
+    expect(pop, findsOneWidget);
+  });
+
+  testWidgets('changing servers drops genre results from the old instance',
+      (tester) async {
+    catalog.holdGenres = true;
+    await show(tester);
+    final original = catalog.genreResponses.single;
+    final current = catalog.genreGuards.single!;
+    app.change(app.state
+        .copyWith(server: const Server(url: 'https://second.example')));
+    expect(current(), isFalse);
+    original.complete(_genreTracks('pop'));
+    await tester.pumpAndSettle();
+    expect(catalog.genres, ['pop', 'pop']);
+    expect(find.text('Pop'), findsNothing);
+    const fresh =
+        MusicTrack(videoId: 'newpopsong1', title: 'New instance recording');
+    catalog.genreResponses.last.complete([fresh]);
+    await tester.pumpAndSettle();
+    final tile = find.byKey(const ValueKey('music-explore-0'));
+    await tester.ensureVisible(tile);
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+    expect(find.text(fresh.title), findsOneWidget);
+    expect(find.text('pop recording 1'), findsNothing);
   });
 
   testWidgets('saved songs refresh locally and open their identifiers',
@@ -1100,7 +1843,7 @@ void main() {
     expect(find.text('Saved recording'), findsNothing);
     expect(
         find.byKey(const ValueKey('music-home-saved-empty')), findsOneWidget);
-    expect(catalog.discoveryCalls, 0);
+    expect(catalog.discoveryArtists, [null, 'Saved artist']);
   });
 
   testWidgets('Home limits its preview while keeping the full library',
@@ -1119,6 +1862,12 @@ void main() {
     final shelf = find.byKey(const ValueKey('music-home-saved'));
     await tester.ensureVisible(shelf);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Song 12'));
+    final preview = [for (var i = 13; i >= 2; i--) 'saved$i'];
+    expectSongQueue(preview, 1);
+    await playFromMenu(
+        tester, find.byKey(const ValueKey('music-home-saved-saved12')));
+    expectSongQueue(preview, 1);
     await tester.drag(shelf, const Offset(-1500, 0));
     await tester.pumpAndSettle();
     expect(find.text('Song 2'), findsOneWidget);
@@ -1163,6 +1912,7 @@ void main() {
   for (final transition in ['server', 'revision', 'loading', 'recovery']) {
     testWidgets('stale genre actions are ignored after $transition changes',
         (tester) async {
+      catalog.useGenreTracks = true;
       await show(tester);
       final stale =
           tester.widget<InkWell>(find.byKey(const ValueKey('music-explore-0')));
@@ -1176,10 +1926,12 @@ void main() {
       stale.onTap!();
       expect(router.pushed, isNull);
       await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('music-collection-play')), findsNothing);
     });
   }
 
   testWidgets('Home keeps its scroll position across rebuilds', (tester) async {
+    catalog.useGenreTracks = true;
     tester.view.physicalSize = const Size(390, 500);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1213,6 +1965,7 @@ void main() {
 
   testWidgets('Home fits 320px with large text and long saved titles',
       (tester) async {
+    catalog.useGenreTracks = true;
     tester.view.physicalSize = const Size(320, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1231,6 +1984,7 @@ void main() {
 
   testWidgets('focusing a lower genre scrolls that tile fully into view',
       (tester) async {
+    catalog.useGenreTracks = true;
     tester.view.physicalSize = const Size(320, 350);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1242,8 +1996,9 @@ void main() {
     expect(tile.top, greaterThanOrEqualTo(0));
     expect(tile.bottom, lessThanOrEqualTo(350));
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pump();
-    expect((router.pushed!.args as MusicRouteArgs).initialQuery,
-        'electronic music');
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Electronic'), findsOneWidget);
+    expect(find.text('electronic recording 1').hitTestable(), findsOneWidget);
+    expect(catalog.genres, _genres);
   });
 }

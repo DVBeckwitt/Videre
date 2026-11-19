@@ -86,7 +86,10 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   final Set<String> _deleting = {};
   final Set<String> _enqueuing = {};
   final Map<String, ({CancelToken token, Future<bool> result})> _exports = {};
-  DownloadFolder? _legacyMusicFolder;
+  DownloadFolderPreferences _folders = const DownloadFolderPreferences();
+  Future<void> _folderWrite = Future.value();
+  final _folderChoiceRevision = <bool, int>{};
+  int _musicFolderRevision = 0;
   Future<String?>? _pendingMusicFolder;
   bool _processing = false, _wifiConnected = false, _closing = false;
   bool _switchingProfile = false;
@@ -189,22 +192,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
 
   void _loadLibrary() {
     Set<String> paused = {};
-    DownloadFolder? folder;
-    var usePrivateStorage = false;
-    _legacyMusicFolder = null;
-    try {
-      final saved = jsonDecode(
-          _library.getSettings(downloadFolderSetting)?.value ?? 'null');
-      folder = DownloadFolder.fromJson(saved);
-      if (saved is Map) {
-        _legacyMusicFolder = DownloadFolder.fromJson(saved['musicFolder']);
-      }
-      usePrivateStorage =
-          saved != null && folder == null && _legacyMusicFolder == null;
-    } on FormatException {
-      // Invalid local preferences fall back to private storage.
-      usePrivateStorage = true;
-    }
+    _folders = _readFolders();
+    _pendingMusicFolder = null;
     try {
       final saved =
           jsonDecode(_library.getSettings(_pausedSetting)?.value ?? '[]');
@@ -212,14 +201,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     } on FormatException {
       // An interrupted settings import should not block the download library.
     }
-    emit(state.copyWith(
-        folderUri: folder?.uri,
-        folderName: folder?.name,
-        usePrivateStorage: usePrivateStorage,
+    emit(_withFolders(state.copyWith(
         wifiOnly: _library.getSettings(_wifiSetting)?.value == 'true',
         pausedVideoIds: paused,
         downloadProgresses: {},
-        videos: _library.getAllDownloads()));
+        videos: _library.getAllDownloads())));
   }
 
   bool get _networkAllowed => !state.wifiOnly || _wifiConnected;
@@ -249,55 +235,98 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         await PodcastDownloads.notifyWifiOnlyChanged(database, profileId);
       });
 
-  Future<void> chooseFolder() async {
+  DownloadFolderPreferences _readFolders() => DownloadFolderPreferences.decode(
+      _library.getSettings(downloadFolderSetting)?.value);
+
+  DownloadManagerState _withFolders(DownloadManagerState snapshot) =>
+      snapshot.copyWith(
+        folderUri: _folders.video.folder?.uri,
+        folderName: _folders.video.folder?.name,
+        usePrivateStorage: _folders.video.usePrivate,
+        audioFolderUri: _folders.audio.folder?.uri,
+        audioFolderName: _folders.audio.folder?.name,
+        usePrivateAudioStorage: _folders.audio.usePrivate,
+      );
+
+  /// Updating one destination must not overwrite a concurrent change to the
+  /// other one or a pre-Android-10 export picker that has just completed.
+  Future<void> _writeFolders(
+      DownloadFolderPreferences Function(DownloadFolderPreferences) update) {
+    final generation = _generation;
+    final writing = _folderWrite.then((_) async {
+      if (!_current || _switchingProfile || generation != _generation) return;
+      final next = update(_readFolders());
+      final value = next.encode();
+      if (value == null) {
+        await _library.deleteSetting(downloadFolderSetting);
+      } else {
+        await _library.saveSetting(SettingsValue(downloadFolderSetting, value));
+      }
+      if (_current && !_switchingProfile && generation == _generation) {
+        _folders = next;
+        emit(_withFolders(state));
+      }
+    });
+    _folderWrite =
+        writing.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return _mutate(() => writing);
+  }
+
+  Future<void> chooseFolder({bool audioOnly = false}) =>
+      _changeFolder(audioOnly, null);
+
+  Future<void> usePrivateFolder({bool audioOnly = false}) =>
+      _changeFolder(audioOnly, privateDownloadDestination);
+
+  Future<void> useDefaultFolder({bool audioOnly = false}) =>
+      _changeFolder(audioOnly, defaultDownloadDestination);
+
+  Future<void> _changeFolder(
+      bool audioOnly, DownloadDestination? destination) async {
     await _ready;
     if (!_current || _switchingProfile) return;
     final generation = _generation;
-    final library = _library;
-    final folder = await storage.pickFolder(state.folderUri);
-    if (folder == null ||
-        !_current ||
-        _switchingProfile ||
-        generation != _generation) {
-      return;
+    final revision = (_folderChoiceRevision[audioOnly] ?? 0) + 1;
+    _folderChoiceRevision[audioOnly] = revision;
+    if (destination == null) {
+      final folder = await storage
+          .pickFolder(audioOnly ? state.audioFolderUri : state.folderUri);
+      if (folder == null ||
+          !_current ||
+          _switchingProfile ||
+          generation != _generation ||
+          revision != _folderChoiceRevision[audioOnly]) {
+        return;
+      }
+      destination = (folder: folder, usePrivate: false);
     }
-    await library.saveSetting(
-        SettingsValue(downloadFolderSetting, jsonEncode(folder.toJson())));
-    if (_current && generation == _generation) {
-      _legacyMusicFolder = null;
-      emit(state.copyWith(
-          folderUri: folder.uri,
-          folderName: folder.name,
-          usePrivateStorage: false));
-    }
+    final selected = destination;
+    // Re-selecting the audio default also lets an older Android device
+    // replace a Music tree whose persisted permission has been revoked.
+    final resetMusicFolder =
+        audioOnly && selected == defaultDownloadDestination;
+    if (resetMusicFolder) _musicFolderRevision++;
+    await _writeFolders((previous) => DownloadFolderPreferences(
+        video: audioOnly ? previous.video : selected,
+        audio: audioOnly ? selected : previous.audio,
+        legacyMusicFolder:
+            resetMusicFolder ? null : previous.legacyMusicFolder));
   }
 
-  Future<void> usePrivateFolder() => _resetFolder(private: true);
-
-  Future<void> useDefaultFolder() => _resetFolder(private: false);
-
-  Future<void> _resetFolder({required bool private}) => _mutate(() async {
-        await _ready;
-        if (!_current || _switchingProfile) return;
-        if (private) {
-          await _library.saveSetting(
-              SettingsValue(downloadFolderSetting, jsonEncode('private')));
-        } else {
-          await _library.deleteSetting(downloadFolderSetting);
-        }
-        if (_current) {
-          _legacyMusicFolder = null;
-          emit(state.copyWith(
-              folderUri: null, folderName: null, usePrivateStorage: private));
-        }
-      });
-
   Future<String?> _deviceMusicFolder() async {
+    final generation = _generation;
     final shared = await storage.sharedMusicFolder();
+    if (!_current || _switchingProfile || generation != _generation) {
+      return null;
+    }
     if (shared != null) return shared;
-    if (_legacyMusicFolder case final folder?) return folder.uri;
-    return _pendingMusicFolder ??=
-        _pickMusicFolder().whenComplete(() => _pendingMusicFolder = null);
+    if (_folders.legacyMusicFolder case final folder?) return folder.uri;
+    final pending = _pendingMusicFolder ??= _pickMusicFolder();
+    try {
+      return await pending;
+    } finally {
+      if (identical(_pendingMusicFolder, pending)) _pendingMusicFolder = null;
+    }
   }
 
   /// A batch gets one system folder prompt on Android versions before 10.
@@ -305,31 +334,34 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
     await _ready;
     if (!_current || _switchingProfile) return false;
     if (!storage.supportsSharedMusic ||
-        state.usePrivateStorage ||
-        state.folderUri != null) {
+        state.usePrivateAudioStorage ||
+        state.audioFolderUri != null) {
       return true;
     }
     return await _deviceMusicFolder() != null && _current && !_switchingProfile;
   }
 
   Future<String?> _pickMusicFolder() async {
-    final library = _library;
     final generation = _generation;
+    final revision = _musicFolderRevision;
     final folder = await storage.pickFolder(null);
     if (folder == null ||
         !_current ||
         _switchingProfile ||
-        generation != _generation) {
+        generation != _generation ||
+        revision != _musicFolderRevision) {
       return null;
     }
-    // The pre-Android-10 fallback is scoped to Music. Preserve a separately
-    // configured private/SAF destination for ordinary downloads.
-    if (state.folderUri == null && !state.usePrivateStorage) {
-      await library.saveSetting(SettingsValue(
-          downloadFolderSetting, jsonEncode({'musicFolder': folder.toJson()})));
-      if (_current && generation == _generation) _legacyMusicFolder = folder;
-    }
-    return folder.uri;
+    await _writeFolders((previous) => DownloadFolderPreferences(
+        video: previous.video,
+        audio: previous.audio,
+        legacyMusicFolder: folder));
+    return _current &&
+            !_switchingProfile &&
+            generation == _generation &&
+            revision == _musicFolderRevision
+        ? folder.uri
+        : null;
   }
 
   void setVideos() {
@@ -355,13 +387,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           return false;
         }
         try {
-          var folder = state.folderUri;
+          final destination = audioOnly ? _folders.audio : _folders.video;
+          var folder = destination.folder?.uri;
           final isMusic = audioOnly && quality == highestAudioDownloadQuality;
           final format =
               isMusic ? MusicDownloadFormat.forDatabase(_library) : null;
-          final shareMusic = isMusic &&
-              storage.supportsSharedMusic &&
-              !state.usePrivateStorage;
+          final shareMusic =
+              isMusic && storage.supportsSharedMusic && !destination.usePrivate;
           if (shareMusic && folder == null) {
             folder = await _deviceMusicFolder();
             if (folder == null || !_current || _switchingProfile) return false;
@@ -1172,6 +1204,9 @@ sealed class DownloadManagerState with _$DownloadManagerState {
     String? folderUri,
     String? folderName,
     @Default(false) bool usePrivateStorage,
+    String? audioFolderUri,
+    String? audioFolderName,
+    @Default(false) bool usePrivateAudioStorage,
     @Default([]) List<DownloadedVideo> videos,
     @Default({}) Map<String, DownloadProgress> downloadProgresses,
     @Default({}) Set<String> pausedVideoIds,

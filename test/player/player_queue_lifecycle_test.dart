@@ -213,6 +213,25 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  test('rewind clamps a fractional underflow to the beginning of the song', () {
+    final step = Duration(seconds: player.state.rewindStep);
+    player.seedProgress(180, step - const Duration(milliseconds: 200));
+    player.rewind();
+    expect(player.state.position, Duration.zero);
+    expect(player.state.mediaCommand?.type, MediaCommandType.seek);
+    expect(player.state.mediaCommand?.value, Duration.zero);
+  });
+
+  test('seek keeps subsecond precision and clamps a fractional overflow', () {
+    player.seedProgress(60, Duration.zero);
+    const inside = Duration(milliseconds: 59750);
+    player.seek(inside);
+    expect(player.state.mediaCommand?.value, inside);
+    player.seek(const Duration(milliseconds: 60250));
+    expect(player.state.position, const Duration(minutes: 1));
+    expect(player.state.mediaCommand?.value, const Duration(minutes: 1));
+  });
+
   testWidgets('players keep independent sleep deadlines', (tester) async {
     final other = _QueuePlayer(PlayerState.init(null), settings);
     addTearDown(() => tester.runAsync(other.close));

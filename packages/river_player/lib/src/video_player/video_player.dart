@@ -16,6 +16,10 @@ final VideoPlayerPlatform _videoPlayerPlatform = VideoPlayerPlatform.instance
 // performed.
   ..init();
 
+/// Share the ordinary player's one-time platform initialization with views
+/// that own their native texture directly.
+VideoPlayerPlatform get initializedVideoPlayerPlatform => _videoPlayerPlatform;
+
 /// The duration, current position, buffering state, error state and settings
 /// of a [VideoPlayerController].
 class VideoPlayerValue {

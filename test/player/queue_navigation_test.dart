@@ -9,25 +9,34 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/song_transition.dart';
+import 'package:clipious/player/models/manual_music_preparation.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+import 'held_music_preparer.dart';
 
 class _ArtworkFailurePlayer extends TestPlayerCubit {
   _ArtworkFailurePlayer(super.initialState, super.settings);
@@ -35,6 +44,13 @@ class _ArtworkFailurePlayer extends TestPlayerCubit {
   @override
   Future<MediaItem?> getMediaItem(int index) async =>
       throw const FileSystemException('Artwork unavailable');
+}
+
+class _SessionPlayer extends PlayerCubit {
+  _SessionPlayer(super.initialState, super.settings);
+
+  @override
+  Future<void> onReady() async {}
 }
 
 class _PendingMetadataService extends Service {
@@ -61,11 +77,39 @@ class _PendingMetadataService extends Service {
   }
 }
 
+class _AdjacentService extends Service {
+  final requests = <String>[];
+  final blocked = <String, Completer<void>>{};
+  final sources = <String, Object>{};
+
+  @override
+  Future<Video> getMusicVideo(String videoId,
+      {Server? serverOverride,
+      void Function(BackendPlayback request)? onBackendRequest,
+      VideoLoadObserver? loadObserver}) async {
+    requests.add(videoId);
+    final connection = BackendPlayback(
+        serverOverride ?? await db.getCurrentlySelectedServer());
+    await blocked[videoId]?.future;
+    final source = sources[videoId] = Object();
+    return Video(
+        videoId: videoId,
+        title: videoId,
+        formatStreams: const [],
+        adaptiveFormats: const [],
+        playbackConnection: connection,
+        playbackSourceId: source);
+  }
+
+  @override
+  Future<bool> isLoggedIn() async => false;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late TestAppCubit app;
   late TestSettingsCubit settings;
-  late TestPlayerCubit player;
+  late PlayerCubit player;
   late MediaHandler handler;
   const videos = [
     Video(videoId: 'a', formatStreams: [], adaptiveFormats: []),
@@ -528,6 +572,750 @@ void main() {
     expect(player.state.playQueue, isEmpty);
   });
 
+  group('adjacent Music preparation', () {
+    late _AdjacentService catalog;
+    late Service original;
+    late List<IdedVideo> ready;
+
+    void remember(List<IdedVideo> items) => ready = List.of(items);
+    List<String> readyIds() => ready.map(playbackQueueId).toList();
+
+    Future<void> until(bool Function() condition) async {
+      await Future.doWhile(() async {
+        if (condition()) return false;
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+        return true;
+      }).timeout(const Duration(seconds: 3));
+    }
+
+    Future<void> open(List<String> ids,
+        {int index = 0, String? savedOnly}) async {
+      final server = await db.getCurrentlySelectedServer();
+      final songs = [
+        for (final id in ids)
+          Video(
+              videoId: id,
+              title: id,
+              downloadPlaybackOnly: id == savedOnly,
+              musicMetadata: MusicMetadata(title: id, artist: 'Artist'))
+      ];
+      songs[index] = songs[index].copyWith(
+          playbackConnection: BackendPlayback(server),
+          playbackSourceId: Object(),
+          adaptiveFormats: const [],
+          formatStreams: const []);
+      await player.playVideo(songs, audio: true, startIndex: index);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+    }
+
+    setUp(() async {
+      await player.close();
+      player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = handler = MediaHandler(player);
+      original = service;
+      service = catalog = _AdjacentService();
+      ready = [];
+      player.addAdjacentMusicListener(remember);
+    });
+
+    tearDown(() {
+      player.removeAdjacentMusicListener(remember);
+      for (final held in catalog.blocked.values) {
+        if (!held.isCompleted) held.complete();
+      }
+      service = original;
+    });
+
+    group('manual Music selection while a song is playing', () {
+      late HeldMusicPreparer preparer;
+
+      Video song(String id) => Video(
+          videoId: id, musicMetadata: MusicMetadata(title: id, artist: 'Band'));
+
+      setUp(() async {
+        await open(['a', 'b', 'c']);
+        preparer = HeldMusicPreparer();
+        player.manualMusicPreparer = preparer;
+      });
+
+      tearDown(() {
+        for (final request in preparer.requests.values) {
+          if (!request.isCompleted) request.complete(false);
+        }
+      });
+
+      for (final succeeds in [true, false]) {
+        test(
+            'the media session stays active when the queue ends while a song '
+            'is being selected (succeeds=$succeeds)', () async {
+          player.manualMusicPreparer = null;
+          await open(['last']);
+          await settings.setRepeatMode(PlayerRepeat.noRepeat);
+          player.manualMusicPreparer = preparer;
+          final switching = player.playVideo([song('new')], audio: true);
+          await until(() => preparer.requests.containsKey('new'));
+          player.setEvent(const MediaEvent(state: MediaState.completed));
+          expect(handler.playbackState.value.playing, isTrue);
+          expect(handler.playbackState.value.processingState,
+              AudioProcessingState.buffering);
+          preparer.requests['new']!.complete(succeeds);
+          await switching;
+          if (succeeds) {
+            player.setEvent(const MediaEvent(state: MediaState.ready));
+            expect(handler.playbackState.value.playing, isTrue);
+            player.setEvent(const MediaEvent(
+                state: MediaState.playing, type: MediaEventType.play));
+            expect(handler.playbackState.value.processingState,
+                AudioProcessingState.ready);
+          } else {
+            expect(handler.playbackState.value.playing, isFalse);
+            expect(handler.playbackState.value.processingState,
+                AudioProcessingState.completed);
+          }
+        });
+      }
+
+      test(
+          'a manual replacement takes over an automatic gap without releasing '
+          'the Android session', () async {
+        await settings.setSongTransitionMode(SongTransitionMode.pause);
+        await settings.setSongTransitionSeconds(10);
+        final switching = player.playVideo([song('new')], audio: true);
+        await until(() => preparer.requests.containsKey('new'));
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        expect(handler.playbackState.value.playing, isTrue);
+        preparer.requests['new']!.complete(true);
+        await switching;
+        player.setEvent(const MediaEvent(state: MediaState.ready));
+        expect(handler.playbackState.value.playing, isTrue);
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.buffering);
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.ready);
+      });
+
+      for (final interrupt in [true, false]) {
+        test(
+            'pausing after EOF releases the service while a selection is held '
+            '(audio focus=$interrupt)', () async {
+          player.manualMusicPreparer = null;
+          await open(['last']);
+          await settings.setRepeatMode(PlayerRepeat.noRepeat);
+          player.manualMusicPreparer = preparer;
+          final switching = player.playVideo([song('new')], audio: true);
+          await until(() => preparer.requests.containsKey('new'));
+          player.setEvent(const MediaEvent(state: MediaState.completed));
+          expect(handler.playbackState.value.playing, isTrue);
+          if (interrupt) {
+            player.handleAudioInterruption(
+                AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+          } else {
+            await handler.pause();
+          }
+          expect(handler.playbackState.value.playing, isFalse);
+          preparer.requests['new']!.complete(true);
+          await switching;
+          player.setEvent(const MediaEvent(state: MediaState.ready));
+          expect(player.shouldStartPlayback, isFalse);
+          expect(handler.playbackState.value.playing, isFalse);
+        });
+      }
+
+      test('a failed candidate leaves the running queue and controls intact',
+          () async {
+        const position = Duration(seconds: 17);
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing,
+            type: MediaEventType.progress,
+            value: position));
+        final mounted = player.state.currentlyPlaying;
+        final command = player.state.mediaCommand;
+        final generation = player.backendPlaybackGeneration;
+        final failure = player.musicSelectionFailureRevision.value;
+        final selecting = player.playVideo([song('x'), song('y')], audio: true);
+        await until(() => preparer.requests.containsKey('x'));
+        void expectOldQueue() {
+          expect(player.state.currentlyPlaying, same(mounted));
+          expect(player.backendPlaybackGeneration, generation);
+          expect(player.state.mediaCommand, same(command));
+          expect(player.state.videos.map(playbackQueueId), ['a', 'b', 'c']);
+          expect(player.state.playedVideos, isEmpty);
+          expect(player.state.playQueue, ['b', 'c']);
+          expect(player.state.isPlaying, isTrue);
+          expect(player.state.position, position);
+          expect(handler.mediaItem.value?.id, 'a');
+          expect(handler.playbackState.value.playing, isTrue);
+        }
+
+        expectOldQueue();
+        preparer.requests['x']!.complete(false);
+        await selecting;
+        expectOldQueue();
+        expect(player.state.mediaEvent.state, isNot(MediaState.error));
+        expect(player.musicSelectionFailureRevision.value, failure + 1);
+      });
+
+      test('two queue-row taps publish only the last admitted occurrence',
+          () async {
+        final failure = player.musicSelectionFailureRevision.value;
+        final first = player.selectQueueOccurrence('b');
+        await until(() => preparer.requests.containsKey('b'));
+        final second = player.selectQueueOccurrence('c');
+        await until(() => preparer.requests.containsKey('c'));
+        expect(preparer.current['b']!(), isFalse);
+        expect(preparer.current['c']!(), isTrue);
+        preparer.requests['b']!.complete(true);
+        await first;
+        expect(player.state.currentQueueId, 'a');
+        expect(player.state.playedVideos, isEmpty);
+        expect(player.state.playQueue, ['b', 'c']);
+        preparer.requests['c']!.complete(true);
+        await second;
+        expect(player.state.currentQueueId, 'c');
+        expect(player.state.playedVideos, ['a', 'b']);
+        expect(player.state.playQueue, isEmpty);
+        expect(player.musicSelectionFailureRevision.value, failure);
+      });
+
+      test(
+          'a retryable song selection commits only the ready alternate backend',
+          () async {
+        final selector = BackendSelector('ROUTE',
+            const [BackendOption('0', 'First'), BackendOption('1', 'Second')],
+            automaticFallback: true);
+        final preferred =
+            selector.withSelection(await db.getCurrentlySelectedServer(), '0');
+        await db.upsertServer(preferred);
+        final requests = <String?>[];
+        final client = MockClient((request) async {
+          expect(request.url.path, '/api/v1/videos/x');
+          requests.add(requestCookieValue(request.headers, 'ROUTE'));
+          return http.Response(
+              '{"videoId":"x","title":"Upload","adaptiveFormats":[],"formatStreams":[],"captions":[]}',
+              200,
+              headers: {'content-type': 'application/json'});
+        });
+        addTearDown(client.close);
+        service = Service(httpClient: client);
+        final firstRoute = BackendPlayback(preferred);
+        final selected = song('x').copyWith(
+            backendPlayback: firstRoute,
+            playbackConnection: firstRoute,
+            adaptiveFormats: const [],
+            formatStreams: const []);
+        final original = player.state.currentlyPlaying;
+        final command = player.state.mediaCommand;
+        final failure = player.musicSelectionFailureRevision.value;
+        final selecting = player.playVideo([selected], audio: true);
+        await preparer.started.future;
+        final first = preparer.requests['x']!;
+        first.completeError(const ManualMusicSourceFailure('transport'));
+        await until(() => !identical(preparer.requests['x'], first));
+        expect(requests, ['1']);
+        expect(player.state.currentlyPlaying, same(original));
+        expect(player.state.mediaCommand, same(command));
+        expect(player.state.playQueue, ['b', 'c']);
+        expect(player.state.isPlaying, isTrue);
+        expect(handler.mediaItem.value?.id, 'a');
+
+        preparer.requests['x']!.complete(true);
+        await selecting;
+        final committed = player.state.currentlyPlaying!;
+        expect(committed.videoId, 'x');
+        expect(committed.backendPlayback?.label, 'Second');
+        expect(committed.musicMetadata?.artist, 'Band');
+        expect(player.state.requestedBackend, same(committed.backendPlayback));
+        expect(handler.mediaItem.value?.id, 'x');
+        expect(player.musicSelectionFailureRevision.value, failure);
+        expect(
+            selector.selectedValue(await db.getCurrentlySelectedServer()), '0');
+      });
+
+      test('playlist ownership and duplicate occurrences change together',
+          () async {
+        final reference = PlaylistReference(
+            kind: PlaylistSourceKind.public,
+            playlistId: 'PLnew',
+            profileId: db.profileId);
+        final songs = assignPlaylistEntryIds([
+          song('x').copyWith(index: 0),
+          song('y').copyWith(index: 1),
+          song('x').copyWith(index: 2)
+        ]);
+        final selecting = player.playPlaylist(songs,
+            audio: true, reference: reference, startIndex: 2);
+        final entry =
+            await preparer.started.future.timeout(const Duration(seconds: 3));
+        final id = playbackQueueId(entry);
+        expect(id, playbackQueueId(songs.last));
+        expect(player.playlistReference, isNull);
+        expect(player.state.currentQueueId, 'a');
+        expect(player.state.playQueue, ['b', 'c']);
+        preparer.requests[id]!.complete(true);
+        await selecting;
+        expect(player.playlistReference, reference);
+        expect(player.state.currentQueueId, id);
+        expect(player.state.playedVideos, songs.take(2).map(playbackQueueId));
+        expect(player.state.playQueue, isEmpty);
+      });
+
+      for (final rawIndex in [false, true]) {
+        test(
+            'a row reached by natural EOF already satisfies its pending tap '
+            '(raw index=$rawIndex)', () async {
+          final selecting = rawIndex
+              ? handler.skipToQueueItem(1)
+              : player.selectQueueOccurrence('b');
+          await until(() => preparer.requests.containsKey('b'));
+          player.setEvent(const MediaEvent(state: MediaState.completed));
+          await until(() => player.state.currentQueueId == 'b');
+          final command = player.state.mediaCommand;
+          final generation = player.backendPlaybackGeneration;
+          preparer.requests['b']!.complete(true);
+          await selecting;
+          expect(player.state.currentQueueId, 'b');
+          expect(player.state.mediaCommand, same(command));
+          expect(player.backendPlaybackGeneration, generation);
+          expect(player.state.playQueue, ['c']);
+        });
+      }
+
+      test('a shuffled notification selection records the last audible song',
+          () async {
+        await settings.setShuffle(true);
+        final selecting = handler.skipToQueueItem(2);
+        await until(() => preparer.requests.containsKey('c'));
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        await until(() => player.state.currentQueueId == 'b');
+        preparer.requests['c']!.complete(true);
+        await selecting;
+        expect(player.state.currentQueueId, 'c');
+        expect(player.state.playedVideos, ['a', 'b']);
+        expect(player.state.playQueue, isEmpty);
+      });
+
+      test('a saved-song selection keeps the online queue until admission',
+          () async {
+        final saved = [
+          for (final track in offlineSongs.take(2))
+            track.copyWith(
+                profileId: db.profileId,
+                musicMetadata:
+                    MusicMetadata(title: track.title, artist: 'Band'))
+        ];
+        for (final track in saved) {
+          await db.upsertDownload(track);
+        }
+        final selecting = player.playOfflineVideos(saved, startIndex: 1);
+        final entry =
+            await preparer.started.future.timeout(const Duration(seconds: 3));
+        expect(entry, isA<DownloadedVideo>());
+        expect(entry.videoId, saved.last.videoId);
+        expect(player.state.currentQueueId, 'a');
+        expect(player.state.videos.map(playbackQueueId), ['a', 'b', 'c']);
+        expect(player.state.offlineVideos, isEmpty);
+        preparer.requests[entry.videoId]!.complete(true);
+        await selecting;
+        expect(
+            player.state.offlineCurrentlyPlaying?.videoId, saved.last.videoId);
+        expect(player.state.offlineVideos, saved);
+        expect(player.state.playedVideos, [saved.first.videoId]);
+        expect(player.state.videos, isEmpty);
+        expect(catalog.requests, isNot(contains(saved.last.videoId)));
+      });
+
+      for (final externalSkip in [false, true]) {
+        test(
+            externalSkip
+                ? 'notification Next cancels a pending library selection'
+                : 'the current queue can finish a song while a different selection prepares',
+            () async {
+          final selecting =
+              player.playVideo([song('x'), song('y')], audio: true);
+          await until(() => preparer.requests.containsKey('x'));
+          if (externalSkip) {
+            await handler.skipToNext();
+          } else {
+            player.setEvent(const MediaEvent(state: MediaState.completed));
+          }
+          await until(() => player.state.currentQueueId == 'b');
+          expect(player.state.playQueue, ['c']);
+          expect(preparer.current['x']!(), !externalSkip);
+          preparer.requests['x']!.complete(true);
+          await selecting;
+          expect(player.state.currentQueueId, externalSkip ? 'b' : 'x');
+          expect(player.state.playQueue, externalSkip ? ['c'] : ['y']);
+          expect(player.state.playedVideos, externalSkip ? ['a'] : isEmpty);
+        });
+      }
+    });
+
+    for (final automatic in [false, true]) {
+      test('joins the pending next song with automatic=$automatic', () async {
+        final gate = catalog.blocked['b'] = Completer<void>();
+        await open(['a', 'b', 'c']);
+        await until(() => catalog.requests.contains('b'));
+        expect(catalog.requests, ['b']);
+        expect(player.state.currentQueueId, 'a');
+
+        final next = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+        final generation = player.backendPlaybackGeneration;
+        if (automatic) {
+          player.setEvent(const MediaEvent(state: MediaState.completed));
+        } else {
+          player.playNext();
+        }
+        await until(() => player.backendPlaybackGeneration != generation);
+        gate.complete();
+        await next.timeout(const Duration(seconds: 3));
+        expect(catalog.requests.where((id) => id == 'b'), hasLength(1));
+        expect(player.state.currentlyPlaying?.playbackSourceId,
+            same(catalog.sources['b']));
+        await until(() => readyIds().toSet().containsAll(['a', 'c']));
+        expect(ready, hasLength(2));
+        expect(player.state.playedVideos, ['a']);
+        expect(player.state.playQueue, ['c']);
+      });
+    }
+
+    test('resolves both neighbors by occurrence without warming distant songs',
+        () async {
+      await open(['a', 'b', 'c', 'b', 'e'], index: 2);
+      final queue = player.state.videos.map(playbackQueueId).toList();
+      final adjacent = [queue[3], queue[1]];
+      await until(() => readyIds().toSet().containsAll(adjacent));
+      expect(readyIds(), unorderedEquals(adjacent));
+      expect(catalog.requests.toSet(), {'b'});
+
+      final back =
+          player.stream.firstWhere((s) => s.currentQueueId == queue[1]);
+      player.playPrevious();
+      await back.timeout(const Duration(seconds: 3));
+      expect(player.state.currentQueueId, queue[1]);
+      expect(player.state.playQueue.first, queue[2]);
+    });
+
+    test('discarding a pending neighbor cannot replace its reordered successor',
+        () async {
+      final stale = catalog.blocked['b'] = Completer<void>();
+      await open(['a', 'b', 'c', 'd']);
+      await until(() => catalog.requests.contains('b'));
+      player.moveQueueOccurrence('c', beforeId: 'b');
+      player.removeVideoFromQueue('b');
+      stale.complete();
+      await until(() => readyIds().contains('c'));
+      expect(readyIds(), ['c']);
+      expect(catalog.requests.where((id) => id == 'd'), isEmpty);
+
+      final next = player.stream.firstWhere((s) => s.currentQueueId == 'c');
+      player.playNext();
+      await next.timeout(const Duration(seconds: 3));
+      expect(catalog.requests.where((id) => id == 'c'), hasLength(1));
+    });
+
+    test('a new swipe immediately after a completed transition is accepted',
+        () async {
+      await open(['a', 'b', 'c']);
+      await until(() => readyIds().contains('b'));
+      final forward = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+      player.playNext();
+      await forward.timeout(const Duration(seconds: 3));
+      final backward = player.stream.firstWhere((s) => s.currentQueueId == 'a');
+      player.playPrevious();
+      await backward.timeout(const Duration(seconds: 3));
+      expect(player.state.playQueue, ['b', 'c']);
+    });
+
+    test('skipping again during a slow open keeps both occurrences in history',
+        () async {
+      final held = catalog.blocked['b'] = Completer<void>();
+      await open(['a', 'b', 'c']);
+      await until(() => catalog.requests.contains('b'));
+      player.playNext();
+      expect(player.openingMusicEntry?.videoId, 'b');
+      final changed = player.stream.firstWhere((s) => s.currentQueueId == 'c');
+      player.playNext();
+      expect(player.openingMusicEntry?.videoId, 'c');
+      held.complete();
+      await changed.timeout(const Duration(seconds: 3));
+      expect(player.state.playedVideos, ['a', 'b']);
+      expect(player.state.playQueue, isEmpty);
+      expect(player.adjacentMusicEntry(previous: true)?.videoId, 'b');
+    });
+
+    test('preparation follows shuffle order rather than catalog order',
+        () async {
+      await settings.setShuffle(true);
+      await open(['a', 'b', 'c', 'd', 'e'], index: 2);
+      final upcoming = player.state.playQueue.toList();
+      await until(() => readyIds().contains(upcoming.first));
+      expect(readyIds(), [upcoming.first]);
+      expect(catalog.requests, [upcoming.first]);
+      player.moveQueueOccurrence(upcoming.last, beforeId: upcoming.first);
+      await until(() => readyIds().contains(upcoming.last));
+      expect(readyIds(), [upcoming.last]);
+      expect(catalog.requests, [upcoming.first, upcoming.last]);
+    });
+
+    test('repeat-all warms the first occurrence at the end of a queue',
+        () async {
+      await settings.setRepeatMode(PlayerRepeat.repeatAll);
+      await open(['a', 'b', 'c'], index: 2);
+      await until(() => readyIds().toSet().containsAll(['a', 'b']));
+      final first = player.stream.firstWhere((s) => s.currentQueueId == 'a');
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await first.timeout(const Duration(seconds: 3));
+      expect(catalog.requests.where((id) => id == 'a'), hasLength(1));
+    });
+
+    test('repeat-one loops on completion and uses the prepared next on a swipe',
+        () async {
+      await settings.setRepeatMode(PlayerRepeat.repeatOne);
+      await open(['a', 'b']);
+      await until(() => readyIds().contains('b'));
+      player.seek(const Duration(seconds: 1));
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      expect(player.state.currentQueueId, 'a');
+      expect(player.state.position, Duration.zero);
+      expect(player.state.playQueue, ['b']);
+
+      final changed = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+      player.playNext();
+      await changed.timeout(const Duration(seconds: 3));
+      expect(player.state.currentlyPlaying?.playbackSourceId,
+          same(catalog.sources['b']));
+      expect(catalog.requests.where((id) => id == 'b'), hasLength(1));
+      expect(player.adjacentMusicEntry(previous: false), isNull);
+      player.seek(const Duration(seconds: 1));
+      player.playNext();
+      expect(player.state.currentQueueId, 'b');
+      expect(player.state.position, Duration.zero);
+    });
+
+    for (final repeat in [PlayerRepeat.repeatOne, PlayerRepeat.repeatAll]) {
+      test('a single-song $repeat loop retains the Android playback session',
+          () async {
+        await settings.setRepeatMode(repeat);
+        await open(['a']);
+        final original = player.state.mediaCommand;
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        expect(handler.playbackState.value.playing, isTrue);
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.buffering);
+        if (repeat == PlayerRepeat.repeatAll) {
+          // Repeat-all reinstalls the occurrence before its decoder can play.
+          await until(() => player.state.mediaCommand != original);
+        }
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.ready);
+      });
+    }
+
+    test('duplicate completion callbacks consume a single queue occurrence',
+        () async {
+      final held = catalog.blocked['b'] = Completer<void>();
+      await open(['a', 'b', 'c']);
+      await until(() => catalog.requests.contains('b'));
+      final changed = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      expect(player.openingMusicEntry?.videoId, 'b');
+      held.complete();
+      await changed.timeout(const Duration(seconds: 3));
+      await until(() => readyIds().contains('c'));
+      expect(player.state.currentQueueId, 'b');
+      expect(player.state.playedVideos, ['a']);
+      expect(player.state.playQueue, ['c']);
+    });
+
+    test('a missing saved-only neighbor never starts an online lookup',
+        () async {
+      await open(['before', 'current', 'missing'],
+          index: 1, savedOnly: 'missing');
+      await until(() => readyIds().contains('before'));
+      expect(readyIds(), ['before']);
+      expect(catalog.requests, ['before']);
+      expect(player.state.currentQueueId, 'current');
+    });
+
+    test('a changed account rejects an old prepared source at promotion',
+        () async {
+      await open(['a', 'b']);
+      await until(() => readyIds().contains('b'));
+      final oldSource = (ready.single as Video).playbackSourceId;
+      const replacement = Server(url: 'https://other.example');
+      await db.upsertServer(replacement);
+      await db.useServer(replacement);
+      final next = player.stream.firstWhere((s) => s.currentQueueId == 'b');
+      player.playNext();
+      await next.timeout(const Duration(seconds: 3));
+      expect(player.state.currentlyPlaying?.playbackSourceId,
+          isNot(same(oldSource)));
+      expect(player.state.currentlyPlaying?.playbackConnection?.server.url,
+          replacement.url);
+    });
+
+    group('automatic song transitions', () {
+      Future<void> openRunning() async {
+        await open(['a', 'b', 'c']);
+        player.setEvent(const MediaEvent(state: MediaState.playing));
+        await until(() => readyIds().contains('b'));
+      }
+
+      Future<void> openWithGap() async {
+        await settings.setSongTransitionMode(SongTransitionMode.pause);
+        await settings.setSongTransitionSeconds(1);
+        await openRunning();
+      }
+
+      test('only an eligible automatic successor may start a transition',
+          () async {
+        await openRunning();
+        expect(player.automaticMusicSuccessor?.videoId, 'b');
+        player.pause();
+        expect(player.automaticMusicSuccessor, isNull);
+        player.play();
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(player.automaticMusicSuccessor?.videoId, 'b');
+        await settings.setRepeatMode(PlayerRepeat.repeatOne);
+        expect(player.automaticMusicSuccessor, isNull);
+        await settings.setRepeatMode(PlayerRepeat.noRepeat);
+        player.sleepAtEndOfTrack();
+        expect(player.automaticMusicSuccessor, isNull);
+        player.cancelSleep();
+        await settings.setAutoplayQueue(false);
+        expect(player.automaticMusicSuccessor, isNull);
+        await settings.setAutoplayQueue(true);
+        expect(player.automaticMusicSuccessor?.videoId, 'b');
+        await player.selectQueueOccurrence('c');
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(player.automaticMusicSuccessor, isNull);
+      });
+
+      for (final automatic in [true, false]) {
+        test(
+            'handoff identifies the incoming occurrence only for natural EOF (automatic=$automatic)',
+            () async {
+          final held = catalog.blocked['b'] = Completer<void>();
+          await open(['a', 'b', 'c']);
+          player.setEvent(const MediaEvent(state: MediaState.playing));
+          await until(() => catalog.requests.contains('b'));
+          final starting =
+              player.stream.firstWhere((s) => s.currentQueueId == 'b');
+          if (automatic) {
+            player.setEvent(const MediaEvent(state: MediaState.completed));
+          } else {
+            player.playNext();
+          }
+          expect(player.isAutomaticMusicHandoffTo('b'), automatic);
+          expect(player.isAutomaticMusicHandoffTo('a'), isFalse);
+          expect(player.isAutomaticMusicHandoffTo('c'), isFalse);
+          held.complete();
+          await starting.timeout(const Duration(seconds: 3));
+          player.playPrevious();
+          expect(player.isAutomaticMusicHandoffTo('b'), isFalse);
+          await until(() => player.state.currentQueueId == 'a');
+        });
+      }
+
+      test('pause mode waits the configured gap after genuine completion',
+          () async {
+        await openWithGap();
+        expect(handler.playbackState.value.playing, isTrue);
+        final starting =
+            player.stream.firstWhere((s) => s.currentQueueId == 'b');
+        final elapsed = Stopwatch()..start();
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        expect(handler.playbackState.value.playing, isTrue);
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.buffering);
+        expect(player.state.currentQueueId, 'a');
+        expect(player.openingMusicEntry, isNull);
+        await starting.timeout(const Duration(seconds: 4));
+        expect(elapsed.elapsedMilliseconds, greaterThanOrEqualTo(990));
+        expect(player.state.playedVideos, ['a']);
+        player.setEvent(const MediaEvent(state: MediaState.ready));
+        expect(handler.playbackState.value.playing, isTrue);
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(handler.playbackState.value.playing, isTrue);
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.ready);
+      });
+
+      test('final Music song releases the playback service', () async {
+        await openRunning();
+        await player.selectQueueOccurrence('c');
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        expect(handler.playbackState.value.playing, isFalse);
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.completed);
+      });
+
+      for (final cancel in ['manual next', 'pause', 'seek', 'reorder']) {
+        test('a $cancel cancels the previous end-of-song timer', () async {
+          await openWithGap();
+          player.setEvent(const MediaEvent(state: MediaState.completed));
+          switch (cancel) {
+            case 'manual next':
+              player.playNext();
+              expect(player.openingMusicEntry?.videoId, 'b');
+              await until(() => player.state.currentQueueId == 'b');
+            case 'pause':
+              player.pause();
+              expect(handler.playbackState.value.playing, isFalse);
+            case 'seek':
+              player.seek(Duration.zero);
+              expect(handler.playbackState.value.playing, isFalse);
+            case 'reorder':
+              player.moveQueueOccurrence('c', beforeId: 'b');
+              expect(handler.playbackState.value.playing, isFalse);
+              player.moveQueueOccurrence('b', beforeId: 'c');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 1100));
+          expect(
+              player.state.currentQueueId, cancel == 'manual next' ? 'b' : 'a');
+          expect(player.state.playQueue.first,
+              cancel == 'manual next' ? 'c' : 'b');
+        });
+      }
+    });
+
+    test('explicit downloaded neighbors stay offline', () async {
+      final downloads = ['x', 'y', 'z']
+          .map((id) => DownloadedVideo(
+              videoId: id,
+              profileId: db.profileId,
+              title: id,
+              lengthSeconds: 60,
+              quality: 'audio',
+              audioOnly: true,
+              downloadComplete: true,
+              musicMetadata: MusicMetadata(title: id, artist: 'Artist')))
+          .toList();
+      await player.playOfflineVideos(downloads);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      await until(() => readyIds().contains('y'));
+      expect(ready.single, isA<DownloadedVideo>());
+      final next = player.stream.firstWhere((s) => s.currentQueueId == 'y');
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+      await next.timeout(const Duration(seconds: 3));
+      await until(() => readyIds().toSet().containsAll(['x', 'z']));
+      expect(ready, everyElement(isA<DownloadedVideo>()));
+      expect(catalog.requests, isEmpty);
+    });
+  });
   for (final shuffle in [false, true]) {
     test(
         'Muzza timeline selection retains moved occurrences (shuffle=$shuffle)',

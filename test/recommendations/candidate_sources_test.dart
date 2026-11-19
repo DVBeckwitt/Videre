@@ -14,6 +14,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
@@ -45,7 +46,9 @@ class _MusicCatalog extends MusicCatalogService {
 
   @override
   Future<List<MusicTrack>> getDiscoverySongs(
-      {String? artist, bool Function()? isCurrent}) async {
+      {String? artist,
+      bool Function()? isCurrent,
+      void Function(InvidiousServiceError)? onInstanceFailure}) async {
     calls++;
     this.artist = artist;
     return pending == null ? tracks : await pending!.future;

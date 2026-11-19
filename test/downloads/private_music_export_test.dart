@@ -32,21 +32,25 @@ class _Downloads extends Cubit<DownloadManagerState>
   final destinations = <String>[];
 
   @override
-  Future<void> useDefaultFolder() async {
-    destinations.add('default');
-    emit(state.copyWith(usePrivateStorage: false));
+  Future<void> useDefaultFolder({bool audioOnly = false}) async {
+    destinations.add(audioOnly ? 'audio-default' : 'video-default');
+    emit(audioOnly
+        ? state.copyWith(usePrivateAudioStorage: false)
+        : state.copyWith(usePrivateStorage: false));
   }
 
   @override
-  Future<void> usePrivateFolder() async {
-    destinations.add('private');
-    emit(state.copyWith(usePrivateStorage: true));
+  Future<void> usePrivateFolder({bool audioOnly = false}) async {
+    destinations.add(audioOnly ? 'audio-private' : 'video-private');
+    emit(audioOnly
+        ? state.copyWith(usePrivateAudioStorage: true)
+        : state.copyWith(usePrivateStorage: true));
   }
 
   @override
-  Future<void> chooseFolder() async {
+  Future<void> chooseFolder({bool audioOnly = false}) async {
     // A dismissed Android picker leaves the current selection in place.
-    destinations.add('picker');
+    destinations.add(audioOnly ? 'audio-picker' : 'video-picker');
   }
 
   @override
@@ -101,9 +105,9 @@ void main() {
   }
 
   testWidgets(
-      'folder selection distinguishes default and private and survives picker cancellation',
+      'audio destination distinguishes default and private and survives picker cancellation',
       (tester) async {
-    final locals = await mount(
+    await mount(
         tester,
         Builder(
             builder: (context) => TextButton(
@@ -112,30 +116,33 @@ void main() {
                 )));
     await tester.tap(find.text('Destination'));
     await tester.pumpAndSettle();
-    void expectSelected(String label) {
+    Finder audioOption(String name) =>
+        find.byKey(ValueKey('download-folder-audio-$name'));
+    void expectSelected(String name) {
       expect(
           find.descendant(
-              of: find.widgetWithText(ListTile, label),
+              of: audioOption(name),
               matching: find.byIcon(Icons.radio_button_checked)),
           findsOneWidget);
-      expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
+      expect(find.byIcon(Icons.radio_button_checked), findsNWidgets(2));
     }
 
-    Future<void> choose(String label) async {
-      final tile = find.widgetWithText(ListTile, label);
+    Future<void> choose(String name) async {
+      final tile = audioOption(name);
       await tester.ensureVisible(tile);
       await tester.tap(tile);
       await tester.pumpAndSettle();
     }
 
-    expectSelected(locals.downloadFolderDefault);
-    await choose(locals.downloadFolderPrivate);
-    expectSelected(locals.downloadFolderPrivate);
-    await choose(locals.downloadFolderChoose);
-    expectSelected(locals.downloadFolderPrivate);
-    await choose(locals.downloadFolderDefault);
-    expectSelected(locals.downloadFolderDefault);
-    expect(downloads.destinations, ['private', 'picker', 'default']);
+    expectSelected('standard');
+    await choose('private');
+    expectSelected('private');
+    await choose('custom');
+    expectSelected('private');
+    await choose('standard');
+    expectSelected('standard');
+    expect(downloads.destinations,
+        ['audio-private', 'audio-picker', 'audio-default']);
   });
 
   final export = find.byKey(ValueKey('export-music-${_song.videoId}'));

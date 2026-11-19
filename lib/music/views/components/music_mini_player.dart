@@ -1,9 +1,11 @@
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -18,8 +20,11 @@ class MusicMiniPlayer extends StatelessWidget {
   Widget build(BuildContext context) {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
-    final video = state.currentlyPlaying;
-    final offline = state.offlineCurrentlyPlaying;
+    final pending = player.openingMusicEntry;
+    final entry =
+        pending ?? state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
+    final video = entry is Video ? entry : null;
+    final offline = entry is DownloadedVideo ? entry : null;
     final music = video?.musicMetadata ?? offline?.musicMetadata;
     if (music == null) return const SizedBox.shrink();
     final locals = AppLocalizations.of(context)!;
@@ -31,13 +36,15 @@ class MusicMiniPlayer extends StatelessWidget {
     final onDevice = isLocalMusicPlaybackId(video?.videoId ?? offline?.videoId);
     final artist =
         onDevice && music.artist.isEmpty ? locals.onDevice : music.artist;
-    final recovery = onDevice ? null : state.backendRecovery;
-    final failed = player.playbackStatus == MediaState.error ||
-        recovery?.phase == BackendRecoveryPhase.failed;
-    final busy = !failed &&
-        (player.playbackStatus == MediaState.loading ||
-            player.playbackStatus == MediaState.buffering ||
-            recovery?.phase == BackendRecoveryPhase.trying);
+    final recovery = onDevice || pending != null ? null : state.backendRecovery;
+    final failed = pending == null &&
+        (player.playbackStatus == MediaState.error ||
+            recovery?.phase == BackendRecoveryPhase.failed);
+    final busy = pending != null ||
+        !failed &&
+            (player.playbackStatus == MediaState.loading ||
+                player.playbackStatus == MediaState.buffering ||
+                recovery?.phase == BackendRecoveryPhase.trying);
     final statusLabel = failed
         ? recovery == null
             ? locals.musicPlaybackError
@@ -201,7 +208,8 @@ class MusicMiniPlayer extends StatelessWidget {
                             tooltip: state.isPlaying
                                 ? locals.musicPause
                                 : locals.musicPlay,
-                            onPressed: player.togglePlaying,
+                            onPressed:
+                                pending == null ? player.togglePlaying : null,
                             style: controlStyle,
                             icon: Icon(state.isPlaying
                                 ? Icons.pause_rounded

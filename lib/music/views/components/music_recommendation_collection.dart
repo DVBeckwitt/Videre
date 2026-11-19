@@ -14,8 +14,6 @@ import 'music_library_actions.dart';
 class MusicRecommendationCollection extends StatefulWidget {
   final String title;
   final List<MusicTrack> tracks;
-  final MusicTrack? cover;
-  final Future<List<MusicTrack>> Function(bool Function() isCurrent)? load;
   final bool Function() isCurrent;
   final List<MusicTrack> Function(Iterable<MusicTrack>) eligible;
   final Listenable changes;
@@ -24,8 +22,6 @@ class MusicRecommendationCollection extends StatefulWidget {
     super.key,
     required this.title,
     required this.tracks,
-    this.cover,
-    this.load,
     required this.isCurrent,
     required this.eligible,
     required this.changes,
@@ -38,10 +34,7 @@ class MusicRecommendationCollection extends StatefulWidget {
 
 class _MusicRecommendationCollectionState
     extends State<MusicRecommendationCollection> {
-  List<MusicTrack>? _loaded;
-  bool _loading = false;
-  bool _failed = false;
-  bool _starting = false;
+  int _playRequest = 0;
 
   bool get _current =>
       mounted &&
@@ -49,27 +42,10 @@ class _MusicRecommendationCollectionState
       (ModalRoute.of(context)?.isCurrent ?? true);
 
   List<MusicTrack> get _tracks =>
-      widget.isCurrent() ? widget.eligible(_loaded ?? widget.tracks) : const [];
-
-  Future<void> _load() async {
-    final load = widget.load;
-    if (!_current || _loading || load == null) return;
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    try {
-      final tracks = await load(() => _current);
-      if (_current) setState(() => _loaded = tracks);
-    } catch (_) {
-      if (_current) setState(() => _failed = true);
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
+      widget.isCurrent() ? widget.eligible(widget.tracks) : const [];
 
   Future<void> _play({String? from, bool shuffle = false}) async {
-    if (!_current || _starting) return;
+    if (!_current) return;
     final tracks = _tracks;
     if (tracks.isEmpty) return;
     final videos = [for (final track in tracks) track.toVideo()];
@@ -77,16 +53,14 @@ class _MusicRecommendationCollectionState
     final index =
         from == null ? 0 : videos.indexWhere((v) => v.videoId == from);
     if (index < 0) return;
-    setState(() => _starting = true);
+    final request = ++_playRequest;
     try {
       await MusicScreen.playTracks(context, videos, startIndex: index);
     } catch (_) {
-      if (mounted && _current) {
+      if (mounted && request == _playRequest && _current) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
       }
-    } finally {
-      if (mounted) setState(() => _starting = false);
     }
   }
 
@@ -129,14 +103,15 @@ class _MusicRecommendationCollectionState
               builder: (context, _) {
                 final locals = AppLocalizations.of(context)!;
                 final tracks = _tracks;
-                final current = widget.isCurrent();
                 return CustomScrollView(slivers: [
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
                       child: Column(children: [
-                        _art(tracks.firstOrNull ?? widget.cover, size: 180),
-                        const SizedBox(height: 12),
+                        if (MediaQuery.sizeOf(context).height >= 480) ...[
+                          _art(tracks.firstOrNull, size: 180),
+                          const SizedBox(height: 12),
+                        ],
                         if (tracks.isNotEmpty) ...[
                           Text(locals.musicTrackCount(tracks.length)),
                           const SizedBox(height: 12),
@@ -147,7 +122,7 @@ class _MusicRecommendationCollectionState
                             children: [
                               FilledButton.icon(
                                 key: const ValueKey('music-collection-play'),
-                                onPressed: _starting ? null : () => _play(),
+                                onPressed: () => _play(),
                                 icon: const Icon(Icons.play_arrow_rounded),
                                 label: Text(locals.musicPlayAll),
                               ),
@@ -155,28 +130,11 @@ class _MusicRecommendationCollectionState
                                 FilledButton.tonalIcon(
                                   key: const ValueKey(
                                       'music-collection-shuffle'),
-                                  onPressed: _starting
-                                      ? null
-                                      : () => _play(shuffle: true),
+                                  onPressed: () => _play(shuffle: true),
                                   icon: const Icon(Icons.shuffle_rounded),
                                   label: Text(locals.musicShuffle),
                                 ),
                             ],
-                          ),
-                        ] else if (_loading)
-                          const CircularProgressIndicator()
-                        else if (current &&
-                            widget.load != null &&
-                            (_loaded == null || _failed)) ...[
-                          if (_failed) Text(locals.musicLoadError),
-                          FilledButton.tonalIcon(
-                            key: const ValueKey('music-collection-load'),
-                            onPressed: _load,
-                            icon: Icon(_failed
-                                ? Icons.refresh
-                                : Icons.explore_outlined),
-                            label: Text(
-                                _failed ? locals.retry : locals.musicLoadMix),
                           ),
                         ] else
                           Text(locals.musicEmptyCollection),
@@ -190,13 +148,10 @@ class _MusicRecommendationCollectionState
                       final artists = song.artists.join(', ');
                       return ListTile(
                         key: ValueKey('music-collection-${song.videoId}'),
-                        onTap:
-                            _starting ? null : () => _play(from: song.videoId),
-                        onLongPress: _starting
-                            ? null
-                            : () => MusicLibraryActions.showSongMenu(
-                                context, song.toVideo(),
-                                onPlay: () => _play(from: song.videoId)),
+                        onTap: () => _play(from: song.videoId),
+                        onLongPress: () => MusicLibraryActions.showSongMenu(
+                            context, song.toVideo(),
+                            onPlay: () => _play(from: song.videoId)),
                         leading: _art(song, size: 48, songRow: true),
                         title: Text(song.title,
                             maxLines: 1, overflow: TextOverflow.ellipsis),

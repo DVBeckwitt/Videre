@@ -55,19 +55,22 @@ class _Downloads extends Cubit<DownloadManagerState>
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
   final offline = <DownloadedVideo>[];
   final online = <Video>[];
+  int? start;
   _Player() : super(PlayerState.init(null));
 
   @override
-  Future<void> playOfflineVideos(List<DownloadedVideo> videos) async =>
-      offline.addAll(videos);
+  Future<void> playOfflineVideos(List<DownloadedVideo> videos,
+      {int startIndex = 0}) async {
+    start = startIndex;
+    offline.addAll(videos);
+  }
 
   @override
   Future<void> playVideo(List<Video> videos,
-          {bool? audio,
-          Duration? startAt,
-          bool? playing,
-          int? startIndex}) async =>
-      online.addAll(videos);
+      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+    start = startIndex;
+    online.addAll(videos);
+  }
 
   @override
   Future<void> playPlaylist(List<Video> entries,
@@ -501,9 +504,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('music-library-layout')));
     await tester.pumpAndSettle();
     expect(find.byType(GridView), findsOneWidget);
-    await tester.tap(find.text('Alpha song'));
+    await tester.tap(find.text('Zulu song'));
     await tester.pump();
-    expect(player.online.single.videoId, first.id);
+    expect(player.online.map((song) => song.videoId), [first.id, last.id]);
+    expect(player.start, 1);
     expect(find.byTooltip('Music actions'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
@@ -579,7 +583,9 @@ void main() {
       if (kind == MusicLibraryKind.song) {
         await tester.tap(find.text('Saved entry 999'));
         await tester.pump();
-        expect(player.online.single.videoId, 'song0000999');
+        expect(player.online, hasLength(count));
+        expect(player.start, count - 1);
+        expect(player.online.last.videoId, 'song0000999');
       }
       expect(library.entries, hasLength(count));
       expect(tester.takeException(), isNull);
@@ -826,9 +832,12 @@ void main() {
         find.byKey(const ValueKey('music-download-spokenword1')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('music-download-queuedmusic')));
     expect(player.offline, isEmpty);
-    await tester.tap(find.byKey(const ValueKey('music-download-abcdefghijk')));
+    await tester
+        .tap(find.byKey(const ValueKey('music-download-alreadyshared')));
     await tester.pump();
-    expect(player.offline, [complete]);
+    expect(player.offline.map((song) => song.videoId),
+        [complete.videoId, 'alreadyshared', 'legacyshared']);
+    expect(player.start, 1);
     await tester.pumpWidget(const SizedBox.shrink());
     await downloads.close();
   });

@@ -106,10 +106,16 @@ void main() {
     await db.close();
   });
 
+  Future<void> loadAndRememberEnglish() async {
+    final saved =
+        settings.stream.firstWhere((state) => state.lastSubtitles == 'English');
+    await controller.setupSubtitleSource(english);
+    await saved;
+  }
+
   test('failed captions preserve the last valid language and paused playback',
       () async {
-    await controller.setupSubtitleSource(english);
-    await Future<void>.delayed(Duration.zero);
+    await loadAndRememberEnglish();
     expect(settings.state.lastSubtitles, 'English');
     expect(video.selectedSubtitle(), 0);
     final pausedEvent = player.state.mediaEvent;
@@ -130,8 +136,7 @@ void main() {
   });
 
   test('TV selection remembers only successfully loaded captions', () async {
-    await controller.setupSubtitleSource(english);
-    await Future<void>.delayed(Duration.zero);
+    await loadAndRememberEnglish();
     final tv =
         TvPlayerSettingsCubit(const TvPlayerSettingsState(), video, settings);
     tv.changeSubtitles('Japanese');

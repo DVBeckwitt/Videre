@@ -27,8 +27,8 @@ class RecommendationCandidatesCancelled implements Exception {
 /// Small candidate pools from Videre's existing catalog and local library.
 ///
 /// Ranking never grants authority to resolve a stream. Returned objects contain
-/// display metadata only. Remote discovery is explicit and cannot refill itself
-/// or fall back to an upstream service when Invidious fails.
+/// display metadata only. Remote discovery runs in bounded batches through
+/// the selected Invidious instance.
 /// Pass the active app database; this object captures a fixed profile view and
 /// rejects work after the active database/profile is replaced.
 class RecommendationCandidates {

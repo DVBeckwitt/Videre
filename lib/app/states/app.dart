@@ -256,25 +256,65 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
     if (link != null) await _openContentLink(link, fullStack);
   }
 
-  /// Recognize an address pasted into a search field as local navigation.
-  bool tryOpenPastedAppLink(String text) {
-    final link = ContentLink.parseAddress(text, server: state.server);
-    if (link == null) return false;
-    unawaited(_openContentLink(link, false));
-    return true;
+  /// Saved addresses identify content; all navigation uses the active session.
+  /// For an unfamiliar origin the user chooses open, search as text, or cancel.
+  Future<PastedLinkAction> submitPastedAppLink(String text,
+      {bool music = false,
+      Future<bool?> Function()? chooseOpen,
+      bool Function()? isCurrent}) async {
+    final uri = ContentLink.completeWebAddress(text);
+    if (uri == null) return PastedLinkAction.unrecognized;
+    final owner = db;
+    final profile = state.profileId;
+    final selected = state.server;
+    final sessionCurrent = _beginLinkNavigation();
+    bool current() =>
+        sessionCurrent() &&
+        db.profileId == profile &&
+        (isCurrent?.call() ?? true);
+    if (!current()) return PastedLinkAction.handled;
+    var link = ContentLink.parse(uri, server: selected, instanceMusic: music);
+    if (link == null) {
+      if (selected == null) return PastedLinkAction.unrecognized;
+      // Read the account list only for submitted URLs, never while typing.
+      List<Server> accounts = const [];
+      try {
+        accounts = await owner.forProfile(profile).getServers();
+      } catch (error) {
+        // A local storage failure leaves an unfamiliar ID eligible for the
+        // explicit choice. It never promotes that address to a saved origin.
+        log.fine('Saved instance lookup unavailable (${error.runtimeType})');
+      }
+      if (!current()) return PastedLinkAction.handled;
+      var knownHost = Uri.tryParse(selected.url)?.host == uri.host;
+      for (final account in accounts) {
+        if (account.profileId != profile) continue;
+        if (Uri.tryParse(account.url)?.host != uri.host) continue;
+        knownHost = true;
+        link = ContentLink.parse(uri, server: account, instanceMusic: music);
+        if (link != null) break;
+      }
+      if (link == null) {
+        if (knownHost) return PastedLinkAction.unrecognized;
+        link = ContentLink.unfamiliarInstanceContent(uri, music: music);
+        if (link == null) return PastedLinkAction.unrecognized;
+        final open = await chooseOpen?.call();
+        if (!current() || open == null) return PastedLinkAction.handled;
+        if (!open) return PastedLinkAction.searchAsText;
+      }
+    }
+    unawaited(_openContentLink(link, false, sourceCurrent: isCurrent));
+    return PastedLinkAction.handled;
   }
 
-  Future<void> _openContentLink(ContentLink link, bool fullStack) async {
-    if (isClosed || state.globalLoading || state.sessionRecoveryRequired) {
-      return;
-    }
+  bool Function() _beginLinkNavigation() {
     final navigation = ++_linkNavigationGeneration;
     final owner = db;
     final profileId = owner.profileId;
     final session = state.sessionRevision;
     final selected = state.server;
     final proxy = NetworkProxy.instance.config;
-    bool current() =>
+    return () =>
         !isClosed &&
         !state.globalLoading &&
         !state.sessionRecoveryRequired &&
@@ -285,6 +325,17 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         identical(state.server, selected) &&
         !NetworkProxy.instance.isChanging &&
         identical(NetworkProxy.instance.config, proxy);
+  }
+
+  Future<void> _openContentLink(ContentLink link, bool fullStack,
+      {bool Function()? sourceCurrent}) async {
+    if (isClosed || state.globalLoading || state.sessionRecoveryRequired) {
+      return;
+    }
+    final owner = db;
+    final selected = state.server;
+    final sessionCurrent = _beginLinkNavigation();
+    bool current() => sessionCurrent() && (sourceCurrent?.call() ?? true);
     try {
       if (link.kind == ContentLinkKind.unresolved) {
         try {
@@ -296,8 +347,8 @@ class AppCubit extends Cubit<AppState> with WidgetsBindingObserver {
         } on NoServerSelected {
           link = link.landing;
         }
-        if (!current()) return;
       }
+      if (!current()) return;
       final route = _appLinkRoute(link);
       log.fine('Opening ${route.routeName}, full stack: $fullStack');
       if (link.kind == ContentLinkKind.home && !link.music) {

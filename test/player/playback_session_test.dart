@@ -11,6 +11,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -26,6 +27,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
@@ -39,6 +41,7 @@ import 'package:sembast/sembast.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
+import 'held_music_preparer.dart';
 
 class _GuestService extends Service {
   List<SponsorSegmentType>? requestedCategories;
@@ -658,6 +661,112 @@ void main() {
       expect(db.getLocalHistory(), isEmpty);
       expect((service as _GuestService).requestedVideoIds, isEmpty);
       expect((service as _GuestService).requestedCategories, isNull);
+    });
+
+    for (final grant in ['unchanged', 'revoked', 'replaced']) {
+      test('manual Music selection rechecks the device folder ($grant)',
+          () async {
+        var readable = true;
+        final tracks = await openDeviceFolder(canRead: () => readable);
+        player.audioSession = await AudioSession.instance;
+        final handler = app_main.mediaHandler = MediaHandler(player);
+        const online = Video(
+            videoId: 'online',
+            formatStreams: [],
+            adaptiveFormats: [],
+            lengthSeconds: 120,
+            musicMetadata: MusicMetadata(title: 'Online', artist: 'Band'));
+        await player.playVideo([online], audio: true);
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        final preparer = HeldMusicPreparer();
+        player.manualMusicPreparer = preparer;
+        final generation = player.backendPlaybackGeneration;
+        final selection = player.playLocalMusic(tracks, startIndex: 1);
+        final entry = await preparer.started.future
+            .timeout(const Duration(seconds: 3)) as DownloadedVideo;
+        expect(entry.videoId, tracks.last.playbackId);
+        expect(entry.storageUri, tracks.last.uri);
+        expect(player.state.currentQueueId, 'online');
+        expect(handler.mediaItem.value?.id, 'online');
+        expect(player.state.offlineVideos, isEmpty);
+        expect(player.backendPlaybackGeneration, generation);
+        if (grant == 'revoked') {
+          readable = false;
+          await LocalMusicLibrary.instance.revalidate();
+        } else if (grant == 'replaced') {
+          final library = LocalMusicLibrary.instance;
+          await library.disable();
+          await library.chooseFolder();
+          if (!library.loaded) await library.refresh();
+          expect(library.trackById(entry.videoId)?.uri, entry.storageUri);
+        }
+        preparer.requests[entry.videoId]!.complete(true);
+        await selection;
+        if (grant != 'unchanged') {
+          expect(player.state.currentQueueId, 'online');
+          expect(player.state.isPlaying, isTrue);
+          expect(player.state.mediaEvent.state, isNot(MediaState.error));
+          expect(handler.mediaItem.value?.id, 'online');
+          expect(player.state.offlineVideos, isEmpty);
+        } else {
+          expect(player.state.currentQueueId, tracks.last.playbackId);
+          expect(player.state.videos, isEmpty);
+          expect(player.state.offlineCurrentlyPlaying?.storageUri,
+              tracks.last.uri);
+          expect(player.state.playedVideos, [tracks.first.playbackId]);
+        }
+        expect((service as _GuestService).requestedVideoIds, isEmpty);
+      });
+    }
+
+    test(
+        'device music keeps the automatic handoff through local source admission',
+        () async {
+      final songs = await openDeviceFolder();
+      final target = songs[1].playbackId;
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      await settings.setSongTransitionMode(SongTransitionMode.crossfade);
+      await player.playLocalMusic(songs);
+      final prepared = Completer<DownloadedVideo>();
+      void observe(List<IdedVideo> entries) {
+        final candidate = entries.whereType<DownloadedVideo>().firstOrNull;
+        if (candidate?.videoId == target && !prepared.isCompleted) {
+          prepared.complete(candidate);
+        }
+      }
+
+      player.addAdjacentMusicListener(observe);
+      try {
+        final standby =
+            await prepared.future.timeout(const Duration(seconds: 2));
+        player.reportLocalMusicDuration(
+            songs.first.playbackId, const Duration(seconds: 20));
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(player.automaticMusicSuccessor?.videoId, target);
+        final selected = player.stream.firstWhere((snapshot) =>
+            snapshot.currentQueueId == target &&
+            snapshot.mediaCommand?.type ==
+                MediaCommandType.switchToOfflineVideo);
+        player.setEvent(const MediaEvent(state: MediaState.completed));
+        expect(player.isAutomaticMusicHandoffTo(target), isTrue);
+        final command = (await selected.timeout(const Duration(seconds: 2)))
+            .mediaCommand!
+            .value as DownloadedVideo;
+        // Playback reauthorizes the URI and reconstructs a new local adapter.
+        expect(command, isNot(same(standby)));
+        expect(command.storageUri, standby.storageUri);
+        expect(player.isAutomaticMusicHandoffTo(target), isTrue);
+        player.setEvent(const MediaEvent(state: MediaState.ready));
+        expect(player.isAutomaticMusicHandoffTo(target), isTrue);
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        expect(player.isAutomaticMusicHandoffTo(target), isFalse);
+      } finally {
+        player.removeAdjacentMusicListener(observe);
+      }
     });
 
     test('external grant revocation stops the active local decoder and queue',

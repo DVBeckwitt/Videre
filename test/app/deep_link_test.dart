@@ -7,6 +7,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
+import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/network/content_link.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -31,6 +32,7 @@ import 'package:logging/logging.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../test_settings_cubit.dart';
+import '../test_player_cubit.dart';
 
 class _LinkApp extends AppCubit {
   _LinkApp() : super(AppState(0, null, HomeLayout())) {
@@ -396,17 +398,178 @@ void main() {
     expect((router.pushed!.args as TvVideoRouteArgs).startAt, Duration.zero);
     expect(router.pushes, 1);
     expect(
-        receiver.tryOpenPastedAppLink(
+        await receiver.submitPastedAppLink(
             'https://instance.example/watch?v=dQw4w9WgXcQ&t=1m15s'),
-        isTrue);
+        PastedLinkAction.handled);
     expect((router.pushed!.args as TvVideoRouteArgs).startAt,
         const Duration(seconds: 75));
     expect(router.pushes, 2);
     expect(
-        receiver
-            .tryOpenPastedAppLink('https://other.example/watch?v=dQw4w9WgXcQ'),
-        isFalse);
+        await receiver
+            .submitPastedAppLink('https://other.example/watch?v=dQw4w9WgXcQ'),
+        PastedLinkAction.handled);
     expect(router.pushes, 2);
+  });
+
+  test('saved Invidious addresses use the search domain and selected account',
+      () async {
+    const selected = Server(url: 'https://instance.example', inUse: true);
+    const saved = Server(url: 'https://saved.example:8443/iv');
+    await db.upsertServer(saved);
+    app.selectForLinkDisplay(selected);
+    appRouter.dispose();
+    final router = _RecordingRouter();
+    appRouter = router;
+    for (final base in [selected.url, saved.url]) {
+      final watch = '$base/watch?v=dQw4w9WgXcQ&t=37';
+      await app.submitPastedAppLink(watch);
+      final video = (router.pushed! as TvVideoRoute).args!;
+      expect(video.videoId, 'dQw4w9WgXcQ');
+      expect(video.startAt, const Duration(seconds: 37));
+      await app.submitPastedAppLink(watch, music: true);
+      _expectMusicArgs(
+          (router.pushed! as MusicRoute).args!, 'song', 'dQw4w9WgXcQ',
+          startAt: const Duration(seconds: 37));
+      await app.submitPastedAppLink('$base/playlist?list=PLmix', music: true);
+      _expectMusicArgs(
+          (router.pushed! as MusicRoute).args!, 'playlist', 'PLmix');
+      await app.submitPastedAppLink('$base/channel/UC_kRDKYrUlrbtrSiyu5Tflg',
+          music: true);
+      _expectMusicArgs((router.pushed! as MusicRoute).args!, 'artist',
+          'UC_kRDKYrUlrbtrSiyu5Tflg');
+    }
+    expect(app.state.server, selected);
+    expect((await db.getCurrentlySelectedServer()).url, selected.url);
+    expect(router.pushes, 8);
+  });
+
+  test('Music paste honors zero timestamps and explicit source domains',
+      () async {
+    app.selectForLinkDisplay(const Server(url: 'https://instance.example'));
+    appRouter.dispose();
+    final router = _RecordingRouter();
+    appRouter = router;
+    const watch = '/watch?v=dQw4w9WgXcQ&t=0';
+    await app.submitPastedAppLink('https://instance.example$watch',
+        music: true);
+    _expectMusicArgs(
+        (router.pushed! as MusicRoute).args!, 'song', 'dQw4w9WgXcQ');
+    await app.submitPastedAppLink('https://www.youtube.com$watch', music: true);
+    final video = (router.pushed! as TvVideoRoute).args!;
+    expect(video.videoId, 'dQw4w9WgXcQ');
+    expect(video.startAt, Duration.zero);
+    await app.submitPastedAppLink('https://music.youtube.com$watch');
+    _expectMusicArgs(
+        (router.pushed! as MusicRoute).args!, 'song', 'dQw4w9WgXcQ');
+    const uploads = 'UU_kRDKYrUlrbtrSiyu5Tflg';
+    await app.submitPastedAppLink(
+        'https://instance.example/playlist?list=$uploads',
+        music: true);
+    expect(
+        (router.pushed! as TvPlaylistRoute).args!.playlist.playlistId, uploads);
+    expect(router.pushes, 4);
+  });
+
+  test('an instance saved by another profile requires an explicit choice',
+      () async {
+    final other = await db.createProfile('Other listener');
+    await db.forProfile(other.id).upsertServer(
+        Server(url: 'https://other.example', profileId: other.id));
+    app.selectForLinkDisplay(const Server(url: 'https://instance.example'));
+    appRouter.dispose();
+    final router = _RecordingRouter();
+    appRouter = router;
+    var prompts = 0;
+    final outcome = await app.submitPastedAppLink(
+        'https://other.example/channel/UC_kRDKYrUlrbtrSiyu5Tflg',
+        chooseOpen: () async {
+      prompts++;
+      return false;
+    });
+    expect(outcome, PastedLinkAction.searchAsText);
+    expect(prompts, 1);
+    expect(router.pushes, 0);
+  });
+
+  test('changing the selected server dismisses a pending paste result',
+      () async {
+    app.selectForLinkDisplay(const Server(url: 'https://instance.example'));
+    appRouter.dispose();
+    final router = _RecordingRouter();
+    appRouter = router;
+    final asked = Completer<void>();
+    final answer = Completer<bool?>();
+    final submitted = app.submitPastedAppLink(
+        'https://foreign.example/watch?v=dQw4w9WgXcQ', chooseOpen: () {
+      asked.complete();
+      return answer.future;
+    });
+    await asked.future;
+    app.selectForLinkDisplay(const Server(url: 'https://new.example'));
+    answer.complete(true);
+    expect(await submitted, PastedLinkAction.handled);
+    expect(router.pushes, 0);
+  });
+
+  test('unfamiliar addresses offer opening only for canonical content IDs',
+      () async {
+    app.selectForLinkDisplay(const Server(url: 'https://instance.example'));
+    for (final address in [
+      'https://foreign.example/watch?v=invalid',
+      'https://foreign.example/channel/%ff',
+      'https://foreign.example/watch?v=%ff',
+      'https://foreign.example/@creator',
+      'https://foreign.example/search?q=music',
+      'https://foreign.example/redirect?u=https://youtu.be/dQw4w9WgXcQ',
+      'https://someone@foreign.example/watch?v=dQw4w9WgXcQ',
+      'words around https://foreign.example/watch?v=dQw4w9WgXcQ',
+    ]) {
+      expect(
+          await app.submitPastedAppLink(address,
+              chooseOpen: () => fail('Unexpected opening prompt for $address')),
+          PastedLinkAction.unrecognized,
+          reason: address);
+    }
+  });
+
+  testWidgets('Music search asks before opening an unfamiliar watch link',
+      (tester) async {
+    app_globals.isTv = false;
+    app.selectForLinkDisplay(const Server(url: 'https://instance.example'));
+    appRouter.dispose();
+    final router = _RecordingRouter();
+    appRouter = router;
+    final settings = TestSettingsCubit(SettingsState.init(), app);
+    final player = TestPlayerCubit(PlayerState.init(null), settings);
+    addTearDown(settings.close);
+    addTearDown(player.close);
+    await tester.pumpWidget(MultiBlocProvider(
+      providers: [
+        BlocProvider<AppCubit>.value(value: app),
+        BlocProvider<SettingsCubit>.value(value: settings),
+        BlocProvider<PlayerCubit>.value(value: player),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const MusicScreen(),
+      ),
+    ));
+    await tester.enterText(find.byKey(const ValueKey('music-search')),
+        'https://foreign.example/watch?v=dQw4w9WgXcQ&t=42');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(router.pushes, 0);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.text('Open on current instance'));
+    await tester.pumpAndSettle();
+    expect(router.pushes, 1);
+    _expectMusicArgs(
+        (router.pushed! as MusicRoute).args!, 'song', 'dQw4w9WgXcQ',
+        startAt: const Duration(seconds: 42));
+    expect(app.state.server?.url, 'https://instance.example');
+    expect(db.getSearchHistory(), isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   test(
@@ -1061,6 +1224,29 @@ void main() {
     await opening;
     expect(recorder.pushes, 1);
     expect(recorder.pushed!.routeName, TvVideoRoute.name);
+  });
+
+  test('a saved handle cannot navigate after leaving its search context',
+      () async {
+    appRouter.dispose();
+    final recorder = _RecordingRouter();
+    appRouter = recorder;
+    final resolver = _DeferredResolver();
+    service = resolver;
+    await db.upsertServer(const Server(url: 'https://saved.example/iv'));
+    app.selectForLinkDisplay(await db.getCurrentlySelectedServer());
+    var current = true;
+    final opening = app.submitPastedAppLink('https://saved.example/iv/@example',
+        music: true, isCurrent: () => current);
+    await Future<void>.delayed(Duration.zero);
+    final request = resolver.requests.single;
+    expect(request.server.url, 'https://instance.example');
+    current = false;
+    request.reply.complete(ContentLink.fromResolution(
+        request.link, {'ucid': 'UC_kRDKYrUlrbtrSiyu5Tflg'}));
+    await opening;
+    await Future<void>.delayed(Duration.zero);
+    expect(recorder.pushes, 0);
   });
 
   test('a resolved alias cannot navigate after the profile changes', () async {

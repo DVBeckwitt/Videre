@@ -375,6 +375,225 @@ void main() {
     expect(manager.state.folderUri, isNull);
   });
 
+  group('separate video and audio download folders', () {
+    const clips = {'uri': folder, 'name': 'Clips'};
+    const songs = {
+      'uri': 'content://documents/tree/primary%3ASongs',
+      'name': 'Songs',
+    };
+    const sharedMusic = 'content://media/external_primary/audio/media';
+
+    Future<void> queueMusic(String id) async {
+      expect(
+          await manager.addDownload(id,
+              audioOnly: true, quality: highestAudioDownloadQuality),
+          isTrue);
+    }
+
+    String? queuedFolder(String id) => db.getDownloadByVideoId(id)!.folderUri;
+
+    test('both media types capture their own folder when queued', () async {
+      final picks = [clips, songs];
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.method, 'pickFolder');
+        return picks.removeAt(0);
+      });
+      await openAndroidStorageManager();
+      await manager.chooseFolder();
+      await manager.chooseFolder(audioOnly: true);
+      await openAndroidStorageManager();
+      expect(manager.state.folderName, 'Clips');
+      expect(manager.state.audioFolderName, 'Songs');
+      expect(await manager.addDownload('clip'), isTrue);
+      expect(await manager.addDownload('soundtrack', audioOnly: true), isTrue);
+      expect(await manager.prepareMusicDownloads(), isTrue);
+      await queueMusic('song');
+      expect(queuedFolder('clip'), clips['uri']);
+      expect(queuedFolder('soundtrack'), songs['uri']);
+      expect(queuedFolder('song'), songs['uri']);
+
+      final paused = db.getDownloadByVideoId('soundtrack')!;
+      await manager.pauseDownload(paused);
+      final completed = paused.copyWith(
+          videoId: 'finished',
+          storageUri: "${songs['uri']}/document/finished",
+          downloadComplete: true);
+      await db.upsertDownload(completed);
+      await manager.usePrivateFolder(audioOnly: true);
+      expect(await manager.addDownload('voice', audioOnly: true), isTrue);
+      await queueMusic('private-song');
+      await openAndroidStorageManager();
+      expect(manager.state.usePrivateAudioStorage, isTrue);
+      expect(manager.state.folderUri, clips['uri']);
+      expect(manager.state.pausedVideoIds, contains('soundtrack'));
+      expect(db.getDownloadByVideoId('soundtrack'), paused);
+      expect(db.getDownloadByVideoId('finished'), completed);
+      expect(queuedFolder('song'), songs['uri']);
+      expect(queuedFolder('voice'), isNull);
+      expect(queuedFolder('private-song'), isNull);
+    });
+
+    for (final legacy in [clips, 'private']) {
+      test(
+          'legacy ${legacy is String ? 'private' : 'custom'} applies to both '
+          'until each type changes', () async {
+        final encoded = jsonEncode(legacy);
+        await db.saveSetting(SettingsValue(downloadFolderSetting, encoded));
+        await openAndroidStorageManager();
+        final originalUri = legacy is String ? null : folder;
+        expect(manager.state.folderUri, originalUri);
+        expect(manager.state.audioFolderUri, originalUri);
+        expect(manager.state.usePrivateStorage, legacy == 'private');
+        expect(manager.state.usePrivateAudioStorage, legacy == 'private');
+        expect(db.getSettings(downloadFolderSetting)?.value, encoded);
+
+        messenger.setMockMethodCallHandler(storageChannel, (call) async {
+          expect(call.method, 'sharedMusicFolder');
+          return sharedMusic;
+        });
+        await manager.useDefaultFolder(audioOnly: true);
+        await openAndroidStorageManager();
+        expect(manager.state.folderUri, originalUri);
+        expect(manager.state.usePrivateStorage, legacy == 'private');
+        expect(manager.state.audioFolderUri, isNull);
+        expect(manager.state.usePrivateAudioStorage, isFalse);
+        expect(await manager.addDownload('clip'), isTrue);
+        expect(await manager.addDownload('voice', audioOnly: true), isTrue);
+        await queueMusic('song');
+        expect(queuedFolder('clip'), originalUri);
+        expect(queuedFolder('voice'), isNull);
+        expect(queuedFolder('song'), sharedMusic);
+      });
+    }
+
+    test('old Android Music grant survives Video edits until Audio is reset',
+        () async {
+      const replacement = {
+        'uri': 'content://documents/tree/primary%3ANewMusic',
+        'name': 'New Music'
+      };
+      await db.saveSetting(SettingsValue(
+          downloadFolderSetting, jsonEncode({'musicFolder': songs})));
+      await openAndroidStorageManager();
+      var picks = 0;
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        if (call.method == 'sharedMusicFolder') return null;
+        expect(call.method, 'pickFolder');
+        picks++;
+        return picks == 1 ? clips : replacement;
+      });
+      await manager.chooseFolder();
+      await openAndroidStorageManager();
+      expect(manager.state.audioFolderUri, isNull);
+      expect(await manager.prepareMusicDownloads(), isTrue);
+      await queueMusic('song');
+      expect(await manager.addDownload('voice', audioOnly: true), isTrue);
+      expect(await manager.addDownload('clip'), isTrue);
+      expect(queuedFolder('song'), songs['uri']);
+      expect(queuedFolder('voice'), isNull);
+      expect(queuedFolder('clip'), clips['uri']);
+      expect(picks, 1);
+
+      await manager.useDefaultFolder(audioOnly: true);
+      await openAndroidStorageManager();
+      await queueMusic('new-song');
+      expect(picks, 2);
+      expect(queuedFolder('new-song'), replacement['uri']);
+      expect(queuedFolder('song'), songs['uri']);
+      expect(manager.state.folderUri, clips['uri']);
+    });
+
+    test('an invalid Audio destination falls back to private independently',
+        () async {
+      await db.saveSetting(SettingsValue(
+          downloadFolderSetting,
+          jsonEncode({
+            'video': clips,
+            'audio': {'uri': 'file:///external/invalid', 'name': 'Invalid'},
+          })));
+      await openAndroidStorageManager();
+      expect(manager.state.folderUri, folder);
+      expect(manager.state.audioFolderUri, isNull);
+      expect(manager.state.usePrivateAudioStorage, isTrue);
+      expect(await manager.addDownload('clip'), isTrue);
+      await queueMusic('song');
+      expect(queuedFolder('clip'), folder);
+      expect(queuedFolder('song'), isNull);
+    });
+
+    test('a delayed legacy picker merges with a simultaneous Video change',
+        () async {
+      final opened = Completer<void>();
+      final selected = Completer<Map<String, String>>();
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        if (call.method == 'sharedMusicFolder') return null;
+        expect(call.method, 'pickFolder');
+        expect(opened.isCompleted, isFalse);
+        opened.complete();
+        return selected.future;
+      });
+      await openAndroidStorageManager();
+      final preparing = manager.prepareMusicDownloads();
+      await opened.future;
+      final videoChange = manager.usePrivateFolder();
+      selected.complete(songs);
+      expect(await preparing, isTrue);
+      await videoChange;
+      await openAndroidStorageManager();
+      expect(manager.state.usePrivateStorage, isTrue);
+      expect(manager.state.usePrivateAudioStorage, isFalse);
+      await queueMusic('song');
+      expect(queuedFolder('song'), songs['uri']);
+    });
+
+    test('resetting Audio discards an older pending Music picker result',
+        () async {
+      final opened = Completer<void>();
+      final stale = Completer<Map<String, String>>();
+      var picks = 0;
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        if (call.method == 'sharedMusicFolder') return null;
+        expect(call.method, 'pickFolder');
+        if (++picks == 1) {
+          opened.complete();
+          return stale.future;
+        }
+        return songs;
+      });
+      await openAndroidStorageManager();
+      final preparing = manager.prepareMusicDownloads();
+      await opened.future;
+      await manager.useDefaultFolder(audioOnly: true);
+      stale.complete(clips);
+      expect(await preparing, isFalse);
+      await queueMusic('song');
+      expect(queuedFolder('song'), songs['uri']);
+      expect(picks, 2);
+    });
+
+    test('concurrent independent edits persist together across profiles',
+        () async {
+      await Future.wait([
+        manager.usePrivateFolder(),
+        manager.usePrivateFolder(audioOnly: true)
+      ]);
+      await manager.pauseForProfileSwitch();
+      final next = await db.createProfile('Second downloader');
+      await db.useProfile(next.id);
+      await manager.reloadForProfile();
+      expect(manager.state.usePrivateStorage, isTrue);
+      expect(manager.state.usePrivateAudioStorage, isTrue);
+      expect(manager.state.videos, isEmpty);
+      await manager.useDefaultFolder(audioOnly: true);
+      await manager.pauseForProfileSwitch();
+      await db.useProfile('default');
+      await manager.reloadForProfile();
+      expect(manager.state.usePrivateStorage, isTrue);
+      expect(manager.state.usePrivateAudioStorage, isFalse);
+      expect(manager.state.videos.single.videoId, video.videoId);
+    });
+  });
+
   test(
       'existing private Music export reuses a pending document and preserves the source',
       () async {
@@ -639,7 +858,7 @@ void main() {
           ]);
       service = _DownloadService((_) async => track);
       await manager.deleteVideo(video);
-      await manager.usePrivateFolder();
+      await manager.usePrivateFolder(audioOnly: true);
       final preference = outputFormat ?? MusicDownloadFormat.m4a;
       if (preference != MusicDownloadFormat.mp3) await preference.save(db);
       final added = outputFormat != null

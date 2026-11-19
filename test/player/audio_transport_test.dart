@@ -1,15 +1,30 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart' show PlaybackState;
+import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/media_handler.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/components/audio_player.dart' as view;
+import 'package:clipious/player/views/components/player_controls.dart';
+import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/adaptive_format.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
+import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
@@ -25,12 +40,26 @@ class _AudioWithoutAutostart extends AudioPlayerCubit {
   void onInit() {}
 }
 
+class _SessionPlayer extends PlayerCubit {
+  _SessionPlayer(super.initialState, super.settings);
+
+  @override
+  Future<void> onReady() async {}
+}
+
 class _TransportPlatform extends JustAudioPlatform {
-  _TransportPlayer? player;
+  final players = <String, _TransportPlayer>{};
+  _TransportPlayer? get player => players.values.lastOrNull;
+
+  Iterable<_TransportPlayer> loaded(String trackId) =>
+      players.values.where((native) => native.loads.any((load) =>
+          _uriSources(load.audioSourceMessage.toMap()).any((source) =>
+              Uri.parse(source['uri'] as String).queryParameters['id'] ==
+              trackId)));
 
   @override
   Future<AudioPlayerPlatform> init(InitRequest request) async =>
-      player = _TransportPlayer(request.id);
+      players[request.id] = _TransportPlayer(request.id);
 
   @override
   Future<DisposeAllPlayersResponse> disposeAllPlayers(
@@ -40,7 +69,7 @@ class _TransportPlatform extends JustAudioPlatform {
   @override
   Future<DisposePlayerResponse> disposePlayer(
       DisposePlayerRequest request) async {
-    await player?.events.close();
+    await players[request.id]?.events.close();
     return DisposePlayerResponse();
   }
 }
@@ -116,6 +145,9 @@ class _TransportPlayer extends AudioPlayerPlatform {
   Future<SetSpeedResponse> setSpeed(SetSpeedRequest request) async =>
       SetSpeedResponse();
   @override
+  Future<SetPitchResponse> setPitch(SetPitchRequest request) async =>
+      SetPitchResponse();
+  @override
   Future<SetLoopModeResponse> setLoopMode(SetLoopModeRequest request) async =>
       SetLoopModeResponse();
   @override
@@ -145,6 +177,27 @@ Iterable<Map<dynamic, dynamic>> _uriSources(Object? value) sync* {
   }
 }
 
+Video _playableVideo(String id, Server server, {bool music = false}) => Video(
+      videoId: id,
+      title: id,
+      author: 'Artist',
+      musicMetadata: music ? MusicMetadata(title: id, artist: 'Artist') : null,
+      lengthSeconds: 30,
+      playbackConnection: BackendPlayback(server),
+      playbackSourceId: Object(),
+      formatStreams: const [],
+      adaptiveFormats: [
+        AdaptiveFormat.fromJson({
+          'url': '${server.url}/videoplayback?id=$id',
+          'itag': '140',
+          'type': 'audio/mp4',
+          'clen': '300000',
+          'lmt': '1',
+          'projectionType': 'RECTANGULAR',
+        }),
+      ],
+    );
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -159,13 +212,16 @@ void main() {
       final platform = _TransportPlatform();
       JustAudioPlatform.instance = platform;
       db = await SembastSqfDb.createInMemory();
+      const server = Server(url: 'https://instance.example');
+      await db.upsertServer(server);
+      await db.useServer(server);
       final app = TestAppCubit(AppState(0, null, HomeLayout()));
       await app.initState();
       app.intentDataStreamSubscription =
           const Stream<void>.empty().listen((_) {});
       final settings = TestSettingsCubit(SettingsState.init(), app);
       await settings.setAutoplayQueue(false);
-      const video = Video(videoId: 'replaymusic1', lengthSeconds: 30);
+      final video = _playableVideo('replaymusic1', server);
       final player = TestPlayerCubit(
           PlayerState.init(null).copyWith(
               isAudio: true,
@@ -174,7 +230,7 @@ void main() {
               videos: [video]),
           settings);
       final audio = _AudioWithoutAutostart(
-          const AudioPlayerState(video: video), player, settings);
+          AudioPlayerState(video: video), player, settings);
       MediaCommand? lastCommand;
       final commands = player.stream.listen((state) {
         final command = state.mediaCommand;
@@ -190,10 +246,7 @@ void main() {
       }
 
       try {
-        audio.initPlayer();
-        await audio.audioPlayer!.setAudioSource(AudioSource.uri(
-            Uri.parse('https://instance.example/videoplayback?itag=140')));
-        player.play();
+        await audio.playVideo(false, startAt: Duration.zero);
         await platform.player!.nextPlay.future
             .timeout(const Duration(seconds: 5));
         await flush();
@@ -235,6 +288,213 @@ void main() {
       }
     });
   }
+
+  test(
+      'Music prepares both neighbors and promotes the buffered decoder on skip and EOF',
+      () async {
+    final originalTarget = debugDefaultTargetPlatformOverride;
+    final originalPlatform = JustAudioPlatform.instance;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final platform = _TransportPlatform();
+    JustAudioPlatform.instance = platform;
+    db = await SembastSqfDb.createInMemory();
+    const server = Server(url: 'https://instance.example');
+    await db.upsertServer(server);
+    await db.useServer(server);
+    await db.saveSetting(
+        SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+    final app = TestAppCubit(AppState(0, server, HomeLayout()));
+    await app.initState();
+    app.intentDataStreamSubscription =
+        const Stream<void>.empty().listen((_) {});
+    final settings = TestSettingsCubit(SettingsState.init(), app);
+    final player = TestPlayerCubit(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(player);
+    final tracks = [
+      for (final id in ['beforeSong1', 'middleSong2', 'afterSong03'])
+        _playableVideo(id, server, music: true),
+    ];
+    // Mount the same shared audio transport that receives the player's queue
+    // commands on the device. Only the native decoder/clock are simulated.
+    AudioPlayerCubit? audio;
+    MediaCommand? lastCommand;
+    final commands = player.stream.listen((state) {
+      final command = state.mediaCommand;
+      if (command != null && command != lastCommand) {
+        lastCommand = command;
+        audio?.handleCommand(command);
+      }
+    });
+    final loaded = platform.loaded;
+    Future<void> until(bool Function() ready, String reason) async {
+      final deadline = Stopwatch()..start();
+      while (!ready() && deadline.elapsed < const Duration(seconds: 3)) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(ready(), isTrue, reason: reason);
+    }
+
+    try {
+      await player.playVideo(tracks, audio: true, startIndex: 1);
+      audio = AudioPlayerCubit(
+          AudioPlayerState(video: player.state.currentlyPlaying),
+          player,
+          settings);
+      await until(() => loaded(tracks[1].videoId).any((p) => p.plays > 0),
+          'The middle song should start normally.');
+      await until(
+          () =>
+              loaded(tracks.first.videoId).isNotEmpty &&
+              loaded(tracks.last.videoId).isNotEmpty,
+          'Both neighbors should be buffered before any skip.');
+      final previous = loaded(tracks.first.videoId).single;
+      final next = loaded(tracks.last.videoId).single;
+      expect([previous.plays, next.plays], [0, 0]);
+
+      player.playPrevious();
+      await until(() => previous.plays > 0,
+          'Swiping back should use the prepared player.');
+      expect(player.state.currentlyPlaying?.videoId, tracks.first.videoId);
+      expect(previous.loads, hasLength(1));
+
+      await until(
+          () =>
+              loaded(tracks[1].videoId)
+                  .any((p) => !p.events.isClosed && p.plays == 0) ||
+              loaded(tracks[1].videoId)
+                  .any((p) => !p.events.isClosed && p.pauses > 0),
+          'The next song should be ready before completion.');
+      final bufferedMiddle =
+          loaded(tracks[1].videoId).where((p) => !p.events.isClosed).last;
+      final playsBeforeEnd = bufferedMiddle.plays;
+      final loadsBeforeEnd = bufferedMiddle.loads.length;
+      previous.report(
+          ProcessingStateMessage.completed, const Duration(seconds: 30));
+      await until(() => bufferedMiddle.plays > playsBeforeEnd,
+          'The real native completion event should reuse the prepared next player.');
+      expect(player.state.currentlyPlaying?.videoId, tracks[1].videoId);
+      expect(bufferedMiddle.loads, hasLength(loadsBeforeEnd));
+    } finally {
+      await commands.cancel();
+      await audio?.close();
+      await player.close();
+      await settings.close();
+      await app.close();
+      await db.close();
+      JustAudioPlatform.instance = originalPlatform;
+      debugDefaultTargetPlatformOverride = originalTarget;
+    }
+  });
+
+  testWidgets('mounted Music transports several songs with the screen off',
+      (tester) async {
+    await tester.runAsync(() async {
+      final originalPlatform = JustAudioPlatform.instance;
+      final originalTarget = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final platform = _TransportPlatform();
+      JustAudioPlatform.instance = platform;
+      db = await SembastSqfDb.createInMemory();
+      const server = Server(url: 'https://instance.example');
+      await db.upsertServer(server);
+      await db.useServer(server);
+      await db.saveSetting(
+          SettingsValue(SponsorSegmentType.sponsor.settingsName(), 'false'));
+      final app = TestAppCubit(AppState(0, server, HomeLayout()));
+      await app.initState();
+      app.intentDataStreamSubscription =
+          const Stream<void>.empty().listen((_) {});
+      final settings = TestSettingsCubit(SettingsState.init(), app);
+      final player = _SessionPlayer(PlayerState.init(null), settings);
+      player.audioSession = await AudioSession.instance;
+      final handler = app_main.mediaHandler = MediaHandler(player);
+      final tracks = [
+        for (var i = 1; i <= 5; i++)
+          _playableVideo('locked-song-$i', server, music: true)
+      ];
+
+      _TransportPlayer? playing(Video track) => platform
+          .loaded(track.videoId)
+          .where((p) => !p.events.isClosed && p.plays > 0)
+          .lastOrNull;
+
+      Future<_TransportPlayer> waitFor(Video track) async {
+        final clock = Stopwatch()..start();
+        while (clock.elapsed < const Duration(seconds: 3)) {
+          final decoder = playing(track);
+          if (decoder != null &&
+              player.state.currentQueueId == track.videoId &&
+              handler.mediaItem.value?.id == track.videoId) {
+            return decoder;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        throw StateError(
+            'Music session or native decoder did not reach ${track.videoId}: '
+            'queue=${player.state.currentQueueId}, notification=${handler.mediaItem.value?.id}, '
+            'playing=${playing(track) != null}.');
+      }
+
+      WidgetsBinding.instance.addObserver(player);
+      AudioPlayerCubit? mountedTransport;
+      StreamSubscription<PlaybackState>? mediaStates;
+      try {
+        app_main.darkColorScheme = ThemeData.dark().colorScheme;
+        await player.playVideo(tracks, audio: true);
+        await tester.pumpWidget(MultiBlocProvider(
+            providers: [
+              BlocProvider<AppCubit>.value(value: app),
+              BlocProvider<SettingsCubit>.value(value: settings),
+              BlocProvider<PlayerCubit>.value(value: player),
+            ],
+            child: MaterialApp(
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: Scaffold(
+                  body: view.AudioPlayer(
+                      video: player.state.currentlyPlaying, miniPlayer: false)),
+            )));
+        mountedTransport = tester
+            .element(find.byType(PlayerControls))
+            .read<AudioPlayerCubit>();
+        var decoder = await waitFor(tracks.first);
+        final reported = <PlaybackState>[];
+        mediaStates = handler.playbackState.listen(reported.add);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        var rendered = false;
+        tester.binding.addPostFrameCallback((_) => rendered = true);
+        expect(tester.binding.framesEnabled, isFalse);
+        for (var i = 1; i < tracks.length; i++) {
+          if (i == 3) {
+            await handler.skipToNext();
+          } else {
+            decoder.report(
+                ProcessingStateMessage.completed, const Duration(seconds: 30));
+          }
+          decoder = await waitFor(tracks[i]);
+          expect(handler.playbackState.value.playing, isTrue);
+          expect(rendered, isFalse);
+        }
+        expect(reported, isNotEmpty);
+        expect(reported.map((state) => state.playing), everyElement(isTrue));
+      } finally {
+        await mediaStates?.cancel();
+        WidgetsBinding.instance.removeObserver(player);
+        tester.binding
+            .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        final closed = mountedTransport?.stream.drain<void>();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await closed;
+        await player.close();
+        await settings.close();
+        await app.close();
+        await db.close();
+        JustAudioPlatform.instance = originalPlatform;
+        debugDefaultTargetPlatformOverride = originalTarget;
+      }
+    });
+  });
 
   test('Android audio retains instance URI and headers at the native boundary',
       () async {

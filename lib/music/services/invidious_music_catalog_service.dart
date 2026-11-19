@@ -11,6 +11,8 @@ import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_video_match.dart';
+import 'package:clipious/music/services/music_video_source.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
@@ -163,22 +165,48 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
 
   @override
   Future<List<MusicTrack>> getDiscoverySongs(
-      {String? artist, bool Function()? isCurrent}) {
+      {String? artist,
+      bool Function()? isCurrent,
+      void Function(InvidiousServiceError)? onInstanceFailure}) {
     final artistName =
         String.fromCharCodes((artist ?? '').trim().runes.take(120));
+    return _verifiedSongSearch(
+        artistName.isEmpty
+            ? 'official music video'
+            : '$artistName official music video',
+        candidateLimit: _discoveryCandidateLimit,
+        skipSavedSongs: artistName.isNotEmpty,
+        onInstanceFailure: onInstanceFailure,
+        isCurrent: isCurrent);
+  }
+
+  @override
+  Future<List<MusicTrack>> getGenreSongs(String genre,
+      {bool Function()? isCurrent,
+      void Function(InvidiousServiceError)? onInstanceFailure}) async {
+    if (!musicExploreGenres.contains(genre)) return const [];
+    return _verifiedSongSearch('$genre music',
+        candidateLimit: 4,
+        onInstanceFailure: onInstanceFailure ?? (failure) => throw failure,
+        isCurrent: isCurrent);
+  }
+
+  Future<List<MusicTrack>> _verifiedSongSearch(String query,
+      {required int candidateLimit,
+      bool skipSavedSongs = false,
+      void Function(InvidiousServiceError)? onInstanceFailure,
+      bool Function()? isCurrent}) async {
+    _requireCurrentDiscovery(isCurrent);
     return _inSession((api, server, checkSession) async {
       Future<void> check() => _checkDiscovery(checkSession, isCurrent);
 
       await check();
-      final query = artistName.isEmpty
-          ? 'official music video'
-          : '$artistName official music video';
       final search =
           await api.searchMusic(query, SearchType.video, server, check);
       await check();
       final candidates = <String>[];
       final seen = <String>{
-        if (artistName.isNotEmpty)
+        if (skipSavedSongs)
           for (final entry
               in MusicLibraryService.forProfile(db, server.profileId).entries)
             if (entry.kind == MusicLibraryKind.song) entry.id,
@@ -188,10 +216,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             _videoId.hasMatch(video.videoId) &&
             seen.add(video.videoId)) {
           candidates.add(video.videoId);
-          if (candidates.length == _discoveryCandidateLimit) break;
+          if (candidates.length == candidateLimit) break;
         }
       }
-      return _inspectDiscoverySongs(api, server, candidates, check, isCurrent);
+      return _inspectDiscoverySongs(api, server, candidates, check, isCurrent,
+          onInstanceFailure: onInstanceFailure);
     });
   }
 
@@ -223,10 +252,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           }.take(_discoveryCandidateLimit).toList());
         } catch (error) {
           await check();
-          if (_discoveryCooldown(error) ||
-              error is InvidiousServiceError &&
-                  (error.isAuthenticationFailure ||
-                      error.isGatewayAccessFailure)) {
+          if (musicDiscoveryMustStop(error)) {
             rethrow;
           }
           seedFailures++;
@@ -320,14 +346,15 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       Future<void> Function() check,
       bool Function()? isCurrent,
       {int seedFailures = 0,
+      void Function(InvidiousServiceError)? onInstanceFailure,
       Map<String, String>? expectedAuthors}) async {
     final covers = _savedCovers(server);
-    Future<({MusicTrack? track, bool failed, bool cooldown})> inspect(
-        String id) async {
+    Future<({MusicTrack? track, bool failed, InvidiousServiceError? rejection})>
+        inspect(String id) async {
       await check();
       MusicTrack? track;
       var failed = false;
-      var cooldown = false;
+      InvidiousServiceError? rejection;
       try {
         // One noninteractive lookup per candidate. Service retains its own
         // transport policy (short 429 and NerdVPN startup retries), but
@@ -348,10 +375,14 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         // One unavailable or malformed candidate must not hide other verified
         // music. Session cancellation is checked outside this partial result.
         failed = true;
-        cooldown = _discoveryCooldown(error);
+        if (error is InvidiousServiceError &&
+            (_discoveryCooldown(error) ||
+                (onInstanceFailure != null && musicDiscoveryMustStop(error)))) {
+          rejection = error;
+        }
       }
       await check();
-      return (track: track, failed: failed, cooldown: cooldown);
+      return (track: track, failed: failed, rejection: rejection);
     }
 
     final host = Uri.parse(server.url).host.toLowerCase();
@@ -367,21 +398,106 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       final inspected = await Future.wait(batch.map(inspect));
       await check();
       offset += batch.length;
+      InvidiousServiceError? rejection;
       for (final item in inspected) {
         if (item.failed) failures++;
         if (item.track case final track?) songs.add(track);
+        if (item.rejection case final error?) {
+          if (rejection == null ||
+              (error.retryAfter ?? Duration.zero) >
+                  (rejection.retryAfter ?? Duration.zero)) {
+            rejection = error;
+          }
+        }
       }
-      // An instance cooldown also applies to requests for other candidates.
-      if (songs.length >= _discoverySongLimit ||
-          inspected.any((item) => item.cooldown)) {
+      if (rejection != null) {
+        if (onInstanceFailure != null) {
+          onInstanceFailure(rejection);
+          if (songs.isEmpty) throw rejection;
+        }
         break;
       }
+      if (songs.length >= _discoverySongLimit) break;
     }
     if (songs.isEmpty && failures > 0) {
       throw const MusicCatalogException(
           'Music discovery could not verify any tracks. Retry the request.');
     }
     return songs.take(_discoverySongLimit).toList();
+  }
+
+  @override
+  Future<Video?> findMusicVideo(Video song,
+      {required bool Function() isCurrent}) async {
+    final connection = song.backendPlayback ?? song.playbackConnection;
+    if (!isCurrent() ||
+        connection == null ||
+        song.downloadPlaybackOnly ||
+        song.musicMetadata == null ||
+        !_videoId.hasMatch(song.videoId)) {
+      return null;
+    }
+    return _inSession((api, selected, checkSession) async {
+      if (!isCurrent() || !connection.matches(selected)) return null;
+      if (!musicVideoAllowed(song)) return null;
+      if (isVisualMusicUpload(song) && hasMusicVideoSource(song)) return song;
+
+      final recording = MusicVideoRecording.fromSong(song);
+      if (recording == null) return null;
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+
+      // The audio may use an explicitly selected backend. Keep that route for
+      // both the search and the actual video; do not spend its fallback budget.
+      final server = connection.server;
+      final results = await api.searchMusic(
+          '${recording.artist} ${recording.title} official music video',
+          SearchType.video,
+          server,
+          check);
+      await check();
+      final labeled = <String>{};
+      final other = <String>{};
+      for (final row in results.videos.take(10)) {
+        if (!_videoId.hasMatch(row.videoId) || !musicVideoAllowed(row)) {
+          continue;
+        }
+        // A saved queue label can omit the current upload's video designation.
+        // A search row for that exact ID can recover it without substituting a
+        // different recording. Never probe the current confirmed Art Track.
+        if (row.videoId == song.videoId) {
+          if (song.musicMetadata?.isArtTrack != true &&
+              !song.isStockArtTrack &&
+              hasMusicVideoLabel(row)) {
+            labeled.add(row.videoId);
+          }
+        } else if (recording.matches(row, fullMetadata: false)) {
+          (hasMusicVideoLabel(row) ? labeled : other).add(row.videoId);
+        }
+      }
+      for (final id in {...labeled, ...other}.take(3)) {
+        await check();
+        try {
+          final detail = await api.getCatalogSongVideo(id, server, null, check);
+          await check();
+          if (detail.videoId != id ||
+              !musicVideoAllowed(detail) ||
+              !isVisualMusicUpload(detail) ||
+              (id != song.videoId &&
+                  !recording.matches(detail, fullMetadata: true))) {
+            continue;
+          }
+          final admitted = detail.copyWith(
+              playbackConnection: connection,
+              backendPlayback: song.backendPlayback);
+          if (hasMusicVideoSource(admitted)) return admitted;
+        } on InvidiousServiceError catch (failure) {
+          if (musicDiscoveryMustStop(failure)) rethrow;
+        } on FormatException {
+          // An invalid candidate cannot establish a match. Try the next one.
+        }
+      }
+      return null;
+    });
   }
 
   @override

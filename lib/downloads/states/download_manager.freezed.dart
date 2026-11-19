@@ -17,6 +17,9 @@ mixin _$DownloadManagerState {
   String? get folderUri;
   String? get folderName;
   bool get usePrivateStorage;
+  String? get audioFolderUri;
+  String? get audioFolderName;
+  bool get usePrivateAudioStorage;
   List<DownloadedVideo> get videos;
   Map<String, DownloadProgress> get downloadProgresses;
   Set<String> get pausedVideoIds;
@@ -42,6 +45,12 @@ mixin _$DownloadManagerState {
                 other.folderName == folderName) &&
             (identical(other.usePrivateStorage, usePrivateStorage) ||
                 other.usePrivateStorage == usePrivateStorage) &&
+            (identical(other.audioFolderUri, audioFolderUri) ||
+                other.audioFolderUri == audioFolderUri) &&
+            (identical(other.audioFolderName, audioFolderName) ||
+                other.audioFolderName == audioFolderName) &&
+            (identical(other.usePrivateAudioStorage, usePrivateAudioStorage) ||
+                other.usePrivateAudioStorage == usePrivateAudioStorage) &&
             const DeepCollectionEquality().equals(other.videos, videos) &&
             const DeepCollectionEquality()
                 .equals(other.downloadProgresses, downloadProgresses) &&
@@ -59,6 +68,9 @@ mixin _$DownloadManagerState {
       folderUri,
       folderName,
       usePrivateStorage,
+      audioFolderUri,
+      audioFolderName,
+      usePrivateAudioStorage,
       const DeepCollectionEquality().hash(videos),
       const DeepCollectionEquality().hash(downloadProgresses),
       const DeepCollectionEquality().hash(pausedVideoIds),
@@ -67,7 +79,7 @@ mixin _$DownloadManagerState {
 
   @override
   String toString() {
-    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, audioFolderUri: $audioFolderUri, audioFolderName: $audioFolderName, usePrivateAudioStorage: $usePrivateAudioStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
   }
 }
 
@@ -81,6 +93,9 @@ abstract mixin class $DownloadManagerStateCopyWith<$Res> {
       {String? folderUri,
       String? folderName,
       bool usePrivateStorage,
+      String? audioFolderUri,
+      String? audioFolderName,
+      bool usePrivateAudioStorage,
       List<DownloadedVideo> videos,
       Map<String, DownloadProgress> downloadProgresses,
       Set<String> pausedVideoIds,
@@ -104,6 +119,9 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
     Object? folderUri = freezed,
     Object? folderName = freezed,
     Object? usePrivateStorage = null,
+    Object? audioFolderUri = freezed,
+    Object? audioFolderName = freezed,
+    Object? usePrivateAudioStorage = null,
     Object? videos = null,
     Object? downloadProgresses = null,
     Object? pausedVideoIds = null,
@@ -122,6 +140,18 @@ class _$DownloadManagerStateCopyWithImpl<$Res>
       usePrivateStorage: null == usePrivateStorage
           ? _self.usePrivateStorage
           : usePrivateStorage // ignore: cast_nullable_to_non_nullable
+              as bool,
+      audioFolderUri: freezed == audioFolderUri
+          ? _self.audioFolderUri
+          : audioFolderUri // ignore: cast_nullable_to_non_nullable
+              as String?,
+      audioFolderName: freezed == audioFolderName
+          ? _self.audioFolderName
+          : audioFolderName // ignore: cast_nullable_to_non_nullable
+              as String?,
+      usePrivateAudioStorage: null == usePrivateAudioStorage
+          ? _self.usePrivateAudioStorage
+          : usePrivateAudioStorage // ignore: cast_nullable_to_non_nullable
               as bool,
       videos: null == videos
           ? _self.videos
@@ -242,6 +272,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
             String? folderUri,
             String? folderName,
             bool usePrivateStorage,
+            String? audioFolderUri,
+            String? audioFolderName,
+            bool usePrivateAudioStorage,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -257,6 +290,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
             _that.folderUri,
             _that.folderName,
             _that.usePrivateStorage,
+            _that.audioFolderUri,
+            _that.audioFolderName,
+            _that.usePrivateAudioStorage,
             _that.videos,
             _that.downloadProgresses,
             _that.pausedVideoIds,
@@ -286,6 +322,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
             String? folderUri,
             String? folderName,
             bool usePrivateStorage,
+            String? audioFolderUri,
+            String? audioFolderName,
+            bool usePrivateAudioStorage,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -300,6 +339,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
             _that.folderUri,
             _that.folderName,
             _that.usePrivateStorage,
+            _that.audioFolderUri,
+            _that.audioFolderName,
+            _that.usePrivateAudioStorage,
             _that.videos,
             _that.downloadProgresses,
             _that.pausedVideoIds,
@@ -326,6 +368,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
             String? folderUri,
             String? folderName,
             bool usePrivateStorage,
+            String? audioFolderUri,
+            String? audioFolderName,
+            bool usePrivateAudioStorage,
             List<DownloadedVideo> videos,
             Map<String, DownloadProgress> downloadProgresses,
             Set<String> pausedVideoIds,
@@ -340,6 +385,9 @@ extension DownloadManagerStatePatterns on DownloadManagerState {
             _that.folderUri,
             _that.folderName,
             _that.usePrivateStorage,
+            _that.audioFolderUri,
+            _that.audioFolderName,
+            _that.usePrivateAudioStorage,
             _that.videos,
             _that.downloadProgresses,
             _that.pausedVideoIds,
@@ -358,6 +406,9 @@ class _DownloadManagerState extends DownloadManagerState {
       {this.folderUri,
       this.folderName,
       this.usePrivateStorage = false,
+      this.audioFolderUri,
+      this.audioFolderName,
+      this.usePrivateAudioStorage = false,
       final List<DownloadedVideo> videos = const [],
       final Map<String, DownloadProgress> downloadProgresses = const {},
       final Set<String> pausedVideoIds = const {},
@@ -375,6 +426,13 @@ class _DownloadManagerState extends DownloadManagerState {
   @override
   @JsonKey()
   final bool usePrivateStorage;
+  @override
+  final String? audioFolderUri;
+  @override
+  final String? audioFolderName;
+  @override
+  @JsonKey()
+  final bool usePrivateAudioStorage;
   final List<DownloadedVideo> _videos;
   @override
   @JsonKey()
@@ -430,6 +488,12 @@ class _DownloadManagerState extends DownloadManagerState {
                 other.folderName == folderName) &&
             (identical(other.usePrivateStorage, usePrivateStorage) ||
                 other.usePrivateStorage == usePrivateStorage) &&
+            (identical(other.audioFolderUri, audioFolderUri) ||
+                other.audioFolderUri == audioFolderUri) &&
+            (identical(other.audioFolderName, audioFolderName) ||
+                other.audioFolderName == audioFolderName) &&
+            (identical(other.usePrivateAudioStorage, usePrivateAudioStorage) ||
+                other.usePrivateAudioStorage == usePrivateAudioStorage) &&
             const DeepCollectionEquality().equals(other._videos, _videos) &&
             const DeepCollectionEquality()
                 .equals(other._downloadProgresses, _downloadProgresses) &&
@@ -447,6 +511,9 @@ class _DownloadManagerState extends DownloadManagerState {
       folderUri,
       folderName,
       usePrivateStorage,
+      audioFolderUri,
+      audioFolderName,
+      usePrivateAudioStorage,
       const DeepCollectionEquality().hash(_videos),
       const DeepCollectionEquality().hash(_downloadProgresses),
       const DeepCollectionEquality().hash(_pausedVideoIds),
@@ -455,7 +522,7 @@ class _DownloadManagerState extends DownloadManagerState {
 
   @override
   String toString() {
-    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
+    return 'DownloadManagerState(folderUri: $folderUri, folderName: $folderName, usePrivateStorage: $usePrivateStorage, audioFolderUri: $audioFolderUri, audioFolderName: $audioFolderName, usePrivateAudioStorage: $usePrivateAudioStorage, videos: $videos, downloadProgresses: $downloadProgresses, pausedVideoIds: $pausedVideoIds, wifiOnly: $wifiOnly, waitingForWifi: $waitingForWifi)';
   }
 }
 
@@ -471,6 +538,9 @@ abstract mixin class _$DownloadManagerStateCopyWith<$Res>
       {String? folderUri,
       String? folderName,
       bool usePrivateStorage,
+      String? audioFolderUri,
+      String? audioFolderName,
+      bool usePrivateAudioStorage,
       List<DownloadedVideo> videos,
       Map<String, DownloadProgress> downloadProgresses,
       Set<String> pausedVideoIds,
@@ -494,6 +564,9 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
     Object? folderUri = freezed,
     Object? folderName = freezed,
     Object? usePrivateStorage = null,
+    Object? audioFolderUri = freezed,
+    Object? audioFolderName = freezed,
+    Object? usePrivateAudioStorage = null,
     Object? videos = null,
     Object? downloadProgresses = null,
     Object? pausedVideoIds = null,
@@ -512,6 +585,18 @@ class __$DownloadManagerStateCopyWithImpl<$Res>
       usePrivateStorage: null == usePrivateStorage
           ? _self.usePrivateStorage
           : usePrivateStorage // ignore: cast_nullable_to_non_nullable
+              as bool,
+      audioFolderUri: freezed == audioFolderUri
+          ? _self.audioFolderUri
+          : audioFolderUri // ignore: cast_nullable_to_non_nullable
+              as String?,
+      audioFolderName: freezed == audioFolderName
+          ? _self.audioFolderName
+          : audioFolderName // ignore: cast_nullable_to_non_nullable
+              as String?,
+      usePrivateAudioStorage: null == usePrivateAudioStorage
+          ? _self.usePrivateAudioStorage
+          : usePrivateAudioStorage // ignore: cast_nullable_to_non_nullable
               as bool,
       videos: null == videos
           ? _self._videos

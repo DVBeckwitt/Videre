@@ -148,6 +148,7 @@ const strictValidationTargets = [
   './test/player/backend_playback_admission_test.dart',
   './test/player/audio_backend_playback_recovery_test.dart',
   './test/player/audio_transport_test.dart',
+  './test/player/audio_adjacent_preload_test.dart',
   './test/player/audio_stall_detector_test.dart',
   './test/player/playback_refresh_test.dart',
   './test/player/backend_retry_notice_test.dart',
