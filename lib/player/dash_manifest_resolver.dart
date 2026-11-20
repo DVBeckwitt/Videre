@@ -23,12 +23,13 @@ class DashManifestResolver {
   static const _onionFetchBudget = Duration(seconds: 45);
   final http.Client client;
   final Duration? _timeout;
+  final void Function()? beforeRequest;
   final DateTime Function() _now;
   final _routes = <(Server, String, String?),
       ({DateTime expires, bool needsCheck, String? nativeManifestPath})>{};
 
   DashManifestResolver(this.client,
-      {Duration? timeout, DateTime Function()? now})
+      {Duration? timeout, DateTime Function()? now, this.beforeRequest})
       : _timeout = timeout,
         _now = now ?? DateTime.now;
 
@@ -191,6 +192,7 @@ class DashManifestResolver {
     return (() async {
       var target = uri;
       for (var redirects = 0;; redirects++) {
+        beforeRequest?.call();
         final request = http.Request('GET', target)..followRedirects = false;
         request.headers.addAll(server.headersForUrl(target.toString()) ?? {});
         final response = await read(await client.send(request));
@@ -291,7 +293,9 @@ class DashManifestResolver {
       final current = _routes[route];
       if (warmUnsigned &&
           current != cached &&
-          !(needsCheck && current?.needsCheck == false)) return;
+          !(needsCheck && current?.needsCheck == false)) {
+        return;
+      }
       if (_routes.length >= 20) _routes.remove(_routes.keys.first);
       _routes[route] = (
         expires: _now().add(const Duration(minutes: 2)),

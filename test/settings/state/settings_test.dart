@@ -27,7 +27,9 @@ import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/app_customizer.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/views/screens/settings.dart';
+import 'package:clipious/settings/views/screens/appearance.dart';
 import 'package:clipious/settings/views/screens/video_player.dart';
 import 'package:clipious/settings/views/tv/screens/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -116,6 +118,50 @@ Future<void> main() async {
     expect(
         SettingsState.init().songTransitionMode, SongTransitionMode.seamless);
     expect(SettingsState.init().songTransitionSeconds, 3);
+  });
+
+  test('the palette preserves legacy dynamic colors and saves each choice',
+      () async {
+    expect(settingsCubit.state.themePalette, ThemePalette.neutral);
+    await settingsCubit.saveSetting(SettingsValue(dynamicTheme, 'true'));
+    expect(settingsCubit.state.themePalette, ThemePalette.dynamicColors);
+    for (final palette in ThemePalette.values) {
+      await settingsCubit.setThemePalette(palette);
+      expect(SettingsState.init().themePalette, palette);
+      expect(UserBackup.validSetting(db.getSettings(themePaletteSettingName)!),
+          isTrue);
+    }
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(themePaletteSettingName, 'unknown')),
+        isFalse);
+    for (final brightness in Brightness.values) {
+      expect(
+          ThemePalette.classicPurple.seededScheme(brightness),
+          ColorScheme.fromSeed(
+              seedColor: const Color(0xff4f0096), brightness: brightness));
+      expect(ThemePalette.dynamicColors.seededScheme(brightness),
+          ThemePalette.neutral.seededScheme(brightness));
+    }
+  });
+
+  testWidgets('Appearance selects Classic purple and preserves brightness',
+      (tester) async {
+    await tester.pumpWidget(BlocProvider<SettingsCubit>.value(
+      value: settingsCubit,
+      child: const MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: AppearanceSettingsScreen()),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Color palette'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Classic purple'));
+    await tester.pumpAndSettle();
+    expect(settingsCubit.state.themePalette, ThemePalette.classicPurple);
+    expect(settingsCubit.state.themeMode, ThemeMode.system);
+    expect(find.text('Classic purple'), findsOneWidget);
   });
 
   test('motion follows Android by default and persists each choice', () async {
@@ -733,7 +779,8 @@ Future<void> main() async {
     ('phone', SettingsScreen()),
     ('TV', TVSettingsScreen()),
   ]) {
-    Future<void> showSettings(WidgetTester tester, {double? width}) async {
+    Future<void> showSettings(WidgetTester tester, String settingKey,
+        {double? width}) async {
       tester.view.physicalSize =
           Size(width ?? (name == 'TV' ? 1280 : 360), 720);
       tester.view.devicePixelRatio = 1;
@@ -750,14 +797,16 @@ Future<void> main() async {
               supportedLocales: AppLocalizations.supportedLocales,
               home: screen)));
       await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(find.text('YT Music'), 400,
+      // The section heading and its controls mount as separate TV list items.
+      await tester.scrollUntilVisible(find.byKey(ValueKey(settingKey)), 400,
           scrollable: find.byType(Scrollable).first);
+      await tester.pumpAndSettle();
     }
 
     testWidgets(
         '$name YT Music settings keep cover and lyrics opt-ins independent',
         (tester) async {
-      await showSettings(tester);
+      await showSettings(tester, 'music-community-cover-setting');
       final lyrics = find.byKey(const ValueKey('music-lrclib-setting'));
       final cover = find.byKey(const ValueKey('music-community-cover-setting'));
       await tester.ensureVisible(cover);
@@ -808,7 +857,7 @@ Future<void> main() async {
           (tester) async {
         final tv = name == 'TV';
         app.isTv = tv;
-        await showSettings(tester, width: width);
+        await showSettings(tester, 'music-transition-setting', width: width);
         Finder keyed(String key) => find.byKey(ValueKey(key));
         final setting = keyed('music-transition-setting');
         final duration = keyed('music-transition-duration-setting');
@@ -901,7 +950,7 @@ Future<void> main() async {
 
     testWidgets('$name chooses a Music streaming quality default',
         (tester) async {
-      await showSettings(tester);
+      await showSettings(tester, 'music-streaming-quality-setting');
       final setting =
           find.byKey(const ValueKey('music-streaming-quality-setting'));
       await tester.ensureVisible(setting);
@@ -931,7 +980,7 @@ Future<void> main() async {
     });
 
     testWidgets('$name chooses square Music cover corners', (tester) async {
-      await showSettings(tester);
+      await showSettings(tester, 'music-cover-corners-setting');
       final setting = find.byKey(const ValueKey('music-cover-corners-setting'));
       await tester.ensureVisible(setting);
       await tester.pumpAndSettle();
@@ -960,7 +1009,7 @@ Future<void> main() async {
 
     testWidgets('$name selects and cancels the YT Music download format',
         (tester) async {
-      await showSettings(tester);
+      await showSettings(tester, 'music-download-format-setting');
       final setting =
           find.byKey(const ValueKey('music-download-format-setting'));
       await tester.pumpAndSettle();

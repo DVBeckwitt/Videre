@@ -7,6 +7,43 @@ import '../../../utils/models/image_object.dart';
 
 part 'history_video_cache.g.dart';
 
+/// The Videre section in which a playback entry was selected.
+enum PlaybackHistoryOrigin { video, music }
+
+/// A pending play may fill its history row once, unless a later edit cancels it.
+class PlaybackHistoryWrite {
+  final String profileId;
+  final PlaybackHistoryOrigin origin;
+  final String videoId;
+  final Future<void> Function(HistoryVideoCache, bool Function()) _store;
+  final void Function(PlaybackHistoryWrite)? _onFinish;
+  bool _cancelled = false;
+  bool _started = false;
+
+  PlaybackHistoryWrite(this.profileId, this.origin, this.videoId, this._store,
+      {void Function(PlaybackHistoryWrite)? onFinish})
+      : _onFinish = onFinish;
+
+  Future<void> record(HistoryVideoCache entry) async {
+    if (_cancelled || _started) return;
+    _started = true;
+    try {
+      if (entry.videoId != videoId) {
+        throw ArgumentError('Playback history belongs to another video.');
+      }
+      await _store(entry, () => !_cancelled);
+    } finally {
+      cancel();
+    }
+  }
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    _onFinish?.call(this);
+  }
+}
+
 @JsonSerializable(explicitToJson: true)
 class HistoryVideoCache {
   String title;

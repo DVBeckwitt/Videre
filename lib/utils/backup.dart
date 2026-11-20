@@ -18,6 +18,7 @@ import '../playlists/models/saved_playlist.dart';
 import '../player/models/video_display_mode.dart';
 import '../settings/models/db/settings.dart';
 import '../settings/models/db/video_filter.dart';
+import '../settings/models/theme_palette.dart';
 import '../videos/models/db/history_video_cache.dart';
 import '../videos/models/db/progress.dart';
 import '../videos/models/music_metadata.dart';
@@ -40,6 +41,13 @@ class UserBackup {
       RegExp(r'^/?(?:vi|vi_webp|s_p|pl_c|tvfilm_banner|ggpht|sb)/');
   static final _ambiguousImagePath =
       RegExp(r'%2e|%2f|%5c|%25|\\|(?:^|/)\.\.?(?:/|$)', caseSensitive: false);
+  // Optional sections may be absent in earlier version 1 backups.
+  static const _optionalSections = [
+    'watchState',
+    'savedPlaylists',
+    'videoHistory',
+    'musicHistory',
+  ];
   static const sectionNames = [
     'settings',
     'subscriptions',
@@ -47,8 +55,7 @@ class UserBackup {
     'progress',
     'history',
     'playlists',
-    'watchState',
-    'savedPlaylists'
+    ..._optionalSections,
   ];
 
   String encode() => jsonEncode({
@@ -72,8 +79,7 @@ class UserBackup {
       }
       final sections = <String, List<Map<String, dynamic>>>{};
       for (final name in sectionNames) {
-        // These additions remain optional in existing version 1 libraries.
-        final rows = (const ['watchState', 'savedPlaylists'].contains(name)
+        final rows = (_optionalSections.contains(name)
             ? data[name] ?? []
             : data[name]) as List;
         if (rows.length > 50000) {
@@ -164,6 +170,8 @@ class UserBackup {
               }
               return progress.toJson();
             case 'history':
+            case 'videoHistory':
+            case 'musicHistory':
               final video = HistoryVideoCache.fromJson(value);
               if (!_videoId.hasMatch(video.videoId) ||
                   video.title.length > 1000) {
@@ -427,6 +435,8 @@ class UserBackup {
         RegExp(r'^[a-z]{2,3}(?:[_-][A-Za-z0-9]{2,8})*$').hasMatch(value),
       lastSubtitle => value.length < 128,
       themeModeSettingName => ['system', 'light', 'dark'].contains(value),
+      themePaletteSettingName =>
+        ThemePalette.values.any((p) => p.name == value),
       motionPreferenceSettingName =>
         ['system', 'reduced', 'off'].contains(value),
       navigationBarLabelBehaviorSettingName =>

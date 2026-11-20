@@ -4,6 +4,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:json_annotation/json_annotation.dart';
 
 import '../../settings/models/db/settings.dart';
+import '../../utils/interfaces/db.dart';
 
 part 'dearrow.g.dart';
 
@@ -28,13 +29,15 @@ class DeArrow {
 
   Map<String, dynamic> toJson() => _$DeArrowToJson(this);
 
-  static Future<List<Video>> processVideos(List<Video>? videos) async {
-    var process = db.getSettings(dearrowSettingName)?.value == "true";
+  static Future<List<Video>> processVideos(List<Video>? videos,
+      {IDbClient? owner}) async {
+    final library = owner ?? db;
+    var process = library.getSettings(dearrowSettingName)?.value == "true";
     if (videos != null && process) {
       bool doThumbnails =
-          db.getSettings(dearrowThumbnailsSettingName)?.value == "true";
+          library.getSettings(dearrowThumbnailsSettingName)?.value == "true";
       var futureTasks =
-          videos.map((e) => _deArrowVideo(e, doThumbnails)).toList();
+          videos.map((e) => _deArrowVideo(e, doThumbnails, library)).toList();
 
       return await Future.wait(futureTasks);
     } else {
@@ -42,8 +45,9 @@ class DeArrow {
     }
   }
 
-  static Future<Video> _deArrowVideo(Video video, bool doThumbnails) async {
-    var cache = db.getDeArrowCache(video.videoId);
+  static Future<Video> _deArrowVideo(
+      Video video, bool doThumbnails, IDbClient library) async {
+    var cache = library.getDeArrowCache(video.videoId);
 
     var vid = video.copyWith();
 
@@ -82,7 +86,7 @@ class DeArrow {
     newCache.title = deArrow?.titles.firstOrNull?.title;
     newCache.url = deArrow?.thumbnailUrl;
     if (newCache.title != null || newCache.url != null) {
-      await db.upsertDeArrowCache(newCache);
+      await library.upsertDeArrowCache(newCache);
     }
 
     return vid;

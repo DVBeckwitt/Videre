@@ -38,7 +38,7 @@ Captured from Videre 1.22.46 on Android. The player shows *Spring* © Blender Fo
 
 Add or switch instances in **Settings → Manage servers**. Saved logins stay with their original instance. Open **Profiles** from Home or Settings to manage people. Profiles organize a shared device without a PIN.
 
-For playback problems, **Connection help** checks the video API and offers retry, instance switching, or a link to the instance’s video page. Availability depends on your server.
+When your instance offers multiple backends and automatic fallback is enabled, Videre tries your selected backend first. For an eligible playback or download failure, it can try up to two alternatives on the same account. It favors backends that worked recently and temporarily skips ones that reported they were blocked or still starting. It learns from ordinary requests and respects the server’s retry deadline. **Connection help** checks the video API and offers retry, instance switching, or a link to the instance’s video page.
 
 Videre suggests F5 and NerdVPN. These are dated checks, and availability can change.
 
@@ -70,7 +70,7 @@ Protected HTTPS servers support gateway sign-in with Android WebView isolated-pr
 - **Downloads.** Under **Settings → Download folders**, set locations for new video and audio downloads independently. Video defaults to app storage. On Android 10 and later, Music downloads default to **Music/Videre**. Choose MP3, Opus, or M4A (AAC) under **Settings → YT Music**. Reopen Videre to recover interrupted transfers. Deleting a download removes its saved file. A copy made with **Export a copy of this song** stays in the destination folder. Reconnect removable storage before retrying.
 - **Navigation.** Use the home pencil button or **Settings → Browsing → Customize app sections** to reorder tabs and icons, hide sections, and choose a startup tab.
 - **Watch Later and playlists.** Choose **Add to playlist → Watch Later** from a video’s menu. Signed-in users can use **Save a copy on server** after a playlist fully loads.
-- **TV history.** **On this device** includes local progress. **On your server** shows the selected account’s history, which excludes playback positions.
+- **History.** **Video history** and **Music history** track playback separately on this device. **All history on this device** includes older entries. **All history on your server** shows the selected account’s combined history.
 - **TV remote.** Select **Receive from phone** on TV, then enter its IP, port, and six-digit code under **Send to TV / remote control** on your phone. Pairing uses unencrypted local HTTP.
 - **Backups.** Use **Export backup** or **Restore or import subscriptions** in Settings. Review the preview before merging or replacing, then reopen Videre. Credentials, downloaded files, and podcast subscriptions and progress are excluded.
 

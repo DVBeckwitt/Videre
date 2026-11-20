@@ -7,7 +7,7 @@ import 'package:clipious/music/views/components/music_player.dart';
 import '../../../downloads/models/downloaded_video.dart';
 import '../../../videos/models/video.dart';
 import '../../../videos/views/components/info.dart';
-import '../components/mini_player_controls.dart';
+import '../components/expanded_player_details.dart';
 
 class TabletExpandedPlayer extends StatelessWidget {
   const TabletExpandedPlayer({super.key});
@@ -32,33 +32,24 @@ class TabletExpandedPlayer extends StatelessWidget {
     return !isFullScreen &&
             !controller.isMini &&
             (video != null || offlineVid != null)
-        ? Column(children: [
-            if (video != null)
-              const Flexible(
-                child: SingleChildScrollView(
-                  child: MiniPlayerControls(directActions: true),
-                ),
-              )
-            else
-              const MiniPlayerControls(),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: innerHorizontalPadding),
-                child: Builder(builder: (context) {
-                  return video != null
-                      ? SingleChildScrollView(
-                          child: VideoInfo(
-                            video: video,
-                            loadDislikes: true,
-                            descriptionAndTags: false,
-                          ),
-                        )
-                      : const SizedBox.shrink();
-                }),
-              ),
-            )
-          ])
+        ? ExpandedPlayerDetails(
+            hasOnlineVideo: video != null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: innerHorizontalPadding),
+              child: Builder(builder: (context) {
+                return video != null
+                    ? SingleChildScrollView(
+                        child: VideoInfo(
+                          video: video,
+                          loadDislikes: true,
+                          descriptionAndTags: false,
+                        ),
+                      )
+                    : const SizedBox.shrink();
+              }),
+            ),
+          )
         : const SizedBox.shrink();
   }
 }

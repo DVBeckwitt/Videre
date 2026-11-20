@@ -383,7 +383,7 @@ class MusicLibraryActions extends StatefulWidget {
       } else if (action == _LibraryAction.play && onPlay != null) {
         await onPlay();
       } else if (downloads != null) {
-        await player.playOfflineVideos(downloads);
+        await player.playOfflineVideos(downloads, fromMusic: true);
       } else {
         await MusicScreen.playTracks(context, videos);
       }

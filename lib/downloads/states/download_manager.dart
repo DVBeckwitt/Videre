@@ -21,23 +21,25 @@ import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/connectivity.dart';
 import 'package:clipious/podcasts/services/podcast_downloads.dart';
 
 import '../../player/states/player.dart';
-import '../../player/media_source.dart';
 import '../../network/gateway_session_bridge.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
 import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
+import '../../videos/models/dearrow.dart';
 import '../../videos/models/sponsor_segment.dart';
 import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
 import '../../videos/services/download_audio_tracks.dart';
 import 'resumable_download.dart';
 import '../services/download_rename.dart';
+import '../services/download_recovery.dart';
 import '../services/download_storage.dart';
 import '../services/download_mux.dart';
 
@@ -65,9 +67,10 @@ Future<({int byteLength, String sha256})> _privateDownloadIntegrity(
 
 class DownloadProgress {
   final CancelToken cancelToken;
+  final DateTime? retryAt;
   int count = 0, total = 1;
 
-  DownloadProgress(this.cancelToken);
+  DownloadProgress(this.cancelToken, {this.retryAt});
 }
 
 class DownloadManagerCubit extends Cubit<DownloadManagerState> {
@@ -117,6 +120,16 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   }
 
   bool get _current => !_closing && _library.profileId == db.profileId;
+
+  DateTime? retryAtFor(DownloadedVideo video) {
+    if (video.profileId != _library.profileId || video.accountId == null) {
+      return null;
+    }
+    final account = _library.getAccount(video.accountId!);
+    return account == null
+        ? null
+        : DownloadRecovery.retryAtFor(service, _library, account);
+  }
 
   Future<T> _mutate<T>(Future<T> Function() action) {
     final result = Future<T>.sync(action);
@@ -498,6 +511,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         connectTimeout: const Duration(seconds: 20),
         receiveTimeout: const Duration(seconds: 30)));
     Future<List<SponsorSegment>>? sponsorSegments;
+    Future<String?>? deArrowTitle;
     var lastUpdate = DateTime(0);
     void update(int count, int total, int step, int steps) {
       final now = DateTime.now();
@@ -529,49 +543,45 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
         await library.upsertDownload(video);
       }
       if (video.folderUri != null) await storage.checkFolder(video.folderUri!);
-      for (var attempt = 0; attempt < 3; attempt++) {
+      final account = library.getAccount(video.accountId!);
+      if (account == null || account.profileId != library.profileId) {
+        throw StateError('The download account is no longer available');
+      }
+      final recovery =
+          await DownloadRecovery.start(service, library, account, token);
+      await recovery.run<void>((route) async {
+        final server = route.server;
         final artworkToken = CancelToken();
         Future<void>? artwork;
         try {
-          if (token.isCancelled) throw token.cancelError!;
-          // Signed media URLs expire. Refresh them before every retry.
-          final server = library.getAccount(video.accountId!);
-          if (server == null || server.profileId != library.profileId) {
-            throw StateError('The download account is no longer available');
-          }
-          if (token.isCancelled) throw token.cancelError!;
-          final loadVideo = !video.storeAsMusic && video.musicMetadata == null
-              ? service.getVideo
-              : service.getMusicVideo;
           var vid = await Future.any([
-            loadVideo(video.videoId, serverOverride: server)
-                .timeout(const Duration(seconds: 30)),
-            // Metadata requests do not accept a cancellation token. Release
-            // pause/delete/proxy changes promptly and ignore any late result.
+            service.getDownloadVideo(video.videoId,
+                route: route, checkCurrent: recovery.checkCurrent),
             token.whenCancel.then((error) => throw error),
           ]);
-          if (token.isCancelled) throw token.cancelError!;
+          recovery.checkCurrent();
           // The sheet can discover a usable default only in DASH. Repeat that
           // discovery even when the user left the audio choice on Automatic.
           final needsDefaultAudio = video.audioTrackId == null &&
-              DownloadFormats(vid.adaptiveFormats).audioContainer == null;
+              !(vid.adaptiveFormats ?? const <AdaptiveFormat>[]).any((format) =>
+                  DownloadContainer.forAudio(format) != null &&
+                  downloadMediaUrl(format, server) != null);
           if ((video.audioTrackId?.startsWith('dash:') ?? false) ||
               needsDefaultAudio) {
             vid = await Future.any([
-              loadDownloadAudioTracks(vid, server, client: service.httpClient)
-                  .timeout(const Duration(seconds: 30)),
+              loadDownloadAudioTracks(vid, server,
+                  client: service.httpClient,
+                  checkCurrent: recovery.checkCurrent,
+                  timeout: const Duration(seconds: 30)),
               token.whenCancel.then((error) => throw error),
             ]);
-            if (token.isCancelled) throw token.cancelError!;
+            recovery.checkCurrent();
           }
           // Admit routes before ranking tracks, so an unsupported high-bitrate
           // URL cannot hide a usable track from the selected instance.
           final mediaUrls = <AdaptiveFormat, String>{};
           for (final format in vid.adaptiveFormats ?? <AdaptiveFormat>[]) {
-            final parsed = parseMediaUrl(format.url);
-            if (parsed == null) continue;
-            final url =
-                validatedMediaUrl(proxyMediaUrl(parsed, server), server);
+            final url = downloadMediaUrl(format, server);
             if (url != null) mediaUrls[format] = url;
           }
           final formats = DownloadFormats(mediaUrls.keys.toList(),
@@ -592,16 +602,33 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                   : DownloadContainer.forVideo(selectedVideo));
           final audio = formats.audioFor(container);
           if (audio == null || (!video.audioOnly && selectedVideo == null)) {
-            throw StateError(
-                'This video has no compatible tracks for the download');
+            throw const DownloadFormatsUnavailable();
           }
           final caption = vid.captions
               .where((caption) => caption.label == video.captionLabel)
               .firstOrNull;
           if (video.captionLabel != null && caption == null) {
-            throw StateError('The selected subtitle track is unavailable');
+            throw const DownloadFormatsUnavailable();
           }
           var music = video.musicMetadata ?? vid.musicMetadata;
+          var title = vid.title;
+          if (!video.storeAsMusic &&
+              video.musicMetadata == null &&
+              library.getSettings(dearrowSettingName)?.value == 'true') {
+            // Enrich the saved title once per job. Optional presentation
+            // metadata cannot trigger a retry of an extraction backend.
+            final enriched = deArrowTitle ??= DeArrow.processVideos([vid],
+                    owner: library)
+                .then<String?>((videos) => videos.first.title,
+                    onError: (_) => null)
+                .timeout(const Duration(seconds: 30), onTimeout: () => null);
+            title = await Future.any([
+                  enriched,
+                  token.whenCancel.then((error) => throw error)
+                ]) ??
+                title;
+            recovery.checkCurrent();
+          }
           if (music != null && video.videoId == vid.videoId) {
             music = vid
                 .resolveMusicMetadata(music)
@@ -610,8 +637,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           video = video.copyWith(
               // Interrupted/replaced output must never inherit old proof.
               playbackProvenance: null,
-              container: container,
-              title: music?.title ?? vid.title ?? video.title,
+              title: music?.title ?? title ?? video.title,
               author: music?.artist ?? vid.author,
               musicMetadata: music,
               authorUrl: vid.authorUrl ?? video.authorUrl,
@@ -620,21 +646,45 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               authenticationRequired: false);
           await library.upsertDownload(video);
           setVideos();
-          sponsorSegments ??= _downloadSponsorSegments(video, library, token);
-          final mediaPath = await video.downloadPath;
+          final segmentsForJob = sponsorSegments ??=
+              _downloadSponsorSegments(video, library, token);
+          // Automatic remains automatic until the output is published. A
+          // second extractor may offer a different compatible container.
+          final outputVideo = video.copyWith(container: container);
+          final mediaPath = await outputVideo.downloadPath;
           final staging = await video.stagingPath;
           final audioPath = '$staging.audio.part';
           final videoPath = '$staging.video.part';
           final captionPath = '$staging.caption.vtt';
           final steps = (video.audioOnly ? 2 : 3) + (caption == null ? 0 : 1);
           Future<void> transfer(AdaptiveFormat format, String path, int step) {
+            recovery.checkCurrent();
             final url = mediaUrls[format]!;
             final size = int.tryParse(format.clen);
+            final rendition = RenditionIdentity.fromFormat(format, server);
+            // Without immutable rendition proof, a refreshed URL (even on
+            // the same backend) must begin a new file.
+            final identity = rendition == null
+                ? const Uuid().v4()
+                : jsonEncode([
+                    video.profileId,
+                    video.accountId,
+                    Uri.parse(server.url).origin,
+                    video.videoId,
+                    rendition.toJson()
+                  ]);
             return downloadResumable(dio, url, path,
                 cancelToken: token,
-                identity: '${format.itag}:${format.clen}:${format.lmt}'
-                    '${format.audioTrack == null ? '' : ':${format.audioTrack!.id}'}',
+                identity: identity,
+                beforeRequest: recovery.checkCurrent,
                 expectedSize: size != null && size > 0 ? size : null,
+                acceptsContentType: (contentType) {
+                  final mime =
+                      contentType?.split(';').first.trim().toLowerCase() ?? '';
+                  return mime != 'text/html' &&
+                      !mime.endsWith('json') &&
+                      !mime.endsWith('xml');
+                },
                 headers: server.headersForUrl(url),
                 onProgress: (count, total) =>
                     update(count, total, step, steps));
@@ -659,6 +709,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           }
           await transfer(audio, audioPath, 0);
           if (!video.audioOnly) await transfer(selectedVideo!, videoPath, 1);
+          recovery.checkCurrent();
+          route.recordSuccess();
           if (caption != null) {
             final subtitles = await Future.any([
               service
@@ -670,8 +722,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             await File(captionPath).writeAsString(subtitles);
             update(1, 1, steps - 2, steps);
           }
-          if (token.isCancelled) throw token.cancelError!;
-          final output = '$staging.mux.${video.extension}';
+          recovery.checkCurrent();
+          final output = '$staging.mux.${outputVideo.extension}';
           if (video.storeAsMusic) {
             await encodeMusic(
                 input: audioPath,
@@ -713,22 +765,25 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
               output
             ], token);
           }
-          if (token.isCancelled) throw token.cancelError!;
+          recovery.checkCurrent();
           await artwork;
-          video = video.copyWith(sponsorSegments: await sponsorSegments);
-          if (token.isCancelled) throw token.cancelError!;
+          video = video.copyWith(sponsorSegments: await segmentsForJob);
+          recovery.checkCurrent();
           if (caption != null) {
             await File(captionPath).copy(await video.subtitlePath);
             if (token.isCancelled) throw token.cancelError!;
           }
           if (video.folderUri == null) {
+            video = video.copyWith(container: container);
+            await library.upsertDownload(video);
+            recovery.checkCurrent();
             await File(output).rename(mediaPath);
           } else {
             final uri = await storage.prepareDocument(video.folderUri!,
-                video.storageUri, video.fileName, video.mimeType);
+                video.storageUri, outputVideo.fileName, outputVideo.mimeType);
             // Record ownership before writing so retries reuse this document
             // and deletion can clean up an interrupted save after a restart.
-            video = video.copyWith(storageUri: uri);
+            video = video.copyWith(storageUri: uri, container: container);
             await library.upsertDownload(video);
             if (token.isCancelled) throw token.cancelError!;
             await storage.writeDocument(output, uri, token);
@@ -775,25 +830,18 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 'The completed download has leftover temporary files', error);
           }
           return;
-        } catch (error) {
-          if (token.isCancelled || _closing) return;
-          if (attempt == 2 ||
-              _accessPauseNeedsSignIn(error) != null ||
-              (error is PlatformException &&
-                  error.code == 'DOWNLOAD_STORAGE') ||
-              error is StateError ||
-              error is FileSystemException) {
-            rethrow;
-          }
-          await Future.any([
-            Future<void>.delayed(Duration(seconds: 1 << attempt)),
-            token.whenCancel
-          ]);
         } finally {
           artworkToken.cancel();
           await artwork;
         }
-      }
+      }, onWaiting: (retryAt) {
+        if (!_current || token.isCancelled) return;
+        final current = state.downloadProgresses[video.videoId];
+        final waiting = DownloadProgress(token, retryAt: retryAt)
+          ..count = current?.count ?? 0
+          ..total = current?.total ?? 1;
+        emit(state.copyWith(downloadProgresses: {video.videoId: waiting}));
+      });
     } catch (error, stack) {
       if (!token.isCancelled && !_closing) {
         final signInRequired = _accessPauseNeedsSignIn(error);
@@ -865,6 +913,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       return _accessPauseNeedsSignIn(error.error!);
     }
     if (error is GatewayAuthenticationRequired) return true;
+    if (error is DownloadCooldown) return false;
     if (error is NerdVpnAccessRequired) {
       return const {'missing', 'signInRequired'}.contains(error.state);
     }

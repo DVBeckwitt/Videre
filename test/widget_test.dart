@@ -351,7 +351,11 @@ class _WatchSelectionPlayer extends TestPlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     selection.add((videos.single.videoId, audio));
   }
 }

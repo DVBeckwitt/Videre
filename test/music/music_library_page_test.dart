@@ -23,6 +23,7 @@ import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
@@ -60,14 +61,18 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playOfflineVideos(List<DownloadedVideo> videos,
-      {int startIndex = 0}) async {
+      {int startIndex = 0, bool fromMusic = false}) async {
     start = startIndex;
     offline.addAll(videos);
   }
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     start = startIndex;
     online.addAll(videos);
   }
@@ -79,7 +84,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
           Duration? startAt,
           bool? audio,
           bool? playing,
-          PlaylistLoadSession? playlistLoader}) async =>
+          PlaylistLoadSession? playlistLoader,
+          bool fromMusic = false}) async =>
       online.addAll(entries);
 
   @override
@@ -163,6 +169,34 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return true;
       }).timeout(const Duration(seconds: 5));
+
+  testWidgets(
+      'Music history opens from Library and clears only local listening',
+      (tester) async {
+    await tester.runAsync(() async {
+      await db.recordPlaybackHistory(PlaybackHistoryOrigin.music,
+          HistoryVideoCache('both', 'Song title', 'Artist', ''));
+      await db.recordPlaybackHistory(PlaybackHistoryOrigin.video,
+          HistoryVideoCache('both', 'Video title', 'Uploader', ''));
+    });
+    await show(tester);
+    await tester.tap(find.byTooltip('Music history'));
+    await tester.pumpAndSettle();
+    expect(find.text('Song title'), findsOneWidget);
+    expect(find.text('Video title'), findsNothing);
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'OK'));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    }
+    expect(
+        find.text('Songs played from Music will appear here.'), findsOneWidget);
+    expect(db.getPlaybackHistory(PlaybackHistoryOrigin.video).single.title,
+        'Video title');
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
       'the Music Library opens the on-device setup without launching a picker',

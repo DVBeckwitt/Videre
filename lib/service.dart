@@ -9,6 +9,7 @@ import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 import 'package:http/http.dart';
 import 'package:clipious/player/dash_manifest_resolver.dart';
+import 'package:clipious/player/media_source.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/extensions.dart';
 import 'package:clipious/globals.dart';
@@ -26,6 +27,7 @@ import 'package:clipious/settings/models/errors/missing_software_key.dart';
 import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/utils/video_post_processing.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/dearrow.dart';
@@ -134,6 +136,8 @@ class Service {
               sameOriginOnly: true, beforeRedirect: beforeRedirect);
   late final dashManifestResolver = DashManifestResolver(httpClient);
   final DateTime Function() _now;
+  late BackendHealth _backendHealth = BackendHealth(now: _now);
+  BackendHealth get backendHealth => _backendHealth;
   final Future<void> Function(Duration) _wait;
   final _getRequests = <String, Future<Response>>{};
   final _interactiveVideoRequests = <(
@@ -194,6 +198,8 @@ class Service {
 
   void clearSessionCaches() {
     _sessionRevision++;
+    _backendHealth.retire();
+    _backendHealth = BackendHealth(now: _now);
     _getRequests.clear();
     _interactiveVideoRequests.clear();
     _browseCache.clear();
@@ -211,8 +217,11 @@ class Service {
         _now = now ?? DateTime.now,
         _wait = wait ?? Future<void>.delayed;
 
-  Duration? _retryAfter(http.BaseResponse response) {
-    final value = response.headers['retry-after']?.trim();
+  Duration? _retryAfter(http.BaseResponse response) =>
+      retryAfterDelay(response.headers['retry-after']);
+
+  Duration? retryAfterDelay(String? header) {
+    final value = header?.trim();
     if (value == null) return null;
     final seconds =
         RegExp(r'^\d+$').hasMatch(value) ? int.tryParse(value) : null;
@@ -607,6 +616,38 @@ class Service {
     return video;
   }
 
+  /// Performs one metadata request for a format picker or queued download.
+  /// The caller owns its retry budget and its saved account may be unselected.
+  Future<Video> getDownloadVideo(String videoId,
+      {required BackendPlayback route,
+      required void Function() checkCurrent}) async {
+    final revision = _sessionRevision;
+    var expired = false;
+    void check() {
+      checkCurrent();
+      if (expired || _sessionRevision != revision) {
+        throw StateError('The download connection changed.');
+      }
+    }
+
+    check();
+    final request = await buildRequest(urlGetVideo,
+        pathParams: {':id': videoId}, serverOverride: route.server);
+    check();
+    final response = await _instanceReader(() async => check())
+        .get(request.uri, headers: request.headers)
+        .timeout(const Duration(seconds: 15), onTimeout: () {
+      expired = true;
+      throw TimeoutException('Download metadata request expired.');
+    });
+    check();
+    final video = _decodeVideoMetadata(response);
+    if (video.videoId != videoId) {
+      throw const FormatException('The server returned another video.');
+    }
+    return video;
+  }
+
   Future<Video> getVideo(String videoId,
           {Server? serverOverride,
           void Function(BackendPlayback request)? onBackendRequest,
@@ -655,7 +696,8 @@ class Service {
         !NetworkProxy.instance.isChanging &&
         identical(NetworkProxy.instance.config, proxy);
     bool active() =>
-        observer == null || (observer.isCurrent() && connectionCurrent());
+        serverOverride != null ||
+        (connectionCurrent() && (observer?.isCurrent() ?? true));
     // Import legacy credentials before freezing the admitted header snapshot.
     // Keep the original context across that await; migration must not bless a
     // concurrent profile, session, or proxy change as a new playback request.
@@ -678,11 +720,12 @@ class Service {
     }
     // Explicit callers (downloads and connection tests) own their server snapshot
     // and subsequent request headers. Only normal playback may change routes.
-    final initialRequest =
-        serverOverride == null ? BackendPlayback(server) : null;
+    final initialRequest = serverOverride == null
+        ? BackendPlayback(server, health: backendHealth)
+        : null;
     final connection = initialRequest ?? BackendPlayback(server);
     var playback = server.backendSelector == null ? null : initialRequest;
-    final firstRetry = !enrichResults && playback?.canRetry == true
+    final firstRetry = playback?.canRetry == true
         ? _MetadataRetry.preferAlternate
         : _MetadataRetry.sameRoute;
     Video video;
@@ -699,12 +742,14 @@ class Service {
                 : _MetadataRetry.none);
         break;
       } catch (error) {
-        if (!active() ||
-            !isBackendRetryable(error) ||
-            playback?.canRetry != true) {
+        if (!active() || !isBackendRetryable(error) || playback == null) {
           rethrow;
         }
-        if (!playback!.matches(await db.getCurrentlySelectedServer())) rethrow;
+        if (!playback.matches(await db.getCurrentlySelectedServer()) ||
+            !active()) {
+          rethrow;
+        }
+        playback.recordFailure(error);
         final next = playback.next();
         if (next == null) rethrow;
         playback = next;
@@ -723,6 +768,7 @@ class Service {
           'The playback connection changed while loading this video.');
     }
     if (!active()) throw StateError('The video load was cancelled.');
+    _recordPlayableBackend(playback, processed);
     return processed;
   }
 
@@ -749,7 +795,12 @@ class Service {
       void Function(BackendPlayback request)? onBackendRequest,
       bool Function()? isCurrent}) async {
     var playback = request;
-    bool active() => isCurrent?.call() ?? true;
+    final database = db;
+    final revision = _sessionRevision;
+    bool active() =>
+        identical(db, database) &&
+        _sessionRevision == revision &&
+        (isCurrent?.call() ?? true);
     while (true) {
       if (!active() ||
           !playback.matches(await db.getCurrentlySelectedServer())) {
@@ -761,17 +812,19 @@ class Service {
         loaded = await _getVideoMetadata(videoId, playback.server,
             backendRequest: playback,
             onBackendRequest: onBackendRequest,
-            metadataRetry: !enrichResults && playback.canRetry
+            metadataRetry: playback.canRetry
                 ? _MetadataRetry.preferAlternate
                 : _MetadataRetry.sameRoute,
-            beforeRequest: enrichResults
-                ? null
-                : () => _requirePlaybackRoute(playback, active));
+            beforeRequest: () => _requirePlaybackRoute(playback, active));
       } catch (error) {
-        if (!active() || !isBackendRetryable(error) || !playback.canRetry) {
+        if (!active() || !isBackendRetryable(error)) {
           rethrow;
         }
-        if (!playback.matches(await db.getCurrentlySelectedServer())) rethrow;
+        if (!playback.matches(await db.getCurrentlySelectedServer()) ||
+            !active()) {
+          rethrow;
+        }
+        playback.recordFailure(error);
         final next = playback.next();
         if (next == null) rethrow;
         playback = next;
@@ -784,9 +837,11 @@ class Service {
               playbackSourceId: Object()),
           enrichResults: enrichResults);
       if (!active() ||
-          !playback.matches(await db.getCurrentlySelectedServer())) {
+          !playback.matches(await db.getCurrentlySelectedServer()) ||
+          !active()) {
         throw StateError('The playback connection changed.');
       }
+      _recordPlayableBackend(playback, processed);
       return processed;
     }
   }
@@ -799,6 +854,32 @@ class Service {
         !active() ||
         NetworkProxy.instance.isChanging) {
       throw StateError('The playback connection changed.');
+    }
+  }
+
+  void _recordPlayableBackend(BackendPlayback? route, Video video) {
+    if (route == null || route.server.backendSelector == null) return;
+    bool admits(String? candidate, {bool manifest = false}) {
+      final url = parseMediaUrl(candidate);
+      return url != null &&
+          validatedMediaUrl(
+                  proxyMediaUrl(url, route.server, adaptive: manifest),
+                  route.server) !=
+              null;
+    }
+
+    if (admits(video.hlsUrl, manifest: true) ||
+        admits(video.dashUrl, manifest: true) ||
+        (video.formatStreams?.any((stream) =>
+                !stream.isLegacyHd720 &&
+                (stream.type.startsWith('video/') ||
+                    stream.type.startsWith('audio/')) &&
+                admits(stream.url)) ??
+            false) ||
+        (video.adaptiveFormats?.any((format) =>
+                format.type.startsWith('audio/') && admits(format.url)) ??
+            false)) {
+      route.recordSuccess();
     }
   }
 
@@ -949,10 +1030,11 @@ class Service {
         if (!await unchanged()) {
           throw StateError('The playback connection changed.');
         }
-        // The Music recovery loop can already try another backend. A server
-        // cooldown still belongs to every route on this instance.
-        if (metadataRetry == _MetadataRetry.preferAlternate &&
-            isBackendRetryable(error)) {
+        // Playback can switch immediately on a confirmed backend outage.
+        // An instance cooldown still applies across all its backends.
+        if (metadataRetry == _MetadataRetry.none ||
+            (metadataRetry == _MetadataRetry.preferAlternate &&
+                isBackendRetryable(error))) {
           rethrow;
         }
         if (delay > Duration.zero) await _wait(delay);
@@ -1084,7 +1166,7 @@ class Service {
         (error.statusCode == 500 && error.responseWasHtml)) {
       return null;
     }
-    // An explicit backend failure can advance Music immediately when the
+    // An explicit backend failure can advance playback immediately when the
     // playback attempt has an alternate. The caller owns the fallback budget.
     if (retry == _MetadataRetry.preferAlternate &&
         isUnavailableBackend(error) &&
@@ -1107,14 +1189,18 @@ class Service {
       {required bool Function() isCurrent,
       void Function(BackendPlayback request)? onRetry}) async {
     var playback = video.backendPlayback;
-    if (playback == null || !isCurrent() || !playback.acquireRecovery()) {
+    final database = db;
+    final revision = _sessionRevision;
+    bool active() =>
+        identical(db, database) && _sessionRevision == revision && isCurrent();
+    if (playback == null || !active() || !playback.acquireRecovery()) {
       return null;
     }
     final original = playback;
     try {
-      while (isCurrent() &&
+      while (active() &&
           playback!.matches(await db.getCurrentlySelectedServer())) {
-        if (!isCurrent()) return null;
+        if (!active()) return null;
         final next = playback.next();
         if (next == null) return null;
         playback = next;
@@ -1123,18 +1209,21 @@ class Service {
           loaded = await _getVideoMetadata(video.videoId, next.server,
               backendRequest: next,
               onBackendRequest: onRetry,
-              metadataRetry: video.musicMetadata != null && next.canRetry
+              metadataRetry: next.canRetry
                   ? _MetadataRetry.preferAlternate
                   : _MetadataRetry.sameRoute,
-              beforeRequest: video.musicMetadata == null
-                  ? null
-                  : () => _requirePlaybackRoute(next, isCurrent));
+              beforeRequest: () => _requirePlaybackRoute(next, active));
         } catch (error) {
           if (!isBackendRetryable(error)) rethrow;
+          if (!active() ||
+              !next.matches(await db.getCurrentlySelectedServer()) ||
+              !active()) {
+            return null;
+          }
+          next.recordFailure(error);
           continue;
         }
-        if (!isCurrent() ||
-            !next.matches(await db.getCurrentlySelectedServer())) {
+        if (!active() || !next.matches(await db.getCurrentlySelectedServer())) {
           return null;
         }
         final processed = await _processVideo(
@@ -1143,10 +1232,12 @@ class Service {
                 playbackConnection: next,
                 playbackSourceId: Object()),
             enrichResults: video.musicMetadata == null);
-        if (!isCurrent() ||
-            !next.matches(await db.getCurrentlySelectedServer())) {
+        if (!active() ||
+            !next.matches(await db.getCurrentlySelectedServer()) ||
+            !active()) {
           return null;
         }
+        _recordPlayableBackend(next, processed);
         return processed.preservingMusicMetadataFrom(video);
       }
       return null;
@@ -1178,14 +1269,22 @@ class Service {
     }
 
     await check();
-    final loaded = await _getVideoMetadata(video.videoId, connection.server,
-        backendRequest: connection,
-        loadObserver: VideoLoadObserver(isCurrent: active, onRetry: () {}),
-        metadataRetry: _MetadataRetry.none);
+    final Video loaded;
+    try {
+      loaded = await _getVideoMetadata(video.videoId, connection.server,
+          backendRequest: connection,
+          loadObserver: VideoLoadObserver(isCurrent: active, onRetry: () {}),
+          metadataRetry: _MetadataRetry.none);
+    } catch (error) {
+      await check();
+      connection.recordFailure(error);
+      rethrow;
+    }
     await check();
     if (loaded.videoId != video.videoId) {
       throw const FormatException('The server returned another video.');
     }
+    _recordPlayableBackend(connection, loaded);
     return video.copyWith(
         downloadPlaybackOnly: false,
         formatStreams: loaded.formatStreams,
@@ -2756,9 +2855,16 @@ class Service {
   Future<List<String>> getLocalHistoryPage(int page, int maxResults) async =>
       _localHistoryPage(db.forProfile(db.profileId), page, maxResults);
 
-  List<String> _localHistoryPage(IDbClient owner, int page, int maxResults) =>
-      owner
-          .getLocalHistory()
+  Future<List<String>> getPlaybackHistoryPage(
+          PlaybackHistoryOrigin origin, int page, int maxResults) async =>
+      _localHistoryPage(db.forProfile(db.profileId), page, maxResults,
+          origin: origin);
+
+  List<String> _localHistoryPage(IDbClient owner, int page, int maxResults,
+          {PlaybackHistoryOrigin? origin}) =>
+      (origin == null
+              ? owner.getLocalHistory()
+              : owner.getPlaybackHistory(origin))
           .skip((page - 1) * maxResults)
           .take(maxResults)
           .map((v) => v.videoId)

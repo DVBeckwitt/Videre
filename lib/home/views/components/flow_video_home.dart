@@ -26,6 +26,7 @@ import '../../../utils/models/paginated_list.dart';
 import '../../../utils/views/tv/components/tv_horizontal_item_list.dart';
 import '../../../videos/views/tv/components/video_item.dart';
 import '../../../videos/models/community_video_filter.dart';
+import '../../../videos/models/db/history_video_cache.dart';
 import '../../../videos/models/db/progress.dart';
 import '../../../videos/models/video.dart';
 import '../../../videos/services/watch_history.dart';
@@ -106,9 +107,8 @@ List<Video> continuingVideos(IDbClient owner, {int limit = 12}) {
   final watched = WatchRepository.forDatabase(owner);
   final filters = owner.getAllFilters();
   return owner
-      .getLocalHistory()
+      .getPlaybackHistory(PlaybackHistoryOrigin.video)
       .where((entry) {
-        if (entry.musicMetadata != null) return false;
         final progress = owner.getVideoPlaybackProgress(entry.videoId);
         return progress.progress.isFinite &&
             progress.progress > 0 &&
@@ -1125,7 +1125,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     try {
       // Flow ContinueWatchingShelf.kt's close action calls
       // HomeViewModel.removeContinueWatchingEntry to delete local history.
-      await _owner.deleteLocalHistory(videoId);
+      await _owner.deletePlaybackHistory(PlaybackHistoryOrigin.video, videoId);
       if (db.profileId == _profile) playbackHistoryRevision.value++;
     } catch (_) {
       if (mounted && _sessionCurrent) {

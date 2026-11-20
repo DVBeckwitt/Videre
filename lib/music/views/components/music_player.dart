@@ -20,6 +20,7 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/player/models/sleep_timer.dart';
 import 'package:clipious/player/views/components/playlist_loading_notice.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -79,17 +80,22 @@ class _MusicPlayerSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final appTheme = Theme.of(context);
+    final palette =
+        context.select((SettingsCubit cubit) => cubit.state.themePalette);
+    final colors = palette == ThemePalette.classicPurple
+        ? ThemePalette.classicDark
+        : _playerColors;
     return Theme(
       data: appTheme.copyWith(
         brightness: Brightness.dark,
-        colorScheme: _playerColors,
-        iconTheme: const IconThemeData(color: Color(0xfff0f0f0)),
+        colorScheme: colors,
+        iconTheme: IconThemeData(color: colors.onSurface),
         textTheme: appTheme.textTheme.apply(
-          bodyColor: _playerColors.onSurface,
-          displayColor: _playerColors.onSurface,
+          bodyColor: colors.onSurface,
+          displayColor: colors.onSurface,
         ),
       ),
-      child: Material(color: _canvas, child: child),
+      child: Material(color: colors.surface, child: child),
     );
   }
 }
@@ -409,7 +415,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
           Expanded(child: nowPlaying),
           Expanded(
             child: Material(
-              color: _canvas.withValues(alpha: 0.65),
+              color: colors.surface.withValues(alpha: 0.65),
               child: Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: queue,
@@ -472,7 +478,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
         child: RepaintBoundary(
           child: ClipRect(
             child: Stack(fit: StackFit.expand, children: [
-              const ColoredBox(color: _canvas),
+              ColoredBox(color: colors.surface),
               ImageFiltered(
                 imageFilter: ui.ImageFilter.blur(sigmaX: 52, sigmaY: 52),
                 child: FittedBox(
@@ -487,18 +493,18 @@ class _MusicPlayerState extends State<MusicPlayer> {
                   ),
                 ),
               ),
-              const DecoratedBox(
+              DecoratedBox(
                   decoration: BoxDecoration(
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    _canvas,
-                    Color(0x6b121212),
-                    Color(0x99121212),
-                    _canvas
+                    colors.surface,
+                    colors.surface.withAlpha(0x6b),
+                    colors.surface.withAlpha(0x99),
+                    colors.surface
                   ],
-                  stops: [0, 0.27, 0.76, 1],
+                  stops: const [0, 0.27, 0.76, 1],
                 ),
               )),
             ]),
@@ -1120,9 +1126,11 @@ class _MusicQueueState extends State<MusicQueue> {
             if (tracks.length != selected.length) return;
             await player.playLocalMusic(tracks);
           } else if (online.length == selected.length) {
-            await player.playVideo(selected.cast<Video>(), audio: true);
+            await player.playVideo(selected.cast<Video>(),
+                audio: true, fromMusic: true);
           } else {
-            await player.playOfflineVideos(selected.cast<DownloadedVideo>());
+            await player.playOfflineVideos(selected.cast<DownloadedVideo>(),
+                fromMusic: true);
           }
         case _QueueSelectionAction.next:
           player.enqueueQueueCopies(online, next: true);

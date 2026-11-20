@@ -10,6 +10,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
     int? maximumBytes,
     bool Function(String? contentType)? acceptsContentType,
     Map<String, dynamic>? headers,
+    void Function()? beforeRequest,
     void Function(int received, int total)? onProgress}) async {
   if (maximumBytes != null &&
       (maximumBytes <= 0 ||
@@ -44,6 +45,7 @@ Future<void> downloadResumable(Dio dio, String url, String path,
   var knownSize = expectedSize;
   while (true) {
     if (cancelToken.isCancelled) throw cancelToken.cancelError!;
+    beforeRequest?.call();
     final response = await dio.get<ResponseBody>(url,
         cancelToken: cancelToken,
         options: Options(

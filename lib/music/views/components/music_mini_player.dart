@@ -5,6 +5,8 @@ import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_recovery.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/backend_recovery_notice.dart';
+import 'package:clipious/settings/models/theme_palette.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -28,9 +30,13 @@ class MusicMiniPlayer extends StatelessWidget {
     final music = video?.musicMetadata ?? offline?.musicMetadata;
     if (music == null) return const SizedBox.shrink();
     final locals = AppLocalizations.of(context)!;
-    const surface = Color(0xff232323);
-    const foreground = Color(0xfff0f0f0);
-    const supporting = Color(0xffc2c2c2);
+    final palette =
+        context.select((SettingsCubit cubit) => cubit.state.themePalette);
+    final colors =
+        palette == ThemePalette.classicPurple ? ThemePalette.classicDark : null;
+    final surface = colors?.primaryContainer ?? const Color(0xff232323);
+    final foreground = colors?.onPrimaryContainer ?? const Color(0xfff0f0f0);
+    final supporting = colors?.onPrimaryContainer ?? const Color(0xffc2c2c2);
     const error = Color(0xffffa8a8);
     final text = Theme.of(context).textTheme;
     final onDevice = isLocalMusicPlaybackId(video?.videoId ?? offline?.videoId);

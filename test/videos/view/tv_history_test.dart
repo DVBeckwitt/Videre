@@ -19,6 +19,7 @@ import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/states/video_in_list.dart';
+import 'package:clipious/videos/states/history.dart';
 import 'package:clipious/videos/views/components/compact_video.dart';
 import 'package:clipious/videos/views/components/history_video.dart';
 import 'package:clipious/videos/views/components/history.dart';
@@ -117,7 +118,11 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     if (failPlayback) throw StateError('Playback unavailable');
     calls.add((videos: videos, audio: audio, startAt: startAt));
   }
@@ -189,7 +194,7 @@ void main() {
         id, title ?? 'Video $id', 'A channel', 'https://instance.example/image',
         lengthSeconds: 100);
     if (watchedAt != null) cached.created = watchedAt;
-    await db.upsertHistoryVideo(cached);
+    await db.recordPlaybackHistory(PlaybackHistoryOrigin.video, cached);
     if (progress > 0) {
       await db.saveProgress(Progress.named(videoId: id, progress: progress));
     }
@@ -281,6 +286,49 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+      'video history keeps legacy entries in the combined view and deletes only video plays',
+      (tester) async {
+    await tester.runAsync(() async {
+      await seed('both', progress: 0.4, title: 'Watched as a video');
+      await db.recordPlaybackHistory(PlaybackHistoryOrigin.music,
+          HistoryVideoCache('both', 'Played from Music', '', ''));
+      await db.upsertHistoryVideo(
+          HistoryVideoCache('legacy', 'Earlier history', '', ''));
+    });
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+        value: app,
+        child: const MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(body: HistoryView()),
+        )));
+    await settle(tester);
+    expect(find.text('Watched as a video'), findsOneWidget);
+    expect(find.text('Played from Music'), findsNothing);
+    expect(find.byKey(const ValueKey('legacy')), findsNothing);
+    await tester.longPress(find.byKey(const ValueKey('both')));
+    await settle(tester);
+    expect(
+        find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.text('Watched as a video')),
+        findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('both')), findsNothing);
+    expect(db.getVideoProgress('both'), 0.4);
+    await tester.tap(find.byKey(const ValueKey('history-source')));
+    await settle(tester);
+    await tester.tap(find.text('All history on this device').last);
+    await settle(tester);
+    expect(find.text('Played from Music'), findsOneWidget);
+    expect(find.byKey(const ValueKey('legacy')), findsOneWidget);
+    expect(history.removedVideos, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final changeAccount in [false, true]) {
     testWidgets(
         'phone pending history hold guards account change: $changeAccount',
@@ -303,9 +351,9 @@ void main() {
         ),
       ));
       await settle(tester);
-      await tester.tap(find.byType(DropdownButton<bool>));
+      await tester.tap(find.byKey(const ValueKey('history-source')));
       await settle(tester);
-      await tester.tap(find.text('On your server').last);
+      await tester.tap(find.text('All history on your server').last);
       await settle(tester);
       await tester.longPress(find.byKey(const ValueKey('pending')));
       await settle(tester);
@@ -349,9 +397,9 @@ void main() {
         ),
       ));
       await settle(tester);
-      await tester.tap(find.byType(DropdownButton<bool>));
+      await tester.tap(find.byKey(const ValueKey('history-source')));
       await settle(tester);
-      await tester.tap(find.text('On your server').last);
+      await tester.tap(find.text('All history on your server').last);
       await settle(tester);
       await tester.tap(find.byType(FloatingActionButton));
       await settle(tester);
@@ -436,9 +484,13 @@ void main() {
         addTearDown(() => app_main.isTv = originalIsTv);
         const music = MusicMetadata(
             title: 'Saved song', artist: 'Artist', album: 'Album');
-        await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
-            'song', 'Saved song', 'Artist', '',
-            musicMetadata: selection == 'video' ? null : music)));
+        final musicSource = selection != 'video';
+        await tester.runAsync(() => db.recordPlaybackHistory(
+            musicSource
+                ? PlaybackHistoryOrigin.music
+                : PlaybackHistoryOrigin.video,
+            HistoryVideoCache('song', 'Saved song', 'Artist', '',
+                musicMetadata: selection == 'video' ? null : music)));
         final player = _Player()
           ..failPlayback = selection == 'unavailable Music';
         final router = _Router();
@@ -464,8 +516,13 @@ void main() {
                 key: navigator,
                 onGenerateRoute: (_) => MaterialPageRoute<void>(
                   builder: (_) => tv
-                      ? const TvHistoryScreen()
-                      : const Scaffold(body: HistoryVideoView(videoId: 'song')),
+                      ? TvHistoryScreen(music: musicSource)
+                      : Scaffold(
+                          body: HistoryVideoView(
+                              videoId: 'song',
+                              source: musicSource
+                                  ? HistorySource.music
+                                  : HistorySource.video)),
                 ),
               ),
             ),
@@ -524,7 +581,7 @@ void main() {
     await mount(tester,
         onOpenVideo: (_, video) async => opened.add(video.videoId));
 
-    expect(find.text('On your server'), findsNothing);
+    expect(find.text('All history on your server'), findsNothing);
     expect(card('offline'), findsOneWidget);
     expect(history.metadataRequests, isEmpty);
     expect(history.historyRequests, isEmpty);
@@ -862,7 +919,7 @@ void main() {
     pending.complete(['private']);
     await settle(tester);
 
-    expect(find.text('On your server'), findsNothing);
+    expect(find.text('All history on your server'), findsNothing);
     expect(card('local'), findsOneWidget);
     expect(card('private'), findsNothing);
     expect(tester.takeException(), isNull);

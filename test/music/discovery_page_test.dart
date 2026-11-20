@@ -162,18 +162,24 @@ class _Catalog extends MusicCatalogService {
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
   _Player() : super(PlayerState.init(null));
 
-  final plays = <({List<String> ids, int? startIndex, bool? audio})>[];
+  final plays =
+      <({List<String> ids, int? startIndex, bool? audio, bool fromMusic})>[];
 
   void setAudioPlayer({required bool minimized}) =>
       emit(state.copyWith(isAudio: true, isHidden: false, isMini: minimized));
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     plays.add((
       ids: videos.map((video) => video.videoId).toList(),
       startIndex: startIndex,
       audio: audio,
+      fromMusic: fromMusic,
     ));
   }
 
@@ -581,22 +587,25 @@ void main() {
   testWidgets('Keep Listening uses music history and retires across profiles',
       (tester) async {
     await tester.runAsync(() async {
-      await db.upsertHistoryVideo(HistoryVideoCache(
-          'listenagain', 'Listened song', 'Artist', '',
-          musicMetadata:
-              const MusicMetadata(title: 'Listened song', artist: 'Artist'))
-        ..created = DateTime.utc(2026, 1, 2));
-      await db.upsertHistoryVideo(HistoryVideoCache(
-          'olderlisten', 'Earlier song', 'Artist', '',
-          musicMetadata:
-              const MusicMetadata(title: 'Earlier song', artist: 'Artist'))
-        ..created = DateTime.utc(2026, 1, 1));
-      await db.upsertHistoryVideo(HistoryVideoCache(
-          'newerlisten', 'Later song', 'Artist', '',
-          musicMetadata:
-              const MusicMetadata(title: 'Later song', artist: 'Artist'))
-        ..created = DateTime.utc(2026, 1, 3));
-      await db.upsertHistoryVideo(
+      await db.recordPlaybackHistory(
+          PlaybackHistoryOrigin.music,
+          HistoryVideoCache('listenagain', 'Listened song', 'Artist', '',
+              musicMetadata:
+                  const MusicMetadata(title: 'Listened song', artist: 'Artist'))
+            ..created = DateTime.utc(2026, 1, 2));
+      await db.recordPlaybackHistory(
+          PlaybackHistoryOrigin.music,
+          HistoryVideoCache('olderlisten', 'Earlier song', 'Artist', '',
+              musicMetadata:
+                  const MusicMetadata(title: 'Earlier song', artist: 'Artist'))
+            ..created = DateTime.utc(2026, 1, 1));
+      await db.recordPlaybackHistory(
+          PlaybackHistoryOrigin.music,
+          HistoryVideoCache('newerlisten', 'Later song', 'Artist', '',
+              musicMetadata:
+                  const MusicMetadata(title: 'Later song', artist: 'Artist'))
+            ..created = DateTime.utc(2026, 1, 3));
+      await db.recordPlaybackHistory(PlaybackHistoryOrigin.video,
           HistoryVideoCache('videohist01', 'Video history', 'Creator', ''));
     });
     await show(tester);
@@ -763,10 +772,11 @@ void main() {
       expect((router.pushed!.args as MusicRouteArgs).videoId, 'learnmusic6');
 
       ranking = retainsSong ? [6, 1, 2, 3, 4, 5, 7] : [1, 2];
-      await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
-          'learnmusic6', 'Learned track 6', 'Artist', '',
-          musicMetadata: const MusicMetadata(
-              title: 'Learned track 6', artist: 'Artist'))));
+      await tester.runAsync(() => db.recordPlaybackHistory(
+          PlaybackHistoryOrigin.music,
+          HistoryVideoCache('learnmusic6', 'Learned track 6', 'Artist', '',
+              musicMetadata: const MusicMetadata(
+                  title: 'Learned track 6', artist: 'Artist'))));
       playbackHistoryRevision.value++;
       await tester.pumpAndSettle();
       await tester.binding.handlePopRoute();
@@ -820,6 +830,7 @@ void main() {
     expect(player.plays.single.ids, ['learnmusic2', 'learnmusic1']);
     expect(player.plays.single.startIndex, 1);
     expect(player.plays.single.audio, isTrue);
+    expect(player.plays.single.fromMusic, isTrue);
     expect(catalog.relatedSeeds, isEmpty);
     expect(
         catalog.discoveryArtists, [null, 'Artist 7', 'Artist 6', 'Artist 5']);
@@ -875,10 +886,11 @@ void main() {
     expect(mix, findsNothing);
     final previousRanks =
         requests.where((surface) => surface == 'quick_picks').length;
-    await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
-        'learnmusic1', 'Learned track 1', 'Artist 1', '',
-        musicMetadata: const MusicMetadata(
-            title: 'Learned track 1', artist: 'Artist 1'))));
+    await tester.runAsync(() => db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache('learnmusic1', 'Learned track 1', 'Artist 1', '',
+            musicMetadata: const MusicMetadata(
+                title: 'Learned track 1', artist: 'Artist 1'))));
     playbackHistoryRevision.value++;
     await tester.pumpAndSettle();
     expect(requests.where((surface) => surface == 'quick_picks').length,
@@ -887,10 +899,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(mix, findsOneWidget);
     expect(requests.where((surface) => surface == 'discover'), hasLength(1));
-    await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
-        'learnmusic2', 'Learned track 2', 'Artist 2', '',
-        musicMetadata: const MusicMetadata(
-            title: 'Learned track 2', artist: 'Artist 2'))));
+    await tester.runAsync(() => db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache('learnmusic2', 'Learned track 2', 'Artist 2', '',
+            musicMetadata: const MusicMetadata(
+                title: 'Learned track 2', artist: 'Artist 2'))));
     playbackHistoryRevision.value++;
     await tester.pumpAndSettle();
     await tester.ensureVisible(mix);
@@ -1026,10 +1039,11 @@ void main() {
             .setLearningEnabled(RecommendationDomain.music, false));
     await show(tester);
     expect(find.text('Keep listening'), findsNothing);
-    await tester.runAsync(() => db.upsertHistoryVideo(HistoryVideoCache(
-        'listenagain', 'Newly listened song', 'Artist', '',
-        musicMetadata: const MusicMetadata(
-            title: 'Newly listened song', artist: 'Artist'))));
+    await tester.runAsync(() => db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache('listenagain', 'Newly listened song', 'Artist', '',
+            musicMetadata: const MusicMetadata(
+                title: 'Newly listened song', artist: 'Artist'))));
     playbackHistoryRevision.value++;
     await tester.pumpAndSettle();
     expect(find.text('Keep listening'), findsOneWidget);

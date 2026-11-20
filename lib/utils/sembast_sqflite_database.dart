@@ -38,6 +38,7 @@ class SembastSqfDb extends IDbClient {
   final log = Logger('SembastSqfLDB');
   final Database _database;
   final String? _fixedProfileId;
+  final Set<PlaybackHistoryWrite> _pendingHistory;
   final _profilesStore = stringMapStoreFactory.store('personProfiles');
   final _profileStateStore = stringMapStoreFactory.store('personProfileState');
   final _globalSettingsStore = stringMapStoreFactory.store('settings');
@@ -71,14 +72,20 @@ class SembastSqfDb extends IDbClient {
       stringMapStoreFactory.store('dearrow'); // use video id as key
   StoreRef<String, Map<String, Object?>> get historyVideoCacheStore =>
       stringMapStoreFactory.store(_storeName('historyVideoCache'));
+  StoreRef<String, Map<String, Object?>> playbackHistoryStore(
+          PlaybackHistoryOrigin origin) =>
+      stringMapStoreFactory.store(_storeName('${origin.name}PlaybackHistory'));
   StoreRef<String, Map<String, Object?>> get progressStore =>
       stringMapStoreFactory.store(_storeName('progress'));
   StoreRef<String, Map<String, Object?>> get offlineSubscriptions =>
       stringMapStoreFactory.store(_storeName('offline_subscriptions'));
 
-  SembastSqfDb(this._database) : _fixedProfileId = null;
+  SembastSqfDb(this._database)
+      : _fixedProfileId = null,
+        _pendingHistory = {};
 
-  SembastSqfDb._forProfile(this._database, this._fixedProfileId);
+  SembastSqfDb._forProfile(
+      this._database, this._fixedProfileId, this._pendingHistory);
 
   Database get db {
     _checkFixedProfile();
@@ -131,7 +138,9 @@ class SembastSqfDb extends IDbClient {
     if (_profilesStore.record(id).getSync(db) == null) {
       throw StateError('Profile no longer exists');
     }
-    return _fixedProfileId == id ? this : SembastSqfDb._forProfile(db, id);
+    return _fixedProfileId == id
+        ? this
+        : SembastSqfDb._forProfile(db, id, _pendingHistory);
   }
 
   Future<void> _initializeProfiles() => db.transaction((txn) async {
@@ -223,6 +232,7 @@ class SembastSqfDb extends IDbClient {
           throw StateError(
               'Switch to another profile before deleting this one');
         }
+        forProfile(id)._cancelPendingHistory();
         String storeName(String name) =>
             id == PersonProfile.defaultId ? name : 'profile:$id:$name';
         for (final name in [
@@ -231,6 +241,8 @@ class SembastSqfDb extends IDbClient {
           'serviers',
           'videoFilters',
           'historyVideoCache',
+          for (final origin in PlaybackHistoryOrigin.values)
+            '${origin.name}PlaybackHistory',
           'progress',
           'offline_subscriptions',
         ]) {
@@ -339,7 +351,11 @@ class SembastSqfDb extends IDbClient {
 
   @override
   close() async {
-    if (_fixedProfileId == null) await db.close();
+    if (_fixedProfileId != null) return;
+    for (final pending in _pendingHistory.toList()) {
+      pending.cancel();
+    }
+    await db.close();
   }
 
   @override
@@ -531,8 +547,13 @@ class SembastSqfDb extends IDbClient {
 
   @override
   HistoryVideoCache? getHistoryVideoByVideoId(String videoId) {
-    var v = historyVideoCacheStore.record(videoId).getSync(db);
-    return v != null ? HistoryVideoCache.fromJson(v) : null;
+    final entries = [
+      if (historyVideoCacheStore.record(videoId).getSync(db) case final row?)
+        HistoryVideoCache.fromJson(row),
+      for (final origin in PlaybackHistoryOrigin.values)
+        if (getPlaybackHistoryVideo(origin, videoId) case final entry?) entry,
+    ]..sort((a, b) => b.created.compareTo(a.created));
+    return entries.firstOrNull;
   }
 
   @override
@@ -613,19 +634,96 @@ class SembastSqfDb extends IDbClient {
       .toList();
 
   @override
-  List<HistoryVideoCache> getLocalHistory() => historyVideoCacheStore
-      .findSync(db, finder: Finder(sortOrders: [SortOrder('created', false)]))
-      .map((record) => HistoryVideoCache.fromJson(record.value))
-      .toList();
+  List<HistoryVideoCache> getLocalHistory() {
+    final entries = [
+      for (final record in historyVideoCacheStore.findSync(db))
+        HistoryVideoCache.fromJson(record.value),
+      for (final origin in PlaybackHistoryOrigin.values)
+        ...getPlaybackHistory(origin),
+    ]..sort((a, b) => b.created.compareTo(a.created));
+    final ids = <String>{};
+    return entries.where((entry) => ids.add(entry.videoId)).toList();
+  }
+
+  @override
+  List<HistoryVideoCache> getPlaybackHistory(PlaybackHistoryOrigin origin) =>
+      playbackHistoryStore(origin)
+          .findSync(db,
+              finder: Finder(sortOrders: [SortOrder('created', false)]))
+          .map((record) => HistoryVideoCache.fromJson(record.value))
+          .toList();
+
+  @override
+  HistoryVideoCache? getPlaybackHistoryVideo(
+      PlaybackHistoryOrigin origin, String videoId) {
+    final row = playbackHistoryStore(origin).record(videoId).getSync(db);
+    return row == null ? null : HistoryVideoCache.fromJson(row);
+  }
+
+  @override
+  Future<void> recordPlaybackHistory(
+          PlaybackHistoryOrigin origin, HistoryVideoCache entry) =>
+      beginPlaybackHistory(origin, entry.videoId).record(entry);
+
+  @override
+  PlaybackHistoryWrite beginPlaybackHistory(
+      PlaybackHistoryOrigin origin, String videoId) {
+    final owner = forProfile(profileId);
+    final pending = PlaybackHistoryWrite(
+        owner.profileId,
+        origin,
+        videoId,
+        (entry, current) => owner._writeProfile((owner, txn) async {
+              if (current()) {
+                await owner
+                    .playbackHistoryStore(origin)
+                    .record(videoId)
+                    .put(txn, entry.toJson());
+              }
+            }),
+        onFinish: _pendingHistory.remove);
+    _pendingHistory.add(pending);
+    return pending;
+  }
+
+  void _cancelPendingHistory({PlaybackHistoryOrigin? origin, String? videoId}) {
+    final profile = profileId;
+    for (final pending in _pendingHistory.toList()) {
+      if (pending.profileId == profile &&
+          (origin == null || pending.origin == origin) &&
+          (videoId == null || pending.videoId == videoId)) {
+        pending.cancel();
+      }
+    }
+  }
+
+  @override
+  Future<void> deletePlaybackHistory(
+      PlaybackHistoryOrigin origin, String videoId) {
+    _cancelPendingHistory(origin: origin, videoId: videoId);
+    return _writeProfile((owner, txn) =>
+        owner.playbackHistoryStore(origin).record(videoId).delete(txn));
+  }
+
+  @override
+  Future<void> clearPlaybackHistory(PlaybackHistoryOrigin origin) {
+    _cancelPendingHistory(origin: origin);
+    return _writeProfile(
+        (owner, txn) => owner.playbackHistoryStore(origin).delete(txn));
+  }
 
   @override
   Future<void> deleteLocalHistory(String videoId) {
     if (_fixedProfileId == null) {
       return forProfile(profileId).deleteLocalHistory(videoId);
     }
+    _cancelPendingHistory(videoId: videoId);
     return db.transaction((txn) async {
       await ensureProfileExists(txn);
       await historyVideoCacheStore.record(videoId).delete(txn);
+      for (final origin in PlaybackHistoryOrigin.values) {
+        await playbackHistoryStore(origin).record(videoId).delete(txn);
+      }
       await progressStore.record(videoId).delete(txn);
       await stringMapStoreFactory
           .store('watchState:$profileId')
@@ -646,9 +744,13 @@ class SembastSqfDb extends IDbClient {
     if (_fixedProfileId == null) {
       return forProfile(profileId).clearLocalHistory();
     }
+    _cancelPendingHistory();
     return db.transaction((txn) async {
       await ensureProfileExists(txn);
       await historyVideoCacheStore.delete(txn);
+      for (final origin in PlaybackHistoryOrigin.values) {
+        await playbackHistoryStore(origin).delete(txn);
+      }
       await progressStore.delete(txn);
       for (final name in ['watchState', 'watchMembership', 'watchOutbox']) {
         await stringMapStoreFactory.store('$name:$profileId').delete(txn);
@@ -688,7 +790,11 @@ class SembastSqfDb extends IDbClient {
           .toList(),
       'progress':
           getAllProgress().map((progress) => progress.toJson()).toList(),
-      'history': getLocalHistory().map((video) => video.toJson()).toList(),
+      'history':
+          historyVideoCacheStore.findSync(db).map((r) => r.value).toList(),
+      for (final origin in PlaybackHistoryOrigin.values)
+        '${origin.name}History':
+            getPlaybackHistory(origin).map((video) => video.toJson()).toList(),
       'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
       'savedPlaylists': [
         for (final saved in SavedPlaylist.decodeLibrary(
@@ -709,19 +815,24 @@ class SembastSqfDb extends IDbClient {
     if (_fixedProfileId == null) {
       return forProfile(profileId).restoreBackup(backup, replace: replace);
     }
+    if (replace && !backup.subscriptionsOnly) _cancelPendingHistory();
     final stores = {
       'settings': settingsStore,
       'subscriptions': offlineSubscriptions,
       'filters': videoFiltersStore,
       'progress': progressStore,
-      'history': historyVideoCacheStore
+      'history': historyVideoCacheStore,
+      for (final origin in PlaybackHistoryOrigin.values)
+        '${origin.name}History': playbackHistoryStore(origin),
     };
     const keys = {
       'settings': 'name',
       'subscriptions': 'channelId',
       'filters': 'uuid',
       'progress': 'videoId',
-      'history': 'videoId'
+      'history': 'videoId',
+      'videoHistory': 'videoId',
+      'musicHistory': 'videoId',
     };
     // Commit the library together; a failed restore must leave the old data usable.
     await db.transaction((txn) async {

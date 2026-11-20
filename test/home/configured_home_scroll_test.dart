@@ -35,9 +35,10 @@ class _Feeds extends Service {
   @override
   Future<List<Video>> getTrending({String? type}) => getPopular();
   @override
-  Future<List<String>> getLocalHistoryPage(int page, int maxResults) {
+  Future<List<String>> getPlaybackHistoryPage(
+      PlaybackHistoryOrigin origin, int page, int maxResults) {
     historyPages.add(page);
-    return super.getLocalHistoryPage(page, maxResults);
+    return super.getPlaybackHistoryPage(origin, page, maxResults);
   }
 
   @override
@@ -178,9 +179,10 @@ void main() {
     for (final showShelf in [true, false]) {
       await tester.runAsync(() async {
         if (showShelf) {
-          await db.upsertHistoryVideo(HistoryVideoCache(
-              id, 'Resume me', 'Creator', '',
-              lengthSeconds: 200));
+          await db.recordPlaybackHistory(
+              PlaybackHistoryOrigin.video,
+              HistoryVideoCache(id, 'Resume me', 'Creator', '',
+                  lengthSeconds: 200));
           await db.saveProgress(Progress(0.5, id));
         } else {
           await db.deleteLocalHistory(id);
@@ -226,9 +228,10 @@ void main() {
         await db.upsertHomeLayout(layout);
         for (var i = 0; i < 22; i++) {
           final id = 'video${i.toString().padLeft(6, "0")}';
-          await db.upsertHistoryVideo(HistoryVideoCache(
-              id, 'History item $i', 'Creator', '',
-              lengthSeconds: 200));
+          await db.recordPlaybackHistory(
+              PlaybackHistoryOrigin.video,
+              HistoryVideoCache(id, 'History item $i', 'Creator', '',
+                  lengthSeconds: 200));
           if (i < 2) await db.saveProgress(Progress(0.5, id));
         }
         app = TestAppCubit(AppState(0, null, layout));

@@ -11,6 +11,7 @@ import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -178,6 +179,38 @@ void main() {
     expect(player.state.recoveringPlayback, isFalse);
     expect(await refresh(original), isNull);
   });
+
+  for (final audioOnly in [false, true]) {
+    test(
+        'explicit outage during Video playback skips a second refresh, audioOnly=$audioOnly',
+        () async {
+      final selector = BackendSelector('ROUTE', const [
+        BackendOption('a', 'First'),
+        BackendOption('b', 'Second'),
+      ]);
+      final selected = selector.withSelection(_server, 'a');
+      await database.upsertServer(selected);
+      await database.useServer(selected);
+      final video =
+          (await api.getVideo(_id)).copyWith(queueEntryId: 'occurrence-1');
+      player.seed(player.state.copyWith(
+          currentlyPlaying: video, videos: [video], isAudio: audioOnly));
+      requests.clear();
+      respond = (request) async => _response(request, 500,
+          error: 'This backend is blocked by Youtube. Please wait '
+              'until it has refreshed itself or switch to another backend.');
+
+      await expectLater(refresh(video), throwsA(isA<InvidiousServiceError>()));
+      expect(requests, hasLength(1));
+      expect(delays, [const Duration(seconds: 1)]);
+      respond = (request) async => _response(request, 200);
+      final replacement =
+          await api.retryVideoBackend(video, isCurrent: () => true);
+      expect(replacement!.backendPlayback!.label, 'Second');
+      expect(requests, hasLength(2));
+      expect(player.state.position, const Duration(seconds: 42));
+    });
+  }
 
   for (final headers in [
     {'retry-after': '60'},

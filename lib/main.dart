@@ -35,9 +35,8 @@ import 'package:logging/logging.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'settings/models/db/app_logs.dart';
+import 'settings/models/theme_palette.dart';
 import 'feedback/views/feedback_screenshot.dart';
-
-const _neutralThemeSeed = Color(0xFF757575);
 
 final scaffoldKey = GlobalKey<ScaffoldMessengerState>();
 bool isTv = false;
@@ -178,8 +177,8 @@ class MyApp extends StatelessWidget {
             previous.sessionRecoveryRequired != current.sessionRecoveryRequired,
         // we want to rebuild only when anything other than the navigation index is changed
         builder: (context, state) {
-          bool useDynamicTheme = context
-              .select((SettingsCubit value) => value.state.useDynamicTheme);
+          final palette =
+              context.select((SettingsCubit value) => value.state.themePalette);
           bool useBlackBackground = context
               .select((SettingsCubit value) => value.state.blackBackground);
           String? locale =
@@ -196,22 +195,14 @@ class MyApp extends StatelessWidget {
               builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
             ColorScheme lightColorScheme;
 
-            if (useDynamicTheme &&
+            if (palette == ThemePalette.dynamicColors &&
                 lightDynamic != null &&
                 darkDynamic != null) {
               lightColorScheme = lightDynamic.harmonized();
               darkColorScheme = darkDynamic.harmonized();
             } else {
-              // Let media artwork provide the color on the default surfaces.
-              lightColorScheme = ColorScheme.fromSeed(
-                seedColor: _neutralThemeSeed,
-                dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
-              );
-              darkColorScheme = ColorScheme.fromSeed(
-                seedColor: _neutralThemeSeed,
-                brightness: Brightness.dark,
-                dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
-              );
+              lightColorScheme = palette.seededScheme(Brightness.light);
+              darkColorScheme = palette.seededScheme(Brightness.dark);
             }
 
             if (useBlackBackground) {

@@ -34,6 +34,7 @@ import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/db/progress.dart';
 import 'package:clipious/videos/services/watch_history.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,6 +49,8 @@ import 'held_music_preparer.dart';
 class _GuestService extends Service {
   List<SponsorSegmentType>? requestedCategories;
   bool metadataFails = false;
+  Completer<void>? metadataRequested;
+  Completer<void>? releaseMetadata;
   final requestedVideoIds = <String>[];
 
   @override
@@ -76,6 +79,8 @@ class _GuestService extends Service {
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver}) async {
     requestedVideoIds.add(id);
+    if (metadataRequested?.isCompleted == false) metadataRequested!.complete();
+    if (releaseMetadata != null) await releaseMetadata!.future;
     return metadataFails
         ? throw StateError('Metadata unavailable')
         : Video(videoId: id);
@@ -150,8 +155,16 @@ class _RemoteLoadPlayer extends _SessionPlayer {
   // Exercise remote intent without creating a native media controller.
   @override
   Future<void> playVideo(List<Video> videos,
-          {bool? audio, Duration? startAt, bool? playing, int? startIndex}) =>
-      super.playVideo([], audio: audio, startAt: startAt, playing: playing);
+          {bool? audio,
+          Duration? startAt,
+          bool? playing,
+          int? startIndex,
+          bool fromMusic = false}) =>
+      super.playVideo([],
+          audio: audio,
+          startAt: startAt,
+          playing: playing,
+          fromMusic: fromMusic);
 }
 
 class _DelayedProgressPlayer extends _SessionPlayer {
@@ -1070,6 +1083,90 @@ void main() {
       await player.resumeSession();
       expect(player.state.startAt, const Duration(seconds: 37));
       expect(player.state.currentlyPlaying!.musicMetadata!.album, 'Album');
+    });
+
+    for (final legacy in [true, false]) {
+      test(
+          'explicit Music resume honors known or legacy origins (legacy=$legacy)',
+          () async {
+        player.audioSession = await AudioSession.instance;
+        app_main.mediaHandler = MediaHandler(player);
+        const song = Video(
+            videoId: 'same-recording',
+            musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+        final session = PlaybackSession(
+            videos: const [song],
+            currentId: song.videoId,
+            seconds: 14,
+            audio: true,
+            musicHistoryEntries: legacy ? null : const {});
+        await db.saveSetting(
+            SettingsValue(playbackSessionSetting, session.encode()));
+        player.restoreSession();
+        expect(db.getLocalHistory(), isEmpty);
+        await player.resumeSession(fromMusic: true);
+        expect(
+            db
+                .getPlaybackHistory(PlaybackHistoryOrigin.music)
+                .map((v) => v.videoId),
+            legacy ? [song.videoId] : isEmpty);
+        expect(
+            db
+                .getPlaybackHistory(PlaybackHistoryOrigin.video)
+                .map((v) => v.videoId),
+            legacy ? isEmpty : [song.videoId]);
+      });
+    }
+
+    test(
+        'history follows where each queue entry was opened, including on retry',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const song = Video(
+          videoId: 'same-recording',
+          musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+      const music = PlaybackHistoryOrigin.music;
+      const video = PlaybackHistoryOrigin.video;
+      // An audio-only watch from Videos can have Music metadata too.
+      await player.playVideo([song], audio: true);
+      expect(db.getPlaybackHistory(video).single.videoId, song.videoId);
+      expect(db.getPlaybackHistory(music), isEmpty);
+      expect(await player.enqueueMusicSongs([song], next: true), isTrue);
+      await player.skipToVideo(1);
+      expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
+      await db.clearPlaybackHistory(music);
+      await player.retryCurrentVideo();
+      expect(db.getPlaybackHistory(music), isEmpty);
+      expect(db.getPlaybackHistory(video).single.videoId, song.videoId);
+      await player.playVideo([song], fromMusic: true, audio: true);
+      expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
+      await waitForSavedPosition(0, videoId: song.videoId);
+      expect(player.savedSession!.musicHistoryEntries, {song.videoId});
+    });
+
+    test(
+        'deleting a song while playback is loading fences its pending history write',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      final api = service as _GuestService;
+      const song = Video(
+          videoId: 'slow',
+          musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+      const music = PlaybackHistoryOrigin.music;
+      await player.playVideo([song], audio: true, fromMusic: true);
+      expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
+      api.metadataRequested = Completer<void>();
+      api.releaseMetadata = Completer<void>();
+      final replay = player.playVideo([song], audio: true, fromMusic: true);
+      await api.metadataRequested!.future.timeout(const Duration(seconds: 3));
+      await db.deletePlaybackHistory(music, song.videoId);
+      api.releaseMetadata!.complete();
+      await replay;
+      expect(db.getPlaybackHistory(music), isEmpty);
+      await player.playVideo([song], audio: true, fromMusic: true);
+      expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
     });
 
     test('restoring a repeated final song retains its occurrence and real ID',

@@ -18,6 +18,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/subscription_management/view/components/subscribe_button.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -151,6 +152,7 @@ void main() {
       bool withQueueAndBackend = false,
       bool expandedAudio = false,
       bool tablet = false,
+      String? authorId,
       Server? playbackServer,
       Server? backendServer}) async {
     tester.view.physicalSize = Size(width, height);
@@ -161,6 +163,7 @@ void main() {
       videoId: 'watch-video',
       title: 'A video with direct playback actions',
       author: 'Test creator',
+      authorId: authorId,
       lengthSeconds: 180,
       liveNow: live,
       playbackConnection:
@@ -611,6 +614,35 @@ void main() {
   });
 
   for (final tablet in [false, true]) {
+    testWidgets(
+        'audio info fills the space below the actions (tablet: $tablet)',
+        (tester) async {
+      await pumpWatch(tester,
+          height: 520,
+          expandedAudio: true,
+          tablet: tablet,
+          authorId: 'test-channel');
+      if (!tablet) {
+        // Exercise the same switch from the ordinary watch page as the report.
+        await tester.tap(watchAction('mode-toggle'));
+        await tester.pumpAndSettle();
+        await tester.tap(watchAction('mode-toggle'));
+        await tester.pumpAndSettle();
+      }
+      expect(player.state.isAudio, isTrue);
+      final panel = find.byType(tablet ? TabletExpandedPlayer : ExpandedPlayer);
+      final lastControl = tablet
+          ? find.ancestor(
+              of: find.byType(SubscribeButton),
+              matching: find.byWidgetPredicate((widget) =>
+                  widget is SingleChildScrollView &&
+                  widget.scrollDirection == Axis.vertical))
+          : find.byType(NavigationBar);
+      expect(tester.getRect(lastControl).bottom, tester.getRect(panel).bottom);
+      expect(find.byType(SubscribeButton).hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('expanded audio controls fit a short body (tablet: $tablet)',
         (tester) async {
       await pumpWatch(tester,

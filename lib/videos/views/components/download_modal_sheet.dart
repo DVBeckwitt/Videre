@@ -2,6 +2,7 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/views/components/download_retry_time.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart';
 import 'package:clipious/globals.dart';
@@ -113,7 +114,18 @@ class DownloadModalSheet extends StatelessWidget {
       child: BlocBuilder<DownloadModalSheetCubit, DownloadModalSheetState>(
           builder: (context, state) {
         final cubit = context.read<DownloadModalSheetCubit>();
+        void cancel() {
+          cubit.cancel();
+          Navigator.of(context).pop();
+        }
+
         if (state.loading) {
+          if (state.retryAt != null) {
+            return _SheetBody(children: [
+              Text(locals.downloadRetryWaiting),
+              TextButton(onPressed: cancel, child: Text(locals.cancel)),
+            ]);
+          }
           return const Padding(
               padding: EdgeInsets.all(24),
               child: Center(
@@ -122,14 +134,20 @@ class DownloadModalSheet extends StatelessWidget {
                       child: CircularProgressIndicator())));
         }
         if (state.failed) {
-          return _SheetBody(children: [
-            Text(locals.itemlistErrorGeneric),
-            FilledButton.icon(
-                autofocus: true,
-                onPressed: cubit.init,
-                icon: const Icon(Icons.refresh),
-                label: Text(locals.retry)),
-          ]);
+          return DownloadRetryAvailability(
+              retryAt: state.retryAt,
+              builder: (context, waitUntil) => _SheetBody(children: [
+                    Text(waitUntil == null
+                        ? locals.itemlistErrorGeneric
+                        : locals.downloadRetryAfter(waitUntil)),
+                    FilledButton.icon(
+                        autofocus: true,
+                        onPressed: waitUntil == null ? cubit.init : null,
+                        icon: const Icon(Icons.refresh),
+                        label: Text(locals.retry)),
+                    if (state.retryAt != null)
+                      TextButton(onPressed: cancel, child: Text(locals.cancel)),
+                  ]));
         }
         return _SheetBody(children: [
           if (state.audioTrackDiscoveryFailed)

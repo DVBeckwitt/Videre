@@ -16,6 +16,7 @@ import 'package:clipious/settings/models/errors/no_server_selected.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/video_post_processing.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/services/watch_history.dart';
 
@@ -118,8 +119,7 @@ class RecommendationCandidates {
       final videos = <Video>[];
       try {
         videos.addAll(_database
-            .getLocalHistory()
-            .where((entry) => entry.musicMetadata == null)
+            .getPlaybackHistory(PlaybackHistoryOrigin.video)
             .map((entry) => entry.toVideo()));
       } on UnsupportedError {
         // A database without history can still supply saved playlists.
@@ -149,8 +149,7 @@ class RecommendationCandidates {
           .map((entry) => entry.toVideo()));
       try {
         videos.addAll(_database
-            .getLocalHistory()
-            .where((entry) => entry.musicMetadata != null)
+            .getPlaybackHistory(PlaybackHistoryOrigin.music)
             .map((entry) => entry.toVideo()));
       } on UnsupportedError {
         // A database without history can still supply saved songs.
@@ -202,8 +201,7 @@ class RecommendationCandidates {
     try {
       final videos = _videos(
         _database
-            .getLocalHistory()
-            .where((entry) => entry.musicMetadata != null)
+            .getPlaybackHistory(PlaybackHistoryOrigin.music)
             .map((entry) => entry.toVideo()),
         limit: maximum,
         music: true,

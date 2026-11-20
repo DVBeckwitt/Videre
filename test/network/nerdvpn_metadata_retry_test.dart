@@ -258,32 +258,38 @@ void main() {
     });
   }
 
-  test('concurrent Music can advance while Video retries the same backend',
+  test('concurrent Video and Music share the request for each backend',
       () async {
     await selectMusicBackends();
-    respond = (request) async =>
-        requestCookieValue(request.headers, 'COMPANION_ID') == '1'
-            ? _response(request, 500, {'error': _blocked})
-            : _success(request);
-    final videoWaiting = Completer<void>();
-    final releaseVideoRetry = Completer<void>();
-    wait = (_) {
-      videoWaiting.complete();
-      return releaseVideoRetry.future;
-    };
-    final video = api.getVideo(_videoId,
-        loadObserver: VideoLoadObserver(isCurrent: () => true, onRetry: () {}));
-    try {
-      await videoWaiting.future;
-      final song = await loadMusic().timeout(const Duration(seconds: 3));
-      expect(song.videoId, _videoId);
-      expect(attemptedBackends(), ['1', '1', '2']);
-    } finally {
-      releaseVideoRetry.complete();
-      expect((await video).videoId, _videoId);
+    final first = Completer<void>();
+    final second = Completer<void>();
+    final counts = <int, int>{};
+    void requested(BackendPlayback route) {
+      final count =
+          counts.update(route.retryIndex, (n) => n + 1, ifAbsent: () => 1);
+      if (count == 2) (route.retryIndex == 0 ? first : second).complete();
     }
-    expect(attemptedBackends(), ['1', '1', '2', '1', '2']);
-    expect(delays, [const Duration(seconds: 1)]);
+
+    respond = (request) async {
+      final preferred =
+          requestCookieValue(request.headers, 'COMPANION_ID') == '1';
+      await (preferred ? first : second).future;
+      return preferred
+          ? _response(request, 500, {'error': _blocked})
+          : _success(request);
+    };
+    VideoLoadObserver observer() => VideoLoadObserver(
+        isCurrent: () => true,
+        onRetry: () => fail('Unexpected same-route retry'));
+    final videos = await Future.wait([
+      api.getVideo(_videoId,
+          onBackendRequest: requested, loadObserver: observer()),
+      api.getMusicVideo(_videoId,
+          onBackendRequest: requested, loadObserver: observer()),
+    ]).timeout(const Duration(seconds: 3));
+    expect(videos.map((video) => video.videoId), [_videoId, _videoId]);
+    expect(attemptedBackends(), ['1', '2']);
+    expect(delays, isEmpty);
   });
 
   test('selecting the first account stops unsaved validation recovery',
@@ -365,21 +371,8 @@ void main() {
                 ? VideoLoadObserver(isCurrent: () => true, onRetry: () {})
                 : null);
         expect(loaded.videoId, _videoId);
-        expect(
-            requests
-                .map((request) =>
-                    requestCookieValue(request.headers, 'COMPANION_ID'))
-                .toList(),
-            [
-              '1',
-              if (interactive || message == _starting) '1',
-              '2',
-            ]);
-        expect(
-            delays,
-            interactive || message == _starting
-                ? [const Duration(seconds: 1)]
-                : []);
+        expect(attemptedBackends(), ['1', '2']);
+        expect(delays, isEmpty);
         expect(loaded.backendPlayback!.retryIndex, 1);
         expect((await database.getCurrentlySelectedServer()).customHeaders,
             account.customHeaders);
@@ -389,7 +382,7 @@ void main() {
 
   for (final message in [_starting, _blocked]) {
     test(
-        'interactive unavailable backends keep one retry and two alternatives: $message',
+        'interactive unavailable backends stop after two distinct alternatives: $message',
         () async {
       final selector = BackendSelector(
           'COMPANION_ID',
@@ -410,13 +403,8 @@ void main() {
               loadObserver:
                   VideoLoadObserver(isCurrent: () => true, onRetry: () {})),
           throwsA(isA<InvidiousServiceError>()));
-      expect(
-          requests
-              .map((request) =>
-                  requestCookieValue(request.headers, 'COMPANION_ID'))
-              .toList(),
-          ['1', '1', '2', '3']);
-      expect(delays, [const Duration(seconds: 1)]);
+      expect(attemptedBackends(), ['1', '2', '3']);
+      expect(delays, isEmpty);
       expect((await database.getCurrentlySelectedServer()).customHeaders,
           account.customHeaders);
     });

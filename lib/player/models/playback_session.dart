@@ -14,6 +14,10 @@ class PlaybackSession {
   final int seconds;
   final String? localSelectionId;
   final bool audio;
+
+  /// Snapshots predating section history have no origin information.
+  final Set<String>? musicHistoryEntries;
+  final bool musicHistoryPlaylist;
   final List<String> played;
   final List<String> next;
   final PlaylistReference? playlistReference;
@@ -27,6 +31,8 @@ class PlaybackSession {
     required this.seconds,
     this.localSelectionId,
     this.audio = false,
+    this.musicHistoryEntries = const {},
+    this.musicHistoryPlaylist = false,
     this.played = const [],
     this.next = const [],
     this.playlistReference,
@@ -58,6 +64,9 @@ class PlaybackSession {
         if (localSelectionId != null && isLocalMusicPlaybackId(currentId))
           'localSelectionId': localSelectionId,
         'audio': audio,
+        if (musicHistoryEntries != null)
+          'musicHistoryEntries': musicHistoryEntries!.toList(),
+        if (musicHistoryPlaylist) 'musicHistoryPlaylist': true,
         'played': played,
         'next': next,
         if (playlistReference != null)
@@ -119,6 +128,11 @@ class PlaybackSession {
             ? json['localSelectionId'] as String?
             : null,
         audio: json['audio'] == true,
+        musicHistoryEntries: (json['musicHistoryEntries'] as List?)
+            ?.whereType<String>()
+            .where(ids.contains)
+            .toSet(),
+        musicHistoryPlaylist: json['musicHistoryPlaylist'] == true,
         played: List<String>.from(json['played'] ?? [])
             .where(ids.contains)
             .toList(),

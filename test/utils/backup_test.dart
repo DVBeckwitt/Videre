@@ -818,6 +818,54 @@ void main() {
     expect(await target.getServers(), isEmpty);
   });
 
+  test('history backup keeps independent plays and legacy entries', () async {
+    const video = PlaybackHistoryOrigin.video;
+    const music = PlaybackHistoryOrigin.music;
+    final watch = HistoryVideoCache(id, 'Watched in Videos', 'Creator', '')
+      ..created = DateTime.utc(2026, 1, 1);
+    final listen = HistoryVideoCache(id, 'Heard in Music', 'Artist', '')
+      ..created = DateTime.utc(2026, 1, 2);
+    await source.recordPlaybackHistory(video, watch);
+    await source.recordPlaybackHistory(music, listen);
+    final backup = UserBackup.parse((await source.exportBackup()).encode());
+    expect(backup.sections['history']!.single['title'], 'Example video');
+    expect(backup.sections['videoHistory']!.single, watch.toJson());
+    expect(backup.sections['musicHistory']!.single, listen.toJson());
+
+    await target.recordPlaybackHistory(
+        video, HistoryVideoCache(id, 'Existing watch', 'Creator', ''));
+    await target.restoreBackup(backup);
+    expect(target.getPlaybackHistory(video).single.title, 'Existing watch');
+    expect(target.getPlaybackHistory(music).single.toJson(), listen.toJson());
+    await target.restoreBackup(backup, replace: true);
+    expect(target.getPlaybackHistory(video).single.toJson(), watch.toJson());
+    expect(target.getPlaybackHistory(music).single.toJson(), listen.toJson());
+
+    final oldBackup = jsonDecode(backup.encode()) as Map<String, dynamic>
+      ..remove('videoHistory')
+      ..remove('musicHistory');
+    await target.restoreBackup(UserBackup.parse(jsonEncode(oldBackup)),
+        replace: true);
+    expect(target.getPlaybackHistory(video), isEmpty);
+    expect(target.getPlaybackHistory(music), isEmpty);
+    expect(target.getLocalHistory().single.title, 'Example video');
+  });
+
+  test('scoped history rejects device IDs when importing a portable backup',
+      () async {
+    final raw = jsonDecode((await source.exportBackup()).encode())
+        as Map<String, dynamic>;
+    final device = HistoryVideoCache('device:track', 'Local', '', '').toJson();
+    for (final section in ['videoHistory', 'musicHistory']) {
+      expect(
+          () => UserBackup.parse(jsonEncode({
+                ...raw,
+                section: [device],
+              })),
+          throwsFormatException);
+    }
+  });
+
   test('merge keeps existing values; replace preserves target accounts',
       () async {
     await target.saveSetting(SettingsValue(useDashSettingName, 'true'));

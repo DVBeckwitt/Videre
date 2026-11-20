@@ -5,6 +5,7 @@ part 'settings.g.dart';
 const sponsorBlockPrefix = 'sponsor-block-';
 const browsingCountry = 'browsing-country';
 const dynamicTheme = 'dynamic-theme';
+const themePaletteSettingName = 'theme-palette';
 const useDashSettingName = 'use-dash';
 const playerRepeat = 'player-repeat';
 const playerShuffle = 'player-shuffle';

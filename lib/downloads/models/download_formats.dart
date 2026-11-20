@@ -1,8 +1,17 @@
+import 'package:clipious/player/media_source.dart';
 import 'package:clipious/player/models/video_quality.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 
 /// Stored in the download job's quality field for Music's audio-only action.
 const highestAudioDownloadQuality = 'highest-audio';
+
+String? downloadMediaUrl(AdaptiveFormat format, Server server) {
+  final parsed = parseMediaUrl(format.url);
+  return parsed == null
+      ? null
+      : validatedMediaUrl(proxyMediaUrl(parsed, server), server);
+}
 
 enum DownloadContainer {
   webm,

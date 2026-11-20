@@ -18,7 +18,7 @@ import '../../../videos/views/components/flow_watch_body.dart';
 import '../../../videos/views/components/recommended_videos.dart';
 import '../../models/flow_watch_layout.dart';
 import 'flow_watch_queue_dock.dart';
-import 'mini_player_controls.dart';
+import 'expanded_player_details.dart';
 import 'minimize_on_swipe_down.dart';
 
 class ExpandedPlayer extends StatefulWidget {
@@ -158,64 +158,61 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
             !controller.isMini &&
             (video != null || offlineVid != null)
         ? Column(children: [
-            if (video != null)
-              const Flexible(
-                child: SingleChildScrollView(
-                  child: MiniPlayerControls(directActions: true),
-                ),
-              )
-            else
-              const MiniPlayerControls(),
             Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: innerHorizontalPadding),
-                child: video != null
-                    ? PageView(
-                        controller: _tabController,
-                        physics: getDeviceType() == DeviceType.phone &&
-                                (distractionFree ||
-                                    !settings.hideCommentsByDefault)
-                            ? const BouncingScrollPhysics(
-                                parent: AlwaysScrollableScrollPhysics(),
-                              )
-                            : const NeverScrollableScrollPhysics(),
-                        onPageChanged: (index) {
-                          final tab = tabs[index];
-                          if (player.state.selectedFullScreenIndex != tab) {
-                            player.selectTab(tab);
-                          }
-                        },
-                        children: <Widget>[
-                          MinimizeOnSwipeDown(
-                            enabled: getDeviceType() == DeviceType.phone &&
-                                !controller.isPip,
-                            scrollable: true,
-                            onSwipeDown: player.showMiniPlayer,
-                            child: VideoInfo(video: video, loadDislikes: true),
-                          ),
-                          if (!distractionFree)
-                            if (!settings.hideCommentsByDefault ||
-                                selectedIndex == 1)
-                              MinimizeOnSwipeDown(
-                                enabled: getDeviceType() == DeviceType.phone &&
-                                    !controller.isPip,
-                                scrollable: true,
-                                onSwipeDown: player.showMiniPlayer,
-                                child: CommentsContainer(
-                                  video: video,
-                                  key: ValueKey('comms-${video.videoId}'),
-                                ),
-                              )
-                            else
-                              const SizedBox.shrink(),
-                          if (!distractionFree)
-                            SingleChildScrollView(
-                                child: RecommendedVideos(video: video)),
-                          const VideoQueue(),
-                        ],
-                      )
-                    : const VideoQueue(),
+              child: ExpandedPlayerDetails(
+                hasOnlineVideo: video != null,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: innerHorizontalPadding),
+                  child: video != null
+                      ? PageView(
+                          controller: _tabController,
+                          physics: getDeviceType() == DeviceType.phone &&
+                                  (distractionFree ||
+                                      !settings.hideCommentsByDefault)
+                              ? const BouncingScrollPhysics(
+                                  parent: AlwaysScrollableScrollPhysics(),
+                                )
+                              : const NeverScrollableScrollPhysics(),
+                          onPageChanged: (index) {
+                            final tab = tabs[index];
+                            if (player.state.selectedFullScreenIndex != tab) {
+                              player.selectTab(tab);
+                            }
+                          },
+                          children: <Widget>[
+                            MinimizeOnSwipeDown(
+                              enabled: getDeviceType() == DeviceType.phone &&
+                                  !controller.isPip,
+                              scrollable: true,
+                              onSwipeDown: player.showMiniPlayer,
+                              child:
+                                  VideoInfo(video: video, loadDislikes: true),
+                            ),
+                            if (!distractionFree)
+                              if (!settings.hideCommentsByDefault ||
+                                  selectedIndex == 1)
+                                MinimizeOnSwipeDown(
+                                  enabled:
+                                      getDeviceType() == DeviceType.phone &&
+                                          !controller.isPip,
+                                  scrollable: true,
+                                  onSwipeDown: player.showMiniPlayer,
+                                  child: CommentsContainer(
+                                    video: video,
+                                    key: ValueKey('comms-${video.videoId}'),
+                                  ),
+                                )
+                              else
+                                const SizedBox.shrink(),
+                            if (!distractionFree)
+                              SingleChildScrollView(
+                                  child: RecommendedVideos(video: video)),
+                            const VideoQueue(),
+                          ],
+                        )
+                      : const VideoQueue(),
+                ),
               ),
             ),
             ClipRect(

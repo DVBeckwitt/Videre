@@ -331,6 +331,9 @@
   "@appearance": {
     "description": "Settings category title"
   },
+  "themePalette": "Color palette",
+  "neutralPalette": "Neutral",
+  "classicPurplePalette": "Classic purple",
   "useDynamicTheme": "Dynamic colors",
   "@useDynamicTheme": {
     "description": ""
@@ -1408,6 +1411,11 @@
   "downloadsWifiOnly": "Download on Wi-Fi only",
   "downloadsWaitingForWifi": "Waiting for Wi-Fi",
   "downloadPaused": "Paused",
+  "downloadRetryWaiting": "Waiting to retry automatically…",
+  "downloadRetryAfter": "The server asked you to wait. Try again after {time}.",
+  "@downloadRetryAfter": {"placeholders": {"time": {"type": "String"}}},
+  "downloadResumeAfter": "Paused. Resume after {time}.",
+  "@downloadResumeAfter": {"placeholders": {"time": {"type": "String"}}},
   "downloadQueued": "Queued",
   "pauseDownload": "Pause download",
   "resumeDownload": "Resume download",
@@ -1496,6 +1504,13 @@
   "remoteCommandFailed": "The receiving device could not accept this command.",
   "remoteConnectedTo": "Connected to {address}",
   "@remoteConnectedTo": {"placeholders": {"address": {"type": "String"}}},
+  "videoPlaybackHistory": "Video history",
+  "musicPlaybackHistory": "Music history",
+  "combinedDeviceHistory": "All history on this device",
+  "combinedServerHistory": "All history on your server",
+  "clearVideoPlaybackHistory": "Remove all entries from this profile’s Video history on this device?",
+  "clearMusicPlaybackHistory": "Remove all entries from this profile’s Music history on this device?",
+  "noMusicPlaybackHistory": "Songs played from Music will appear here.",
   "localHistoryClearDescription": "Remove watch history, playback progress, and the saved queue from this device? Your server history will stay unchanged.",
   "forceTvUi": "Force TV interface",
   "forceTvUiExplanation": "Force the interface to be the TV experience, can be useful for some devices that do not have the leanback system config. App restart required",

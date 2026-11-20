@@ -35,6 +35,7 @@ import '../../utils/motion.dart';
 import '../../utils/backup.dart';
 import '../../utils/models/country.dart';
 import '../models/db/settings.dart';
+import '../models/theme_palette.dart';
 
 part 'settings.freezed.dart';
 
@@ -80,10 +81,8 @@ class SettingsCubit extends Cubit<SettingsState> {
     await setForceLandscapeFullScreen(value);
   }
 
-  toggleDynamicTheme(bool value) async {
-    await setUseDynamicTheme(value);
-    updateApp();
-  }
+  Future<void> setThemePalette(ThemePalette value) =>
+      _saveSettingInOrder(themePaletteSettingName, () => value.name);
 
   toggleDash(bool value) async {
     await setUseDash(value);
@@ -454,8 +453,6 @@ class SettingsCubit extends Cubit<SettingsState> {
     await _set(browsingCountry, code);
   }
 
-  setUseDynamicTheme(bool b) async => await _set(dynamicTheme, b);
-
   setUseDash(bool b) async => await _set(useDashSettingName, b);
 
   setAutoplayVideoOnLoad(bool b) async => await _set(playerAutoplayOnLoad, b);
@@ -740,7 +737,11 @@ sealed class SettingsState with _$SettingsState {
   Country get country =>
       getCountryFromCode(_get(browsingCountry)?.value ?? 'US');
 
-  bool get useDynamicTheme => _get(dynamicTheme)?.value == 'true';
+  ThemePalette get themePalette => ThemePalette.values.firstWhere(
+      (value) => value.name == _get(themePaletteSettingName)?.value,
+      orElse: () => _get(dynamicTheme)?.value == 'true'
+          ? ThemePalette.dynamicColors
+          : ThemePalette.neutral);
 
   bool get useDash => (_get(useDashSettingName)?.value ?? 'true') == 'true';
 

@@ -10,16 +10,31 @@ import '../models/video.dart';
 /// Invidious can expose alternate languages only in its DASH manifest.
 /// Keep manifest discovery on the download's account and selected media origin.
 Future<Video> loadDownloadAudioTracks(Video video, Server server,
-    {required http.Client client}) async {
+    {required http.Client client,
+    void Function()? checkCurrent,
+    Duration? timeout}) async {
   final raw = parseMediaUrl(video.dashUrl);
   if (raw == null || video.liveNow == true) return video;
   final url =
       validatedMediaUrl(proxyMediaUrl(raw, server, adaptive: true), server);
   if (url == null) return video;
   String? body;
-  final resolved = await DashManifestResolver(client).resolve(
-      url, video.videoId, server,
-      requireManifest: true, onManifest: (content) => body = content);
+  var retired = false;
+  late String? resolved;
+  try {
+    final resolver = DashManifestResolver(client, beforeRequest: () {
+      if (retired) throw StateError('Download manifest request expired.');
+      checkCurrent?.call();
+    });
+    final result = resolver.resolve(url, video.videoId, server,
+        requireManifest: true, onManifest: (content) => body = content);
+    resolved = timeout == null ? await result : await result.timeout(timeout);
+    checkCurrent?.call();
+  } finally {
+    // A pending HTTP read may settle after timeout or cancellation. The
+    // resolver must not follow it with a redirect or another signed request.
+    retired = true;
+  }
   if (body == null || resolved == null) return video;
   final tracks = downloadAudioTracksFromManifest(body!, resolved, server);
   return tracks.isEmpty

@@ -343,7 +343,7 @@ void main() {
     }
     final list =
         ItemListCubit<String>(ItemListState(itemList: FixedItemList([])));
-    final cubit = HistoryCubit(null, list, local: true);
+    final cubit = HistoryCubit(null, list, source: HistorySource.device);
     final observed = <List<String>>[];
     void onChanged() =>
         observed.add(db.getLocalHistory().map((v) => v.videoId).toList());

@@ -26,6 +26,8 @@ import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/views/components/history.dart';
+import 'package:clipious/videos/views/tv/screens/history.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -699,7 +701,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               final completed =
                   videos.where((video) => video.downloadComplete).toList();
               return context.read<PlayerCubit>().playOfflineVideos(completed,
-                  startIndex: completed.indexOf(selected));
+                  fromMusic: true, startIndex: completed.indexOf(selected));
             });
         return ListView.builder(
             itemCount: videos.length,
@@ -810,6 +812,26 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                       header: true,
                                       child: Text(locals.musicLibrary,
                                           style: theme.textTheme.titleLarge))),
+                              IconButton(
+                                key: const ValueKey('music-library-history'),
+                                tooltip: locals.musicPlaybackHistory,
+                                icon: const Icon(Icons.history),
+                                onPressed: state.globalLoading ||
+                                        state.sessionRecoveryRequired
+                                    ? null
+                                    : () => Navigator.of(context).push<void>(
+                                        MaterialPageRoute(
+                                            builder: (context) => isTv
+                                                ? const TvHistoryScreen(
+                                                    music: true)
+                                                : Scaffold(
+                                                    appBar: AppBar(
+                                                        title: Text(locals
+                                                            .musicPlaybackHistory)),
+                                                    body: const HistoryView(
+                                                        music: true),
+                                                  ))),
+                              ),
                               IconButton(
                                   tooltip: locals.takeoutImport,
                                   icon: const Icon(Icons.file_upload_outlined),

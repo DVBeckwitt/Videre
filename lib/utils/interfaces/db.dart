@@ -132,6 +132,33 @@ abstract class IDbClient {
   List<HistoryVideoCache> getLocalHistory() =>
       throw UnsupportedError('History is only available in the app database');
 
+  List<HistoryVideoCache> getPlaybackHistory(PlaybackHistoryOrigin origin) =>
+      throw UnsupportedError('History is only available in the app database');
+
+  HistoryVideoCache? getPlaybackHistoryVideo(
+          PlaybackHistoryOrigin origin, String videoId) =>
+      throw UnsupportedError('History is only available in the app database');
+
+  Future<void> recordPlaybackHistory(
+          PlaybackHistoryOrigin origin, HistoryVideoCache entry) =>
+      upsertHistoryVideo(entry);
+
+  PlaybackHistoryWrite beginPlaybackHistory(
+      PlaybackHistoryOrigin origin, String videoId) {
+    final owner = forProfile(profileId);
+    return PlaybackHistoryWrite(owner.profileId, origin, videoId,
+        (entry, current) async {
+      if (current()) await owner.recordPlaybackHistory(origin, entry);
+    });
+  }
+
+  Future<void> deletePlaybackHistory(
+          PlaybackHistoryOrigin origin, String videoId) async =>
+      throw UnsupportedError('History is only available in the app database');
+
+  Future<void> clearPlaybackHistory(PlaybackHistoryOrigin origin) async =>
+      throw UnsupportedError('History is only available in the app database');
+
   Future<void> deleteLocalHistory(String videoId) async =>
       throw UnsupportedError('History is only available in the app database');
 

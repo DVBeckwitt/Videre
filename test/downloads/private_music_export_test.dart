@@ -12,6 +12,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:dio/dio.dart';
 
 const _song = DownloadedVideo(
   videoId: 'abcdefghijk',
@@ -30,6 +31,21 @@ class _Downloads extends Cubit<DownloadManagerState>
   final requests = <DownloadedVideo>[];
   late final result = Completer<bool>();
   final destinations = <String>[];
+  DateTime? retryAt;
+  final actions = <String>[];
+
+  void setPending(DownloadManagerState next) => emit(next);
+
+  @override
+  DateTime? retryAtFor(DownloadedVideo video) => retryAt;
+
+  @override
+  Future<void> pauseDownload(DownloadedVideo video) async =>
+      actions.add('pause');
+
+  @override
+  Future<void> retryDownload(DownloadedVideo video) async =>
+      actions.add('resume');
 
   @override
   Future<void> useDefaultFolder({bool audioOnly = false}) async {
@@ -146,6 +162,43 @@ void main() {
   });
 
   final export = find.byKey(ValueKey('export-music-${_song.videoId}'));
+  testWidgets(
+      'a short download cooldown shows automatic retry and permits pause',
+      (tester) async {
+    final video = _song.copyWith(downloadComplete: false);
+    downloads.setPending(DownloadManagerState(downloadProgresses: {
+      video.videoId: DownloadProgress(CancelToken(),
+          retryAt: DateTime.now().add(const Duration(seconds: 2))),
+    }));
+    final locals = await openSheet(tester, video);
+    expect(find.text(locals.downloadRetryWaiting), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text(locals.delete), findsOneWidget);
+    await tester.tap(find.text(locals.pauseDownload));
+    await tester.pumpAndSettle();
+    expect(downloads.actions, ['pause']);
+  });
+
+  testWidgets(
+      'a paused download enables explicit resume when its cooldown ends',
+      (tester) async {
+    final video = _song.copyWith(downloadComplete: false);
+    downloads.retryAt = DateTime.now().add(const Duration(minutes: 2));
+    downloads.setPending(DownloadManagerState(pausedVideoIds: {video.videoId}));
+    final locals = await openSheet(tester, video);
+    ListTile resumeAction() => tester
+        .widget<ListTile>(find.widgetWithText(ListTile, locals.resumeDownload));
+    expect(find.textContaining('Paused. Resume after'), findsNWidgets(2));
+    expect(resumeAction().enabled, isFalse);
+    expect(find.text(locals.delete), findsOneWidget);
+    await tester.pump(const Duration(minutes: 2));
+    expect(resumeAction().enabled, isTrue);
+    expect(downloads.actions, isEmpty);
+    await tester.tap(find.text(locals.resumeDownload));
+    await tester.pumpAndSettle();
+    expect(downloads.actions, ['resume']);
+  });
+
   for (final entry in [
     (
       label: 'unfinished music',

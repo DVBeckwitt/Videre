@@ -48,6 +48,7 @@ import 'package:clipious/player/views/tablet/expanded_player.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
@@ -135,7 +136,11 @@ class _Player extends TestPlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     musicPlayRequests.add(videos);
     await seed(state.copyWith(
         videos: videos,
@@ -284,6 +289,30 @@ void main() {
         )));
     await tester.pump();
   }
+
+  testWidgets('Classic purple colors the open Music player and mini player',
+      (tester) async {
+    await pump(tester);
+    final playButton = find.byKey(const ValueKey('music-player-play'));
+    expect(Theme.of(tester.element(playButton)).colorScheme.surface,
+        const Color(0xff121212));
+    await tester
+        .runAsync(() => settings.setThemePalette(ThemePalette.classicPurple));
+    await tester.pump();
+    expect(Theme.of(tester.element(playButton)).colorScheme,
+        ThemePalette.classicDark);
+    final style = tester.widget<IconButton>(playButton).style!;
+    final fill = style.backgroundColor!.resolve({})!;
+    final ink = style.foregroundColor!.resolve({})!;
+    expect(fill, ThemePalette.classicDark.primaryContainer);
+    expect(ink, ThemePalette.classicDark.onPrimaryContainer);
+    expect((ink.computeLuminance() + 0.05) / (fill.computeLuminance() + 0.05),
+        greaterThanOrEqualTo(4.5));
+    await pump(tester, child: const MusicMiniPlayer());
+    final progress = tester.widget<LinearProgressIndicator>(
+        find.byKey(const ValueKey('music-mini-progress')));
+    expect(progress.color, ThemePalette.classicDark.onPrimaryContainer);
+  });
 
   testWidgets('a failed song selection reports above the visible player route',
       (tester) async {

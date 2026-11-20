@@ -126,13 +126,17 @@ class _PlaybackPlayer extends TestPlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     calls.add((videos: List.of(videos), audio: audio, startIndex: startIndex));
   }
 
   @override
   Future<void> playOfflineVideos(List<DownloadedVideo> videos,
-      {int startIndex = 0}) async {
+      {int startIndex = 0, bool fromMusic = false}) async {
     offlineCalls.add(List.of(videos));
   }
 }

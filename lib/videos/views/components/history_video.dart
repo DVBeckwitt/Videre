@@ -13,13 +13,19 @@ import '../../states/history.dart';
 class HistoryVideoView extends StatelessWidget {
   final String videoId;
   final VoidCallback? onLongPress;
+  final HistorySource source;
 
-  const HistoryVideoView({super.key, required this.videoId, this.onLongPress});
+  const HistoryVideoView(
+      {super.key,
+      required this.videoId,
+      this.onLongPress,
+      this.source = HistorySource.device});
 
   @override
   Widget build(BuildContext context) {
     return BlocProvider(
-      create: (context) => HistoryItemCubit(HistoryItemState(videoId: videoId)),
+      create: (context) =>
+          HistoryItemCubit(HistoryItemState(videoId: videoId), source: source),
       child: BlocBuilder<HistoryItemCubit, HistoryItemState>(
           builder: (context, state) {
         return GestureDetector(
@@ -31,7 +37,7 @@ class HistoryVideoView extends StatelessWidget {
                 ? CompactVideo(
                     onTap: () async {
                       final video = state.cachedVid!.toVideo();
-                      if (video.musicMetadata == null) {
+                      if (!source.opensMusic(video)) {
                         AutoRouter.of(context)
                             .push(VideoRoute(videoId: video.videoId));
                         return;

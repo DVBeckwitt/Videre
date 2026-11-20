@@ -166,8 +166,12 @@ class MusicScreen extends StatefulWidget {
         returnRoute == null ? null : player.musicSelectionFailureRevision.value;
     final playback = reference == null
         ? player.playVideo(videos,
-            audio: true, startAt: startAt, startIndex: startIndex)
+            fromMusic: true,
+            audio: true,
+            startAt: startAt,
+            startIndex: startIndex)
         : player.playPlaylist(videos,
+            fromMusic: true,
             reference: reference,
             startIndex: startIndex ?? 0,
             audio: true,
@@ -773,7 +777,7 @@ class MusicScreenState extends State<MusicScreen> {
             builder: (_) =>
                 _MusicTvPlayer(videos: saved.videos, resumeSession: true)));
       } else {
-        await player.resumeSession();
+        await player.resumeSession(fromMusic: true);
       }
     } catch (_) {
       if (!mounted) return;
@@ -1434,6 +1438,7 @@ class _MusicTvPlayer extends StatelessWidget {
               isAudio: true, isMini: false, isHidden: false, startAt: startAt),
           context.read<SettingsCubit>(),
           resume: resumeSession,
+          fromMusic: true,
           initialLocalMusic: localTracks,
           playlistReference: reference,
           startIndex: startIndex,
@@ -1472,10 +1477,12 @@ class _MusicTvPlayer extends StatelessWidget {
                           ? player.resumeSession
                           : () => reference == null
                               ? player.playVideo(videos,
+                                  fromMusic: true,
                                   audio: true,
                                   startAt: startAt,
                                   startIndex: startIndex)
                               : player.playPlaylist(videos,
+                                  fromMusic: true,
                                   reference: reference!,
                                   startIndex: startIndex,
                                   audio: true,

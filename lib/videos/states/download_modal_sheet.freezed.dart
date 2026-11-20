@@ -17,6 +17,7 @@ mixin _$DownloadModalSheetState {
   bool get audioOnly;
   bool get loading;
   bool get failed;
+  DateTime? get retryAt;
   bool get audioTrackDiscoveryFailed;
   List<AdaptiveFormat> get availableQualities;
   List<DownloadContainer> get availableContainers;
@@ -44,6 +45,7 @@ mixin _$DownloadModalSheetState {
                 other.audioOnly == audioOnly) &&
             (identical(other.loading, loading) || other.loading == loading) &&
             (identical(other.failed, failed) || other.failed == failed) &&
+            (identical(other.retryAt, retryAt) || other.retryAt == retryAt) &&
             (identical(other.audioTrackDiscoveryFailed,
                     audioTrackDiscoveryFailed) ||
                 other.audioTrackDiscoveryFailed == audioTrackDiscoveryFailed) &&
@@ -69,6 +71,7 @@ mixin _$DownloadModalSheetState {
       audioOnly,
       loading,
       failed,
+      retryAt,
       audioTrackDiscoveryFailed,
       const DeepCollectionEquality().hash(availableQualities),
       const DeepCollectionEquality().hash(availableContainers),
@@ -81,7 +84,7 @@ mixin _$DownloadModalSheetState {
 
   @override
   String toString() {
-    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, audioTrackDiscoveryFailed: $audioTrackDiscoveryFailed, availableQualities: $availableQualities, availableContainers: $availableContainers, audioTracks: $audioTracks, captions: $captions, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, quality: $quality)';
+    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, retryAt: $retryAt, audioTrackDiscoveryFailed: $audioTrackDiscoveryFailed, availableQualities: $availableQualities, availableContainers: $availableContainers, audioTracks: $audioTracks, captions: $captions, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, quality: $quality)';
   }
 }
 
@@ -95,6 +98,7 @@ abstract mixin class $DownloadModalSheetStateCopyWith<$Res> {
       {bool audioOnly,
       bool loading,
       bool failed,
+      DateTime? retryAt,
       bool audioTrackDiscoveryFailed,
       List<AdaptiveFormat> availableQualities,
       List<DownloadContainer> availableContainers,
@@ -122,6 +126,7 @@ class _$DownloadModalSheetStateCopyWithImpl<$Res>
     Object? audioOnly = null,
     Object? loading = null,
     Object? failed = null,
+    Object? retryAt = freezed,
     Object? audioTrackDiscoveryFailed = null,
     Object? availableQualities = null,
     Object? availableContainers = null,
@@ -145,6 +150,10 @@ class _$DownloadModalSheetStateCopyWithImpl<$Res>
           ? _self.failed
           : failed // ignore: cast_nullable_to_non_nullable
               as bool,
+      retryAt: freezed == retryAt
+          ? _self.retryAt
+          : retryAt // ignore: cast_nullable_to_non_nullable
+              as DateTime?,
       audioTrackDiscoveryFailed: null == audioTrackDiscoveryFailed
           ? _self.audioTrackDiscoveryFailed
           : audioTrackDiscoveryFailed // ignore: cast_nullable_to_non_nullable
@@ -192,6 +201,7 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
       {this.audioOnly = false,
       this.loading = false,
       this.failed = false,
+      this.retryAt,
       this.audioTrackDiscoveryFailed = false,
       final List<AdaptiveFormat> availableQualities = const [],
       final List<DownloadContainer> availableContainers = const [],
@@ -215,6 +225,8 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
   @override
   @JsonKey()
   final bool failed;
+  @override
+  final DateTime? retryAt;
   @override
   @JsonKey()
   final bool audioTrackDiscoveryFailed;
@@ -284,6 +296,7 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
                 other.audioOnly == audioOnly) &&
             (identical(other.loading, loading) || other.loading == loading) &&
             (identical(other.failed, failed) || other.failed == failed) &&
+            (identical(other.retryAt, retryAt) || other.retryAt == retryAt) &&
             (identical(other.audioTrackDiscoveryFailed,
                     audioTrackDiscoveryFailed) ||
                 other.audioTrackDiscoveryFailed == audioTrackDiscoveryFailed) &&
@@ -309,6 +322,7 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
       audioOnly,
       loading,
       failed,
+      retryAt,
       audioTrackDiscoveryFailed,
       const DeepCollectionEquality().hash(_availableQualities),
       const DeepCollectionEquality().hash(_availableContainers),
@@ -321,7 +335,7 @@ class _DownloadModalSheetState implements DownloadModalSheetState {
 
   @override
   String toString() {
-    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, audioTrackDiscoveryFailed: $audioTrackDiscoveryFailed, availableQualities: $availableQualities, availableContainers: $availableContainers, audioTracks: $audioTracks, captions: $captions, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, quality: $quality)';
+    return 'DownloadModalSheetState(audioOnly: $audioOnly, loading: $loading, failed: $failed, retryAt: $retryAt, audioTrackDiscoveryFailed: $audioTrackDiscoveryFailed, availableQualities: $availableQualities, availableContainers: $availableContainers, audioTracks: $audioTracks, captions: $captions, container: $container, audioTrackId: $audioTrackId, captionLabel: $captionLabel, quality: $quality)';
   }
 }
 
@@ -337,6 +351,7 @@ abstract mixin class _$DownloadModalSheetStateCopyWith<$Res>
       {bool audioOnly,
       bool loading,
       bool failed,
+      DateTime? retryAt,
       bool audioTrackDiscoveryFailed,
       List<AdaptiveFormat> availableQualities,
       List<DownloadContainer> availableContainers,
@@ -364,6 +379,7 @@ class __$DownloadModalSheetStateCopyWithImpl<$Res>
     Object? audioOnly = null,
     Object? loading = null,
     Object? failed = null,
+    Object? retryAt = freezed,
     Object? audioTrackDiscoveryFailed = null,
     Object? availableQualities = null,
     Object? availableContainers = null,
@@ -387,6 +403,10 @@ class __$DownloadModalSheetStateCopyWithImpl<$Res>
           ? _self.failed
           : failed // ignore: cast_nullable_to_non_nullable
               as bool,
+      retryAt: freezed == retryAt
+          ? _self.retryAt
+          : retryAt // ignore: cast_nullable_to_non_nullable
+              as DateTime?,
       audioTrackDiscoveryFailed: null == audioTrackDiscoveryFailed
           ? _self.audioTrackDiscoveryFailed
           : audioTrackDiscoveryFailed // ignore: cast_nullable_to_non_nullable

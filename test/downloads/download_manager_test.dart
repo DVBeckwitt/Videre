@@ -16,6 +16,7 @@ import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
@@ -24,6 +25,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/caption.dart';
+import 'package:clipious/videos/models/db/dearrow_cache.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
@@ -56,12 +58,31 @@ class _DirectHttpOverrides extends HttpOverrides {}
 class _DownloadService extends Service {
   final Future<Video> Function(String) fetch;
   final void Function(Server?)? onServer;
+  final void Function(String?)? onRetryAfter;
   final Future<String> Function(String, Caption, Server)? captions;
   final Future<List<SponsorSegment>> Function(String, List<SponsorSegmentType>)?
       sponsors;
 
   _DownloadService(this.fetch,
-      {this.onServer, this.sponsors, this.captions, super.httpClient});
+      {this.onServer,
+      this.onRetryAfter,
+      this.sponsors,
+      this.captions,
+      super.httpClient});
+
+  @override
+  Duration? retryAfterDelay(String? header) {
+    onRetryAfter?.call(header);
+    return super.retryAfterDelay(header);
+  }
+
+  @override
+  Future<Video> getDownloadVideo(String videoId,
+      {required BackendPlayback route, required void Function() checkCurrent}) {
+    checkCurrent();
+    onServer?.call(route.server);
+    return fetch(videoId);
+  }
 
   @override
   Future<String> getPlaybackCaptions(String videoId, Caption caption,
@@ -2327,6 +2348,346 @@ void main() {
     expect(requests, [original.accountId, original.accountId]);
     expect(
         db.getDownloadByVideoId(video.videoId)!.accountId, original.accountId);
+  });
+
+  Future<Server> queueDownloadWithBackends() async {
+    final origin = 'http://127.0.0.1:${mediaServer!.port}';
+    final selector = BackendSelector(
+        'ROUTE',
+        const [
+          BackendOption('one', 'First'),
+          BackendOption('two', 'Second'),
+          BackendOption('three', 'Third'),
+        ],
+        automaticFallback: true);
+    final owner = selector.withSelection(
+        Server(
+            id: 'download-owner',
+            url: origin,
+            customHeaders: {'X-Account': 'original'}),
+        'one');
+    await db.upsertServer(owner);
+    await db.upsertDownload(
+        video.copyWith(accountId: owner.accountId, audioOnly: true));
+    await db.useServer(Server(
+        id: 'another-account',
+        url: origin,
+        customHeaders: {'X-Account': 'other'}));
+    return owner;
+  }
+
+  Video downloadRendition(String videoId, Server route,
+      {String revision = '1'}) {
+    return Video(videoId: videoId, adaptiveFormats: [
+      AdaptiveFormat(null, '128000', null, '${route.url}/audio', '251',
+          'audio/webm', '8', revision, '', 'webm', 'opus', null, null),
+    ]);
+  }
+
+  test(
+      'failed transfer changes backend on the saved account and restarts a changed rendition',
+      () async {
+    final owner = await queueDownloadWithBackends();
+    const replacement = [41, 42, 43, 44, 45, 46, 47, 48];
+    final transfers = <(String?, String?, String?)>[];
+    mediaServer!.listen((request) async {
+      final cookie = request.headers.value(HttpHeaders.cookieHeader);
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      transfers.add((cookie, range, request.headers.value('X-Account')));
+      if (cookie == 'ROUTE=two') {
+        request.response.add(replacement);
+      } else if (transfers.length == 1) {
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers
+            .set(HttpHeaders.contentRangeHeader, 'bytes 0-2/8');
+        request.response.add([1, 2, 3]);
+      } else {
+        request.response.statusCode = HttpStatus.serviceUnavailable;
+      }
+      await request.response.close();
+    });
+    final requested = <Server>[];
+    service = _DownloadService((id) async {
+      final route = requested.last;
+      final alternate = route.backendSelector!.selectedValue(route) == 'two';
+      if (!alternate) return downloadRendition(id, route);
+      return Video(videoId: id, adaptiveFormats: [
+        AdaptiveFormat(null, '128000', null, '${route.url}/audio', '140',
+            'audio/mp4', '8', '2', '', 'mp4', 'aac', null, null),
+      ]);
+    }, onServer: (server) => requested.add(server!));
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete ||
+        state.videos.single.downloadFailed);
+
+    expect(requested.map((route) => route.accountId),
+        everyElement(owner.accountId));
+    expect(
+        requested.map((route) => route.backendSelector!.selectedValue(route)),
+        ['one', 'two']);
+    expect(transfers, [
+      ('ROUTE=one', null, 'original'),
+      ('ROUTE=one', 'bytes=3-', 'original'),
+      ('ROUTE=two', null, 'original'),
+    ]);
+    final saved = db.getDownloadByVideoId(video.videoId)!;
+    expect(saved.downloadComplete, isTrue);
+    expect(saved.container, DownloadContainer.mp4);
+    expect(await File(await saved.downloadPath).readAsBytes(), replacement);
+    final storedOwner = db.getAccount(owner.accountId)!;
+    expect(storedOwner.backendSelector!.selectedValue(storedOwner), 'one');
+    expect(
+        (await db.getCurrentlySelectedServer()).accountId, 'another-account');
+  });
+
+  test(
+      'a long media Retry-After pauses downloads across backends and queued jobs',
+      () async {
+    final owner = await queueDownloadWithBackends();
+    final next = video.copyWith(
+        videoId: 'next-download', accountId: owner.accountId, audioOnly: true);
+    await db.upsertDownload(next);
+    final cookies = <String?>[];
+    mediaServer!.listen((request) async {
+      cookies.add(request.headers.value(HttpHeaders.cookieHeader));
+      request.response.statusCode = HttpStatus.tooManyRequests;
+      request.response.headers.set(HttpHeaders.retryAfterHeader, '120');
+      await request.response.close();
+    });
+    final requested = <Server>[];
+    Service freshService() =>
+        _DownloadService((id) async => downloadRendition(id, requested.last),
+            onServer: (server) => requested.add(server!));
+    service = freshService();
+
+    await manager.setWifiOnly(false);
+    bool bothPaused(DownloadManagerState state) =>
+        state.pausedVideoIds.containsAll([video.videoId, next.videoId]) &&
+        state.downloadProgresses.isEmpty;
+    await waitFor(bothPaused);
+    await manager.retryDownload(db.getDownloadByVideoId(video.videoId)!);
+    await waitFor(bothPaused);
+    await manager.close();
+    service = freshService();
+    await openManager();
+    await manager.retryDownload(db.getDownloadByVideoId(next.videoId)!);
+    await waitFor(bothPaused);
+
+    expect(requested.map((route) => route.accountId), [owner.accountId]);
+    expect(cookies, ['ROUTE=one']);
+    for (final saved in db.getAllDownloads()) {
+      expect(saved.downloadComplete, isFalse);
+      expect(saved.downloadFailed, isFalse);
+      expect(saved.authenticationRequired, isFalse);
+    }
+  });
+
+  test('a short media Retry-After waits before requesting the same backend',
+      () async {
+    await queueDownloadWithBackends();
+    const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
+    final cookies = <String?>[];
+    final cooldown = Stopwatch();
+    mediaServer!.listen((request) async {
+      cookies.add(request.headers.value(HttpHeaders.cookieHeader));
+      if (cookies.length == 1) {
+        request.response.statusCode = HttpStatus.tooManyRequests;
+        request.response.headers.set(HttpHeaders.retryAfterHeader, '1');
+        cooldown.start();
+      } else {
+        request.response.add(bytes);
+      }
+      await request.response.close();
+    });
+    final requested = <Server>[];
+    Duration? beforeSecondMetadata;
+    service = _DownloadService((id) async {
+      if (requested.length == 2) beforeSecondMetadata = cooldown.elapsed;
+      return downloadRendition(id, requested.last);
+    }, onServer: (server) => requested.add(server!));
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.single.downloadComplete ||
+        state.videos.single.downloadFailed ||
+        state.pausedVideoIds.contains(video.videoId));
+
+    expect(manager.state.videos.single.downloadComplete, isTrue);
+    expect(
+        beforeSecondMetadata, greaterThanOrEqualTo(const Duration(seconds: 1)));
+    expect(cookies, ['ROUTE=one', 'ROUTE=one']);
+    expect(await File(await video.downloadPath).readAsBytes(), bytes);
+  });
+
+  test(
+      'pausing during a short media Retry-After cancels the wait and keeps the job paused',
+      () async {
+    await queueDownloadWithBackends();
+    final cooldownRead = Completer<void>();
+    final cookies = <String?>[];
+    mediaServer!.listen((request) async {
+      cookies.add(request.headers.value(HttpHeaders.cookieHeader));
+      request.response.statusCode = HttpStatus.tooManyRequests;
+      request.response.headers.set(HttpHeaders.retryAfterHeader, '2');
+      await request.response.close();
+    });
+    final requested = <Server>[];
+    service =
+        _DownloadService((id) async => downloadRendition(id, requested.last),
+            onServer: (server) => requested.add(server!),
+            onRetryAfter: (header) {
+              if (header == '2' && !cooldownRead.isCompleted) {
+                cooldownRead.complete();
+              }
+            });
+
+    await manager.setWifiOnly(false);
+    await cooldownRead.future.timeout(const Duration(seconds: 5));
+    final job = db.getDownloadByVideoId(video.videoId)!;
+    await manager.pauseDownload(job);
+    await waitFor((state) => state.downloadProgresses.isEmpty,
+        timeout: const Duration(seconds: 1));
+    await Future<void>.delayed(const Duration(milliseconds: 2100));
+
+    expect(requested, hasLength(1));
+    expect(cookies, ['ROUTE=one']);
+    await manager.close();
+    await openManager();
+    expect(manager.state.pausedVideoIds, contains(job.videoId));
+    expect(manager.state.videos.single.downloadFailed, isFalse);
+    expect(manager.state.videos.single.downloadComplete, isFalse);
+  });
+
+  test(
+      'a later download skips a recently blocked alternate for the one that completed',
+      () async {
+    final owner = await queueDownloadWithBackends();
+    final next = video.copyWith(
+        videoId: 'another-download',
+        accountId: owner.accountId,
+        audioOnly: true);
+    await db.upsertDownload(next);
+    final transfers = <String?>[];
+    mediaServer!.listen((request) async {
+      transfers.add(request.headers.value(HttpHeaders.cookieHeader));
+      request.response.add([0, 1, 2, 3, 4, 5, 6, 7]);
+      await request.response.close();
+    });
+    late Server route;
+    final metadata = <(String, String?)>[];
+    service = _DownloadService((id) async {
+      final selected = route.backendSelector!.selectedValue(route);
+      metadata.add((id, selected));
+      if (selected == 'one') {
+        throw InvidiousServiceError('Temporary outage', statusCode: 503);
+      }
+      if (selected == 'two') {
+        throw InvidiousServiceError('Blocked backend',
+            statusCode: 500,
+            errorCode: 'This backend is blocked by YouTube. Please wait '
+                'until it has refreshed itself or switch to another backend.');
+      }
+      return downloadRendition(id, route);
+    }, onServer: (server) => route = server!);
+
+    await manager.setWifiOnly(false);
+    await waitFor((state) =>
+        state.videos.length == 2 &&
+        state.videos
+            .every((job) => job.downloadComplete || job.downloadFailed));
+
+    final first = metadata.first.$1;
+    final second = first == video.videoId ? next.videoId : video.videoId;
+    expect(metadata, [
+      (first, 'one'),
+      (first, 'two'),
+      (first, 'three'),
+      (second, 'one'),
+      (second, 'three'),
+    ]);
+    expect(transfers, ['ROUTE=three', 'ROUTE=three']);
+    expect(db.getAllDownloads().every((job) => job.downloadComplete), isTrue);
+  });
+
+  test(
+      'a new job tries only its preference when all alternatives reported blocked',
+      () async {
+    final owner = await queueDownloadWithBackends();
+    final second = video.copyWith(
+        videoId: 'second-blocked', accountId: owner.accountId, audioOnly: true);
+    await db.upsertDownload(second);
+    final metadata = <String, List<String?>>{};
+    service = Service(httpClient: MockClient((request) async {
+      final routes =
+          metadata.putIfAbsent(request.url.pathSegments.last, () => []);
+      routes.add(request.headers[HttpHeaders.cookieHeader]);
+      return http.Response(
+          jsonEncode({
+            'error': 'This backend is blocked by YouTube. Please wait '
+                'until it has refreshed itself or switch to another backend.'
+          }),
+          500,
+          headers: {'content-type': 'application/json'});
+    }));
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.every((job) => job.downloadFailed));
+    expect(metadata.values, [
+      ['ROUTE=one', 'ROUTE=two', 'ROUTE=three'],
+      ['ROUTE=one']
+    ]);
+  });
+
+  test('a declared HTML error page cannot become an audio download', () async {
+    await queueDownloadWithBackends();
+    var requests = 0;
+    mediaServer!.listen((request) async {
+      requests++;
+      request.response.headers.contentType = ContentType.html;
+      request.response.write('<html>Access required</html>');
+      await request.response.close();
+    });
+    late Server route;
+    service = _DownloadService((id) async {
+      final result = downloadRendition(id, route);
+      result.adaptiveFormats!.single.clen = '';
+      return result;
+    }, onServer: (server) => route = server!);
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadFailed);
+    expect(requests, 1);
+    expect(await File(await video.downloadPath).exists(), isFalse);
+  });
+
+  test(
+      'expired signed media renews once on the saved backend and keeps the opted-in title',
+      () async {
+    await queueDownloadWithBackends();
+    await db.saveSetting(SettingsValue(dearrowSettingName, 'true'));
+    await db.upsertDeArrowCache(
+        DeArrowCache(video.videoId)..title = 'Edited title');
+    final routes = <String?>[];
+    mediaServer!.listen((request) async {
+      routes.add(request.headers.value(HttpHeaders.cookieHeader));
+      if (routes.length == 1) {
+        request.response.statusCode = HttpStatus.forbidden;
+      } else {
+        request.response.add(List.filled(8, 9));
+      }
+      await request.response.close();
+    });
+    late Server route;
+    service = _DownloadService((id) async {
+      final result = downloadRendition(id, route);
+      final format = result.adaptiveFormats!.single;
+      if (routes.isEmpty) format.url = '${format.url}?expire=1';
+      return result;
+    }, onServer: (server) => route = server!);
+    await manager.setWifiOnly(false);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    expect(routes, ['ROUTE=one', 'ROUTE=one']);
+    expect(db.getDownloadByVideoId(video.videoId)!.title, 'Edited title');
   });
 
   for (final removeOriginal in [false, true]) {

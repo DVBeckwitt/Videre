@@ -150,11 +150,13 @@ void main() {
 
   Future<void> remember(String id, String title, double progress,
       {bool music = false}) async {
-    await db.upsertHistoryVideo(HistoryVideoCache(id, title, 'Creator', '',
-        lengthSeconds: 300,
-        musicMetadata: music
-            ? MusicMetadata(title: title, artist: 'Artist', thumbnails: [])
-            : null));
+    await db.recordPlaybackHistory(
+        music ? PlaybackHistoryOrigin.music : PlaybackHistoryOrigin.video,
+        HistoryVideoCache(id, title, 'Creator', '',
+            lengthSeconds: 300,
+            musicMetadata: music
+                ? MusicMetadata(title: title, artist: 'Artist', thumbnails: [])
+                : null));
     await db.saveProgress(Progress(progress, id));
   }
 
@@ -234,7 +236,7 @@ void main() {
       await remember(id, 'One recording', 0.4);
       final profile = await db.createProfile('Other');
       final owner = db.forProfile(profile.id);
-      await owner.upsertHistoryVideo(
+      await owner.recordPlaybackHistory(PlaybackHistoryOrigin.video,
           HistoryVideoCache(id, 'Same recording', 'Creator', ''));
       await owner.saveProgress(Progress(0.6, id));
       return owner;
@@ -251,7 +253,7 @@ void main() {
     expect(playbackHistoryRevision.value, greaterThan(revision));
     expect(remove, findsNothing);
     expect(db.getLocalHistory(), isEmpty);
-    expect(db.getVideoProgress(id), 0);
+    expect(db.getVideoProgress(id), 0.4);
     expect(other!.getVideoProgress(id), 0.6);
     expect(other.getLocalHistory().single.videoId, id);
     expect(api.historyDeletes, 0);

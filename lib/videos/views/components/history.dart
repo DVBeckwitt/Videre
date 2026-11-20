@@ -16,15 +16,16 @@ import '../../states/history.dart';
 
 class HistoryView extends StatefulWidget {
   final bool nestedScroll;
+  final bool music;
 
-  const HistoryView({super.key, this.nestedScroll = false});
+  const HistoryView({super.key, this.nestedScroll = false, this.music = false});
 
   @override
   State<HistoryView> createState() => _HistoryViewState();
 }
 
 class _HistoryViewState extends State<HistoryView> {
-  bool local = true;
+  HistorySource selected = HistorySource.video;
 
   Future<void> _confirmRemoval(
       BuildContext context, HistoryCubit history, String? videoId) async {
@@ -41,10 +42,13 @@ class _HistoryViewState extends State<HistoryView> {
         title:
             Text(videoId == null ? locals.clearHistoryQuestion : locals.delete),
         content: Text(videoId == null
-            ? history.local
-                ? locals.localHistoryClearDescription
-                : locals.clearHistoryQuestionExplanation
-            : db.getHistoryVideoByVideoId(videoId)?.title ?? videoId),
+            ? switch (history.source) {
+                HistorySource.music => locals.clearMusicPlaybackHistory,
+                HistorySource.video => locals.clearVideoPlaybackHistory,
+                HistorySource.device => locals.localHistoryClearDescription,
+                HistorySource.server => locals.clearHistoryQuestionExplanation,
+              }
+            : history.source.cached(videoId)?.title ?? videoId),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -78,34 +82,48 @@ class _HistoryViewState extends State<HistoryView> {
   Widget build(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     final loggedIn = context.select((AppCubit app) => app.isLoggedIn);
-    final showLocal = local || !loggedIn;
+    final source = widget.music
+        ? HistorySource.music
+        : !loggedIn && selected == HistorySource.server
+            ? HistorySource.video
+            : selected;
+    final session = context.select((AppCubit app) =>
+        (app.state.profileId, app.state.sessionRevision, app.state.server));
     return MultiBlocProvider(
-      key: ValueKey(showLocal),
+      key: ValueKey((source, session)),
       providers: [
         BlocProvider(
             create: (BuildContext context) => ItemListCubit<String>(
                 ItemListState<String>(
                     itemList: PageBasedPaginatedList<String>(
-                        getItemsFunc: showLocal
-                            ? service.getLocalHistoryPage
-                            : service.getUserHistory,
-                        maxResults: 20)))),
+                        getItemsFunc: source.page, maxResults: 20)))),
         BlocProvider(
           create: (context) => HistoryCubit(
               null, context.read<ItemListCubit<String>>(),
-              local: showLocal),
+              source: source),
         )
       ],
       child: Column(children: [
-        DropdownButton<bool>(
-          value: showLocal,
-          items: [
-            DropdownMenuItem(value: true, child: Text(locals.onDevice)),
-            if (loggedIn)
-              DropdownMenuItem(value: false, child: Text(locals.onServer)),
-          ],
-          onChanged: (value) => setState(() => local = value ?? true),
-        ),
+        if (!widget.music)
+          DropdownButton<HistorySource>(
+            key: const ValueKey('history-source'),
+            isExpanded: true,
+            value: source,
+            items: [
+              for (final item in [
+                HistorySource.video,
+                HistorySource.device,
+                if (loggedIn) HistorySource.server,
+              ])
+                DropdownMenuItem(
+                    value: item,
+                    child: Text(item.label(locals),
+                        overflow: TextOverflow.ellipsis)),
+            ],
+            onChanged: (value) {
+              if (value != null) setState(() => selected = value);
+            },
+          ),
         Expanded(child:
             BlocBuilder<ItemListCubit<String>, ItemListState<String>>(
                 builder: (context, state) {
@@ -129,14 +147,18 @@ class _HistoryViewState extends State<HistoryView> {
                       ? Center(
                           child: Padding(
                             padding: const EdgeInsets.all(8.0),
-                            child: Text(locals.noHistory),
+                            child: Text(widget.music
+                                ? locals.noMusicPlaybackHistory
+                                : locals.noHistory),
                           ),
                         )
                       : Padding(
                           padding: const EdgeInsets.only(top: 3),
                           child: RefreshIndicator(
                             onRefresh: () {
-                              unawaited(service.syncHistory());
+                              if (!widget.music) {
+                                unawaited(service.syncHistory());
+                              }
                               return listCubit.refreshItems();
                             },
                             child:
@@ -165,6 +187,7 @@ class _HistoryViewState extends State<HistoryView> {
                                       : HistoryVideoView(
                                           key: ValueKey(state.items[index]),
                                           videoId: state.items[index],
+                                          source: source,
                                           onLongPress: () => _confirmRemoval(
                                               context,
                                               historyCubit,
@@ -179,6 +202,8 @@ class _HistoryViewState extends State<HistoryView> {
                   bottom: 15,
                   right: 15,
                   child: FloatingActionButton(
+                    heroTag: null,
+                    tooltip: locals.clearHistoryQuestion,
                     onPressed: () =>
                         _confirmRemoval(context, historyCubit, null),
                     child: const Icon(Icons.delete),

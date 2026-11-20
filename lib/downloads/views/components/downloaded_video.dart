@@ -11,6 +11,7 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 
 import '../../../videos/views/components/compact_video.dart';
+import 'download_retry_time.dart';
 
 bool _canExportMusic(DownloadedVideo video) =>
     video.downloadComplete &&
@@ -26,7 +27,6 @@ class DownloadedVideoView extends StatelessWidget {
   void openVideoSheet(BuildContext context) {
     final cubit = context.read<DownloadManagerCubit>();
     final locals = AppLocalizations.of(context)!;
-    final paused = cubit.state.pausedVideoIds.contains(video.videoId);
     showSafeModalBottomSheet<void>(
       enableDrag: true,
       showDragHandle: true,
@@ -36,19 +36,34 @@ class DownloadedVideoView extends StatelessWidget {
           if (!video.downloadComplete &&
               !video.downloadFailed &&
               !video.authenticationRequired)
-            ListTile(
-              leading: Icon(paused ? Icons.play_arrow : Icons.pause),
-              title:
-                  Text(paused ? locals.resumeDownload : locals.pauseDownload),
-              onTap: () {
-                Navigator.of(ctx).pop();
-                if (paused) {
-                  cubit.retryDownload(video);
-                } else {
-                  cubit.pauseDownload(video);
-                }
-              },
-            ),
+            BlocBuilder<DownloadManagerCubit, DownloadManagerState>(
+                bloc: cubit,
+                builder: (context, state) {
+                  final paused = state.pausedVideoIds.contains(video.videoId);
+                  return DownloadRetryAvailability(
+                      retryAt: paused ? cubit.retryAtFor(video) : null,
+                      builder: (_, waitUntil) => ListTile(
+                            enabled: waitUntil == null,
+                            leading:
+                                Icon(paused ? Icons.play_arrow : Icons.pause),
+                            title: Text(paused
+                                ? locals.resumeDownload
+                                : locals.pauseDownload),
+                            subtitle: waitUntil == null
+                                ? null
+                                : Text(locals.downloadResumeAfter(waitUntil)),
+                            onTap: waitUntil == null
+                                ? () {
+                                    Navigator.of(ctx).pop();
+                                    if (paused) {
+                                      cubit.retryDownload(video);
+                                    } else {
+                                      cubit.pauseDownload(video);
+                                    }
+                                  }
+                                : null,
+                          ));
+                }),
           if (video.downloadFailed || video.authenticationRequired)
             ListTile(
               leading: const Icon(Icons.refresh),
@@ -107,23 +122,30 @@ class DownloadedVideoView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
-    final state = context.watch<DownloadManagerCubit>().state;
+    final cubit = context.watch<DownloadManagerCubit>();
+    final state = cubit.state;
     final progress = state.downloadProgresses[video.videoId];
     final paused = state.pausedVideoIds.contains(video.videoId);
     final pending = !video.downloadComplete && !video.downloadFailed;
-    final status = video.authenticationRequired
-        ? locals.downloadSignInRequired
-        : video.storageFailed
-            ? locals.downloadFolderError
-            : video.downloadFailed
-                ? locals.videoFailedDownloadRetry
-                : paused
-                    ? locals.downloadPaused
-                    : state.waitingForWifi
-                        ? locals.downloadsWaitingForWifi
-                        : progress == null
-                            ? locals.downloadQueued
-                            : null;
+    String? status;
+    if (video.authenticationRequired) {
+      status = locals.downloadSignInRequired;
+    } else if (video.storageFailed) {
+      status = locals.downloadFolderError;
+    } else if (video.downloadFailed) {
+      status = locals.videoFailedDownloadRetry;
+    } else if (paused) {
+      final retryAt = cubit.retryAtFor(video);
+      status = retryAt == null
+          ? locals.downloadPaused
+          : locals.downloadResumeAfter(downloadRetryTime(context, retryAt));
+    } else if (state.waitingForWifi) {
+      status = locals.downloadsWaitingForWifi;
+    } else if (progress?.retryAt != null) {
+      status = locals.downloadRetryWaiting;
+    } else if (progress == null) {
+      status = locals.downloadQueued;
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -155,7 +177,11 @@ class DownloadedVideoView extends StatelessWidget {
               : null,
           trailing: [
             if (video.audioOnly) const Icon(Icons.audiotrack),
-            if (pending && progress != null && !paused && !state.waitingForWifi)
+            if (pending &&
+                progress != null &&
+                progress.retryAt == null &&
+                !paused &&
+                !state.waitingForWifi)
               SizedBox(
                   width: 20,
                   height: 20,

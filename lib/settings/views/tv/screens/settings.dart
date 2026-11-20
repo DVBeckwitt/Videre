@@ -21,6 +21,7 @@ import 'package:logging/logging.dart';
 import '../../../../feedback/views/open_feedback.dart';
 import '../../../../downloads/views/components/download_folder.dart';
 import '../../../states/settings.dart';
+import '../../../models/theme_palette.dart';
 import '../../screens/community_filter_settings.dart';
 import '../../screens/network_proxy.dart';
 import '../../../../utils/motion.dart';
@@ -103,6 +104,18 @@ class TVSettingsScreen extends StatelessWidget {
       selected: cubit.state.motionPreference.label(locals),
       onSelect: (String selected) => cubit.setMotionPreference(MotionPreference
           .values
+          .firstWhere((value) => value.label(locals) == selected)),
+    ));
+  }
+
+  void selectPalette(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final cubit = context.read<SettingsCubit>();
+    AutoRouter.of(context).push(TvSelectFromListRoute(
+      title: locals.themePalette,
+      options: ThemePalette.values.map((value) => value.label(locals)).toList(),
+      selected: cubit.state.themePalette.label(locals),
+      onSelect: (selected) => cubit.setThemePalette(ThemePalette.values
           .firstWhere((value) => value.label(locals) == selected)),
     ));
   }
@@ -396,6 +409,11 @@ class TVSettingsScreen extends StatelessWidget {
                 if (supportsLocalMusicFolders)
                   const LocalMusicFolder.settings(),
                 SettingsTitle(title: locals.appearance),
+                SettingsTile(
+                  title: locals.themePalette,
+                  description: state.themePalette.label(locals),
+                  onSelected: selectPalette,
+                ),
                 SettingsTile(
                   title: locals.animations,
                   description:

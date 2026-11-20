@@ -235,6 +235,102 @@ void main() {
     expect(routes, ['0', '1', '2']);
   });
 
+  test('playback learns working alternatives from ordinary metadata requests',
+      () async {
+    final routes = <String?>[];
+    respond((request) async {
+      final route = requestCookieValue(request.headers, 'ROUTE');
+      routes.add(route);
+      return route == '2'
+          ? http.Response(
+              jsonEncode({
+                'videoId': 'test-video',
+                'dashUrl':
+                    'https://instance.example/api/manifest/dash/id/test-video',
+              }),
+              200,
+              headers: {'content-type': 'application/json'})
+          : http.Response(jsonEncode({'error': _blockedBackend}), 500,
+              request: request, headers: {'content-type': 'application/json'});
+    });
+    await api.getVideo('test-video');
+    expect(routes, ['0', '1', '2']);
+    routes.clear();
+    await api.getMusicVideo('test-video');
+    expect(routes, ['0', '2']);
+    expect((await db.getCurrentlySelectedServer()).customHeaders,
+        instance.customHeaders);
+    api.clearSessionCaches();
+    routes.clear();
+    await api.getVideo('test-video');
+    expect(routes, ['0', '1', '2']);
+  });
+
+  for (final (description, fields, usable) in [
+    ('empty formats', {'formatStreams': []}, false),
+    ('foreign manifest', {'dashUrl': 'https://other.example/manifest'}, false),
+    (
+      'retired format',
+      {
+        'formatStreams': [
+          {
+            'url': 'https://instance.example/stream',
+            'type': 'video/mp4',
+            'itag': '22',
+            'quality': 'hd720'
+          }
+        ]
+      },
+      false
+    ),
+    (
+      'unsupported format',
+      {
+        'formatStreams': [
+          {
+            'url': 'https://instance.example/stream',
+            'type': 'text/html',
+            'itag': '18',
+            'quality': 'medium'
+          }
+        ]
+      },
+      false
+    ),
+    (
+      'admitted stream',
+      {
+        'formatStreams': [
+          {
+            'url': 'https://instance.example/stream',
+            'type': 'video/mp4',
+            'itag': '18',
+            'quality': 'medium'
+          }
+        ]
+      },
+      true
+    ),
+  ]) {
+    test('backend health uses offered media from $description', () async {
+      final routes = <String?>[];
+      respond((request) async {
+        final route = requestCookieValue(request.headers, 'ROUTE');
+        routes.add(route);
+        return route == '0'
+            ? http.Response(jsonEncode({'error': _blockedBackend}), 500,
+                request: request, headers: {'content-type': 'application/json'})
+            : http.Response(
+                jsonEncode({'videoId': 'test-video', ...fields}), 200,
+                headers: {'content-type': 'application/json'});
+      });
+      await api.getVideoForBackend('test-video',
+          BackendPlayback.manual(instance, '2', health: api.backendHealth));
+      await api.getVideo('test-video');
+      expect(routes, ['2', '0', usable ? '2' : '1']);
+    });
+  }
+
   test('explicit server callers retain their routing and retry ownership',
       () async {
     final routes = <String?>[];
@@ -245,6 +341,54 @@ void main() {
     await expectLater(api.getVideo('test-video', serverOverride: instance),
         throwsA(isA<InvidiousServiceError>()));
     expect(routes, ['0']);
+  });
+
+  test('NerdVPN Companion outages temporarily exclude the failed alternatives',
+      () async {
+    final nerdVpn = instance.copyWith(url: 'https://invidious.nerdvpn.de');
+    await db.upsertServer(nerdVpn);
+    await db.useServer(nerdVpn);
+    final routes = <String?>[];
+    respond((request) async {
+      final route = requestCookieValue(request.headers, 'ROUTE');
+      routes.add(route);
+      return route == '3'
+          ? ok()
+          : http.Response(jsonEncode({'error': _blockedBackend}), 500,
+              request: request, headers: {'content-type': 'application/json'});
+    });
+    await expectLater(
+        api.getVideo('test-video'), throwsA(isA<InvidiousServiceError>()));
+    expect(routes, ['0', '1', '2']);
+    routes.clear();
+    await api.getVideo('test-video');
+    expect(routes, ['0', '3']);
+  });
+
+  test('a new item tries an untested alternative before recent gateway errors',
+      () async {
+    final routes = <String?>[];
+    respond((request) async {
+      final route = requestCookieValue(request.headers, 'ROUTE');
+      routes.add(route);
+      return switch (route) {
+        '0' => failed(502),
+        '1' => failed(503),
+        '2' => failed(504),
+        '3' => http.Response(
+            jsonEncode(
+                {'videoId': request.url.pathSegments.last, 'title': 'Next'}),
+            200,
+            headers: {'content-type': 'application/json'}),
+        _ => throw StateError('Unexpected route'),
+      };
+    });
+    await expectLater(
+        api.getVideo('test-video'), throwsA(isA<InvidiousServiceError>()));
+    expect(routes, ['0', '1', '2']);
+    routes.clear();
+    await api.getVideo('next-video');
+    expect(routes, ['0', '3']);
   });
 
   test('metadata and media recovery share one budget and preserve PREFS',

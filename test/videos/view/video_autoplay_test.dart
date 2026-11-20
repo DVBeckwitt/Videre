@@ -169,7 +169,11 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     playRequests.add(videos);
     startPositions.add(startAt);
     emit(state.copyWith(videos: videos, currentlyPlaying: videos.first));

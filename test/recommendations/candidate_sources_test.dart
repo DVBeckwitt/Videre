@@ -85,13 +85,15 @@ void main() {
 
   test('local pools keep music separate and never fetch playback metadata',
       () async {
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(1), 'Watched video', 'Uploader', '',
-        lengthSeconds: 120));
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(2), 'Listened song', 'Artist', '',
-        musicMetadata:
-            const MusicMetadata(title: 'Listened song', artist: 'Artist')));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.video,
+        HistoryVideoCache(_id(1), 'Watched video', 'Uploader', '',
+            lengthSeconds: 120));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(2), 'Listened song', 'Artist', '',
+            musicMetadata:
+                const MusicMetadata(title: 'Listened song', artist: 'Artist')));
     await MusicLibraryService.forProfile(db, db.profileId).save(
         MusicLibraryEntry(
             kind: MusicLibraryKind.song,
@@ -113,11 +115,16 @@ void main() {
     await MusicLibraryService.forProfile(db, db.profileId).save(
         MusicLibraryEntry(
             kind: MusicLibraryKind.song, id: _id(1), title: 'Song'));
-    await db.upsertHistoryVideo(HistoryVideoCache(_id(1), 'Song', 'Artist', '',
-        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist')));
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(2), 'Song 2', 'Artist', '',
-        musicMetadata: const MusicMetadata(title: 'Song 2', artist: 'Artist')));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(1), 'Song', 'Artist', '',
+            musicMetadata:
+                const MusicMetadata(title: 'Song', artist: 'Artist')));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(2), 'Song 2', 'Artist', '',
+            musicMetadata:
+                const MusicMetadata(title: 'Song 2', artist: 'Artist')));
     final candidates = RecommendationCandidates(db, api: api);
 
     expect(
@@ -186,10 +193,12 @@ void main() {
     await MusicLibraryService.forProfile(db, db.profileId).save(
         MusicLibraryEntry(
             kind: MusicLibraryKind.song, id: _id(1), title: 'Bookmarked song'));
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(2), 'Listen', 'Artist', '',
-        musicMetadata: const MusicMetadata(title: 'Listen', artist: 'Artist')));
-    await db.upsertHistoryVideo(
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(2), 'Listen', 'Artist', '',
+            musicMetadata:
+                const MusicMetadata(title: 'Listen', artist: 'Artist')));
+    await db.recordPlaybackHistory(PlaybackHistoryOrigin.video,
         HistoryVideoCache(_id(3), 'Watched video', 'Uploader', ''));
     await _savePlaylists([
       Playlist(
@@ -237,17 +246,20 @@ void main() {
         MusicLibraryEntry(
             kind: MusicLibraryKind.song, id: _id(i), title: 'Saved song $i'),
     ]);
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(21), 'Older listen', 'Artist', '',
-        musicMetadata:
-            const MusicMetadata(title: 'Older listen', artist: 'Artist'))
-      ..created = DateTime(2026, 1, 1));
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(22), 'Recent listen', 'Artist', '',
-        musicMetadata:
-            const MusicMetadata(title: 'Recent listen', artist: 'Artist'))
-      ..created = DateTime(2026, 1, 2));
-    await db.upsertHistoryVideo(
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(21), 'Older listen', 'Artist', '',
+            musicMetadata:
+                const MusicMetadata(title: 'Older listen', artist: 'Artist'))
+          ..created = DateTime(2026, 1, 1));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(22), 'Recent listen', 'Artist', '',
+            musicMetadata:
+                const MusicMetadata(title: 'Recent listen', artist: 'Artist'))
+          ..created = DateTime(2026, 1, 2));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.video,
         HistoryVideoCache(_id(23), 'Recent video', 'Uploader', '')
           ..created = DateTime(2026, 1, 3));
     final candidates = RecommendationCandidates(db, api: api);
@@ -269,9 +281,10 @@ void main() {
       MusicArtistCredit(name: 'River'),
       MusicArtistCredit(name: 'River', id: id),
     ]);
-    await db.upsertHistoryVideo(HistoryVideoCache(
-        _id(21), 'Duet', 'River, River', '',
-        musicMetadata: metadata));
+    await db.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(_id(21), 'Duet', 'River, River', '',
+            musicMetadata: metadata));
     final track =
         RecommendationCandidates(db, api: api).listeningHistory().single;
     expect(
@@ -291,7 +304,7 @@ void main() {
             MusicMetadata(title: 'Song', artist: 'Artist', thumbnails: [
           ImageObject(null, frame, 320, 180),
         ]));
-    await db.upsertHistoryVideo(listen);
+    await db.recordPlaybackHistory(PlaybackHistoryOrigin.music, listen);
     final candidates = RecommendationCandidates(db, api: api);
     final uncached = candidates.listeningHistory().single;
     expect(uncached.thumbnails, isEmpty);
@@ -311,7 +324,7 @@ void main() {
 
     final other = await db.createProfile('Another listener');
     await db.useProfile(other.id);
-    await db.upsertHistoryVideo(listen);
+    await db.recordPlaybackHistory(PlaybackHistoryOrigin.music, listen);
     expect(candidates.listeningHistory(), isEmpty);
     final otherListen =
         RecommendationCandidates(db, api: api).listeningHistory().single;
@@ -322,7 +335,7 @@ void main() {
 
   test('old profile providers cannot read the newly selected library',
       () async {
-    await db.upsertHistoryVideo(
+    await db.recordPlaybackHistory(PlaybackHistoryOrigin.video,
         HistoryVideoCache(_id(1), 'Old profile', 'Uploader', ''));
     await _savePlaylists([
       Playlist(

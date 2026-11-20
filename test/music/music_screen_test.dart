@@ -152,6 +152,7 @@ class _Player extends TestPlayerCubit {
   _Player(super.initialState, super.settings);
 
   int resumes = 0;
+  bool? resumedFromMusic;
   int shows = 0;
   bool? sponsorFailureIsAsync;
   Completer<void>? playbackStartup;
@@ -187,8 +188,9 @@ class _Player extends TestPlayerCubit {
   }
 
   @override
-  Future<void> resumeSession() async {
+  Future<void> resumeSession({bool? fromMusic}) async {
     resumes++;
+    resumedFromMusic = fromMusic;
   }
 
   @override
@@ -198,7 +200,11 @@ class _Player extends TestPlayerCubit {
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     _selectionRevision++;
     calls.add((
       videos: videos,
@@ -223,7 +229,8 @@ class _Player extends TestPlayerCubit {
       Duration? startAt,
       bool? audio,
       bool? playing,
-      PlaylistLoadSession? playlistLoader}) async {
+      PlaylistLoadSession? playlistLoader,
+      bool fromMusic = false}) async {
     calls.add((
       videos: entries,
       audio: audio,
@@ -1660,6 +1667,7 @@ void main() {
     await tester.tap(find.text('Resume listening'));
     await tester.pumpAndSettle();
     expect(player.resumes, 1);
+    expect(player.resumedFromMusic, isTrue);
     expect(player.calls, isEmpty);
   });
 

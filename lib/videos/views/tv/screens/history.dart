@@ -16,33 +16,39 @@ import '../../../../utils/views/tv/components/tv_button.dart';
 import '../../../../utils/views/tv/components/tv_overscan.dart';
 import '../../../models/video.dart';
 import '../../../states/video_in_list.dart';
+import '../../../states/history.dart';
 import '../components/video_item.dart';
 
 class TvHistoryScreen extends StatefulWidget {
   final Future<void> Function(BuildContext context, Video video)? onOpenVideo;
 
-  const TvHistoryScreen({super.key, this.onOpenVideo});
+  final bool music;
+
+  const TvHistoryScreen({super.key, this.onOpenVideo, this.music = false});
 
   @override
   State<TvHistoryScreen> createState() => _TvHistoryScreenState();
 }
 
 class _TvHistoryScreenState extends State<TvHistoryScreen> {
-  bool _local = true;
+  HistorySource selected = HistorySource.video;
 
   @override
   Widget build(BuildContext context) {
     final loggedIn = context.select((AppCubit app) => app.isLoggedIn);
     final server = context.select((AppCubit app) => app.state.server);
-    final showLocal = _local || !loggedIn;
+    final source = widget.music
+        ? HistorySource.music
+        : !loggedIn && selected == HistorySource.server
+            ? HistorySource.video
+            : selected;
     final locals = AppLocalizations.of(context)!;
     return BlocProvider(
       // Discard in-flight account requests when changing source or account.
-      key: ValueKey((showLocal, ObjectKey(server))),
+      key: ValueKey((source, ObjectKey(server), db.profileId)),
       create: (_) => ItemListCubit<String>(ItemListState(
         itemList: _HistoryPages(
-          getItemsFunc:
-              showLocal ? service.getLocalHistoryPage : service.getUserHistory,
+          getItemsFunc: source.page,
         ),
       )),
       child: Scaffold(
@@ -54,43 +60,53 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(locals.history,
+                  Text(
+                      widget.music
+                          ? locals.musicPlaybackHistory
+                          : locals.history,
                       style: Theme.of(context).textTheme.titleLarge),
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Wrap(
-                      spacing: 12,
-                      runSpacing: 8,
-                      children: [
-                        _action(
-                          key: const ValueKey('tv-history-local'),
-                          label: locals.onDevice,
-                          icon: showLocal ? Icons.check : Icons.tv,
-                          autofocus: showLocal,
-                          onPressed: (_) => setState(() => _local = true),
-                        ),
-                        if (loggedIn)
-                          _action(
-                            key: const ValueKey('tv-history-server'),
-                            label: locals.onServer,
-                            icon:
-                                !showLocal ? Icons.check : Icons.cloud_outlined,
-                            autofocus: !showLocal,
-                            onPressed: (_) => setState(() => _local = false),
-                          ),
-                        _action(
-                          key: const ValueKey('tv-history-refresh'),
-                          label: locals.refresh,
-                          icon: Icons.refresh,
-                          onPressed: (_) {
-                            if (!state.loading) {
-                              unawaited(service.syncHistory());
-                              list.refreshItems();
-                            }
-                          },
-                        ),
-                      ],
-                    ),
+                    child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Wrap(
+                          spacing: 12,
+                          children: [
+                            if (!widget.music)
+                              for (final item in [
+                                HistorySource.video,
+                                HistorySource.device,
+                                if (loggedIn) HistorySource.server,
+                              ])
+                                _action(
+                                  key: ValueKey(
+                                      'tv-history-${item == HistorySource.video ? "local" : item.name}'),
+                                  label: item.label(locals),
+                                  icon: item == source
+                                      ? Icons.check
+                                      : item == HistorySource.server
+                                          ? Icons.cloud_outlined
+                                          : Icons.tv,
+                                  autofocus: item == source,
+                                  onPressed: (_) =>
+                                      setState(() => selected = item),
+                                ),
+                            _action(
+                              key: const ValueKey('tv-history-refresh'),
+                              label: locals.refresh,
+                              autofocus: widget.music,
+                              icon: Icons.refresh,
+                              onPressed: (_) {
+                                if (!state.loading) {
+                                  if (!widget.music) {
+                                    unawaited(service.syncHistory());
+                                  }
+                                  list.refreshItems();
+                                }
+                              },
+                            ),
+                          ],
+                        )),
                   ),
                   if (state.loading)
                     const SizedBox(
@@ -104,7 +120,9 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                     child: state.items.isEmpty
                         ? Center(
                             child: Text(!state.loading && !hasError
-                                ? locals.noHistory
+                                ? (widget.music
+                                    ? locals.noMusicPlaybackHistory
+                                    : locals.noHistory)
                                 : ''),
                           )
                         : GridView.builder(
@@ -119,13 +137,14 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                             itemBuilder: (context, index) => _HistoryVideo(
                               key: ValueKey(state.items[index]),
                               videoId: state.items[index],
+                              source: source,
                               onOpen: (cardContext, video) async {
                                 final oldIndex =
                                     list.state.items.indexOf(video.videoId);
                                 final rowHeight = cardContext.size?.height;
                                 if (widget.onOpenVideo != null) {
                                   await widget.onOpenVideo!(cardContext, video);
-                                } else if (video.musicMetadata != null) {
+                                } else if (source.opensMusic(video)) {
                                   try {
                                     await MusicScreen.playTracks(
                                         cardContext, [video]);
@@ -235,9 +254,14 @@ Widget _action({
 
 class _HistoryVideo extends StatefulWidget {
   final String videoId;
+  final HistorySource source;
   final Future<void> Function(BuildContext context, Video video) onOpen;
 
-  const _HistoryVideo({super.key, required this.videoId, required this.onOpen});
+  const _HistoryVideo(
+      {super.key,
+      required this.videoId,
+      required this.source,
+      required this.onOpen});
 
   @override
   State<_HistoryVideo> createState() => _HistoryVideoState();
@@ -247,7 +271,7 @@ class _HistoryVideoState extends State<_HistoryVideo> {
   late Future<Video> _video = _loadVideo();
 
   Future<Video> _loadVideo() async {
-    final cached = db.getHistoryVideoByVideoId(widget.videoId);
+    final cached = widget.source.cached(widget.videoId);
     // Viewing server history must not mark its entries watched on this device.
     return cached?.toVideo() ?? await service.getVideo(widget.videoId);
   }

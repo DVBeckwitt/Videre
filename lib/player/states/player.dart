@@ -134,6 +134,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   final PlaylistLoadSession? _initialPlaylistLoader;
   final int _initialPlaylistIndex;
   final bool? _initialPlaylistAudio;
+  final bool _initialFromMusic;
+  // Origin follows the queue occurrence across mode switches and decoder retries.
+  final _musicHistoryEntries = <String>{};
+  bool _musicHistoryPlaylist = false;
+  PlaybackHistoryWrite? _activeHistoryWrite;
+  PlaybackHistoryWrite? _preparingHistoryWrite;
   final List<LocalMusicTrack>? _initialLocalMusic;
   PlaylistReference? _playlistReference;
   PlaylistLoadSession? _playlistLoader;
@@ -338,6 +344,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       List<LocalMusicTrack>? initialLocalMusic,
       int startIndex = 0,
       bool? playlistAudio,
+      bool fromMusic = false,
       Future<void> Function(Duration)? playbackRecoveryDelay,
       Future<bool> Function()? videoFocusActivation,
       int Function()? learningTimeMicroseconds})
@@ -350,6 +357,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _initialPlaylistReference = playlistReference,
         _initialPlaylistLoader = playlistLoader,
         _initialPlaylistIndex = startIndex,
+        _initialFromMusic = fromMusic,
         _initialPlaylistAudio = playlistAudio {
     _profileDatabase = db.forProfile(db.profileId);
     _runtimePlayers.add(this);
@@ -369,6 +377,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   Future<void> _proxyChanging() async {
     if (isClosed) return;
+    _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     _adjacentMusic.reset();
     _clearSponsorPreparation();
@@ -578,6 +587,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     if (additions.isNotEmpty) {
       final next = additions.map(playbackQueueId).toList();
+      if (_musicHistoryPlaylist) _musicHistoryEntries.addAll(next);
       if (settings.state.playerShuffleMode) next.shuffle();
       emit(state.copyWith(
           videos: [...state.videos, ...additions],
@@ -729,6 +739,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
               : null,
           seconds: snapshot.position.inSeconds,
           audio: snapshot.isAudio,
+          musicHistoryEntries: {
+            for (final entry in [...snapshot.videos, ...snapshot.offlineVideos])
+              if (_musicHistoryEntries.contains(playbackQueueId(entry)))
+                playbackQueueId(entry),
+          },
+          musicHistoryPlaylist: _musicHistoryPlaylist,
           played: snapshot.playedVideos,
           next: snapshot.playQueue.toList(),
           playlistReference: _playlistReference,
@@ -761,6 +777,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       return;
     }
     _sessionTransitionPending = false;
+    _musicHistoryEntries
+      ..clear()
+      ..addAll(saved.musicHistoryEntries ?? const <String>{});
+    _musicHistoryPlaylist = saved.musicHistoryPlaylist;
     _bindPlaylist(
         saved.playlistReference?.profileId == _profileDatabase.profileId
             ? saved.playlistReference
@@ -805,7 +825,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         isAudio: saved.audio));
   }
 
-  Future<void> resumeSession() async {
+  Future<void> resumeSession({bool? fromMusic}) async {
     _requestedPlaying = null;
     final saved = savedSession;
     if (saved == null) return;
@@ -842,6 +862,13 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       }
     }
     restoreSession();
+    // Resuming a pre-split queue from Music is a new listening action. A
+    // modern queue already records each occurrence's original section.
+    if (saved.musicHistoryEntries == null && (fromMusic ?? _initialFromMusic)) {
+      _musicHistoryEntries.addAll(
+          [...state.videos, ...state.offlineVideos].map(playbackQueueId));
+      _musicHistoryPlaylist = _playlistReference != null;
+    }
     final videos = state.videos.isNotEmpty ? state.videos : state.offlineVideos;
     final current =
         videos.where((v) => playbackQueueId(v) == saved.currentId).firstOrNull;
@@ -1057,7 +1084,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           return refreshed;
         } catch (error) {
           await check();
-          if (!isPlaybackRefreshRetryable(error) ||
+          if (!isPlaybackRefreshRetryable(error,
+                  hasAlternate: video.backendPlayback?.canRetry == true) ||
               !_playbackRecoveryBudget.hasRemaining) {
             rethrow;
           }
@@ -1599,10 +1627,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final reference = _initialPlaylistReference;
       final switching = reference == null
           ? playVideo(startVideos,
+              fromMusic: _initialFromMusic,
               startAt: state.startAt,
               startIndex:
                   _initialPlaylistIndex == 0 ? null : _initialPlaylistIndex)
           : playPlaylist(startVideos,
+              fromMusic: _initialFromMusic,
               reference: reference,
               startIndex: _initialPlaylistIndex,
               startAt: state.startAt,
@@ -1770,6 +1800,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   @override
   close() async {
     _isDisposing = true;
+    _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     _clearMusicHandoff();
     _adjacentMusic.dispose();
@@ -1840,6 +1871,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void hide() {
     if (isClosed || state.isClosing) return;
+    _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     unawaited(_finishLearning());
     unawaited(musicSound.resetSession());
@@ -1990,6 +2022,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// Save under the current person and retire decoders without a UI animation.
   Future<void> _retirePlaybackSession({required bool changingProfile}) async {
     if (isClosed) return;
+    _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     _adjacentMusic.reset();
     _clearSponsorPreparation();
@@ -2172,6 +2205,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         .where((video) => !video.filtered && ids.add(video.videoId))
         .toList();
     if (additions.isEmpty) return;
+    _musicHistoryEntries.removeAll(additions.map(playbackQueueId));
     emit(state
         .copyWith(offlineVideos: [], videos: [...state.videos, ...additions]));
     generatePlayQueue();
@@ -2587,6 +2621,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   void _abandonMusicSelection({bool keepEndWait = false}) {
+    _preparingHistoryWrite?.cancel();
+    _preparingHistoryWrite = null;
     _preparingSelectedSong = false;
     if (!keepEndWait && _musicEndWait == _MusicEndWait.selection) {
       _releaseMusicEndWait();
@@ -2606,8 +2642,19 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       !state.isClosing &&
       (state.isPlaying || _musicHandoff != null || _musicEndWait != null);
 
+  PlaybackHistoryWrite? _beginHistoryWrite(IdedVideo entry, {bool? fromMusic}) {
+    if (isLocalMusicPlaybackId(entry.videoId)) return null;
+    final music =
+        fromMusic ?? _musicHistoryEntries.contains(playbackQueueId(entry));
+    return _profileDatabase.beginPlaybackHistory(
+        music ? PlaybackHistoryOrigin.music : PlaybackHistoryOrigin.video,
+        entry.videoId);
+  }
+
   Future<_PreparedMusicSelection?> _prepareMusicSelection(
-      IdedVideo entry, Duration startAt) async {
+      IdedVideo entry, Duration startAt,
+      {bool? fromMusic}) async {
+    _preparingHistoryWrite = _beginHistoryWrite(entry, fromMusic: fromMusic);
     _preparingSelectedSong = true;
     final request = _musicSelectionRequestRevision;
     final preparer = manualMusicPreparer!;
@@ -2717,6 +2764,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   Future<void> _playVideos(List<IdedVideo> vids,
       {Duration? startAt,
       int startIndex = 0,
+      bool fromMusic = false,
       bool selectedByUser = false,
       required bool audio,
       required VoidCallback bindQueue}) async {
@@ -2734,12 +2782,16 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final intent = _transportIntentRevision;
     _PreparedMusicSelection? prepared;
     if (audio && _isMusicEntry(selected) && _canPrepareMusicSelection) {
-      prepared =
-          await _prepareMusicSelection(selected, startAt ?? Duration.zero);
+      prepared = await _prepareMusicSelection(
+          selected, startAt ?? Duration.zero,
+          fromMusic: fromMusic);
       if (prepared == null || request != _musicSelectionRequestRevision) return;
     }
     final playingAfterPreparation = _requestedPlaying;
     bindQueue();
+    _musicHistoryEntries.clear();
+    if (fromMusic) _musicHistoryEntries.addAll(entries.map(playbackQueueId));
+    _musicHistoryPlaylist = fromMusic && _playlistReference != null;
     if (prepared != null && intent != _transportIntentRevision) {
       _requestedPlaying = playingAfterPreparation;
     }
@@ -2959,6 +3011,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       playing = false;
     }
     if (backendRequest == null && !retainOnFailure) {
+      _activeHistoryWrite?.cancel();
+      _activeHistoryWrite = preparedMusic == null
+          ? _beginHistoryWrite(video)
+          : _preparingHistoryWrite;
+      _preparingHistoryWrite = null;
       unawaited(_finishLearning());
     } else {
       _learningPlayback?.clock.interrupt();
@@ -3196,18 +3253,20 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         if (!active()) return;
       }
 
-      if (currentlyPlaying != null) {
-        await _profileDatabase.upsertHistoryVideo(HistoryVideoCache(
-            currentlyPlaying.videoId,
-            currentlyPlaying.title ?? '',
-            currentlyPlaying.author,
-            ImageObject.getBestThumbnail(currentlyPlaying.videoThumbnails)
-                    ?.url ??
+      final historyVideo = _learningVideo;
+      final historyWrite = _activeHistoryWrite;
+      if (historyWrite != null && historyVideo != null) {
+        await historyWrite.record(HistoryVideoCache(
+            historyVideo.videoId,
+            historyVideo.title ?? '',
+            historyVideo.author,
+            ImageObject.getBestThumbnail(historyVideo.videoThumbnails)?.url ??
                 '',
-            authorId: currentlyPlaying.authorId,
-            lengthSeconds: currentlyPlaying.lengthSeconds,
-            musicMetadata: currentlyPlaying.musicMetadata));
+            authorId: historyVideo.authorId,
+            lengthSeconds: historyVideo.lengthSeconds,
+            musicMetadata: historyVideo.musicMetadata));
         if (!active()) return;
+        _activeHistoryWrite = null;
         playbackHistoryRevision.value++;
       }
 
@@ -3322,7 +3381,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         saved = updated;
       }
       if (!active()) throw StateError('The current video changed.');
-      final selection = BackendPlayback.manual(saved, value);
+      final selection =
+          BackendPlayback.manual(saved, value, health: service.backendHealth);
       if (!selection.matches(await db.getCurrentlySelectedServer()) ||
           !active()) {
         throw StateError('The playback connection changed.');
@@ -3339,7 +3399,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> playOfflineVideos(List<DownloadedVideo> offlineVids,
-      {int startIndex = 0}) async {
+      {int startIndex = 0, bool fromMusic = false}) async {
     if (offlineVids.isEmpty ||
         startIndex < 0 ||
         startIndex >= offlineVids.length ||
@@ -3351,6 +3411,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     log.fine('Playing ${offlineVids.length} offline videos');
     await _playVideos(offlineVids,
+        fromMusic: fromMusic,
         startIndex: startIndex,
         audio: offlineVids[startIndex].audioOnly, bindQueue: () {
       _requestedPlaying = null;
@@ -3471,7 +3532,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   }
 
   Future<void> playVideo(List<Video> v,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     final selected = _selectedWatchVideoId;
     _selectedWatchVideoId = null;
     if (isClosed || _switchingProfile || v.isEmpty) return;
@@ -3488,6 +3553,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     log.fine('Playing ${videos.length} videos');
 
     await _playVideos(videos,
+        fromMusic: fromMusic,
         startAt: startAt,
         startIndex: index,
         selectedByUser: selected == videos[index].videoId,
@@ -3503,6 +3569,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// removed, so filtering cannot silently select a different video.
   Future<void> playPlaylist(List<Video> entries,
       {required PlaylistReference reference,
+      bool fromMusic = false,
       int startIndex = 0,
       Duration? startAt,
       bool? audio,
@@ -3529,6 +3596,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     playlistLoader?.retain();
     try {
       await _playVideos(videos,
+          fromMusic: fromMusic,
           startAt: startAt,
           startIndex: index,
           audio: audio ?? selected.musicMetadata != null, bindQueue: () {
@@ -3584,7 +3652,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final manualRoute =
         previousRoute?.manualSelection == true && selector != null
             ? BackendPlayback.manual(previousRoute!.preferredServer,
-                selector.selectedValue(previousRoute.server))
+                selector.selectedValue(previousRoute.server),
+                health: service.backendHealth)
             : null;
     final operation = _switchToVideo(retry,
         startAt: state.position,
@@ -3974,6 +4043,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final combined = assignPlaybackQueueIds([...state.videos, ...selection]);
     final copies = combined.skip(originalLength).toList();
     final ids = copies.map(playbackQueueId);
+    _musicHistoryEntries.addAll(ids);
     emit(state.copyWith(
       videos: next
           ? [
@@ -4074,6 +4144,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final index = state.offlineVideos
         .indexWhere((video) => playbackQueueId(video) == state.currentQueueId);
     final ids = additions.map(playbackQueueId);
+    _musicHistoryEntries.addAll(ids);
     emit(state.copyWith(
       offlineVideos: next
           ? [
@@ -4195,6 +4266,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       final videos =
           existing == null ? [...state.videos, target] : state.videos;
       final queueId = playbackQueueId(target);
+      _musicHistoryEntries.remove(queueId);
       var playQueue = ListQueue<String>.from(state.playQueue)
         ..removeWhere((id) => id == queueId)
         ..addFirst(queueId);

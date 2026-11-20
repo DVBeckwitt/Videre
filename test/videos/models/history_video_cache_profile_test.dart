@@ -6,6 +6,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
+import 'package:clipious/videos/models/db/progress.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -91,6 +92,108 @@ void main() {
 
     expect(loaded.toJson(), cached.toJson());
     expect(database.getLocalHistory().length, 1);
+  });
+
+  test(
+      'scoped history keeps each section, profile, and legacy rows independent',
+      () async {
+    const music = PlaybackHistoryOrigin.music;
+    const video = PlaybackHistoryOrigin.video;
+    final older = HistoryVideoCache('same', 'Video title', null, '')
+      ..created = DateTime.utc(2026, 1);
+    final latest = HistoryVideoCache('same', 'Music title', null, '')
+      ..created = DateTime.utc(2026, 3);
+    final legacy = HistoryVideoCache('legacy', 'Legacy', null, '')
+      ..created = DateTime.utc(2026, 2);
+    await database.recordPlaybackHistory(video, older);
+    await database.recordPlaybackHistory(music, latest);
+    await database.upsertHistoryVideo(legacy);
+    await database.saveProgress(Progress(.4, 'same'));
+    expect(database.getLocalHistory().map((v) => v.title),
+        ['Music title', 'Legacy']);
+    expect(database.getPlaybackHistory(video).single.title, 'Video title');
+    expect(database.getPlaybackHistory(music).single.title, 'Music title');
+    final other =
+        database.forProfile((await database.createProfile('Second')).id);
+    expect(other.getLocalHistory(), isEmpty);
+    await other.recordPlaybackHistory(music, latest);
+    await database.clearPlaybackHistory(music);
+    expect(database.getPlaybackHistory(music), isEmpty);
+    expect(database.getLocalHistory().map((v) => v.title),
+        ['Legacy', 'Video title']);
+    expect(database.getVideoProgress('same'), .4);
+    expect(other.getPlaybackHistory(music).single.title, 'Music title');
+    await database.deletePlaybackHistory(video, 'same');
+    expect(database.getLocalHistory().single.videoId, 'legacy');
+    expect(database.getVideoProgress('same'), .4);
+    await database.recordPlaybackHistory(video, older);
+    await database.deleteLocalHistory('same');
+    expect(database.getPlaybackHistory(video), isEmpty);
+    expect(database.getVideoProgress('same'), 0);
+    await database.recordPlaybackHistory(music, latest);
+    await database.clearLocalHistory();
+    expect(database.getLocalHistory(), isEmpty);
+    expect(other.getPlaybackHistory(music).single.title, 'Music title');
+  });
+
+  for (final combined in [false, true]) {
+    for (final clear in [false, true]) {
+      test(
+          'pending playback obeys history edits (combined=$combined, clear=$clear)',
+          () async {
+        const music = PlaybackHistoryOrigin.music;
+        const video = PlaybackHistoryOrigin.video;
+        final same = HistoryVideoCache('same', 'First', null, '');
+        final another = HistoryVideoCache('another', 'Second', null, '');
+        final selected = database.forProfile(database.profileId);
+        final other =
+            database.forProfile((await database.createProfile('Second')).id);
+        final pending = selected.beginPlaybackHistory(music, same.videoId);
+        final otherId = selected.beginPlaybackHistory(music, another.videoId);
+        final otherSection = selected.beginPlaybackHistory(video, same.videoId);
+        final otherPerson = other.beginPlaybackHistory(music, same.videoId);
+        if (combined) {
+          await (clear
+              ? database.clearLocalHistory()
+              : database.deleteLocalHistory(same.videoId));
+        } else {
+          await (clear
+              ? database.clearPlaybackHistory(music)
+              : database.deletePlaybackHistory(music, same.videoId));
+        }
+        await pending.record(same);
+        await otherId.record(another);
+        await otherSection.record(same);
+        await otherPerson.record(same);
+        expect(selected.getPlaybackHistoryVideo(music, same.videoId), isNull);
+        expect(selected.getPlaybackHistoryVideo(music, another.videoId),
+            clear ? isNull : isNotNull);
+        expect(selected.getPlaybackHistoryVideo(video, same.videoId),
+            combined ? isNull : isNotNull);
+        expect(other.getPlaybackHistory(music).single.videoId, same.videoId);
+        await selected.beginPlaybackHistory(music, same.videoId).record(same);
+        expect(
+            selected.getPlaybackHistoryVideo(music, same.videoId), isNotNull);
+      });
+    }
+  }
+
+  test('cancelling a history write already waiting for the database drops it',
+      () async {
+    const music = PlaybackHistoryOrigin.music;
+    final release = Completer<void>();
+    final entered = Completer<void>();
+    final locked = database.db.transaction((_) async {
+      entered.complete();
+      await release.future;
+    });
+    await entered.future;
+    final pending = database.beginPlaybackHistory(music, 'waiting');
+    final writing = pending.record(HistoryVideoCache('waiting', '', null, ''));
+    pending.cancel();
+    release.complete();
+    await Future.wait([locked, writing]);
+    expect(database.getPlaybackHistory(music), isEmpty);
   });
 
   test('cached Music history retains catalog artwork and song metadata',

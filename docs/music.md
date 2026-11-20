@@ -148,8 +148,14 @@ Selecting a track in a public or local playlist keeps the full playlist in the
 queue, including earlier tracks and repeated occurrences. **Resume playlist**
 returns to that playlist's last occurrence and exact timestamp, independently
 of the most recently opened Music session. Progress indicators use the same
-per-video history as Videos; marking a recording watched does not discard its
-precise timestamp. Playlist progress belongs to the active Videre profile.
+per-video resume position as Videos. Each profile keeps separate Music and
+Video histories. Open **Music → Library → Music history** to see what you
+played from Music. Playing a video in audio-only mode keeps it in Video
+history. A recording played from both sections appears in both lists. Removing
+it from one list preserves its entry in the other and its resume position.
+
+For the original purple colors, choose **Settings → Appearance → Color palette
+→ Classic purple**. The choice also applies to the Music player.
 
 In the expanded Music player, tap a linked artist name to open that artist’s
 Music page while the song continues. Songs with only an artist name display it

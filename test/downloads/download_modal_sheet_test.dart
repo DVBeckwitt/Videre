@@ -7,7 +7,9 @@ import 'package:clipious/videos/models/caption.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -24,11 +26,10 @@ class _Metadata extends Service {
   _Metadata(this.fetch);
 
   @override
-  Future<Video> getVideo(String videoId,
-      {Server? serverOverride,
-      void Function(BackendPlayback request)? onBackendRequest,
-      VideoLoadObserver? loadObserver}) {
-    accounts.add(serverOverride);
+  Future<Video> getDownloadVideo(String videoId,
+      {required BackendPlayback route, required void Function() checkCurrent}) {
+    checkCurrent();
+    accounts.add(route.server);
     if (!started.isCompleted) started.complete();
     return fetch();
   }
@@ -39,9 +40,10 @@ AdaptiveFormat _format(
         String encoding = 'vp9',
         String? quality,
         String? resolution,
+        String url = 'https://instance.invalid/stream',
         String size = '100'}) =>
-    AdaptiveFormat(null, '128000', null, 'https://media.invalid/stream', '251',
-        type, size, '1', '', null, encoding, quality, resolution);
+    AdaptiveFormat(null, '128000', null, url, '251', type, size, '1', '', null,
+        encoding, quality, resolution);
 
 Video _playable() => Video(videoId: 'video', adaptiveFormats: [
       _format(),
@@ -84,6 +86,76 @@ void main() {
     await db.close();
   });
 
+  final selector = BackendSelector('backend',
+      const [BackendOption('a', 'First'), BackendOption('b', 'Second')]);
+
+  for (final failure in ['unavailable', 'missing audio', 'foreign media']) {
+    test('picker recovers on another backend after $failure', () async {
+      final preferred = selector.withSelection(
+          account.copyWith(backendSelector: selector), 'a');
+      await db.upsertServer(preferred);
+      var attempts = 0;
+      final metadata = _Metadata(() async {
+        if (++attempts == 1) {
+          if (failure == 'missing audio') return const Video(videoId: 'video');
+          if (failure == 'foreign media') {
+            return Video(videoId: 'video', adaptiveFormats: [
+              _format(url: 'https://other.invalid/stream')
+            ]);
+          }
+          throw InvidiousServiceError('Unavailable', statusCode: 503);
+        }
+        return _playable();
+      });
+      service = metadata;
+      final cubit = DownloadModalSheetCubit(
+          const DownloadModalSheetState(), const Video(videoId: 'video'));
+      addTearDown(cubit.close);
+
+      await _loaded(cubit);
+      expect(cubit.state.failed, isFalse);
+      expect(cubit.state.availableQualities.single.qualityLabel, '720p');
+      expect(metadata.accounts.map((route) => selector.selectedValue(route!)),
+          ['a', 'b']);
+      expect(metadata.accounts.map((route) => route?.accountId),
+          everyElement(account.accountId));
+      expect(
+          selector.selectedValue(await db.getCurrentlySelectedServer()), 'a');
+    });
+  }
+
+  test('a rate-limited picker leaves all alternate backends untouched',
+      () async {
+    final preferred = selector.withSelection(
+        account.copyWith(backendSelector: selector), 'a');
+    await db.upsertServer(preferred);
+    final metadata = _Metadata(() async {
+      throw InvidiousServiceError('Rate limited',
+          statusCode: 429, retryAfter: const Duration(hours: 1));
+    });
+    service = metadata;
+    final cubit = DownloadModalSheetCubit(
+        const DownloadModalSheetState(), const Video(videoId: 'video'));
+    addTearDown(cubit.close);
+
+    await _loaded(cubit);
+    expect(cubit.state.failed, isTrue);
+    expect(selector.selectedValue(metadata.accounts.single!), 'a');
+  });
+
+  test('saved picker choices expire when the same account changes credentials',
+      () async {
+    service = _Metadata(() async => _playable());
+    final cubit = DownloadModalSheetCubit(
+        const DownloadModalSheetState(), const Video(videoId: 'video'));
+    addTearDown(cubit.close);
+    await _loaded(cubit);
+    expect(await cubit.canStartDownload(), isTrue);
+
+    await db.upsertServer(account.copyWith(authToken: 'changed'));
+    expect(await cubit.canStartDownload(), isFalse);
+  });
+
   for (final formats in <List<AdaptiveFormat>?>[
     null,
     [],
@@ -105,11 +177,59 @@ void main() {
     });
   }
 
+  testWidgets('a long picker cooldown shows the deadline and waits for Retry',
+      (tester) async {
+    final metadata = _Metadata(() async {
+      throw InvidiousServiceError('Rate limited',
+          statusCode: 429, retryAfter: const Duration(minutes: 2));
+    });
+    service = metadata;
+    await _showSheet(tester);
+    FilledButton retry() => tester.widget<FilledButton>(
+        find.byWidgetPredicate((widget) => widget is FilledButton));
+    expect(find.textContaining('Try again after'), findsOneWidget);
+    expect(retry().onPressed, isNull);
+    expect(find.text('Cancel'), findsOneWidget);
+    await tester.pump(const Duration(minutes: 2));
+    expect(retry().onPressed, isNotNull);
+    expect(metadata.accounts, hasLength(1));
+  });
+
+  testWidgets('canceling during a short picker cooldown stops automatic retry',
+      (tester) async {
+    final metadata = _Metadata(() async {
+      throw InvidiousServiceError('Rate limited',
+          statusCode: 429, retryAfter: const Duration(seconds: 8));
+    });
+    service = metadata;
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
+          body: Builder(
+              builder: (context) => TextButton(
+                  onPressed: () => DownloadModalSheet.showVideoModalSheet(
+                      context, const Video(videoId: 'video')),
+                  child: const Text('Open')))),
+    ));
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Waiting to retry automatically…'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 9));
+    expect(metadata.accounts, hasLength(1));
+    expect(find.text('Open'), findsOneWidget);
+    expect(find.byType(DownloadModalSheet), findsNothing);
+  });
+
   testWidgets('metadata failure shows Retry and a retry restores choices',
       (tester) async {
     var attempts = 0;
     final metadata = _Metadata(() async {
-      if (++attempts == 1) throw const SocketException('Metadata unavailable');
+      if (++attempts == 1) {
+        throw InvidiousServiceError('Metadata unavailable', statusCode: 404);
+      }
       return _playable();
     });
     service = metadata;

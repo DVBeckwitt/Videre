@@ -187,14 +187,12 @@ enum HomeDataSource {
                   small: small,
                   animateDownload: true,
                   paginatedVideoList: PageBasedPaginatedList<Video>(
-                      getItemsFunc: (page, maxResults) =>
-                          // we get the data for each video
-                          service.getLocalHistoryPage(page, maxResults).then(
-                              (value) => Future.wait(value
-                                  .map((e) async => (await HistoryVideoCache
-                                          .fromVideoIdToVideo(e))
-                                      .toVideo())
-                                  .toList())),
+                      getItemsFunc: (page, maxResults) => Future.value(db
+                          .getPlaybackHistory(PlaybackHistoryOrigin.video)
+                          .skip((page - 1) * maxResults)
+                          .take(maxResults)
+                          .map((entry) => entry.toVideo())
+                          .toList()),
                       maxResults: 20),
                 )
               : HistoryView(nestedScroll: nestedScroll),

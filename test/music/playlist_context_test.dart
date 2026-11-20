@@ -68,13 +68,18 @@ class _Player extends TestPlayerCubit {
       Duration? startAt,
       bool? audio,
       bool? playing,
-      PlaylistLoadSession? playlistLoader}) async {
+      PlaylistLoadSession? playlistLoader,
+      bool fromMusic = false}) async {
     calls.add(_PlaylistCall(entries, reference, startIndex, audio, startAt));
   }
 
   @override
   Future<void> playVideo(List<Video> videos,
-      {bool? audio, Duration? startAt, bool? playing, int? startIndex}) async {
+      {bool? audio,
+      Duration? startAt,
+      bool? playing,
+      int? startIndex,
+      bool fromMusic = false}) async {
     standaloneCalls++;
   }
 }

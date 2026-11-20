@@ -160,7 +160,7 @@ class SettingsScreen extends StatelessWidget {
                     title: Text(locals.appearance),
                     description: Text(
                       List.of([
-                        locals.useDynamicTheme,
+                        locals.themePalette,
                         locals.themeBrightness,
                         locals.blackBackground,
                         locals.animations,

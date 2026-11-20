@@ -79,10 +79,17 @@ Portable version 1 backups include an optional `savedPlaylists` section for
 public bookmarks and optional exact seconds in existing progress records.
 Older backups still import. Credentials, private/account playlist references,
 and playlist checkpoints are excluded; imported public bookmarks belong to the
-receiving person. Deleting history clears the corresponding local checkpoint
-and prevents a late playback callback from recreating it.
+receiving person. New backups also preserve the two local playback histories.
+Entries from backups made before the split remain available under **All history
+on this device**.
 
 ## Watched status and synchronization
+
+Each person has separate **Video history** and **Music history** lists. Removing
+an entry or clearing one of these lists affects only that list. **All history on
+this device** provides the combined view. Deleting from that view also clears
+the corresponding local progress and playlist checkpoint. The signed-in
+Invidious account has a single history list for both sections.
 
 Manual watched state is separate from playback position. Marking a video watched
 does not replace its saved resume position; marking it unwatched resets resume

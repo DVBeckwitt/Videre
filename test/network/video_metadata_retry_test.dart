@@ -154,7 +154,7 @@ void main() {
 
   for (final interactive in [false, true]) {
     test(
-        'invalid metadata: empty retry result stays bounded, interactive=$interactive',
+        'invalid metadata on an alternate stops recovery, interactive=$interactive',
         () async {
       final selected = (await selectFallbacks())
           .copyWith(url: 'https://invidious.nerdvpn.de');
@@ -173,9 +173,10 @@ void main() {
               .having((error) => error.statusCode, 'status', 200)));
       expect(requests, hasLength(2));
       expect(requests.last.url, requests.first.url);
-      expect(requests.last.headers, requests.first.headers);
-      expect(delays, [const Duration(seconds: 1)]);
-      expect(retries, interactive ? 1 : 0);
+      expect(requests.map((r) => requestCookieValue(r.headers, 'ROUTE')),
+          ['0', '1']);
+      expect(delays, isEmpty);
+      expect(retries, 0);
     });
   }
 

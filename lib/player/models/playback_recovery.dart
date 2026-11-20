@@ -13,11 +13,17 @@ class PlaybackRecoveryBudget {
   }
 }
 
-bool isPlaybackRefreshRetryable(Object error) =>
-    isBackendRetryable(error) ||
-    (error is InvidiousServiceError &&
-        !error.isGatewayAccessFailure &&
-        !error.responseWasHtml &&
-        !error.retryAfterIsInvalid &&
-        (error.retryAfter ?? Duration.zero) <= Duration.zero &&
-        const {408, 500}.contains(error.statusCode));
+bool isPlaybackRefreshRetryable(Object error, {required bool hasAlternate}) {
+  if (hasAlternate &&
+      error is InvidiousServiceError &&
+      isUnavailableBackend(error)) {
+    return false;
+  }
+  return isBackendRetryable(error) ||
+      (error is InvidiousServiceError &&
+          !error.isGatewayAccessFailure &&
+          !error.responseWasHtml &&
+          !error.retryAfterIsInvalid &&
+          (error.retryAfter ?? Duration.zero) <= Duration.zero &&
+          const {408, 500}.contains(error.statusCode));
+}

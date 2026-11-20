@@ -8,6 +8,7 @@ import 'package:settings_ui/settings_ui.dart';
 
 import '../../../utils/views/components/select_list_dialog.dart';
 import '../../../utils/motion.dart';
+import '../../models/theme_palette.dart';
 
 @RoutePage()
 class AppearanceSettingsScreen extends StatelessWidget {
@@ -83,6 +84,23 @@ class AppearanceSettingsScreen extends StatelessWidget {
         title: locals.animations);
   }
 
+  void selectPalette(BuildContext context) {
+    final locals = AppLocalizations.of(context)!;
+    final settings = context.read<SettingsCubit>();
+    SelectList.show<ThemePalette>(context,
+        values: ThemePalette.values,
+        value: settings.state.themePalette,
+        itemBuilder: (value, selected) => ListTile(
+            selected: selected,
+            title: Text(value.label(locals)),
+            subtitle: value == ThemePalette.dynamicColors
+                ? Text(locals.useDynamicThemeDescription)
+                : null,
+            trailing: selected ? const Icon(Icons.check) : null),
+        onSelect: settings.setThemePalette,
+        title: locals.themePalette);
+  }
+
   @override
   Widget build(BuildContext context) {
     ColorScheme colorScheme = Theme.of(context).colorScheme;
@@ -104,12 +122,11 @@ class AppearanceSettingsScreen extends StatelessWidget {
             sections: [
               SettingsSection(
                 tiles: [
-                  SettingsTile.switchTile(
+                  SettingsTile(
                     leading: const Icon(Icons.palette),
-                    initialValue: state.useDynamicTheme,
-                    onToggle: cubit.toggleDynamicTheme,
-                    title: Text(locals.useDynamicTheme),
-                    description: Text(locals.useDynamicThemeDescription),
+                    title: Text(locals.themePalette),
+                    value: Text(state.themePalette.label(locals)),
+                    onPressed: selectPalette,
                   ),
                   SettingsTile(
                     leading: const Icon(Icons.brightness_4_outlined),
