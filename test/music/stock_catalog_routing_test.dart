@@ -6,11 +6,13 @@ import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/video_filter.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -196,6 +198,32 @@ void main() {
     expect(calls.single.origin, instance);
   });
 
+  test('different release callers share the selected instance cooldown',
+      () async {
+    final success = respond;
+    respond = (request) async =>
+        http.Response('{"error":"Cooldown"}', 429, request: request, headers: {
+          'content-type': 'application/json',
+          'retry-after': '60',
+        });
+    var now = DateTime.utc(2026);
+    final music = InvidiousMusicCatalogService(api: api, now: () => now);
+    final coolingDown = throwsA(isA<InvidiousServiceError>()
+        .having((error) => error.retryAfter, 'retry delay', isNotNull));
+    await expectLater(music.getArtistReleases(channelId), coolingDown);
+    respond = success;
+    now = now.add(const Duration(seconds: 59));
+    await expectLater(
+        music.getArtistReleases(channelId, continuation: 'next'),
+        throwsA(isA<InvidiousServiceError>().having((error) => error.retryAfter,
+            'remaining delay', const Duration(seconds: 1))));
+    expect(calls, hasLength(1));
+    now = now.add(const Duration(seconds: 1));
+    expect(
+        (await music.getArtistReleases(channelId)).releases.single.id, albumId);
+    expect(calls, hasLength(2));
+  });
+
   test('charts read a single page even when more tracks are advertised',
       () async {
     final chart = musicCharts.first.playlistId;
@@ -225,7 +253,11 @@ void main() {
         });
     await db.saveFilter(VideoFilter(value: 'Excluded')..hideFromFeed = true);
     final music = InvidiousMusicCatalogService(api: api);
-    expect((await music.getChartSongs(chart)).single.videoId, videoId);
+    final tracks = await music.getChartSongs(chart);
+    expect(tracks, hasLength(25));
+    expect(tracks.last.videoId, videoId);
+    final recommendations = RecommendationService.forProfile(db, db.profileId);
+    expect(recommendations.eligibleMusic(tracks).single.videoId, videoId);
     final url = calls.single;
     expect(url.origin, instance);
     expect(url.path, '/api/v1/playlists/$chart');

@@ -221,9 +221,11 @@ class RemoteReceiver {
 
 class RemoteClient {
   final Uri address;
-  // This client only accepts literal LAN addresses and refuses redirects.
+  // Keep the literal LAN destination local even when the process has an HTTP
+  // proxy configured. The request also disables redirects.
   final HttpClient _http = createDirectHttpClient()
-    ..connectionTimeout = const Duration(seconds: 5);
+    ..connectionTimeout = const Duration(seconds: 5)
+    ..findProxy = null;
   String? _token;
 
   RemoteClient(String input) : address = parseAddress(input);

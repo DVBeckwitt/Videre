@@ -92,7 +92,7 @@ internal class NerdVpnRecoveryInterceptor : Interceptor {
     private fun recover(context: GatewayContext, response: Response, error: String, retry: Boolean = true): Map<String, Any> {
         val attempt = response.request.tag(NerdVpnRequestRevision::class.java)
         return try {
-            NerdVpnAccess.recover(context, error, response.code, response.header("Retry-After")?.toLongOrNull(),
+            NerdVpnAccess.recover(context, error, response.code, nerdVpnRetryAfterSeconds(response.header("Retry-After")),
                 attempt?.key, attempt?.revision, retry, attempt?.intent)
         } catch (failure: Exception) {
             response.close()

@@ -3,14 +3,17 @@ import '../../globals.dart' show db;
 import '../../utils/video_post_processing.dart' show privateVideoString;
 import '../../videos/models/video.dart';
 
-bool musicVideoAllowed(Video video) =>
-    !video.filtered &&
-    !video.filterHide &&
+bool musicVideoAvailable(Video video) =>
     video.title != privateVideoString &&
     video.liveNow != true &&
     video.isUpcoming != true &&
     (video.premiereTimestamp ?? 0) <=
-        DateTime.now().millisecondsSinceEpoch ~/ 1000 &&
+        DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+bool musicVideoAllowed(Video video) =>
+    !video.filtered &&
+    !video.filterHide &&
+    musicVideoAvailable(video) &&
     !db.getAllFilters().any((filter) => filter.filterVideo(video)) &&
     !communityFilters
         .match(

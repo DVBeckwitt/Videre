@@ -1872,7 +1872,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final audioSession =
         players.where((p) => p._hasAudioSession).firstOrNull?.audioSession;
     bool hasActiveOwner() =>
-        _sessionOwner?.state.hasVideo == true || _podcastOwner?.active == true;
+        _sessionOwner?.state.hasVideo == true ||
+        _runtimePlayers.any((player) => player._podcasts?.active == true);
     try {
       await Future.wait([
         for (final player in players)
@@ -1902,8 +1903,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _clearSponsorPreparation();
     _selectedWatchVideoId = null;
     final learning = _finishLearning();
-    final stoppingPodcast =
-        activePodcast?.stop(clearMediaSession: changingProfile);
+    // A pending takeover has its own controller before becoming the global
+    // podcast owner. On task removal, each player must stop its own controller.
+    final podcast = changingProfile ? activePodcast : _podcasts;
+    final stoppingPodcast = podcast?.stop(clearMediaSession: changingProfile);
     final clearingSound = musicSound.resetSession();
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();

@@ -44,6 +44,7 @@ import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/search/views/components/pasted_link_dialog.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/motion.dart';
@@ -245,6 +246,7 @@ class MusicScreenState extends State<MusicScreen> {
   MusicCollection? _collection;
   MusicArtistPage? _artistPage;
   _ArtistReleaseListing? _artistReleases;
+  Timer? _artistReleaseCooldown;
   final _browseHistory = <({
     MusicCollection? collection,
     MusicArtistPage? artist,
@@ -331,6 +333,7 @@ class MusicScreenState extends State<MusicScreen> {
   @override
   void dispose() {
     _generation++;
+    _artistReleaseCooldown?.cancel();
     _search.dispose();
     _queryFocus.dispose();
     super.dispose();
@@ -351,6 +354,8 @@ class MusicScreenState extends State<MusicScreen> {
 
   void _clearForSession() {
     _generation++;
+    _artistReleaseCooldown?.cancel();
+    _artistReleaseCooldown = null;
     setState(() {
       _loading = false;
       _retryingSong = false;
@@ -525,6 +530,10 @@ class MusicScreenState extends State<MusicScreen> {
         (identical(_artistReleases, listing) ||
             _browseHistory.any((page) => identical(page.releases, listing)));
     if (!current() || listing.loading) return;
+    if (_artistReleaseCooldown != null) {
+      setState(() => listing.failed = true);
+      return;
+    }
     setState(() {
       listing.loading = true;
       listing.failed = false;
@@ -546,11 +555,23 @@ class MusicScreenState extends State<MusicScreen> {
               : page.continuation;
     } on MusicCatalogUnsupported {
       listing.continuation = null;
-    } catch (_) {
+    } catch (error) {
+      if (!current()) return;
       listing.failed = true;
+      final delay = error is InvidiousServiceError ? error.retryAfter : null;
+      if (delay != null && delay > Duration.zero) {
+        _artistReleaseCooldown?.cancel();
+        _artistReleaseCooldown = Timer(delay, () {
+          if (mounted) setState(() => _artistReleaseCooldown = null);
+        });
+      }
     } finally {
       listing.loading = false;
-      if (current() && identical(_artistReleases, listing)) setState(() {});
+      if (current() &&
+          (identical(_artistReleases, listing) ||
+              _artistReleaseCooldown != null)) {
+        setState(() {});
+      }
     }
   }
 
@@ -1134,8 +1155,10 @@ class MusicScreenState extends State<MusicScreen> {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: TextButton(
-              onPressed: () => _loadArtistReleases(
-                  artistId, listing, context.read<AppCubit>().state),
+              onPressed: _artistReleaseCooldown == null
+                  ? () => _loadArtistReleases(
+                      artistId, listing, context.read<AppCubit>().state)
+                  : null,
               child: Text(listing.failed ? locals.retry : locals.loadMore),
             ),
           ),

@@ -3,6 +3,10 @@ package com.github.dvbeckwitt.videre.proxy
 import android.content.Context
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import okhttp3.Call
 import okhttp3.Connection
@@ -169,6 +173,30 @@ class NerdVpnTransportDeviceTest {
         val record = EncryptedNerdVpnStore(target).read(account)!!
         assertEquals(fixtureKey, record.key)
         assertTrue(record.retryAt!! >= before + 60_000)
+        assertThrows(NerdVpnAccessRequired::class.java) {
+            runInterceptors(request()) {
+                sent++
+                response(it, 200)
+            }
+        }
+        assertEquals(1, sent)
+    }
+
+    @Test fun rateLimitedResponseUsesTheServerHttpDateDeadline() {
+        val deadline = (System.currentTimeMillis() / 1000 + 120) * 1000
+        val header = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US)
+            .apply { timeZone = TimeZone.getTimeZone("GMT") }.format(Date(deadline))
+        var sent = 0
+        val failure = assertThrows(NerdVpnAccessRequired::class.java) {
+            runInterceptors(request()) {
+                sent++
+                response(it, 429, "rate_limited").newBuilder().header("Retry-After", header).build()
+            }
+        }
+        assertEquals("unavailable", failure.state)
+        val record = EncryptedNerdVpnStore(target).read(account)!!
+        assertEquals(fixtureKey, record.key)
+        assertTrue(record.retryAt!! >= deadline)
         assertThrows(NerdVpnAccessRequired::class.java) {
             runInterceptors(request()) {
                 sent++

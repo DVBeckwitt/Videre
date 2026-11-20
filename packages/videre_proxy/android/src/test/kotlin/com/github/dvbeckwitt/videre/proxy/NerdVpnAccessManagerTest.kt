@@ -689,6 +689,36 @@ class NerdVpnAccessManagerTest {
         assertNull(parseNerdVpnTimestamp("2026-11-14T09:30:00+01:00"))
     }
 
+    @Test fun `HTTP-date cooldown preserves the server deadline`() {
+        val receivedAt = parseNerdVpnTimestamp("2026-11-19T19:30:00.250Z")!!
+        val store = MemoryStore()
+        var clock = receivedAt
+        val manager = NerdVpnAccessManager(store, { _, _ -> error("Unexpected key retrieval") }) { clock }
+        manager.setKey(account, originalKey)
+        val revision = store.read(account)!!.revision
+        val header = "Thu, 19 Nov 2026 19:32:00 GMT"
+        val delay = nerdVpnRetryAfterSeconds(header, clock)
+        manager.recover(account, "rate_limited", 429, delay, originalKey, revision)
+        clock += 119_000
+        assertEquals("unavailable", manager.resolve(account, video).error)
+        clock += 1000
+        assertEquals(originalKey, manager.resolve(account, video).apiKey)
+    }
+
+    @Test fun `retry header parser accepts numeric and HTTP date forms`() {
+        val receivedAt = parseNerdVpnTimestamp("2026-11-19T19:30:00.250Z")!!
+        assertEquals(60L, nerdVpnRetryAfterSeconds("60", receivedAt))
+        assertEquals(0L, nerdVpnRetryAfterSeconds("0", receivedAt))
+        assertEquals(120L, nerdVpnRetryAfterSeconds("Thu, 19 Nov 2026 19:32:00 GMT", receivedAt))
+        assertEquals(120L, nerdVpnRetryAfterSeconds("Thursday, 19-Nov-26 19:32:00 GMT", receivedAt))
+        assertEquals(120L, nerdVpnRetryAfterSeconds("Thu Nov 19 19:32:00 2026", receivedAt))
+        assertEquals(0L, nerdVpnRetryAfterSeconds("Thu, 19 Nov 2026 19:30:00 GMT", receivedAt))
+        assertNull(nerdVpnRetryAfterSeconds("Thu, 19 Nov 2026 19:32:00 GMT trailing", receivedAt))
+        assertNull(nerdVpnRetryAfterSeconds("Thu, 99 Nov 2026 19:32:00 GMT", receivedAt))
+        assertNull(nerdVpnRetryAfterSeconds("999999999999999999999", receivedAt))
+        assertNull(nerdVpnRetryAfterSeconds("Thu, 19 Nov 2026 19:32:00 GMT", Long.MIN_VALUE))
+    }
+
     private fun manager(store: NerdVpnStore,
         fetch: (GatewayContext, String) -> NerdVpnKeyResult = { _, _ -> error("Unexpected key retrieval") }) =
         NerdVpnAccessManager(store, fetch) { initialTime }

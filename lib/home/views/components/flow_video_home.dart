@@ -798,19 +798,10 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
 
   void _changed() {
     _lastForYou = null;
-    if (!_current) {
-      if (_sessionCurrent) {
-        // Resume-only and configured feeds still reflect local progress; they
-        // do not need recommendation ranking or subscription warming.
-        setState(() {});
-        if (_selectedTab == HomeTabsLayout.yourFeeds) {
-          unawaited(_resolveTopicCatalog());
-        }
-      }
-      return;
-    }
+    if (!_sessionCurrent) return;
     final generation = _engine.generation(RecommendationDomain.video);
-    if (generation != _tasteGeneration) {
+    final tasteChanged = generation != _tasteGeneration;
+    if (tasteChanged) {
       _clearImpressions();
       _tasteGeneration = generation;
       _discovering = false;
@@ -828,6 +819,17 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       _interestVideos.clear();
       _sources.clearVideoDiscovery();
       _retireSubscriptions();
+    }
+    if (!_current) {
+      // Resume-only and configured feeds still reflect local progress; they
+      // do not need recommendation ranking or subscription warming.
+      setState(() {});
+      if (_selectedTab == HomeTabsLayout.yourFeeds) {
+        unawaited(_resolveTopicCatalog());
+      }
+      return;
+    }
+    if (tasteChanged) {
       unawaited(_warmSubscriptions());
     } else if (_discovering) {
       // History updates should not interrupt an intentional discovery request.

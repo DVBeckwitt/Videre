@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -342,6 +343,54 @@ void main() {
     expect(find.text('New chart song'), findsOneWidget);
     expect(catalog.chartRequests, hasLength(2));
     expect(catalog.artistReleaseRequests, [artistId, artistId]);
+  });
+
+  testWidgets('Home replaces chart rows hidden by a changed community rule',
+      (tester) async {
+    await tester.runAsync(() async {
+      await installCommunityMusicFilters();
+      await communityFilters.setAction(
+          CommunityRule.music, CommunityAction.label);
+    });
+    catalog.chartTracks = [
+      for (var i = 0; i < 6; i++)
+        MusicTrack(
+            videoId: 'hiddenSong$i',
+            title: 'Listed chart song $i',
+            uploaderChannelId: musicListedUploader),
+      _discovered,
+    ];
+    await show(tester);
+    expect(find.text('Listed chart song 0'), findsOneWidget);
+    expect(find.text(_discovered.title), findsNothing);
+
+    await tester.runAsync(() =>
+        communityFilters.setAction(CommunityRule.music, CommunityAction.hide));
+    await tester.pumpAndSettle();
+    expect(find.text('Listed chart song 0'), findsNothing);
+    expect(find.text(_discovered.title), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('music-home-fresh-refresh')), findsOneWidget);
+    expect(catalog.chartRequests, hasLength(1));
+  });
+
+  testWidgets(
+      'Home can reveal chart rows fetched while the uploader was hidden',
+      (tester) async {
+    await tester.runAsync(installCommunityMusicFilters);
+    const hiddenTrack = MusicTrack(
+        videoId: 'hiddenSong1',
+        title: 'Listed chart song',
+        uploaderChannelId: musicListedUploader);
+    catalog.chartTracks = [hiddenTrack];
+    await show(tester);
+    expect(find.text(hiddenTrack.title), findsNothing);
+
+    await tester.runAsync(() =>
+        communityFilters.setAction(CommunityRule.music, CommunityAction.label));
+    await tester.pumpAndSettle();
+    expect(find.text(hiddenTrack.title), findsOneWidget);
+    expect(catalog.chartRequests, hasLength(1));
   });
 
   testWidgets('initial chart failure allows retry after instance cooldown',

@@ -31,8 +31,16 @@ import 'package:clipious/videos/models/video.dart';
 /// Unsupported YouTube Music feeds never fall back to Google's catalog.
 class InvidiousMusicCatalogService extends MusicCatalogService {
   final Service? _service;
+  final DateTime Function() _now;
+  ({
+    Object owner,
+    BackendPlayback route,
+    DateTime until
+  })? _artistReleaseCooldown;
 
-  InvidiousMusicCatalogService({Service? api}) : _service = api;
+  InvidiousMusicCatalogService({Service? api, DateTime Function()? now})
+      : _service = api,
+        _now = now ?? DateTime.now;
 
   static final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
   static final _channelId = RegExp(r'^UC[a-zA-Z0-9_-]{22}$');
@@ -657,11 +665,26 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     _requireCurrentDiscovery(isCurrent);
     return _inSession((api, server, checkSession) async {
       Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      await check();
+      final remaining = _artistReleaseDeadline(server)?.difference(_now());
+      if (remaining != null && remaining > Duration.zero) {
+        throw InvidiousServiceError('The releases endpoint is cooling down.',
+            statusCode: 429, retryAfter: remaining);
+      }
       Map<String, dynamic> data;
       try {
         data = await api.getMusicChannelReleases(id, server, check,
             continuation: continuation);
       } on InvidiousServiceError catch (error) {
+        await checkSession();
+        final delay = error.retryAfter;
+        if (delay != null && delay > Duration.zero) {
+          final until = _now().add(delay);
+          if (_artistReleaseDeadline(server)?.isAfter(until) != true) {
+            _artistReleaseCooldown =
+                (owner: db, route: BackendPlayback(server), until: until);
+          }
+        }
         await check();
         // Older instances may omit the route. Genuine access failures and
         // cooldowns must remain visible to callers.
@@ -712,6 +735,15 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     });
   }
 
+  DateTime? _artistReleaseDeadline(Server server) {
+    final cooldown = _artistReleaseCooldown;
+    return cooldown != null &&
+            identical(cooldown.owner, db) &&
+            cooldown.route.matches(server)
+        ? cooldown.until
+        : null;
+  }
+
   @override
   Future<List<MusicTrack>> getChartSongs(String playlistId,
       {bool Function()? isCurrent}) {
@@ -728,14 +760,16 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       }
       final covers = _savedCovers(server);
       final seen = <String>{};
+      // Keep the first page of the Top 100 for fresh local eligibility checks.
+      // The playlist's filter flags describe the settings at fetch time.
       return [
         for (final video in page.videos
             .where((video) =>
                 _videoId.hasMatch(video.videoId) &&
                 video.title?.trim().isNotEmpty == true &&
-                musicVideoAllowed(video) &&
+                musicVideoAvailable(video) &&
                 seen.add(video.videoId))
-            .take(24))
+            .take(100))
           _track(video, covers, server),
       ];
     });

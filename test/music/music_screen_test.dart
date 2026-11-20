@@ -33,6 +33,7 @@ import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
+import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -77,6 +78,7 @@ class _Catalog extends MusicCatalogService {
   final artistRequests = <String>[];
   final releaseRequests = <String?>[];
   final releasePages = <String?, MusicArtistReleases>{};
+  Object? releaseFailure;
   final playlistRequests = <String>[];
   Completer<MusicArtistPage>? pendingArtist;
   Completer<MusicCollection>? pendingPlaylist;
@@ -127,6 +129,7 @@ class _Catalog extends MusicCatalogService {
   Future<MusicArtistReleases> getArtistReleases(String id,
       {String? continuation, bool Function()? isCurrent}) async {
     releaseRequests.add(continuation);
+    if (releaseFailure case final error?) throw error;
     return releasePages[continuation] ?? const MusicArtistReleases();
   }
 
@@ -1396,6 +1399,38 @@ void main() {
       expect(find.text('Origin'), findsOneWidget);
     });
   }
+
+  testWidgets('artist release pagination waits for the instance cooldown',
+      (tester) async {
+    const firstRelease =
+        MusicCollection(id: 'OLAK5uy_release', title: 'First release');
+    const nextRelease =
+        MusicCollection(id: 'OLAK5uy_next', title: 'Next release');
+    catalog.releasePages[null] = const MusicArtistReleases(
+        releases: [firstRelease], continuation: 'next');
+    catalog.releasePages['next'] =
+        const MusicArtistReleases(releases: [nextRelease]);
+    await show(tester, screen: const MusicScreen(artistId: 'UCartist'));
+    await tester.pumpAndSettle();
+    catalog.releaseFailure = InvidiousServiceError('Too many requests',
+        statusCode: 429, retryAfter: const Duration(minutes: 1));
+    await tester.ensureVisible(find.text('Load more'));
+    await tester.tap(find.text('Load more'));
+    await tester.pumpAndSettle();
+    final retry = find.widgetWithText(TextButton, 'Retry');
+    expect(find.text(firstRelease.title), findsOneWidget);
+    expect(tester.widget<TextButton>(retry).onPressed, isNull);
+    expect(catalog.releaseRequests, [null, 'next']);
+
+    catalog.releaseFailure = null;
+    await tester.pump(const Duration(minutes: 1));
+    expect(tester.widget<TextButton>(retry).onPressed, isNotNull);
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(find.text(nextRelease.title), findsOneWidget);
+    expect(catalog.releaseRequests, [null, 'next', 'next']);
+  });
 
   testWidgets('starting a later playlist song retains its complete queue',
       (tester) async {

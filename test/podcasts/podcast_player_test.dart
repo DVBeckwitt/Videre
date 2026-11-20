@@ -41,6 +41,7 @@ class _Service extends Service {
 class _Platform extends JustAudioPlatform {
   final players = <_NativePlayer>[];
   Completer<void>? holdLoad;
+  Completer<void>? holdDispose;
   Duration nextDuration = const Duration(seconds: 60);
   bool completeNextLoad = false;
 
@@ -60,6 +61,9 @@ class _Platform extends JustAudioPlatform {
       DisposePlayerRequest request) async {
     final player = players.firstWhere((item) => item.id == request.id);
     player.disposed = true;
+    final hold = holdDispose;
+    holdDispose = null;
+    await hold?.future;
     await player.events.close();
     return DisposePlayerResponse();
   }
@@ -562,6 +566,8 @@ void main() {
       await _flush();
       expect(player.active, isTrue);
       await session.seek(const Duration(seconds: 27));
+      await session.pause();
+      expect(session.playbackState.value.playing, isFalse);
       await session.onTaskRemoved();
       expect(player.active, isFalse);
       expect(platform.players.last.disposed, isTrue);
@@ -579,6 +585,62 @@ void main() {
     } finally {
       await owner.close();
       await routePlayer.close();
+      await settings.close();
+      await app.close();
+      await db.close();
+      service = previousService;
+    }
+  });
+
+  test('task removal cancels podcasts on both sides of a route handoff',
+      () async {
+    final previousService = service;
+    service = _Service();
+    db = await SembastSqfDb.createInMemory();
+    final app = TestAppCubit(AppState(0, null, HomeLayout()));
+    await app.initState();
+    app.intentDataStreamSubscription =
+        const Stream<void>.empty().listen((_) {});
+    final settings = TestSettingsCubit(SettingsState.init(), app);
+    final home = TestPlayerCubit(video_player.PlayerState.init(null), settings);
+    final route =
+        TestPlayerCubit(video_player.PlayerState.init(null), settings);
+    final session = app_main.mediaHandler = MediaHandler(home);
+    final hold = Completer<void>();
+    Future<void> open(PodcastPlayer player) => player.playEpisode(
+        episode: _episode,
+        feedTitle: 'Local subscription',
+        profileId: db.profileId);
+
+    try {
+      await open(home.podcasts);
+      await _flush();
+      expect(home.podcasts.playing, isTrue);
+      platform.holdDispose = hold;
+      final routeOpening = open(route.podcasts);
+      await _flush();
+      expect(platform.players.single.disposed, isTrue);
+      expect(home.activePodcast, same(route.podcasts));
+      final homeOpening = open(home.podcasts);
+      expect(home.podcasts.active, isTrue);
+
+      final removing = session.onTaskRemoved();
+      await _flush();
+      expect(session.playbackState.value.processingState,
+          isNot(AudioProcessingState.idle));
+      hold.complete();
+      await Future.wait([routeOpening, homeOpening, removing]);
+      await _flush();
+      expect(home.podcasts.active, isFalse);
+      expect(route.podcasts.active, isFalse);
+      expect(platform.players, hasLength(1));
+      expect(session.mediaItem.value, isNull);
+      expect(session.playbackState.value.processingState,
+          AudioProcessingState.idle);
+    } finally {
+      if (!hold.isCompleted) hold.complete();
+      await home.close();
+      await route.close();
       await settings.close();
       await app.close();
       await db.close();

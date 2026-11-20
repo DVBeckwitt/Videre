@@ -1341,18 +1341,18 @@ class _FreshSelectionState extends State<_FreshSelection>
       session.matches(_DiscoverySession(context.read<AppCubit>().state));
 
   void _chooseChartTracks(List<MusicTrack> tracks) {
-    final session = widget.session;
-    final recommendations = RecommendationService.forProfile(
-        session.database, session.app.profileId);
-    final unique = {
-      for (final track in recommendations.eligibleMusic(tracks))
-        track.videoId: track,
-    };
+    final unique = <String, MusicTrack>{};
+    for (final track in tracks) {
+      unique.putIfAbsent(track.videoId, () => track);
+    }
     _chartTracks = [
       ...unique.keys.where((id) => !_recentTracks.contains(id)),
       ..._recentTracks.where(unique.containsKey),
-    ].take(_shelfSize).map((id) => unique[id]!).toList();
-    for (final track in _chartTracks) {
+    ].map((id) => unique[id]!).toList();
+  }
+
+  void _rememberChartTracks(List<MusicTrack> tracks) {
+    for (final track in tracks) {
       _recentTracks
         ..remove(track.videoId)
         ..add(track.videoId);
@@ -1460,7 +1460,10 @@ class _FreshSelectionState extends State<_FreshSelection>
     ].take(_shelfSize).toList();
     final recommendations = RecommendationService.forProfile(
         session.database, session.app.profileId);
-    final tracks = recommendations.eligibleMusic(_chartTracks);
+    // Refill the shelf from its fetched rows when filtering changes.
+    final tracks =
+        recommendations.eligibleMusic(_chartTracks).take(_shelfSize).toList();
+    if (visible) _rememberChartTracks(tracks);
     final locals = AppLocalizations.of(context)!;
     final refreshSelection = _loading || _cooldown != null
         ? null

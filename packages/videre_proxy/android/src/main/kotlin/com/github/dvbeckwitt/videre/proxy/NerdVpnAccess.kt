@@ -122,7 +122,7 @@ internal object NerdVpnAccess {
             NerdVpnKeyResult(response.code, json?.optString("error")?.takeIf { it.isNotEmpty() },
                 json?.optString("api_key")?.takeIf { validNerdVpnKey(it) },
                 json?.optString("api_key_available_at")?.let(::parseNerdVpnTimestamp),
-                response.header("Retry-After")?.toLongOrNull())
+                nerdVpnRetryAfterSeconds(response.header("Retry-After")))
         }
     }
 }

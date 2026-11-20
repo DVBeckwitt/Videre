@@ -928,6 +928,48 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('For You records impressions after a reset on Your Feeds',
+      (tester) async {
+    await tester.runAsync(() async {
+      await remember('video000001', 'Local video', 0);
+      await settings.setHomeTabsLayout(HomeTabsLayout(enabledOrder: [
+        HomeTabsLayout.forYou,
+        HomeTabsLayout.yourFeeds,
+      ]));
+    });
+    final lifecycle = tester.binding.lifecycleState;
+    addTearDown(() => tester.binding.handleAppLifecycleStateChanged(
+        lifecycle ?? AppLifecycleState.detached));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+
+    await show(tester, configuredFeed: const Text('Configured feed'));
+    await tester.tap(find.byKey(const ValueKey('video-home-your-feeds')));
+    await tester.pumpAndSettle();
+    expect(find.text('Configured feed'), findsOneWidget);
+    await tester.runAsync(() async {
+      await RecommendationService.forProfile(db, db.profileId)
+          .reset(RecommendationDomain.video);
+    });
+    await tester.pumpAndSettle();
+    calls.clear();
+
+    await tester.tap(find.byKey(const ValueKey('video-home-for-you')));
+    await tester.pumpAndSettle();
+    expect(find.text('Local video'), findsOneWidget);
+    VisibilityDetectorController.instance.notifyNow();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 80));
+
+    final recordings = calls
+        .expand(
+            (call) => (call.arguments as Map)['events'] as List? ?? const [])
+        .whereType<Map>()
+        .where((event) => event['type'] == 'impression')
+        .map((event) => (event['candidate'] as Map)['id']);
+    expect(recordings, ['video000001']);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('empty local history gives an explicit discovery action',
       (tester) async {
     await show(tester);
