@@ -6,9 +6,11 @@ import '../../../app/states/app.dart';
 import '../../../downloads/models/music_download_format.dart';
 import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../music/models/music_cover_corners.dart';
 import '../../../music/models/song_transition.dart';
 import '../../../music/services/music_community_cover_preferences.dart';
 import '../../../music/services/music_lyrics_preferences.dart';
+import '../../../player/models/music_audio_quality.dart';
 import '../../../utils.dart' show selectKeys;
 import '../../states/settings.dart';
 
@@ -23,6 +25,8 @@ class MusicProviderSettings extends StatelessWidget {
           settings.state.songTransitionSeconds
         ));
     final settings = context.read<SettingsCubit>();
+    final quality = context.select(
+        (SettingsCubit settings) => settings.state.musicStreamingQuality);
     String modeLabel(SongTransitionMode value) => switch (value) {
           SongTransitionMode.seamless => locals.musicTransitionSeamless,
           SongTransitionMode.pause => locals.musicTransitionPause,
@@ -30,6 +34,20 @@ class MusicProviderSettings extends StatelessWidget {
           SongTransitionMode.crossfade => locals.musicTransitionCrossfade,
         };
     return Column(mainAxisSize: MainAxisSize.min, children: [
+      _MusicChoice<MusicStreamingQuality>(
+        tileKey: const ValueKey('music-streaming-quality-setting'),
+        icon: Icons.high_quality_outlined,
+        title: locals.musicStreamingQualitySetting,
+        values: MusicStreamingQuality.values,
+        read: () => quality,
+        label: (value) => switch (value) {
+          MusicStreamingQuality.auto => locals.musicAudioQualityAuto,
+          MusicStreamingQuality.dataSaver => locals.musicAudioQualityDataSaver,
+          MusicStreamingQuality.highest => locals.musicAudioQualityHighest,
+        },
+        optionKey: (value) => ValueKey('music-streaming-quality-${value.name}'),
+        save: settings.setMusicStreamingQuality,
+      ),
       _MusicChoice<SongTransitionMode>(
         tileKey: const ValueKey('music-transition-setting'),
         icon: Icons.multitrack_audio_rounded,
@@ -77,6 +95,19 @@ class MusicProviderSettings extends StatelessWidget {
         revision: communityCoverArtPreferenceRevision,
         read: isCommunityCoverArtEnabled,
         write: setCommunityCoverArtEnabled,
+      ),
+      _MusicChoice<MusicCoverCorners>(
+        tileKey: const ValueKey('music-cover-corners-setting'),
+        icon: Icons.crop_square_outlined,
+        title: locals.musicCoverCorners,
+        values: MusicCoverCorners.values,
+        read: () => MusicCoverCorners.forDatabase(db),
+        label: (corners) => switch (corners) {
+          MusicCoverCorners.rounded => locals.musicCoverCornersRounded,
+          MusicCoverCorners.square => locals.musicCoverCornersSquare,
+        },
+        optionKey: (corners) => ValueKey('music-cover-corners-${corners.name}'),
+        save: (corners) => corners.save(db),
       ),
       _MusicChoice<MusicDownloadFormat>(
         tileKey: const ValueKey('music-download-format-setting'),

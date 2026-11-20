@@ -12,7 +12,7 @@ class BackendPlaybackFailure implements Exception {
   const BackendPlaybackFailure();
 }
 
-bool _isUnavailableBackend(InvidiousServiceError error) {
+bool isUnavailableBackend(InvidiousServiceError error) {
   if (error.statusCode != 500 || error.responseWasHtml) return false;
   final code =
       error.errorCode?.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
@@ -39,7 +39,7 @@ bool isBackendRetryable(Object error) =>
         !error.retryAfterIsInvalid &&
         (error.retryAfter ?? Duration.zero) <= Duration.zero &&
         (const [502, 503, 504].contains(error.statusCode) ||
-            _isUnavailableBackend(error)));
+            isUnavailableBackend(error)));
 
 class _BackendRetryBudget {
   final attempted = <String>{};

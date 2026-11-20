@@ -112,6 +112,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       _nativeProgressRequest;
   Future<void>? _disposal;
   final _standbys = <String, _StandbyAudio>{};
+  StreamSubscription<SettingsState>? _qualityChanges;
   Map<String, IdedVideo> _adjacentEntries = const {};
   final _retiring = <Future<void>>{};
   _StandbyAudio? _promoted;
@@ -132,6 +133,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     try {
       await stopForProxyChange();
     } finally {
+      await _qualityChanges?.cancel();
       await super.close();
     }
   }
@@ -141,6 +143,19 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     initPlayer();
     playVideo(state.offlineVideo != null, startAt: player.state.startAt);
     player.addAdjacentMusicListener(_updateAdjacents);
+    var previous = settings.state.musicStreamingQuality;
+    _qualityChanges = settings.stream.listen((state) {
+      final quality = state.musicStreamingQuality;
+      if (quality == previous) return;
+      previous = quality;
+      for (final slot in _standbys.values) {
+        if (slot.entry is! Video || slot.failed || slot.decoder.playing) {
+          continue;
+        }
+        if (identical(slot, _transition.incoming)) _transition.stop();
+        _refreshStandbyQuality(slot, quality);
+      }
+    });
   }
 
   @override
@@ -332,7 +347,18 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     slot.ready = _prepare(slot);
   }
 
-  Future<AudioPlaybackSources?> _prepare(_StandbyAudio slot) async {
+  void _refreshStandbyQuality(
+      _StandbyAudio slot, MusicStreamingQuality quality) {
+    slot.ready = slot.ready.then((prepared) {
+      if (prepared == null || prepared.streamingQuality == quality) {
+        return prepared;
+      }
+      return _prepare(slot, previous: prepared);
+    });
+  }
+
+  Future<AudioPlaybackSources?> _prepare(_StandbyAudio slot,
+      {AudioPlaybackSources? previous}) async {
     final entry = slot.entry;
     final id = playbackQueueId(entry);
     final owner = db;
@@ -349,6 +375,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             identical(_manual?.slot, slot) ||
             identical(_promoted, slot));
     try {
+      if (!active()) return null;
       final offline = entry is DownloadedVideo ? entry : null;
       if (offline != null && offline.profileId != profileId) return null;
       final video = entry is Video ? entry : null;
@@ -361,8 +388,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       if (!active()) return null;
       if (sources != null && sources.sources.isNotEmpty) {
         // Queue traversal starts songs at zero even if they have watch history.
-        await slot.decoder.setAudioSource(sources.sources.first,
-            initialPosition: Duration.zero);
+        if (!samePreparedAudioSource(previous, sources)) {
+          await slot.decoder.setAudioSource(sources.sources.first,
+              initialPosition: Duration.zero);
+        }
         if (active()) return sources;
       }
     } catch (_) {
@@ -835,8 +864,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _publishedQuality = null;
   }
 
-  void _publishMusicQuality(Video video, BackendPlayback route,
-      Set<MusicAudioQuality> qualities, MusicAudioQuality? effective) {
+  void _publishMusicQuality(
+      Video video,
+      BackendPlayback route,
+      Set<MusicAudioQuality> qualities,
+      MusicAudioQuality? effective,
+      MusicStreamingQuality streamingQuality) {
     final generation = _playbackGeneration;
     final queueId = player.state.currentQueueId;
     late final MusicAudioQualityMenu menu;
@@ -862,7 +895,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             (choice != null && !menu.choices.contains(choice))) {
           return false;
         }
-        if (choice == menu.selected) return true;
+        if (choice == menu.selected &&
+            (choice != null ||
+                streamingQuality == MusicStreamingQuality.forDatabase(db))) {
+          return true;
+        }
         _transition.stop();
         final previous = _qualityPreference;
         _loadingGeneration = generation;
@@ -979,6 +1016,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                 isCurrent: active,
                 qualityRoute: qualityRoute,
                 qualityPreference: _qualityPreference,
+                // During a crossfade the incoming song is already audible.
+                // Revalidate that rendition without restarting it at zero if
+                // the profile default changed in the middle of the overlap.
+                streamingQualityOverride:
+                    continueOverlap ? warmPlan?.streamingQuality : null,
                 skipDownload: _downloadReuseFailed,
               );
           if (!active() || plan == null) return false;
@@ -991,7 +1033,13 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           if (!offline && video != null) {
             player.setRequestedBackend(video.videoId, video.backendPlayback);
           }
-          final (:sources, :menuRoute, :qualities, :sourceQualities) = plan;
+          final (
+            :sources,
+            :menuRoute,
+            :qualities,
+            :sourceQualities,
+            :streamingQuality
+          ) = plan;
           MusicAudioQuality? effective;
           if (sources.isEmpty) {
             if (video?.downloadPlaybackOnly == true) {
@@ -1089,7 +1137,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           _sourceAdmitted = true;
           if (menuRoute != null && video != null) {
             if (_qualityPreference != effective) _qualityPreference = null;
-            _publishMusicQuality(video, menuRoute, qualities, effective);
+            _publishMusicQuality(
+                video, menuRoute, qualities, effective, streamingQuality);
           }
           final interrupted = _focusInterrupted || player.playbackInterrupted;
           if (_wantsToPlay && player.shouldStartPlayback && !interrupted) {

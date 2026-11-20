@@ -13,6 +13,7 @@ import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/manual_music_preparation.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -863,6 +864,62 @@ void main() {
     expect(audio.audioPlayer!.position,
         greaterThanOrEqualTo(const Duration(milliseconds: 520)));
   });
+
+  for (final when in [
+    'before crossfade',
+    'during crossfade',
+    'while reserved'
+  ]) {
+    test('changing streaming quality $when preserves the handoff', () async {
+      final alreadyAudible = when == 'during crossfade';
+      next = next.copyWith(adaptiveFormats: [
+        ...next.adaptiveFormats!,
+        AdaptiveFormat(null, '64000', null, '${_server.url}/next-low', '139',
+            'audio/mp4', '100', '1', 'RECTANGULAR', 'mp4', 'mp4a', null, null),
+      ]);
+      final (outgoing, _) =
+          await prepareTransition(SongTransitionMode.crossfade);
+      if (when == 'while reserved') {
+        expect(
+            await audio.prepareMusicSelection(next, Duration.zero, () => true),
+            isTrue);
+      }
+      if (!alreadyAudible) {
+        await settings
+            .setMusicStreamingQuality(MusicStreamingQuality.dataSaver);
+      }
+      if (when == 'while reserved') audio.cancelMusicSelection();
+      await outgoing.report(
+          ProcessingStateMessage.ready, const Duration(milliseconds: 119450));
+      final rendition = alreadyAudible ? 'next' : 'next-low';
+      await _until(
+          () => loaded(rendition).any((d) => d.playing && d.volume > 0),
+          'The preferred stream overlaps before EOF');
+      final incoming = loaded(rendition).singleWhere((d) => d.playing);
+      if (alreadyAudible) {
+        await settings
+            .setMusicStreamingQuality(MusicStreamingQuality.dataSaver);
+      }
+      await incoming.report(
+          ProcessingStateMessage.ready, const Duration(milliseconds: 470));
+      final previousSeeks = incoming.seeks.length;
+      await outgoing.report(
+          ProcessingStateMessage.completed, const Duration(minutes: 2));
+      await _until(() => player.automaticTarget == next.queueEntryId,
+          'The queue receives the outgoing EOF');
+      selectNext(automatic: true);
+      await _until(
+          () =>
+              outgoing.disposed && !audio.state.loading && incoming.volume == 1,
+          'The incoming decoder is promoted');
+      expect(incoming.playedTracks, [rendition]);
+      expect(incoming.seeks.length, previousSeeks);
+      expect(audio.audioPlayer!.position,
+          greaterThanOrEqualTo(const Duration(milliseconds: 470)));
+      expect(player.musicAudioQuality?.effective?.bitrate,
+          alreadyAudible ? 128000 : 64000);
+    });
+  }
 
   test(
       'fade lowers the first song before EOF and raises the next song after it',

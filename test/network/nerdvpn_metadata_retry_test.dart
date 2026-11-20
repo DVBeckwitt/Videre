@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/nerdvpn_origin.dart';
+import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -116,6 +118,172 @@ void main() {
     final song = await InvidiousMusicCatalogService(api: api).getSong(_videoId);
     expect(song.videoId, _videoId);
     expect(requests, hasLength(2));
+  });
+
+  Future<Server> selectMusicBackends(
+      {bool automatic = true, bool thirdBackend = false}) async {
+    final selector = BackendSelector(
+      'COMPANION_ID',
+      [
+        const BackendOption('1', 'First'),
+        const BackendOption('2', 'Second'),
+        if (thirdBackend) const BackendOption('3', 'Third'),
+      ],
+      automaticFallback: automatic,
+    );
+    final account = selector.withSelection(
+        _account.copyWith(backendSelector: selector), '1');
+    await database.upsertServer(account);
+    await database.useServer(account);
+    return account;
+  }
+
+  Future<MusicTrack> loadMusic() =>
+      InvidiousMusicCatalogService(api: api).getSong(_videoId,
+          loadObserver:
+              VideoLoadObserver(isCurrent: () => true, onRetry: () {}));
+
+  Iterable<String?> attemptedBackends() => requests
+      .map((request) => requestCookieValue(request.headers, 'COMPANION_ID'));
+
+  for (final message in [_starting, _blocked]) {
+    test('Music immediately tries an available alternate for: $message',
+        () async {
+      final account = await selectMusicBackends();
+      respond = (request) async =>
+          requestCookieValue(request.headers, 'COMPANION_ID') == '1'
+              ? _response(request, 500, {'error': message})
+              : _success(request);
+
+      expect((await loadMusic()).videoId, _videoId);
+      expect(
+          requests.map((request) => request.url.origin).toSet(), {account.url});
+      expect(requests.map((request) => request.headers['X-Test-Account']),
+          everyElement('fixture'));
+      expect(attemptedBackends(), ['1', '2']);
+      expect(delays, isEmpty);
+      expect((await database.getCurrentlySelectedServer()).customHeaders,
+          account.customHeaders);
+    });
+  }
+
+  test('Music keeps its same-route retry with automatic fallback disabled',
+      () async {
+    await selectMusicBackends(automatic: false);
+    expect((await loadMusic()).videoId, _videoId);
+    expect(attemptedBackends(), ['1', '1']);
+    expect(delays, [const Duration(seconds: 1)]);
+  });
+
+  test('player-selected Music backend advances immediately on startup failure',
+      () async {
+    final account = await selectMusicBackends();
+    respond = (request) async =>
+        requestCookieValue(request.headers, 'COMPANION_ID') == '2'
+            ? _response(request, 500, {'error': _starting})
+            : _success(request);
+
+    final loaded = await api.getMusicVideoForBackend(
+        _videoId, BackendPlayback.manual(account, '2'));
+
+    expect(loaded.backendPlayback!.retryIndex, 1);
+    expect(attemptedBackends(), ['2', '1']);
+    expect(delays, isEmpty);
+  });
+
+  test('player-selected Music backend honors instance cooldown before fallback',
+      () async {
+    final account = await selectMusicBackends();
+    respond = (request) async => requests.length == 1
+        ? _response(request, 500, {'error': _starting},
+            headers: {'retry-after': '2'})
+        : _success(request);
+
+    await api.getMusicVideoForBackend(
+        _videoId, BackendPlayback.manual(account, '2'));
+
+    expect(attemptedBackends(), ['2', '2']);
+    expect(delays, [const Duration(seconds: 2)]);
+  });
+
+  test('player-selected Music backend cannot advance after a session change',
+      () async {
+    final account = await selectMusicBackends();
+    respond = (request) async {
+      api.clearSessionCaches();
+      return _response(request, 500, {'error': _starting});
+    };
+
+    await expectLater(
+        api.getMusicVideoForBackend(
+            _videoId, BackendPlayback.manual(account, '2')),
+        throwsStateError);
+
+    expect(attemptedBackends(), ['2']);
+    expect(delays, isEmpty);
+  });
+
+  test('Music media recovery waits for startup only on the last backend',
+      () async {
+    await selectMusicBackends(thirdBackend: true);
+    var lastAttempts = 0;
+    respond = (request) async {
+      final backend = requestCookieValue(request.headers, 'COMPANION_ID');
+      if (backend == '2' || backend == '3' && ++lastAttempts == 1) {
+        return _response(request, 500, {'error': _starting});
+      }
+      return _success(request);
+    };
+    final song = await loadMusic();
+    final video =
+        song.playbackVideo!.copyWith(musicMetadata: song.musicMetadata);
+
+    final loaded = await api.retryVideoBackend(video, isCurrent: () => true);
+
+    expect(attemptedBackends(), ['1', '2', '3', '3']);
+    expect(delays, [const Duration(seconds: 1)]);
+    expect(loaded!.musicMetadata, video.musicMetadata);
+    expect(loaded.backendPlayback!.retryIndex, 2);
+  });
+
+  for (final retryAfter in ['2', '60', 'invalid']) {
+    test('Music honors Retry-After $retryAfter before choosing a route',
+        () async {
+      await selectMusicBackends();
+      respond = (request) async => _response(request, 500, {'error': _blocked},
+          headers: {'retry-after': retryAfter});
+      await expectLater(loadMusic(), throwsA(isA<InvidiousServiceError>()));
+      expect(attemptedBackends(), retryAfter == '2' ? ['1', '1'] : ['1']);
+      expect(delays, retryAfter == '2' ? [const Duration(seconds: 2)] : []);
+    });
+  }
+
+  test('concurrent Music can advance while Video retries the same backend',
+      () async {
+    await selectMusicBackends();
+    respond = (request) async =>
+        requestCookieValue(request.headers, 'COMPANION_ID') == '1'
+            ? _response(request, 500, {'error': _blocked})
+            : _success(request);
+    final videoWaiting = Completer<void>();
+    final releaseVideoRetry = Completer<void>();
+    wait = (_) {
+      videoWaiting.complete();
+      return releaseVideoRetry.future;
+    };
+    final video = api.getVideo(_videoId,
+        loadObserver: VideoLoadObserver(isCurrent: () => true, onRetry: () {}));
+    try {
+      await videoWaiting.future;
+      final song = await loadMusic().timeout(const Duration(seconds: 3));
+      expect(song.videoId, _videoId);
+      expect(attemptedBackends(), ['1', '1', '2']);
+    } finally {
+      releaseVideoRetry.complete();
+      expect((await video).videoId, _videoId);
+    }
+    expect(attemptedBackends(), ['1', '1', '2', '1', '2']);
+    expect(delays, [const Duration(seconds: 1)]);
   });
 
   test('selecting the first account stops unsaved validation recovery',

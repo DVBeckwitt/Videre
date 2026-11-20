@@ -11,6 +11,7 @@ import '../../../player/models/local_music_playback.dart';
 import '../../../player/states/player.dart';
 import '../../../videos/models/music_metadata.dart';
 import '../../../videos/models/video.dart';
+import '../../models/music_cover_corners.dart';
 import '../../models/music_lyrics.dart';
 import '../../services/music_catalog_service.dart';
 import '../../services/music_video_match.dart';
@@ -68,6 +69,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
     _filterChanges.addListener(_filtersChanged);
+    MusicCoverCorners.revision.addListener(_coverCornersChanged);
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
   }
 
@@ -116,6 +118,7 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
   @override
   void dispose() {
     _filterChanges.removeListener(_filtersChanged);
+    MusicCoverCorners.revision.removeListener(_coverCornersChanged);
     NetworkProxy.instance.removeBeforeApply(_proxyChanging);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -208,6 +211,8 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     });
   }
 
+  void _coverCornersChanged() => setState(() {});
+
   @override
   Widget build(BuildContext context) {
     context.watch<AppCubit>();
@@ -228,7 +233,14 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
     final showing = match != null && _showVideo;
     final display = showing ? (_display ??= Object()) : null;
     final locals = AppLocalizations.of(context)!;
-    final border = BorderRadius.circular(showing ? 12 : widget.size * 0.2);
+    final coverCorners = MusicCoverCorners.forDatabase(db);
+    final border = showing
+        ? BorderRadius.circular(12)
+        : switch (coverCorners) {
+            MusicCoverCorners.rounded =>
+              BorderRadius.circular(widget.size * 0.2),
+            MusicCoverCorners.square => BorderRadius.zero,
+          };
     void unavailable() {
       if (!mounted ||
           display == null ||

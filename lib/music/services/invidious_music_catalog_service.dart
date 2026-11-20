@@ -4,6 +4,7 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
@@ -20,6 +21,7 @@ import 'package:clipious/search/models/search_type.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/utils/invidious_image.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/video_post_processing.dart'
     show privateVideoString;
@@ -643,6 +645,99 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           for (final video in videos.videos) _track(video, covers, server)
         ],
       );
+    });
+  }
+
+  @override
+  Future<MusicArtistReleases> getArtistReleases(String id,
+      {String? continuation, bool Function()? isCurrent}) {
+    if (!_channelId.hasMatch(id)) {
+      throw const MusicCatalogException('Invalid music artist.');
+    }
+    _requireCurrentDiscovery(isCurrent);
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      Map<String, dynamic> data;
+      try {
+        data = await api.getMusicChannelReleases(id, server, check,
+            continuation: continuation);
+      } on InvidiousServiceError catch (error) {
+        await check();
+        // Older instances may omit the route. Genuine access failures and
+        // cooldowns must remain visible to callers.
+        if (!musicDiscoveryMustStop(error) &&
+            (error.statusCode == 404 || error.statusCode == 501)) {
+          return const MusicArtistReleases();
+        }
+        rethrow;
+      }
+      await check();
+      final releases = <MusicCollection>[];
+      final seen = <String>{};
+      for (final entry in data['playlists'] as List) {
+        if (entry
+            case {'playlistId': final String id, 'title': final String title}) {
+          final playlistId = id.startsWith('VL') ? id.substring(2) : id;
+          if (!_playlistId.hasMatch(playlistId) ||
+              playlistId.startsWith('RD') ||
+              title.trim().isEmpty ||
+              !seen.add(playlistId)) {
+            continue;
+          }
+          final author = entry['author'];
+          final image = entry['playlistThumbnail'];
+          final count = entry['videoCount'];
+          releases.add(MusicCollection(
+            id: playlistId,
+            title: title,
+            artists: [if (author is String && author.isNotEmpty) author],
+            thumbnails: [
+              if (image is String &&
+                  image.isNotEmpty &&
+                  invidiousImageUrl(image, server) != null)
+                ImageObject(null, image, 0, 0),
+            ],
+            videoCount: count is int && count >= 0 ? count : null,
+          ));
+        }
+      }
+      final next = data['continuation'];
+      return MusicArtistReleases(
+        releases: releases,
+        continuation:
+            next is String && next.trim().isNotEmpty && next != continuation
+                ? next
+                : null,
+      );
+    });
+  }
+
+  @override
+  Future<List<MusicTrack>> getChartSongs(String playlistId,
+      {bool Function()? isCurrent}) {
+    if (!musicCharts.any((chart) => chart.playlistId == playlistId)) {
+      throw const MusicCatalogException('Invalid music chart.');
+    }
+    _requireCurrentDiscovery(isCurrent);
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() => _checkDiscovery(checkSession, isCurrent);
+      final page = await api.getMusicPlaylistPage(playlistId, 1, server, check);
+      await check();
+      if (page.playlistId != playlistId) {
+        throw const MusicCatalogException('The server returned another chart.');
+      }
+      final covers = _savedCovers(server);
+      final seen = <String>{};
+      return [
+        for (final video in page.videos
+            .where((video) =>
+                _videoId.hasMatch(video.videoId) &&
+                video.title?.trim().isNotEmpty == true &&
+                musicVideoAllowed(video) &&
+                seen.add(video.videoId))
+            .take(24))
+          _track(video, covers, server),
+      ];
     });
   }
 

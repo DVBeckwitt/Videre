@@ -208,10 +208,13 @@ class RecommendationService extends ChangeNotifier {
   }
 
   bool _allowed(Video video,
-          {required bool music, bool includeCommunityHidden = false}) =>
+          {required bool music,
+          List<VideoFilter>? filters,
+          bool includeCommunityHidden = false}) =>
       !video.filtered &&
       !video.filterHide &&
-      !_database.getAllFilters().any((f) => f.filterVideo(video)) &&
+      !(filters ?? _database.getAllFilters())
+          .any((f) => f.filterVideo(video)) &&
       (includeCommunityHidden ||
           !communityFilters
               .match(
@@ -221,9 +224,11 @@ class RecommendationService extends ChangeNotifier {
               .any((match) => match.action == CommunityAction.hide));
 
   List<T> _eligible<T>(RecommendationDomain domain, Iterable<T> values,
-      RecommendationCandidate Function(T) metadata, bool Function(T) allowed) {
+      RecommendationCandidate Function(T) metadata, Video Function(T) toVideo,
+      {bool includeCommunityHidden = false}) {
     if (!_current) return const [];
     final snapshot = _read(domain);
+    late final filters = _database.getAllFilters();
     // MusicBrain can escalate repeated dislikes without a host-side block.
     // Local shelves and fallback results must honor that exclusion too.
     final blockedCreators = {
@@ -237,7 +242,10 @@ class RecommendationService extends ChangeNotifier {
       if (!candidate.valid ||
           snapshot.blockedIds.contains(candidate.id) ||
           blockedCreators.contains(candidate.creatorKey) ||
-          !allowed(value) ||
+          !_allowed(toVideo(value),
+              music: domain == RecommendationDomain.music,
+              filters: filters,
+              includeCommunityHidden: includeCommunityHidden) ||
           !ids.add(candidate.id)) {
         continue;
       }
@@ -251,21 +259,15 @@ class RecommendationService extends ChangeNotifier {
   /// show an honestly labeled unranked shelf without restoring excluded items.
   List<Video> eligibleVideos(Iterable<Video> videos,
           {bool includeCommunityHidden = false}) =>
-      _eligible(
-          RecommendationDomain.video,
-          videos,
-          RecommendationCandidate.video,
-          (video) => _allowed(video,
-              music: false, includeCommunityHidden: includeCommunityHidden));
+      _eligible(RecommendationDomain.video, videos,
+          RecommendationCandidate.video, (video) => video,
+          includeCommunityHidden: includeCommunityHidden);
 
   List<MusicTrack> eligibleMusic(Iterable<MusicTrack> tracks,
           {bool includeCommunityHidden = false}) =>
-      _eligible(
-          RecommendationDomain.music,
-          tracks,
-          RecommendationCandidate.music,
-          (track) => _allowed(track.toVideo(),
-              music: true, includeCommunityHidden: includeCommunityHidden));
+      _eligible(RecommendationDomain.music, tracks,
+          RecommendationCandidate.music, (track) => track.toVideo(),
+          includeCommunityHidden: includeCommunityHidden);
 
   Future<T> _serialized<T>(Future<T> Function() action) {
     final completer = Completer<T>();
@@ -320,7 +322,7 @@ class RecommendationService extends ChangeNotifier {
         surface: surface,
         subscriptionChannels: subscriptions,
         expectedGeneration: token,
-        allowed: (v) => _allowed(v, music: false));
+        toVideo: (v) => v);
   }
 
   Future<RecommendationResult<MusicTrack>> rankMusic(List<MusicTrack> tracks,
@@ -330,13 +332,15 @@ class RecommendationService extends ChangeNotifier {
           (track) => track.videoId,
           surface: surface,
           subscriptionChannels: subscriptionChannels,
-          allowed: (track) => _allowed(track.toVideo(), music: true));
+          toVideo: (track) => track.toVideo());
 
-  Map<String, String> _subscriptionInput(RecommendationDomain domain,
-      RecommendationSnapshot snapshot, Map<String, String> channels) {
-    if (!snapshot.enabled || channels.isEmpty) return const {};
+  Map<String, String> _subscriptionInput(
+      RecommendationDomain domain,
+      RecommendationSnapshot snapshot,
+      Map<String, String> channels,
+      List<VideoFilter> allFilters) {
     final music = domain == RecommendationDomain.music;
-    final filters = _database.getAllFilters().where(
+    final filters = allFilters.where(
         (filter) => filter.filterAll || filter.type == FilterType.channelName);
     final admitted = <String, String>{};
     for (final entry in channels.entries) {
@@ -369,15 +373,17 @@ class RecommendationService extends ChangeNotifier {
       {required String surface,
       required Map<String, String> subscriptionChannels,
       int? expectedGeneration,
-      required bool Function(T) allowed}) {
+      required Video Function(T) toVideo}) {
     final token = expectedGeneration ?? generation(domain);
     return _serialized(() async {
       if (!_valid(domain, token)) {
         return RecommendationResult<T>.cancelled();
       }
       final snapshot = _read(domain);
-      final subscriptions =
-          _subscriptionInput(domain, snapshot, subscriptionChannels);
+      late final filters = _database.getAllFilters();
+      final subscriptions = snapshot.enabled && subscriptionChannels.isNotEmpty
+          ? _subscriptionInput(domain, snapshot, subscriptionChannels, filters)
+          : const <String, String>{};
       final blockedCreators = {
         ...snapshot.blockedCreators,
         ..._nativeCreatorBlocks(domain, snapshot),
@@ -390,7 +396,9 @@ class RecommendationService extends ChangeNotifier {
             items.containsKey(id(item)) ||
             snapshot.blockedIds.contains(candidate.id) ||
             blockedCreators.contains(candidate.creatorKey) ||
-            !allowed(item)) {
+            !_allowed(toVideo(item),
+                music: domain == RecommendationDomain.music,
+                filters: filters)) {
           continue;
         }
         items[id(item)] = item;

@@ -1170,7 +1170,7 @@ void main() {
   }
 
   testWidgets(
-      'Music quality picker displays the effective Auto rendition and selects a bitrate',
+      'Music quality picker shows the effective profile rendition and selects a bitrate',
       (tester) async {
     final video = _video('song', preferred);
     await tester.runAsync(() async =>
@@ -1197,7 +1197,7 @@ void main() {
     ));
     await tester.tap(find.byTooltip('Audio quality'));
     await tester.pumpAndSettle();
-    expect(find.text('Auto'), findsOneWidget);
+    expect(find.text('Use profile default'), findsOneWidget);
     expect(find.text('128 kbps · AAC'), findsNWidgets(2));
     await tester.tap(find.text('64 kbps · AAC'));
     await tester.pumpAndSettle();
@@ -1265,6 +1265,41 @@ void main() {
     final before = native.sources.length;
     expect(await oldMenu.select(oldMenu.choices.last), isFalse);
     expect(native.sources, hasLength(before));
+  });
+
+  test('Music streaming default applies on load and after a track override',
+      () async {
+    await settings.setMusicStreamingQuality(MusicStreamingQuality.dataSaver);
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+          adaptiveFormats: [
+            _adaptive('${preferred.url}/hi'),
+            _adaptive('${preferred.url}/lo', bitrate: '64000'),
+            _adaptive('${preferred.url}/unknown', bitrate: ''),
+            _adaptive('https://unrelated.example/untrusted', bitrate: '10000'),
+          ],
+        ));
+
+    await audio.playVideo(false);
+    final menu = player.musicAudioQuality!;
+    expect(menu.choices.map((quality) => quality.bitrate), [128000, 64000]);
+    expect(menu.effective?.bitrate, 64000);
+    expect(menu.selected, isNull);
+    expect((native.sources.single as UriAudioSource).uri.path, '/lo');
+
+    expect(await menu.select(menu.choices.first), isTrue);
+    expect(player.musicAudioQuality!.selected?.bitrate, 128000);
+    expect(await player.musicAudioQuality!.select(null), isTrue);
+    expect(player.musicAudioQuality!.effective?.bitrate, 64000);
+    expect(player.musicAudioQuality!.selected, isNull);
+
+    await settings.setMusicStreamingQuality(MusicStreamingQuality.highest);
+    expect(await player.musicAudioQuality!.select(null), isTrue);
+    expect(player.musicAudioQuality!.effective?.bitrate, 128000);
+    expect(player.musicAudioQuality!.selected, isNull);
+    expect(retryService.retryCalls, 0);
   });
 
   test('proxy audio-only responses route adaptive audio through the instance',

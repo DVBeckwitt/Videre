@@ -226,33 +226,31 @@ class _MusicPlayerState extends State<MusicPlayer> {
         key: const ValueKey('music-now-playing-scroll'),
         padding: shortLandscape
             ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
-            : const EdgeInsets.fromLTRB(30, 10, 30, 16),
+            : const EdgeInsets.fromLTRB(18, 10, 18, 16),
         child: Center(
             child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 460),
+                constraints: const BoxConstraints(maxWidth: 510),
                 child: LayoutBuilder(builder: (context, panel) {
                   final textScale = MediaQuery.textScalerOf(context).scale(20);
                   final metadataHeight = (textScale - 20).clamp(0.0, 45.0);
                   // Give the two-line title, seek bar, transport and action
                   // strip room before sizing the cover on shorter phones.
-                  final artArea = wide
-                      ? math.max(
-                          math.min(
-                                  panel.maxWidth,
-                                  (constraints.maxHeight * 0.59)
-                                      .clamp(140.0, 432.0)) +
-                              24,
-                          constraints.maxHeight - 296 - metadataHeight * 2)
-                      : math.max(140.0,
-                          constraints.maxHeight - 356 - metadataHeight * 2);
-                  final artworkSize =
-                      math.min(panel.maxWidth, math.min(432.0, artArea - 24));
+                  const artworkSpacing = 12.0;
+                  final heightBudget = constraints.maxHeight -
+                      (wide ? 296 : 356) -
+                      metadataHeight * 2 -
+                      artworkSpacing;
+                  final preferredSize = wide
+                      ? math.max(constraints.maxHeight * 0.62, heightBudget)
+                      : heightBudget;
+                  final artworkSize = math.min(
+                      panel.maxWidth, preferredSize.clamp(116.0, 480.0));
                   return Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         if (!shortLandscape) ...[
                           SizedBox(
-                            height: artArea,
+                            height: artworkSize + artworkSpacing,
                             child: _artworkFrame(
                                 music, video, offline, artworkSize,
                                 allowOnlineArtwork: allowOnlineArtwork),
@@ -278,6 +276,11 @@ class _MusicPlayerState extends State<MusicPlayer> {
                                   _artistByline(context, music, onDevice),
                                 ],
                               )),
+                              if (!onDevice && pending == null)
+                                MusicAudioQualityButton(
+                                  showLabel:
+                                      panel.maxWidth >= 380 && textScale <= 24,
+                                ),
                               if (video != null && !onDevice) ...[
                                 const SizedBox(width: 8),
                                 MusicBookmarkButton(
@@ -423,7 +426,7 @@ class _MusicPlayerState extends State<MusicPlayer> {
                       music,
                       video,
                       offline,
-                      math.min(constraints.maxWidth * 0.32,
+                      math.min(constraints.maxWidth * 0.34,
                           math.max(1, constraints.maxHeight - 32)),
                       allowOnlineArtwork: allowOnlineArtwork)),
               Expanded(flex: 5, child: nowPlaying),
@@ -791,7 +794,6 @@ class _MusicPlayerState extends State<MusicPlayer> {
                   : null),
           action('sound', locals.musicSound, Icons.tune,
               () => showMusicSoundSheet(context, player)),
-          if (!onDevice && !opening) const MusicAudioQualityButton(),
           IconButton(
               tooltip: locals.musicRewind,
               onPressed: opening ? null : player.rewind,

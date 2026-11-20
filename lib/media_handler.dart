@@ -63,6 +63,9 @@ class MediaHandler extends BaseAudioHandler
   }
 
   @override
+  Future<void> onTaskRemoved() => PlayerCubit.stopForTaskRemoval(this);
+
+  @override
   Future<void> seek(Duration position) async {
     final podcast = controller.activePodcast;
     if (podcast != null) {

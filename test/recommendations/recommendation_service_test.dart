@@ -22,10 +22,12 @@ const sample = Video(
     authorId: 'UCabcdefghijklmnopqrstuv',
     lengthSeconds: 200);
 
-class _FailingImpressionDatabase extends Fake implements IDbClient {
-  _FailingImpressionDatabase(this.database);
+class _RecommendationDatabase extends Fake implements IDbClient {
+  _RecommendationDatabase(this.database, {this.failFirstWrite = false});
 
   final IDbClient database;
+  final bool failFirstWrite;
+  var filterReads = 0;
   var attempts = 0;
 
   @override
@@ -38,7 +40,10 @@ class _FailingImpressionDatabase extends Fake implements IDbClient {
   SettingsValue? getSettings(String name) => database.getSettings(name);
 
   @override
-  List<VideoFilter> getAllFilters() => database.getAllFilters();
+  List<VideoFilter> getAllFilters() {
+    filterReads++;
+    return database.getAllFilters();
+  }
 
   @override
   Future<void> upsertServer(Server server) async =>
@@ -49,7 +54,9 @@ class _FailingImpressionDatabase extends Fake implements IDbClient {
 
   @override
   Future<void> saveSetting(SettingsValue setting) async {
-    if (++attempts == 1) throw StateError('Temporary disk failure');
+    if (++attempts == 1 && failFirstWrite) {
+      throw StateError('Temporary disk failure');
+    }
     await database.saveSetting(setting);
   }
 }
@@ -163,6 +170,47 @@ void main() {
         isTrue);
   });
 
+  test('each eligibility batch reads filters once when it starts', () async {
+    final observed = _RecommendationDatabase(database);
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    service.dispose();
+    service = RecommendationService.forTesting(observed, bridge: (input) async {
+      if (!entered.isCompleted) {
+        entered.complete();
+        await release.future;
+      }
+      return evaluate(input);
+    });
+    final videos = [
+      for (var i = 0; i < 100; i++)
+        sample.copyWith(videoId: 'v${i.toString().padLeft(10, '0')}'),
+    ];
+    expect(service.eligibleVideos(videos), hasLength(videos.length));
+    final admissionReads = observed.filterReads;
+    final channels = {sample.authorId!: 'Creator'};
+    final first = service.rankVideos(videos, subscriptionChannels: channels);
+    await entered.future;
+    final firstRankReads = observed.filterReads - admissionReads;
+    final next = service.rankVideos(videos, subscriptionChannels: channels);
+    try {
+      await database.saveFilter(VideoFilter(value: sample.title));
+    } finally {
+      release.complete();
+    }
+    expect((await first).items, hasLength(videos.length));
+    expect((await next).items, isEmpty);
+    expect([
+      admissionReads,
+      firstRankReads,
+      observed.filterReads - admissionReads - firstRankReads,
+    ], [
+      1,
+      1,
+      1
+    ]);
+  });
+
   test('viewport batches admitted cards without changing the active ranking',
       () async {
     var notifications = 0;
@@ -209,7 +257,7 @@ void main() {
     const domain = RecommendationDomain.video;
     await play('previous');
     final original = snapshot(domain);
-    final failing = _FailingImpressionDatabase(database);
+    final failing = _RecommendationDatabase(database, failFirstWrite: true);
     service.dispose();
     service =
         RecommendationService.forTesting(failing, bridge: (request) async {

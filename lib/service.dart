@@ -86,6 +86,7 @@ const urlGetUserPlaylists = '/api/v1/auth/playlists';
 const urlGetUserPlaylist = '/api/v1/auth/playlists/:id';
 const urlPostUserPlaylists = '/api/v1/auth/playlists';
 const urlGetChannelPlaylists = '/api/v1/channels/:id/playlists';
+const urlGetChannelReleases = '/api/v1/channels/:id/releases';
 const urlPostUserPlaylistVideo = '/api/v1/auth/playlists/:id/videos';
 const urlDeleteUserPlaylist = '/api/v1/auth/playlists/:id';
 const urlDeleteUserPlaylistVideo = '/api/v1/auth/playlists/:id/videos/:index';
@@ -102,6 +103,8 @@ class VideoLoadObserver {
 
   const VideoLoadObserver({required this.isCurrent, required this.onRetry});
 }
+
+enum _MetadataRetry { sameRoute, preferAlternate, none }
 
 class _InteractiveVideoRequest {
   final observers = <VideoLoadObserver>{};
@@ -133,8 +136,14 @@ class Service {
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
   final _getRequests = <String, Future<Response>>{};
-  final _interactiveVideoRequests =
-      <(String, Server, Object, int, bool), _InteractiveVideoRequest>{};
+  final _interactiveVideoRequests = <(
+    String,
+    Server,
+    Object,
+    int,
+    _MetadataRetry
+  ),
+      _InteractiveVideoRequest>{};
   final _browseCache = <String, ({DateTime expires, Response response})>{};
   int _sessionRevision = 0;
   Future<void> _localPlaylistWrite = Future.value();
@@ -673,6 +682,9 @@ class Service {
         serverOverride == null ? BackendPlayback(server) : null;
     final connection = initialRequest ?? BackendPlayback(server);
     var playback = server.backendSelector == null ? null : initialRequest;
+    final firstRetry = !enrichResults && playback?.canRetry == true
+        ? _MetadataRetry.preferAlternate
+        : _MetadataRetry.sameRoute;
     Video video;
     while (true) {
       if (!active()) throw StateError('The video load was cancelled.');
@@ -682,7 +694,9 @@ class Service {
             onBackendRequest: onBackendRequest,
             loadObserver: observer,
             beforeRequest: beforeRequest,
-            allowSameRouteRetry: (playback?.retryIndex ?? 0) == 0);
+            metadataRetry: (playback?.retryIndex ?? 0) == 0
+                ? firstRetry
+                : _MetadataRetry.none);
         break;
       } catch (error) {
         if (!active() ||
@@ -747,6 +761,9 @@ class Service {
         loaded = await _getVideoMetadata(videoId, playback.server,
             backendRequest: playback,
             onBackendRequest: onBackendRequest,
+            metadataRetry: !enrichResults && playback.canRetry
+                ? _MetadataRetry.preferAlternate
+                : _MetadataRetry.sameRoute,
             beforeRequest: enrichResults
                 ? null
                 : () => _requirePlaybackRoute(playback, active));
@@ -790,13 +807,13 @@ class Service {
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver,
       Future<void> Function()? beforeRequest,
-      bool allowSameRouteRetry = true}) async {
+      _MetadataRetry metadataRetry = _MetadataRetry.sameRoute}) async {
     final video = await _loadVideoMetadata(videoId, server,
         backendRequest: backendRequest,
         onBackendRequest: onBackendRequest,
         loadObserver: loadObserver,
         beforeRequest: beforeRequest,
-        allowSameRouteRetry: allowSameRouteRetry);
+        metadataRetry: metadataRetry);
     // A successful HTTP response can still belong to another cache key. Reject
     // it before source admission, post-processing, or any backend retry.
     if (video.videoId != videoId) {
@@ -840,7 +857,7 @@ class Service {
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver,
       Future<void> Function()? beforeRequest,
-      bool allowSameRouteRetry = true}) async {
+      required _MetadataRetry metadataRetry}) async {
     final originalDb = db;
     final profileId = originalDb.profileId;
     final sessionRevision = _sessionRevision;
@@ -873,7 +890,7 @@ class Service {
         throw StateError('The playback connection changed.');
       }
       return _getInteractiveVideoMetadata(request, backendRequest, loadObserver,
-          unchanged: unchanged, allowRetry: allowSameRouteRetry);
+          unchanged: unchanged, retry: metadataRetry);
     }
     Future<Response> get() =>
         _get(request, coalesce: true, beforeRequest: beforeRequest);
@@ -932,6 +949,12 @@ class Service {
         if (!await unchanged()) {
           throw StateError('The playback connection changed.');
         }
+        // The Music recovery loop can already try another backend. A server
+        // cooldown still belongs to every route on this instance.
+        if (metadataRetry == _MetadataRetry.preferAlternate &&
+            isBackendRetryable(error)) {
+          rethrow;
+        }
         if (delay > Duration.zero) await _wait(delay);
         if (!await unchanged()) {
           throw StateError('The playback connection changed.');
@@ -961,13 +984,13 @@ class Service {
   Future<Video> _getInteractiveVideoMetadata(
       ServerRequest request, BackendPlayback route, VideoLoadObserver observer,
       {required Future<bool> Function() unchanged,
-      required bool allowRetry}) async {
+      required _MetadataRetry retry}) async {
     final key = (
       request._cacheKey,
       route.preferredServer,
       NetworkProxy.instance.config,
       _sessionRevision,
-      allowRetry
+      retry
     );
     final existing = _interactiveVideoRequests[key];
     final pending = existing ?? _InteractiveVideoRequest();
@@ -975,7 +998,7 @@ class Service {
     if (existing == null) {
       _interactiveVideoRequests[key] = pending;
       pending.result = _loadInteractiveVideoMetadata(request, pending,
-              unchanged: unchanged, allowRetry: allowRetry)
+              unchanged: unchanged, retry: retry)
           .whenComplete(() {
         if (identical(_interactiveVideoRequests[key], pending)) {
           _interactiveVideoRequests.remove(key);
@@ -996,7 +1019,8 @@ class Service {
 
   Future<Video> _loadInteractiveVideoMetadata(
       ServerRequest request, _InteractiveVideoRequest pending,
-      {required Future<bool> Function() unchanged, required bool allowRetry}) {
+      {required Future<bool> Function() unchanged,
+      required _MetadataRetry retry}) {
     const budget = Duration(seconds: 15);
     final started = _now();
     var expired = false;
@@ -1022,8 +1046,9 @@ class Service {
         await checkCurrent();
         return _decodeVideoMetadata(response);
       } catch (error) {
-        final delay =
-            allowRetry ? _videoRetryDelay(error, response, request) : null;
+        final delay = retry == _MetadataRetry.none
+            ? null
+            : _videoRetryDelay(error, response, request, retry);
         if (expired || delay == null || remaining() <= delay) rethrow;
         await checkCurrent();
         pending.announceRetry();
@@ -1043,8 +1068,8 @@ class Service {
     });
   }
 
-  Duration? _videoRetryDelay(
-      Object error, Response? response, ServerRequest request) {
+  Duration? _videoRetryDelay(Object error, Response? response,
+      ServerRequest request, _MetadataRetry retry) {
     const defaultDelay = Duration(seconds: 1);
     if (error is TimeoutException ||
         (error is SocketException && error.osError != null)) {
@@ -1057,6 +1082,13 @@ class Service {
             request.uri.origin ||
         !const {408, 429, 500, 502, 503, 504}.contains(error.statusCode) ||
         (error.statusCode == 500 && error.responseWasHtml)) {
+      return null;
+    }
+    // An explicit backend failure can advance Music immediately when the
+    // playback attempt has an alternate. The caller owns the fallback budget.
+    if (retry == _MetadataRetry.preferAlternate &&
+        isUnavailableBackend(error) &&
+        isBackendRetryable(error)) {
       return null;
     }
     final delay = error.retryAfter;
@@ -1091,6 +1123,9 @@ class Service {
           loaded = await _getVideoMetadata(video.videoId, next.server,
               backendRequest: next,
               onBackendRequest: onRetry,
+              metadataRetry: video.musicMetadata != null && next.canRetry
+                  ? _MetadataRetry.preferAlternate
+                  : _MetadataRetry.sameRoute,
               beforeRequest: video.musicMetadata == null
                   ? null
                   : () => _requirePlaybackRoute(next, isCurrent));
@@ -1146,7 +1181,7 @@ class Service {
     final loaded = await _getVideoMetadata(video.videoId, connection.server,
         backendRequest: connection,
         loadObserver: VideoLoadObserver(isCurrent: active, onRetry: () {}),
-        allowSameRouteRetry: false);
+        metadataRetry: _MetadataRetry.none);
     await check();
     if (loaded.videoId != video.videoId) {
       throw const FormatException('The server returned another video.');
@@ -2302,6 +2337,20 @@ class Service {
           serverOverride: server,
           enrichResults: false,
           beforeRequest: beforeRequest);
+
+  Future<Map<String, dynamic>> getMusicChannelReleases(
+      String channelId, Server server, Future<void> Function() beforeRequest,
+      {String? continuation}) async {
+    final req = await buildRequest(urlGetChannelReleases,
+        pathParams: {':id': channelId},
+        query: {'continuation': continuation},
+        serverOverride: server);
+    final data = handleResponse(await _get(req, beforeRequest: beforeRequest));
+    if (data is! Map<String, dynamic> || data['playlists'] is! List) {
+      throw InvidiousServiceError('The server returned invalid releases');
+    }
+    return data;
+  }
 
   Future<Channel> _getChannel(String channelId,
       {required bool saveLastSeen,

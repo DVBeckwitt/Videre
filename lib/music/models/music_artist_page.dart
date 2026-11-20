@@ -1,5 +1,6 @@
 import 'package:clipious/music/models/music_album.dart';
 import 'package:clipious/music/models/music_artist.dart';
+import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_track.dart';
 
 class MusicArtistPage {
@@ -16,4 +17,12 @@ class MusicArtistPage {
     this.albums = const [],
     this.singles = const [],
   });
+}
+
+/// A page of public release playlists from the artist's channel.
+class MusicArtistReleases {
+  final List<MusicCollection> releases;
+  final String? continuation;
+
+  const MusicArtistReleases({this.releases = const [], this.continuation});
 }

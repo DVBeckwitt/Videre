@@ -126,6 +126,22 @@ class _ProfileStopRecorder extends _AudioStartRecorder {
   }
 }
 
+class _RecordingAudioFocus extends Fake implements AudioSession {
+  bool active = false;
+
+  @override
+  Future<bool> setActive(bool active,
+      {AVAudioSessionSetActiveOptions? avAudioSessionSetActiveOptions,
+      AndroidAudioFocusGainType? androidAudioFocusGainType,
+      AndroidAudioAttributes? androidAudioAttributes,
+      bool? androidWillPauseWhenDucked,
+      AudioSessionConfiguration fallbackConfiguration =
+          const AudioSessionConfiguration.music()}) async {
+    this.active = active;
+    return true;
+  }
+}
+
 class _RemoteLoadPlayer extends _SessionPlayer {
   _RemoteLoadPlayer(super.initialState, super.settings);
 
@@ -1275,6 +1291,124 @@ void main() {
         expect(player.savedSession?.seconds, checkpoint + 3,
             reason: lifecycle.name);
       }
+    });
+
+    for (final audio in [true, false]) {
+      test(
+          'task removal stops ${audio ? 'Music' : 'video'} and saves its queue',
+          () async {
+        const first = Video(videoId: 'first', lengthSeconds: 120);
+        const second = Video(videoId: 'second', lengthSeconds: 90);
+        player.seedState(player.state.copyWith(
+            currentlyPlaying: first,
+            videos: [first, second],
+            isAudio: audio,
+            isPlaying: true,
+            isHidden: false,
+            position: const Duration(seconds: 35)));
+        // On TV the shared service can belong to Home while a video route
+        // owns the active decoder.
+        final home =
+            audio ? player : _SessionPlayer(PlayerState.init(null), settings);
+        if (!audio) addTearDown(home.close);
+        final handler = app_main.mediaHandler = MediaHandler(home);
+        const item = MediaItem(id: 'first', title: 'Playing');
+        handler.mediaItem.add(item);
+        handler.queue.add([item]);
+        handler.playbackState.add(PlaybackState(
+            playing: true, processingState: AudioProcessingState.ready));
+        final decoder = _ProfileStopRecorder(
+            const AudioPlayerState(video: first), player, settings);
+        addTearDown(() async {
+          if (!decoder.stopped.isCompleted) decoder.stopped.complete();
+          await decoder.close();
+        });
+
+        player.didChangeAppLifecycleState(AppLifecycleState.paused);
+        await waitForSavedPosition(35);
+        expect(decoder.stopRequested.isCompleted, isFalse);
+        expect(player.state.isPlaying, isTrue);
+        await player.onProgress(const Duration(seconds: 37));
+        final removed = handler.onTaskRemoved();
+        await Future.any([removed, decoder.stopRequested.future]);
+        expect(decoder.stopRequested.isCompleted, isTrue);
+        expect(handler.playbackState.value.processingState,
+            isNot(AudioProcessingState.idle),
+            reason: 'Android can destroy the detached engine upon idle.');
+        decoder.stopped.complete();
+        await removed;
+        expect(player.state.hasVideo, isFalse);
+        expect(handler.playbackState.value.processingState,
+            AudioProcessingState.idle);
+        expect(handler.mediaItem.value, isNull);
+        expect(handler.queue.value, isEmpty);
+        expect(player.savedSession?.seconds, 37);
+        expect(player.savedSession?.audio, audio);
+        expect(player.savedSession?.currentId, 'first');
+        expect(player.savedSession?.videos.map((video) => video.videoId),
+            ['first', 'second']);
+      });
+    }
+
+    test('late task cleanup preserves a reopened player and its audio focus',
+        () async {
+      final focus = _RecordingAudioFocus();
+      player.audioSession = focus;
+      final handler = app_main.mediaHandler = MediaHandler(player);
+      const old = Video(videoId: 'old', lengthSeconds: 60);
+      player.seedState(player.state.copyWith(
+          currentlyPlaying: old,
+          videos: [old],
+          isPlaying: true,
+          isHidden: false));
+      final decoder = _ProfileStopRecorder(
+          const AudioPlayerState(video: old), player, settings);
+      addTearDown(() async {
+        if (!decoder.stopped.isCompleted) decoder.stopped.complete();
+        await decoder.close();
+      });
+      final removing = handler.onTaskRemoved();
+      await decoder.stopRequested.future.timeout(const Duration(seconds: 3));
+      final reopened = _SessionPlayer(PlayerState.init(null), settings);
+      addTearDown(reopened.close);
+      reopened.audioSession = focus;
+      const fresh =
+          Video(videoId: 'fresh', formatStreams: [], adaptiveFormats: []);
+      await reopened.playVideo([fresh]);
+      await focus.setActive(true);
+      expect(handler.mediaItem.value?.id, 'fresh');
+      decoder.stopped.complete();
+      await removing;
+      expect(focus.active, isTrue);
+      expect(handler.mediaItem.value?.id, 'fresh');
+      expect(reopened.state.currentQueueId, 'fresh');
+    });
+
+    test('a Music selection finishing after task removal cannot start',
+        () async {
+      const first = Video(
+          videoId: 'first',
+          lengthSeconds: 120,
+          formatStreams: [],
+          adaptiveFormats: [],
+          musicMetadata: MusicMetadata(title: 'First', artist: 'Band'));
+      player.audioSession = await AudioSession.instance;
+      final handler = app_main.mediaHandler = MediaHandler(player);
+      await player.playVideo([first], audio: true);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.play));
+      final preparer = HeldMusicPreparer();
+      player.manualMusicPreparer = preparer;
+      final selection = player.playVideo([first.copyWith(videoId: 'next')]);
+      await preparer.started.future.timeout(const Duration(seconds: 3));
+
+      await handler.onTaskRemoved();
+      preparer.requests['next']!.complete(true);
+      await selection;
+      expect(player.state.hasVideo, isFalse);
+      expect(player.state.isPlaying, isFalse);
+      expect(handler.mediaItem.value, isNull);
+      expect(player.savedSession?.currentId, 'first');
     });
 
     test('media controls keep startup paused after delayed autoplay', () async {

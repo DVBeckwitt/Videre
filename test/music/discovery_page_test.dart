@@ -6,6 +6,9 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_charts.dart';
+import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -81,6 +84,26 @@ class _Catalog extends MusicCatalogService {
   final genreGuards = <bool Function()?>[];
   final genreFailures = <void Function(InvidiousServiceError)?>[];
   final genreResponses = <Completer<List<MusicTrack>>>[];
+  final chartRequests = <String>[];
+  List<MusicTrack> chartTracks = const [];
+  Object? chartFailure;
+  final artistReleaseRequests = <String>[];
+  final artistReleases = <String, MusicArtistReleases>{};
+
+  @override
+  Future<List<MusicTrack>> getChartSongs(String playlistId,
+      {bool Function()? isCurrent}) async {
+    chartRequests.add(playlistId);
+    if (chartFailure case final error?) throw error;
+    return chartTracks;
+  }
+
+  @override
+  Future<MusicArtistReleases> getArtistReleases(String id,
+      {String? continuation, bool Function()? isCurrent}) async {
+    artistReleaseRequests.add(id);
+    return artistReleases[id] ?? const MusicArtistReleases();
+  }
 
   @override
   Future<List<MusicTrack>> getGenreSongs(String genre,
@@ -257,6 +280,148 @@ void main() {
     expect(args.queue.map((video) => video.videoId), ids);
     expect(args.startIndex, selected);
   }
+
+  testWidgets('Home loads the regional stock chart and rotates its tracks',
+      (tester) async {
+    catalog.chartTracks = List.generate(
+        12,
+        (index) => MusicTrack(
+            videoId: 'chartSong${index.toString().padLeft(2, '0')}',
+            title: 'Chart track $index'));
+    await show(tester);
+    expect(catalog.chartRequests, [
+      musicCharts.singleWhere((chart) => chart.countryCode == 'US').playlistId
+    ]);
+    expect(find.text('From your regional chart'), findsOneWidget);
+    expect(find.text('Chart track 0'), findsOneWidget);
+
+    final refresh = find.byKey(const ValueKey('music-home-fresh-refresh'));
+    Future<void> reload() async {
+      await tester.ensureVisible(refresh);
+      await tester.tap(refresh);
+      await tester.pumpAndSettle();
+    }
+
+    await reload();
+    expect(find.text('Chart track 0'), findsNothing);
+    expect(find.text('Chart track 6'), findsOneWidget);
+    await reload();
+    expect(find.text('Chart track 0'), findsOneWidget);
+    expect(find.text('Chart track 6'), findsNothing);
+    catalog.chartFailure = StateError('Chart temporarily unavailable');
+    await reload();
+    expect(find.text('Chart track 0'), findsOneWidget);
+    expect(catalog.chartRequests.toSet(), hasLength(1));
+  });
+
+  testWidgets('changing the proxy replaces Home chart and release selections',
+      (tester) async {
+    final artistId = 'UC${'a' * 22}';
+    const oldRelease = MusicCollection(id: 'PLold', title: 'Old release');
+    const newRelease = MusicCollection(id: 'PLnew', title: 'New release');
+    await tester.runAsync(() => library.save(MusicLibraryEntry(
+        kind: MusicLibraryKind.artist, id: artistId, title: 'Saved channel')));
+    catalog.artistReleases[artistId] =
+        const MusicArtistReleases(releases: [oldRelease]);
+    catalog.chartTracks = [_discovered];
+    await show(tester);
+    expect(find.text(oldRelease.title), findsOneWidget);
+    expect(find.text(_discovered.title), findsOneWidget);
+
+    catalog.artistReleases[artistId] =
+        const MusicArtistReleases(releases: [newRelease]);
+    catalog.chartTracks = const [
+      MusicTrack(videoId: 'newchart001', title: 'New chart song')
+    ];
+    await tester.runAsync(
+        () => NetworkProxy.instance.apply(SocksProxyConfig(enabled: true)));
+    await tester.pumpAndSettle();
+    expect(find.text(oldRelease.title), findsNothing);
+    expect(find.text(_discovered.title), findsNothing);
+    expect(find.text(newRelease.title), findsOneWidget);
+    expect(find.text('New chart song'), findsOneWidget);
+    expect(catalog.chartRequests, hasLength(2));
+    expect(catalog.artistReleaseRequests, [artistId, artistId]);
+  });
+
+  testWidgets('initial chart failure allows retry after instance cooldown',
+      (tester) async {
+    catalog.chartFailure = InvidiousServiceError('Too many requests',
+        statusCode: 429, retryAfter: const Duration(minutes: 1));
+    await show(tester);
+    final retry = find.byKey(const ValueKey('music-home-fresh-retry'));
+    expect(tester.widget<TextButton>(retry).onPressed, isNull);
+    expect(catalog.chartRequests, hasLength(1));
+    await tester.pump(const Duration(minutes: 1));
+    expect(tester.widget<TextButton>(retry).onPressed, isNotNull);
+    expect(catalog.chartRequests, hasLength(1));
+
+    catalog.chartFailure = null;
+    catalog.chartTracks = [_discovered];
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pumpAndSettle();
+    expect(retry, findsNothing);
+    expect(find.byKey(const ValueKey('music-home-chart')), findsOneWidget);
+    expect(catalog.chartRequests, hasLength(2));
+  });
+
+  testWidgets('changing chart region respects the active instance cooldown',
+      (tester) async {
+    catalog.chartFailure = InvidiousServiceError('Too many requests',
+        statusCode: 429, retryAfter: const Duration(minutes: 1));
+    await show(tester);
+    expect(catalog.chartRequests, hasLength(1));
+    await show(tester, active: false);
+    await tester
+        .runAsync(() => db.saveSetting(SettingsValue(browsingCountry, 'JP')));
+    catalog.chartFailure = null;
+    catalog.chartTracks = [_discovered];
+    await show(tester);
+    expect(catalog.chartRequests, hasLength(1));
+    await tester.pump(const Duration(minutes: 1));
+    await tester.pumpAndSettle();
+    expect(catalog.chartRequests, hasLength(2));
+    expect(
+        catalog.chartRequests.last,
+        musicCharts
+            .firstWhere((chart) => chart.countryCode == 'JP')
+            .playlistId);
+    expect(find.text(_discovered.title), findsOneWidget);
+  });
+
+  testWidgets('Home requests releases for only three saved artist channels',
+      (tester) async {
+    const release =
+        MusicCollection(id: 'OLAK5uy_homeRelease', title: 'Artist release');
+    final ids = List.generate(4, (index) => 'UC${'a' * 21}$index');
+    await tester.runAsync(() async {
+      for (final id in ids) {
+        await library.save(MusicLibraryEntry(
+            kind: MusicLibraryKind.artist, id: id, title: 'Saved channel $id'));
+        catalog.artistReleases[id] =
+            const MusicArtistReleases(releases: [release]);
+      }
+    });
+    catalog.artistReleases[ids.last] = MusicArtistReleases(releases: [
+      ...List.generate(
+          6,
+          (i) => MusicCollection(
+              id: 'OLAK5uy_home$i', title: 'Latest saved artist release $i')),
+      release,
+    ]);
+    await show(tester);
+
+    expect(catalog.artistReleaseRequests, ids.reversed.take(3));
+    expect(find.text('Releases from saved artists'), findsOneWidget);
+    final card = find.text(release.title);
+    expect(card, findsOneWidget);
+    await tester.ensureVisible(card);
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+    final args = router.pushed!.args as MusicRouteArgs;
+    expect(args.playlistId, release.id);
+  });
 
   Future<void> playFromMenu(WidgetTester tester, Finder row) async {
     router.pushed = null;

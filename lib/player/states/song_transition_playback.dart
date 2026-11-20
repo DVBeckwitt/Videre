@@ -281,6 +281,12 @@ class _SongTransitionPlayback {
         _mode == SongTransitionMode.crossfade &&
         playbackQueueId(entry) == _successorId;
     try {
+      // A manual reservation or an earlier audible overlap may have owned
+      // this decoder while the user changed the streaming default.
+      if (entry is Video) {
+        owner._refreshStandbyQuality(
+            slot, MusicStreamingQuality.forDatabase(db));
+      }
       final prepared = await slot.ready;
       if (!current() || prepared == null) return;
       final active = await resolveAudioPlaybackSources(

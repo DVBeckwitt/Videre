@@ -102,6 +102,15 @@ abstract class MusicCatalogService {
   Future<MusicArtistPage> getArtist(String id) async =>
       throw const MusicCatalogUnsupported();
 
+  Future<MusicArtistReleases> getArtistReleases(String id,
+          {String? continuation, bool Function()? isCurrent}) async =>
+      throw const MusicCatalogUnsupported();
+
+  /// Reads the first page of a known regional or worldwide Music chart.
+  Future<List<MusicTrack>> getChartSongs(String playlistId,
+          {bool Function()? isCurrent}) async =>
+      throw const MusicCatalogUnsupported();
+
   Future<MusicCollection> getPlaylist(String id) async =>
       throw const MusicCatalogUnsupported();
 }

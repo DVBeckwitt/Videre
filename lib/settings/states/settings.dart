@@ -24,6 +24,7 @@ import '../../home/models/content_mode.dart';
 import '../../home/models/home_tabs_layout.dart';
 import '../../music/models/music_layout.dart';
 import '../../music/models/song_transition.dart';
+import '../../player/models/music_audio_quality.dart';
 import '../../player/models/video_display_mode.dart';
 import '../../player/states/player.dart';
 import '../../recommendations/recommendation_service.dart';
@@ -543,6 +544,9 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setSongTransitionMode(SongTransitionMode mode) =>
       _saveSettingInOrder(songTransitionModeSettingName, () => mode.name);
 
+  Future<void> setMusicStreamingQuality(MusicStreamingQuality quality) =>
+      _saveSettingInOrder(musicStreamingQualitySettingName, () => quality.name);
+
   Future<void> setSongTransitionSeconds(int seconds) {
     RangeError.checkValueInInterval(
         seconds, minSongTransitionSeconds, maxSongTransitionSeconds, 'seconds');
@@ -799,6 +803,11 @@ sealed class SettingsState with _$SettingsState {
       SongTransitionMode.fromStorage(
           _get(songTransitionModeSettingName)?.value) ??
       SongTransitionMode.seamless;
+
+  MusicStreamingQuality get musicStreamingQuality =>
+      MusicStreamingQuality.fromStorage(
+          _get(musicStreamingQualitySettingName)?.value) ??
+      MusicStreamingQuality.auto;
 
   int get songTransitionSeconds {
     final saved =

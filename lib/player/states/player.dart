@@ -1863,25 +1863,60 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
-  /// Save under the old person before the application selects the new one.
-  /// Clear immediately: an animation callback must never clear the next queue.
-  Future<void> prepareForProfileSwitch() async {
+  /// Android removed the task from Recents. The cached playback engine can
+  /// outlive its Activity, and TV routes can own separate decoders.
+  static Future<void> stopForTaskRemoval(MediaHandler handler) async {
+    final players = _runtimePlayers
+        .where((p) => !p.isClosed && !p._isDisposing && !p._switchingProfile)
+        .toList();
+    final audioSession =
+        players.where((p) => p._hasAudioSession).firstOrNull?.audioSession;
+    bool hasActiveOwner() =>
+        _sessionOwner?.state.hasVideo == true || _podcastOwner?.active == true;
+    try {
+      await Future.wait([
+        for (final player in players)
+          player._retirePlaybackSession(changingProfile: false),
+      ]);
+    } finally {
+      // Publishing idle can destroy the detached Flutter engine. Finish saving
+      // and stopping decoders first, and preserve a newly started session.
+      if (!hasActiveOwner()) {
+        try {
+          await audioSession?.setActive(false);
+        } finally {
+          if (!hasActiveOwner()) await handler.clearSession();
+        }
+      }
+    }
+  }
+
+  Future<void> prepareForProfileSwitch() =>
+      _retirePlaybackSession(changingProfile: true);
+
+  /// Save under the current person and retire decoders without a UI animation.
+  Future<void> _retirePlaybackSession({required bool changingProfile}) async {
     if (isClosed) return;
     _cancelMusicSelection();
     _adjacentMusic.reset();
     _clearSponsorPreparation();
     _selectedWatchVideoId = null;
     final learning = _finishLearning();
-    final stoppingPodcast = activePodcast?.stop();
+    final stoppingPodcast =
+        activePodcast?.stop(clearMediaSession: changingProfile);
     final clearingSound = musicSound.resetSession();
     _clearPlaybackRecovery(resetBudget: true);
     _clearMetadataRetry();
     pause();
     final saved = _saveSession(state);
+    _watchRepository = null;
+    _watchAccount = null;
+    _watchVideoId = null;
+    _watchRevision = null;
     _bindPlaylist(null, []);
-    _switchingProfile = true;
+    if (changingProfile) _switchingProfile = true;
     _progressGeneration++;
-    _videoSwitchGeneration++;
+    final generation = ++_videoSwitchGeneration;
     _requestedBackendVideoId = null;
     _backendSwitchPending = false;
     _manualSelectionPending = false;
@@ -1895,7 +1930,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         List.of(_beforeProfileSwitch).map((callback) => callback()));
     // Late decoder events are blocked above. Publish idle explicitly because
     // the UI can dispose before its queued pause event reaches AudioService.
-    final clearingSession = _mediaSessionHandler?.clearSession();
+    final clearingSession =
+        changingProfile ? _mediaSessionHandler?.clearSession() : null;
     emit(PlayerState.init(null));
     await Future.wait([
       learning,
@@ -1905,13 +1941,15 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       if (stoppingPodcast != null) stoppingPodcast,
       if (clearingSession != null) clearingSession
     ]);
+    if (!changingProfile &&
+        (isClosed || generation != _videoSwitchGeneration)) {
+      return;
+    }
     if (_sessionOwner == this) _sessionOwner = null;
-    if (_hasAudioSession) await audioSession.setActive(false);
-    await _updateAutoPip(state, disable: true);
-    _watchRepository = null;
-    _watchAccount = null;
-    _watchVideoId = null;
-    _watchRevision = null;
+    if (changingProfile) {
+      if (_hasAudioSession) await audioSession.setActive(false);
+      await _updateAutoPip(state, disable: true);
+    }
   }
 
   Future<void> reloadForProfile() async {

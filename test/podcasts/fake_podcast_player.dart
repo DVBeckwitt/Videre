@@ -60,7 +60,7 @@ class FakePodcastPlayer extends ChangeNotifier implements PodcastPlayer {
   }
 
   @override
-  Future<void> stop() async {
+  Future<void> stop({bool clearMediaSession = true}) async {
     stopCalls++;
     generation++;
     episode = null;

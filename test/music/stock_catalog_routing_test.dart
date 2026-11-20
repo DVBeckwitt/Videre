@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:clipious/globals.dart';
+import 'package:clipious/music/models/music_charts.dart';
 import 'package:clipious/music/services/invidious_music_catalog_service.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -9,6 +10,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +22,7 @@ const videoId = 'abcdefghijk';
 const channelId = 'UC0123456789012345678901';
 const playlistId = 'PLstockmusic';
 const mixId = 'RDabcdefghijk';
+const albumId = 'OLAK5uy_stockAlbum';
 const song = {
   'videoId': videoId,
   'type': 'video',
@@ -100,6 +103,22 @@ void main() {
           return json(request, {
             'videos': [song, privateSong]
           });
+        case '/api/v1/channels/$channelId/releases':
+          return json(request, {
+            'playlists': [
+              {
+                'playlistId': 'VL$albumId',
+                'title': 'Album',
+                'author': 'Artist',
+                'videoCount': 1,
+                'playlistThumbnail':
+                    'https://i.ytimg.com/vi/$videoId/hqdefault.jpg',
+              },
+              {'playlistId': 'https://music.youtube.com', 'title': 'Invalid'},
+            ],
+            if (!request.url.queryParameters.containsKey('continuation'))
+              'continuation': 'page+=2',
+          });
         case '/api/v1/playlists/$playlistId':
           return json(request, {
             ...playlist,
@@ -111,6 +130,14 @@ void main() {
             'title': 'Mix',
             'videos': [song, privateSong]
           });
+        case '/api/v1/playlists/$albumId':
+          return json(request, {
+            ...playlist,
+            'playlistId': albumId,
+            'title': 'Album',
+            'videoCount': 1,
+            'videos': [song],
+          });
         default:
           fail('Unexpected instance path ${request.url.path}');
       }
@@ -121,6 +148,91 @@ void main() {
     api.httpClient.close();
     await NetworkProxy.instance.initialize(saved: '{}', configureNative: false);
     await db.close();
+  });
+
+  test('releases page and album tracks stay on the selected instance',
+      () async {
+    final music = InvidiousMusicCatalogService(api: api);
+    final first = await music.getArtistReleases(channelId);
+    final release = first.releases.single;
+    expect(release.id, albumId);
+    expect(release.title, 'Album');
+    expect(release.thumbnails.single.url, contains(videoId));
+    expect(first.continuation, 'page+=2');
+    final second = await music.getArtistReleases(channelId,
+        continuation: first.continuation);
+    expect(second.continuation, isNull);
+    expect(calls.last.queryParameters['continuation'], 'page+=2');
+    final album = await music.getPlaylist(release.id);
+    expect(album.tracks.single.videoId, videoId);
+    expect(calls.map((uri) => uri.path), [
+      '/api/v1/channels/$channelId/releases',
+      '/api/v1/channels/$channelId/releases',
+      '/api/v1/playlists/$albumId',
+    ]);
+    expect(calls.every((uri) => uri.origin == instance), isTrue);
+  });
+
+  test('artists retain uploads when the instance lacks the releases API',
+      () async {
+    final success = respond;
+    respond = (request) async => request.url.path.endsWith('/releases')
+        ? json(request, {'error': 'Not found'}, status: 404)
+        : await success(request);
+    final music = InvidiousMusicCatalogService(api: api);
+    expect((await music.getArtistReleases(channelId)).releases, isEmpty);
+    expect((await music.getArtist(channelId)).songs.single.videoId, videoId);
+  });
+
+  test('release redirects cannot contact YouTube directly', () async {
+    respond = (request) async => http.Response('', 302,
+            request: request,
+            headers: {
+              'location': 'https://music.youtube.com/playlist?list=$albumId'
+            });
+    await expectLater(
+        InvidiousMusicCatalogService(api: api).getArtistReleases(channelId),
+        throwsA(isA<http.ClientException>()));
+    expect(calls.single.origin, instance);
+  });
+
+  test('charts read a single page even when more tracks are advertised',
+      () async {
+    final chart = musicCharts.first.playlistId;
+    respond = (request) async => json(request, {
+          ...playlist,
+          'playlistId': chart,
+          'videoCount': 100,
+          'videos': [
+            privateSong,
+            {
+              ...song,
+              'videoId': 'premiere001',
+              'premiereTimestamp': DateTime.now()
+                      .add(const Duration(days: 1))
+                      .millisecondsSinceEpoch ~/
+                  1000,
+            },
+            for (var i = 0; i < 24; i++)
+              {
+                ...song,
+                'videoId': 'excluded${i.toString().padLeft(3, '0')}',
+                'title': 'Excluded'
+              },
+            song,
+            song,
+          ],
+        });
+    await db.saveFilter(VideoFilter(value: 'Excluded')..hideFromFeed = true);
+    final music = InvidiousMusicCatalogService(api: api);
+    expect((await music.getChartSongs(chart)).single.videoId, videoId);
+    final url = calls.single;
+    expect(url.origin, instance);
+    expect(url.path, '/api/v1/playlists/$chart');
+    expect(url.queryParameters['page'], '1');
+    expect(() => music.getChartSongs('PLunknown'),
+        throwsA(isA<MusicCatalogException>()));
+    expect(calls, hasLength(1));
   });
 
   test(
@@ -174,6 +286,9 @@ void main() {
     'discovery search': (music) => music.getDiscoverySongs(),
     'genre search': (music) => music.getGenreSongs('pop'),
     'artist': (music) => music.getArtist(channelId),
+    'artist releases': (music) => music.getArtistReleases(channelId),
+    'regional chart': (music) =>
+        music.getChartSongs(musicCharts.first.playlistId),
     'playlist': (music) => music.getPlaylist(playlistId),
     'mix': (music) => music.getPlaylist(mixId),
     'song': (music) => music.getSong(videoId),

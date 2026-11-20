@@ -193,6 +193,10 @@ class HeaderEofRecoveryTest {
                     assertEquals(22, record[0].toInt())
                     val length = ((record[3].toInt() and 255) shl 8) or (record[4].toInt() and 255)
                     input.readFully(ByteArray(length))
+                    // Send a TCP FIN during the handshake. Closing both directions
+                    // immediately can reset the connection as the client sends its TLS alert.
+                    socket.shutdownOutput()
+                    input.readBytes()
                 }
                 fixture.assertNoConnection()
             }

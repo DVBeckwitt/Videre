@@ -19,6 +19,7 @@ typedef AudioPlaybackSources = ({
   BackendPlayback? menuRoute,
   Set<MusicAudioQuality> qualities,
   Map<AudioSource, MusicAudioQuality> sourceQualities,
+  MusicStreamingQuality streamingQuality,
 });
 
 bool samePreparedAudioSource(
@@ -47,6 +48,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   required String sessionId,
   required bool Function() isCurrent,
   MusicAudioQuality? qualityPreference,
+  MusicStreamingQuality? streamingQualityOverride,
   BackendPlayback? qualityRoute,
   bool skipDownload = false,
 }) async {
@@ -54,6 +56,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   final qualities = <MusicAudioQuality>{};
   final sourceQualities = <AudioSource, MusicAudioQuality>{};
   BackendPlayback? menuRoute;
+  var streamingQuality = MusicStreamingQuality.auto;
   if (isLocalMusicPlaybackId(offlineVideo?.videoId)) {
     final track = localMusicTrackForPlayback(offlineVideo!.videoId);
     if (track == null || offlineVideo.profileId != db.profileId) {
@@ -81,7 +84,11 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     final server = playback?.server ?? selectedServer;
     if (video == null) return null;
     final music = video.musicMetadata != null;
-    if (music) menuRoute = playback ?? BackendPlayback(server);
+    if (music) {
+      menuRoute = playback ?? BackendPlayback(server);
+      streamingQuality =
+          streamingQualityOverride ?? MusicStreamingQuality.forDatabase(db);
+    }
     final local = skipDownload || qualityPreference != null
         ? null
         : await resolveDownloadPlaybackSource(
@@ -144,6 +151,8 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
       if (qualityPreference != null)
         for (final entry in qualityByUrl.entries)
           if (entry.value == qualityPreference) entry.key,
+      if (streamingQuality == MusicStreamingQuality.dataSaver)
+        ...qualityByUrl.keys.toList().reversed,
       ...audioByUrl.keys,
       ...combined.map(admit).whereType<String>(),
     };
@@ -166,6 +175,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     sources: sources,
     menuRoute: menuRoute,
     qualities: qualities,
-    sourceQualities: sourceQualities
+    sourceQualities: sourceQualities,
+    streamingQuality: streamingQuality,
   );
 }

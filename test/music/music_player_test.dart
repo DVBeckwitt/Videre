@@ -19,6 +19,7 @@ import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
+import 'package:clipious/music/models/music_cover_corners.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/views/components/music_selection_feedback.dart';
@@ -36,6 +37,7 @@ import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/audio_player.dart';
 import 'package:clipious/player/states/player.dart';
@@ -258,6 +260,7 @@ void main() {
   Future<void> pump(WidgetTester tester,
       {Size size = const Size(390, 844),
       double scale = 1,
+      bool disableAnimations = false,
       Widget child = const MusicPlayer()}) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = size;
@@ -273,8 +276,9 @@ void main() {
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
           builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(context)
-                  .copyWith(textScaler: TextScaler.linear(scale)),
+              data: MediaQuery.of(context).copyWith(
+                  textScaler: TextScaler.linear(scale),
+                  disableAnimations: disableAnimations),
               child: child!),
           home: Scaffold(body: child),
         )));
@@ -1026,6 +1030,85 @@ void main() {
     expect(player.state.currentlyPlaying?.videoId, next.videoId);
   });
 
+  for (final disableAnimations in [false, true]) {
+    testWidgets(
+        'Synced lyrics follow playback and yield to scrolling (motion off: $disableAnimations)',
+        (tester) async {
+      await tester.runAsync(() => setLrclibEnabled(true));
+      final cues = [
+        for (var i = 0; i < 80; i++)
+          (start: Duration(seconds: i * 2), text: 'Lyric line $i'),
+      ];
+      await pump(tester,
+          disableAnimations: disableAnimations,
+          child: MusicPlayer(
+              lyricsLoader: (_, __, ___) async => MusicLyrics.synced(cues)));
+      await tap(tester, 'music-player-lyrics');
+      await tester.pumpAndSettle();
+
+      Finder line(int index) =>
+          find.widgetWithText(ListTile, 'Lyric line $index');
+      final viewport = find.descendant(
+          of: find.byKey(const ValueKey('music-lyrics-lines')),
+          matching: find.byType(Scrollable));
+      final follow = find.widgetWithText(FilterChip, 'Follow lyrics');
+      bool following() => tester.widget<FilterChip>(follow).selected;
+      expect(line(15).hitTestable(), findsOneWidget);
+      final selected = tester.widget<ListTile>(line(15));
+      expect(selected.selected, isTrue);
+      expect(selected.titleTextStyle?.fontWeight, FontWeight.w700);
+      expect(
+          tester
+              .widget<AnimatedContainer>(find.descendant(
+                  of: line(15), matching: find.byType(AnimatedContainer)))
+              .duration,
+          disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 180));
+      expect(following(), isTrue);
+
+      await player.seed(player.state.copyWith(position: cues[16].start));
+      await tester.pumpAndSettle();
+      expect(tester.widget<ListTile>(line(16)).selected, isTrue);
+      expect(line(16).hitTestable(), findsOneWidget);
+      expect(following(), isTrue);
+
+      final rowFocus = Focus.of(tester.element(find.text('Lyric line 16')));
+      rowFocus.requestFocus();
+      await tester.pumpAndSettle();
+      expect(following(), isFalse);
+      final followFocus = Focus.of(tester.element(find.text('Follow lyrics')));
+      followFocus.requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(following(), isTrue);
+      expect(followFocus.hasPrimaryFocus, isTrue);
+
+      await tester.drag(viewport, const Offset(0, 240));
+      await tester.pumpAndSettle();
+      expect(following(), isFalse);
+      final pausedPosition = tester.state<ScrollableState>(viewport).position;
+      final pausedOffset = pausedPosition.pixels;
+      await player.seed(player.state.copyWith(position: cues[70].start));
+      await tester.pumpAndSettle();
+      expect(line(70).hitTestable(), findsNothing);
+      expect(pausedPosition.pixels, pausedOffset);
+
+      await tester.tap(follow);
+      await tester.pumpAndSettle();
+      expect(following(), isTrue);
+      expect(line(70).hitTestable(), findsOneWidget);
+      expect(tester.widget<ListTile>(line(70)).selected, isTrue);
+
+      await player.seed(player.state.copyWith(position: Duration.zero));
+      await tester.pumpAndSettle();
+      expect(line(0).hitTestable(), findsOneWidget);
+      expect(tester.widget<ListTile>(line(0)).selected, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets(
       'A lyric database miss on a captioned track never fetches speech text',
       (tester) async {
@@ -1100,6 +1183,30 @@ void main() {
     await pressAndroidBack(tester);
   });
 
+  testWidgets('the active profile controls cover corners in Now Playing',
+      (tester) async {
+    await pump(tester);
+    final artwork = find.byKey(const ValueKey('music-player-artwork'));
+    BorderRadiusGeometry? corners() =>
+        (tester.widget<Container>(artwork).decoration! as BoxDecoration)
+            .borderRadius;
+
+    expect(corners(), isNot(BorderRadius.zero));
+    await tester.runAsync(() async {
+      final other = await db.createProfile('Another listener');
+      await MusicCoverCorners.square.save(db);
+      expect(MusicCoverCorners.forDatabase(db.forProfile(other.id)),
+          MusicCoverCorners.rounded);
+    });
+    await tester.pump();
+    expect(corners(), BorderRadius.zero);
+    expect(player.state.currentlyPlaying, song);
+
+    await tester.runAsync(() => MusicCoverCorners.rounded.save(db));
+    await tester.pump();
+    expect(corners(), isNot(BorderRadius.zero));
+  });
+
   for (final (size, scale) in [
     (const Size(320, 568), 2.5),
     (const Size(390, 844), 1.0),
@@ -1112,6 +1219,14 @@ void main() {
       final artwork =
           tester.getSize(find.byKey(const ValueKey('music-player-artwork')));
       expect(artwork.width, artwork.height);
+      if (size == const Size(390, 844)) {
+        expect(artwork.width, greaterThanOrEqualTo(350));
+        expect(
+            tester
+                .getBottomRight(find.byKey(const ValueKey('music-player-play')))
+                .dy,
+            lessThanOrEqualTo(size.height));
+      }
       expect(find.text('Singer'), findsWidgets);
       expect(find.text('Album'), findsOneWidget);
       await tester
@@ -1382,7 +1497,13 @@ void main() {
     // All primary and secondary controls should be reachable without a scroll.
     final rail = find.byKey(const ValueKey('music-player-actions'));
     expect(tester.getRect(rail).bottom, lessThanOrEqualTo(696));
-    for (final control in ['play', 'queue', 'sleep', 'sound']) {
+    for (final control in [
+      'play',
+      'queue',
+      'sleep',
+      'sound',
+      'audio-quality'
+    ]) {
       expect(find.byKey(ValueKey('music-player-$control')).hitTestable(),
           findsOneWidget);
     }
@@ -1415,6 +1536,37 @@ void main() {
     await tap(tester, 'music-player-queue');
     expect(find.byType(MusicQueue), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'Android Back closes both Music quality dialogs before the player',
+      (tester) async {
+    await pump(tester);
+    BackButtonInterceptor.add(player.handleBackButton,
+        name: 'miniPlayer', zIndex: 2, ifNotYetIntercepted: true);
+    await tap(tester, 'music-player-audio-quality');
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(player.state.isMini, isFalse);
+
+    const quality = (itag: '140', bitrate: 128000, codec: 'AAC', trackId: null);
+    player.musicAudioQuality = MusicAudioQualityMenu(
+        videoId: song.videoId,
+        choices: [quality],
+        selected: null,
+        effective: quality,
+        saved: false,
+        select: (_) async => fail('Dismissing must preserve the rendition'));
+    await tap(tester, 'music-player-audio-quality');
+    await tester.pumpAndSettle();
+    expect(find.byType(SimpleDialog), findsOneWidget);
+    await pressAndroidBack(tester);
+    expect(find.byType(SimpleDialog), findsNothing);
+    expect(player.state.isMini, isFalse);
+    await pressAndroidBack(tester);
+    expect(player.state.isMini, isTrue);
   });
 
   testWidgets('Android Back unwinds Music queue popup, selection and player',

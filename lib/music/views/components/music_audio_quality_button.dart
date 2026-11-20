@@ -5,9 +5,12 @@ import '../../../l10n/generated/app_localizations.dart';
 import '../../../player/models/local_music_playback.dart';
 import '../../../player/models/music_audio_quality.dart';
 import '../../../player/states/player.dart';
+import '../../../player/views/components/player_modal_back_handler.dart';
 
 class MusicAudioQualityButton extends StatelessWidget {
-  const MusicAudioQualityButton({super.key});
+  final bool showLabel;
+
+  const MusicAudioQualityButton({super.key, this.showLabel = false});
 
   static String _label(MusicAudioQuality quality) =>
       '${(quality.bitrate / 1000).round()} kbps · ${quality.codec}';
@@ -28,7 +31,8 @@ class MusicAudioQualityButton extends StatelessWidget {
         menu.choices.isEmpty) {
       await showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (context) => PlayerModalBackHandler(
+            child: AlertDialog(
           title: Text(locals.musicAudioQuality),
           content: Text(saved || menu?.saved == true
               ? locals.musicAudioQualitySaved
@@ -40,13 +44,14 @@ class MusicAudioQualityButton extends StatelessWidget {
               child: Text(MaterialLocalizations.of(context).closeButtonLabel),
             ),
           ],
-        ),
+        )),
       );
       return;
     }
     final result = await showDialog<({MusicAudioQuality? quality})>(
       context: context,
-      builder: (context) => SimpleDialog(
+      builder: (context) => PlayerModalBackHandler(
+          child: SimpleDialog(
         title: Text(locals.musicAudioQuality),
         children: [
           for (final choice in [null, ...menu.choices])
@@ -54,7 +59,7 @@ class MusicAudioQualityButton extends StatelessWidget {
               autofocus: menu.selected == choice,
               selected: menu.selected == choice,
               title: Text(choice == null
-                  ? locals.musicAudioQualityAuto
+                  ? locals.musicAudioQualityProfileDefault
                   : _label(choice)),
               subtitle: choice == null && menu.selected == null
                   ? menu.saved
@@ -68,7 +73,7 @@ class MusicAudioQualityButton extends StatelessWidget {
               onTap: () => Navigator.pop(context, (quality: choice)),
             ),
         ],
-      ),
+      )),
     );
     if (result == null ||
         !context.mounted ||
@@ -87,10 +92,30 @@ class MusicAudioQualityButton extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => IconButton(
-        key: const ValueKey('music-player-audio-quality'),
-        tooltip: AppLocalizations.of(context)!.musicAudioQuality,
-        onPressed: () => _open(context),
-        icon: const Icon(Icons.high_quality_outlined),
+  Widget build(BuildContext context) {
+    const key = ValueKey('music-player-audio-quality');
+    const icon = Icon(Icons.high_quality_outlined);
+    final label = AppLocalizations.of(context)!.musicAudioQuality;
+    if (showLabel) {
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 136),
+        child: Tooltip(
+          message: label,
+          excludeFromSemantics: true,
+          child: TextButton.icon(
+            key: key,
+            onPressed: () => _open(context),
+            icon: icon,
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        ),
       );
+    }
+    return IconButton(
+      key: key,
+      tooltip: label,
+      onPressed: () => _open(context),
+      icon: icon,
+    );
+  }
 }

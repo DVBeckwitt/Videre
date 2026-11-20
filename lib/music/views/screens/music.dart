@@ -46,6 +46,7 @@ import 'package:clipious/search/views/components/pasted_link_dialog.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/models/image_object.dart';
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
@@ -58,6 +59,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 enum _MusicSearch { songs, artists, playlists }
+
+class _ArtistReleaseListing {
+  final releases = <String, MusicCollection>{};
+  final requestedContinuations = <String>{};
+  String? continuation;
+  bool loading = false;
+  bool failed = false;
+}
 
 @RoutePage()
 class MusicScreen extends StatefulWidget {
@@ -235,8 +244,12 @@ class MusicScreenState extends State<MusicScreen> {
   List<MusicPlaylist> _playlists = [];
   MusicCollection? _collection;
   MusicArtistPage? _artistPage;
-  final _browseHistory =
-      <({MusicCollection? collection, MusicArtistPage? artist})>[];
+  _ArtistReleaseListing? _artistReleases;
+  final _browseHistory = <({
+    MusicCollection? collection,
+    MusicArtistPage? artist,
+    _ArtistReleaseListing? releases,
+  })>[];
   bool _loading = false;
   bool _browseRequest = false;
   bool _retryingSong = false;
@@ -252,7 +265,8 @@ class MusicScreenState extends State<MusicScreen> {
   int? _abandonedSongRequest;
   Future<void> Function()? _retry;
 
-  bool get _hasBrowsePage => _collection != null || _artistPage != null;
+  bool get _hasBrowsePage =>
+      _collection != null || _artistPage != null || _browseHistory.isNotEmpty;
 
   void focusSearch({VoidCallback? onBack}) {
     if (onBack != null) setState(() => _shortcutBack = onBack);
@@ -352,6 +366,7 @@ class MusicScreenState extends State<MusicScreen> {
       _playlists = [];
       _collection = null;
       _artistPage = null;
+      _artistReleases = null;
       _browseHistory.clear();
       _retry = null;
     });
@@ -378,6 +393,18 @@ class MusicScreenState extends State<MusicScreen> {
     if (!_sameSession(session)) return;
     final generation = ++_generation;
     setState(() {
+      // Back must restore the source even while the destination is loading
+      // or showing its retry action.
+      if (browse && (_collection != null || _artistPage != null)) {
+        _browseHistory.add((
+          collection: _collection,
+          artist: _artistPage,
+          releases: _artistReleases,
+        ));
+        _collection = null;
+        _artistPage = null;
+        _artistReleases = null;
+      }
       _loading = true;
       _browseRequest = browse;
       _retryingSong = false;
@@ -432,6 +459,7 @@ class MusicScreenState extends State<MusicScreen> {
       _showCommunityHidden = false;
       _collection = null;
       _artistPage = null;
+      _artistReleases = null;
       _browseHistory.clear();
       _songs = [];
       _artists = [];
@@ -470,22 +498,9 @@ class MusicScreenState extends State<MusicScreen> {
     await _run((generation, session) async {
       final collection = await musicCatalogService.getPlaylist(id);
       if (_active(generation, session)) {
-        setState(() {
-          _rememberBrowsePage();
-          _collection = collection;
-          _artistPage = null;
-        });
+        setState(() => _collection = collection);
       }
     }, () => _openCollection(id), browse: true);
-  }
-
-  void _rememberBrowsePage() {
-    if (_collection != null || _artistPage != null) {
-      _browseHistory.add((
-        collection: _collection,
-        artist: _artistPage,
-      ));
-    }
   }
 
   Future<void> _openArtist(String id) async {
@@ -493,13 +508,50 @@ class MusicScreenState extends State<MusicScreen> {
     await _run((generation, session) async {
       final artist = await musicCatalogService.getArtist(id);
       if (_active(generation, session)) {
+        final releases = _ArtistReleaseListing();
         setState(() {
-          _rememberBrowsePage();
           _artistPage = artist;
-          _collection = null;
+          _artistReleases = releases;
         });
+        unawaited(_loadArtistReleases(artist.artist.id, releases, session));
       }
     }, () => _openArtist(id), browse: true);
+  }
+
+  Future<void> _loadArtistReleases(
+      String artistId, _ArtistReleaseListing listing, AppState session) async {
+    bool current() =>
+        _sameSession(session) &&
+        (identical(_artistReleases, listing) ||
+            _browseHistory.any((page) => identical(page.releases, listing)));
+    if (!current() || listing.loading) return;
+    setState(() {
+      listing.loading = true;
+      listing.failed = false;
+    });
+    final continuation = listing.continuation;
+    try {
+      final page = await musicCatalogService.getArtistReleases(artistId,
+          continuation: continuation, isCurrent: current);
+      if (!current()) return;
+      for (final release in page.releases) {
+        listing.releases.putIfAbsent(release.id, () => release);
+      }
+      if (continuation != null) {
+        listing.requestedContinuations.add(continuation);
+      }
+      listing.continuation =
+          listing.requestedContinuations.contains(page.continuation)
+              ? null
+              : page.continuation;
+    } on MusicCatalogUnsupported {
+      listing.continuation = null;
+    } catch (_) {
+      listing.failed = true;
+    } finally {
+      listing.loading = false;
+      if (current() && identical(_artistReleases, listing)) setState(() {});
+    }
   }
 
   Future<void> _openSong(String id, {Duration startAt = Duration.zero}) async {
@@ -664,9 +716,11 @@ class MusicScreenState extends State<MusicScreen> {
         final previous = _browseHistory.removeLast();
         _collection = previous.collection;
         _artistPage = previous.artist;
+        _artistReleases = previous.releases;
       } else {
         _collection = null;
         _artistPage = null;
+        _artistReleases = null;
       }
       _loading = false;
       _browseRequest = false;
@@ -1013,6 +1067,8 @@ class MusicScreenState extends State<MusicScreen> {
             ),
         ]),
       ),
+      if (_artistReleases case final listing?)
+        ..._artistReleaseTiles(artistPage.artist.id, listing),
       if (artistPage.songs.isNotEmpty) ...[
         _sectionTitle(locals.musicChannelUploads),
         Align(
@@ -1034,6 +1090,57 @@ class MusicScreenState extends State<MusicScreen> {
             padding: const EdgeInsets.all(24),
             child: Text(locals.musicArtistEmpty)),
     ]);
+  }
+
+  List<Widget> _artistReleaseTiles(
+      String artistId, _ArtistReleaseListing listing) {
+    final locals = AppLocalizations.of(context)!;
+    final canLoad = listing.failed || listing.continuation != null;
+    if (listing.releases.isEmpty && !listing.loading && !canLoad) return [];
+    return [
+      _sectionTitle(locals.musicArtistReleases),
+      for (final release in listing.releases.values)
+        ListTile(
+          key: ValueKey('music-release-${release.id}'),
+          leading: release.thumbnails.isEmpty
+              ? const SizedBox.square(
+                  dimension: 48, child: Icon(Icons.album_outlined))
+              : Thumbnail(
+                  width: 48,
+                  height: 48,
+                  instanceOnly: true,
+                  images: release.thumbnails,
+                  decoration:
+                      BoxDecoration(borderRadius: BorderRadius.circular(6)),
+                  fallback: const Icon(Icons.album_outlined),
+                ),
+          title: Text(release.title),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _openCollection(release.id),
+        ),
+      if (listing.loading)
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(
+            child: SizedBox.square(
+              dimension: 24,
+              child: MotionLoadingIndicator(child: CircularProgressIndicator()),
+            ),
+          ),
+        )
+      else if (canLoad)
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextButton(
+              onPressed: () => _loadArtistReleases(
+                  artistId, listing, context.read<AppCubit>().state),
+              child: Text(listing.failed ? locals.retry : locals.loadMore),
+            ),
+          ),
+        ),
+    ];
   }
 
   Widget _sectionTitle(String title) => Padding(

@@ -34,6 +34,15 @@ and prepares selections for saved artists and genres. The **Discover music**
 shortcut appears when it can take you to songs. Artist and genre choices
 appear as their tracks become available. Select one to see its prepared list.
 
+While Music Home is visible, it also checks the first page of your regional
+chart, or the worldwide chart where no regional playlist is available. It
+checks one releases page for each of up to three saved artists. **From your
+regional chart** and **Releases from saved artists** appear when the instance
+returns usable results. Select a release to open its playlist. **Refresh**
+reloads the shelves through the selected instance and favors chart tracks
+you have not recently seen in the current Music session. A failed refresh
+keeps the previous results for the affected shelf.
+
 Swipe horizontally in **Quick Picks** to move one column at a time. Tap **⋮**
 on a song for **Play next**, **Add to queue**, and recommendation feedback such
 as **More like this**. Holding a song also opens its actions.
@@ -122,9 +131,10 @@ The existing browsing-country setting applies to Search and discovery.
 
 Search **Songs**, **Channels**, or **Playlists** through Invidious. Songs use
 the server's video search; Channels use channel search and show that channel's
-popular uploads. These are standard YouTube results supplied by Invidious, not
-a verified YouTube Music artist or album catalog. Public playlists retain the
-server's track order. Selecting a song starts from the beginning; **Resume listening**
+popular uploads. When the selected instance offers release playlists for the
+channel, the artist page shows **Releases** above the uploads. Select a release
+to open its public playlist. Channel and instance coverage vary. Public
+playlists retain the server's track order. Selecting a song starts from the beginning; **Resume listening**
 continues the saved Music session at its saved position.
 
 Public playlists, including `OLAK5uy_` IDs, use Invidious's standard playlist
@@ -297,9 +307,16 @@ that Google does not include cannot be reconstructed by this local importer.
 
 ## Audio quality, artwork, and lyrics
 
-In Music Now Playing, **Audio quality** shows the audio renditions available
-from your selected Invidious instance. Choose **Auto** to use Videre's default
-selection. A downloaded audio file has the quality it was saved with.
+**Settings → YT Music → Streaming audio quality** sets the active profile's
+preference for new Music streams. **Auto** uses Videre's normal source order.
+**Data saver** prefers the lowest advertised bitrate in the selected audio
+language, and **Highest available** prefers the highest. In Music Now Playing,
+**Audio quality** lists the renditions available from your selected Invidious
+instance. Choose a rendition for the playing song or select **Use profile
+default**. Downloaded audio has the quality it was saved with.
+
+**Settings → YT Music → Cover corners** chooses **Rounded** or **Square** for
+the cover in expanded Music Now Playing in the active profile.
 
 By default, Music displays a saved cover or an identifiable YouTube Art Track
 image through the selected Invidious instance. Ordinary uploads can show their
@@ -320,8 +337,12 @@ Expand Music Now Playing and tap **Lyrics** on the cover artwork to look up
 synced or plain lyrics from LRCLIB. The first lookup asks you to enable the
 provider. The same switch is available in **Settings → YT Music**. Videre sends
 the song's title, artist, and known album and duration when you open the panel.
-The Videre network proxy applies when enabled. Select a timed line to seek when playback
-supports it. Coverage depends on the recording match and LRCLIB's catalog.
+The Videre network proxy applies when enabled. The active timed line is
+highlighted and follows playback. Scroll manually to read ahead or behind,
+then select **Follow lyrics** to resume following. With animations off, the
+highlight and position update immediately. Select a timed line to seek when
+playback supports it. Coverage depends on the recording match and LRCLIB's
+catalog.
 [LRCLIB API](https://lrclib.net/docs.txt)
 
 ## Ads and SponsorBlock

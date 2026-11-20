@@ -9,6 +9,7 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 class MusicLyricsButton extends StatefulWidget {
@@ -248,33 +249,190 @@ class _MusicLyricsSheetState extends State<_MusicLyricsSheet> {
         itemBuilder: (context, index) => SelectableText(cues[index].text),
       );
 
-  Widget _timedLines(List<MusicLyricCue> cues) => ListView.builder(
-        key: const ValueKey('music-lyrics-lines'),
-        itemCount: cues.length,
-        itemBuilder: (context, index) {
-          final cue = cues[index];
-          var next = index + 1;
-          while (next < cues.length && cues[next].start == cue.start) {
-            next++;
+  Widget _timedLines(List<MusicLyricCue> cues) => _TimedLyrics(
+        cues: cues,
+        onSeek: (start) {
+          final player = context.read<PlayerCubit>();
+          final limit = _seekLimit(player.state);
+          if (widget.isCurrent() && limit != null && start <= limit) {
+            player.seek(start);
           }
-          final end = next < cues.length ? cues[next].start : null;
-          return BlocSelector<PlayerCubit, PlayerState, bool>(
-            selector: (state) =>
-                state.position >= cue.start &&
-                (end == null || state.position < end),
-            builder: (context, active) => ListTile(
-              selected: active,
-              leading: Text(prettyDurationCustom(cue.start)),
-              title: Text(cue.text),
-              onTap: () {
-                final player = context.read<PlayerCubit>();
-                final limit = _seekLimit(player.state);
-                if (widget.isCurrent() && limit != null && cue.start <= limit) {
-                  player.seek(cue.start);
-                }
-              },
-            ),
-          );
         },
       );
+}
+
+class _TimedLyrics extends StatefulWidget {
+  final List<MusicLyricCue> cues;
+  final ValueChanged<Duration> onSeek;
+
+  const _TimedLyrics({required this.cues, required this.onSeek});
+
+  @override
+  State<_TimedLyrics> createState() => _TimedLyricsState();
+}
+
+class _TimedLyricsState extends State<_TimedLyrics> {
+  static const _center = ValueKey('music-lyrics-current-section');
+  static const _alignment = 0.32;
+  final _lineKeys = <int, GlobalKey>{};
+  late int _anchor;
+  int? _lastFollowed;
+  bool _following = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final active = _activeLine(context.read<PlayerCubit>().state.position);
+    _anchor = active < 0 ? 0 : active;
+  }
+
+  int _activeLine(Duration position) {
+    final cues = widget.cues;
+    var start = 0;
+    var end = cues.length;
+    while (start < end) {
+      final middle = (start + end) ~/ 2;
+      if (cues[middle].start <= position) {
+        start = middle + 1;
+      } else {
+        end = middle;
+      }
+    }
+    if (start == 0) return -1;
+    final cueStart = cues[start - 1].start;
+    end = start - 1;
+    start = 0;
+    while (start < end) {
+      final middle = (start + end) ~/ 2;
+      if (cues[middle].start < cueStart) {
+        start = middle + 1;
+      } else {
+        end = middle;
+      }
+    }
+    return start;
+  }
+
+  void _reveal(int active, {bool animate = true}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_following || _lastFollowed != active) return;
+      final target = active < 0 ? 0 : active;
+      final row = _lineKeys[target]?.currentContext;
+      if (row != null) {
+        Scrollable.ensureVisible(row,
+            alignment: _alignment,
+            duration: animate ? AppMotion.duration(row) : Duration.zero,
+            curve: Curves.easeInOut);
+      } else if (_anchor != target) {
+        // A seek can land far outside the lazy viewport. Center a new
+        // viewport on that cue without laying out the intervening rows.
+        setState(() {
+          _anchor = target;
+          _lastFollowed = null;
+        });
+      }
+    });
+  }
+
+  void _pauseFollowing() {
+    if (_following) setState(() => _following = false);
+  }
+
+  Widget _line(BuildContext context, int index, Duration? activeStart) {
+    final cue = widget.cues[index];
+    final active = cue.start == activeStart;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    return IndexedSemantics(
+      index: index,
+      child: ListTile(
+        key: _lineKeys.putIfAbsent(index, GlobalKey.new),
+        selected: active,
+        selectedColor: colors.onSecondaryContainer,
+        selectedTileColor: colors.secondaryContainer,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        titleTextStyle: active
+            ? theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700)
+            : null,
+        leading: Row(mainAxisSize: MainAxisSize.min, children: [
+          AnimatedContainer(
+            duration: AppMotion.fadeDuration(
+                context, const Duration(milliseconds: 180)),
+            width: 4,
+            height: 24,
+            decoration: BoxDecoration(
+                color: active ? colors.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(width: 8),
+          Text(prettyDurationCustom(cue.start)),
+        ]),
+        title: Text(cue.text),
+        onFocusChange: (focused) {
+          if (focused) _pauseFollowing();
+        },
+        onTap: () => widget.onSeek(cue.start),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = context
+        .select((PlayerCubit player) => _activeLine(player.state.position));
+    final activeStart = active < 0 ? null : widget.cues[active].start;
+    if (_following && _lastFollowed != active) {
+      final animate = _lastFollowed != null;
+      _lastFollowed = active;
+      _reveal(active, animate: animate);
+    }
+    return Column(children: [
+      Expanded(
+        child: NotificationListener<UserScrollNotification>(
+          onNotification: (notice) {
+            if (notice.depth == 0 && notice.direction != ScrollDirection.idle) {
+              _pauseFollowing();
+            }
+            return false;
+          },
+          child: KeyedSubtree(
+            key: const ValueKey('music-lyrics-lines'),
+            child: CustomScrollView(
+              key: ValueKey(_anchor),
+              primary: false,
+              center: _center,
+              semanticChildCount: widget.cues.length,
+              slivers: [
+                if (_anchor > 0)
+                  SliverList.builder(
+                    addSemanticIndexes: false,
+                    itemCount: _anchor,
+                    itemBuilder: (context, index) =>
+                        _line(context, _anchor - index - 1, activeStart),
+                  ),
+                SliverList.builder(
+                  key: _center,
+                  addSemanticIndexes: false,
+                  itemCount: widget.cues.length - _anchor,
+                  itemBuilder: (context, index) =>
+                      _line(context, _anchor + index, activeStart),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      Align(
+        alignment: AlignmentDirectional.centerEnd,
+        child: FilterChip(
+          label: Text(AppLocalizations.of(context)!.musicFollowLyrics),
+          selected: _following,
+          onSelected: (following) => setState(() {
+            _following = following;
+            _lastFollowed = null;
+          }),
+        ),
+      ),
+    ]);
+  }
 }

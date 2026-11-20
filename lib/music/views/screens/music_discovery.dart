@@ -8,6 +8,8 @@ import 'package:clipious/content_filter/community_filter.dart';
 import 'package:clipious/content_filter/community_filter_widgets.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/music_charts.dart';
+import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
@@ -32,6 +34,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -80,7 +83,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
     return TickerMode(
       enabled: !covered,
       child: _DiscoverySongs(
-          builder: (canDiscover, songs) => _DiscoveryScroll(
+          builder: (canDiscover, freshShelves, songs) => _DiscoveryScroll(
                 storageKey: 'music-home',
                 controller: _scroll,
                 children: [
@@ -96,6 +99,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
                   ),
                   const MusicRecommendationShelves(),
                   _SavedSongs(onLibrary: widget.onLibrary),
+                  freshShelves,
                   const _MusicExplore(),
                   KeyedSubtree(key: _discovery, child: songs),
                 ],
@@ -426,10 +430,13 @@ class _DiscoverySession {
             [filter.uuid, filter.toJson()],
         ]);
 
-  bool matches(_DiscoverySession other) =>
+  bool sameConnection(_DiscoverySession other) =>
       identical(database, other.database) &&
       !_sessionChanged(app, other.app) &&
-      identical(proxy, other.proxy) &&
+      identical(proxy, other.proxy);
+
+  bool matches(_DiscoverySession other) =>
+      sameConnection(other) &&
       country == other.country &&
       filters == other.filters;
 
@@ -445,7 +452,8 @@ typedef _DiscoveryBatch = ({
 });
 
 class _DiscoverySongs extends StatefulWidget {
-  final Widget Function(bool Function()? canDiscover, Widget songs) builder;
+  final Widget Function(
+      bool Function()? canDiscover, Widget freshShelves, Widget songs) builder;
   const _DiscoverySongs({required this.builder});
 
   @override
@@ -682,7 +690,8 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
         recommendations?.changes
       ]),
       builder: (context, _) => library == null || recommendations == null
-          ? widget.builder(null, const SizedBox.shrink())
+          ? widget.builder(
+              null, const SizedBox.shrink(), const SizedBox.shrink())
           : _buildSelection(context, session, library, recommendations),
     );
   }
@@ -753,6 +762,15 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
 
     return widget.builder(
         ready.isEmpty ? null : () => ready.any(readyNow),
+        _FreshSelection(
+          session: session,
+          artists: [
+            for (final entry in library.entries
+                .where((entry) => entry.kind == MusicLibraryKind.artist)
+                .take(3))
+              entry.id,
+          ],
+        ),
         Column(
           key: const ValueKey('music-discovery'),
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1233,3 +1251,297 @@ bool _sameSession(AppState initial, AppState current) =>
     initial.profileId == current.profileId &&
     initial.sessionRevision == current.sessionRevision &&
     initial.server == current.server;
+
+class _FreshSelection extends StatefulWidget {
+  final _DiscoverySession session;
+  final List<String> artists;
+
+  const _FreshSelection({required this.session, required this.artists});
+
+  @override
+  State<_FreshSelection> createState() => _FreshSelectionState();
+}
+
+class _FreshSelectionState extends State<_FreshSelection>
+    with WidgetsBindingObserver {
+  static const _shelfSize = 6;
+  final _releases = <String, List<MusicCollection>>{};
+  final _recentTracks = <String>{};
+  List<MusicTrack> _chartTracks = const [];
+  bool _scheduled = false;
+  bool _loading = false;
+  bool _prepared = false;
+  bool _chartPrepared = false;
+  bool _failed = false;
+  int _generation = 0;
+  Timer? _cooldown;
+  late bool _foreground;
+
+  bool get _visible =>
+      mounted &&
+      _foreground &&
+      TickerMode.of(context) &&
+      (ModalRoute.of(context)?.isCurrent ?? true);
+
+  @override
+  void initState() {
+    super.initState();
+    final state = WidgetsBinding.instance.lifecycleState;
+    _foreground = state == null || state == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didUpdateWidget(_FreshSelection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.session.matches(oldWidget.session)) {
+      _cancel();
+      _releases.clear();
+      _recentTracks.clear();
+      _chartTracks = const [];
+      _chartPrepared = false;
+      _failed = false;
+      if (!widget.session.sameConnection(oldWidget.session)) {
+        _cooldown?.cancel();
+        _cooldown = null;
+      }
+    } else if (!listEquals(widget.artists, oldWidget.artists)) {
+      _cancel();
+      _releases.removeWhere((id, _) => !widget.artists.contains(id));
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final foreground = state == AppLifecycleState.resumed;
+    if (_foreground == foreground) return;
+    setState(() {
+      _foreground = foreground;
+      if (!foreground && _loading) _cancel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _cooldown?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  void _cancel() {
+    _generation++;
+    _scheduled = false;
+    _loading = false;
+    _prepared = false;
+  }
+
+  bool _current(_DiscoverySession session) =>
+      _visible &&
+      session.eligible &&
+      session.matches(_DiscoverySession(context.read<AppCubit>().state));
+
+  void _chooseChartTracks(List<MusicTrack> tracks) {
+    final session = widget.session;
+    final recommendations = RecommendationService.forProfile(
+        session.database, session.app.profileId);
+    final unique = {
+      for (final track in recommendations.eligibleMusic(tracks))
+        track.videoId: track,
+    };
+    _chartTracks = [
+      ...unique.keys.where((id) => !_recentTracks.contains(id)),
+      ..._recentTracks.where(unique.containsKey),
+    ].take(_shelfSize).map((id) => unique[id]!).toList();
+    for (final track in _chartTracks) {
+      _recentTracks
+        ..remove(track.videoId)
+        ..add(track.videoId);
+    }
+    while (_recentTracks.length > _shelfSize * 3) {
+      _recentTracks.remove(_recentTracks.first);
+    }
+  }
+
+  Future<void> _load(MusicChart chart, {bool refresh = false}) async {
+    final session = widget.session;
+    final generation = _generation;
+    final artists = widget.artists;
+    bool current() => generation == _generation && _current(session);
+    if (_loading || _cooldown != null || !current()) return;
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+
+    Future<bool> tryLoad(Future<void> Function() load) async {
+      try {
+        await load();
+      } on MusicCatalogUnsupported {
+        return current();
+      } catch (error) {
+        if (!current()) return false;
+        _failed = true;
+        if (error is InvidiousServiceError && musicDiscoveryMustStop(error)) {
+          final delay = error.retryAfter;
+          if (delay != null && delay > Duration.zero) {
+            _cooldown?.cancel();
+            _cooldown = Timer(delay, () {
+              if (mounted) setState(() => _cooldown = null);
+            });
+          }
+          return false;
+        }
+      }
+      return current();
+    }
+
+    try {
+      if (refresh || !_chartPrepared) {
+        final proceed = await tryLoad(() async {
+          final tracks = await musicCatalogService
+              .getChartSongs(chart.playlistId, isCurrent: current);
+          if (current()) setState(() => _chooseChartTracks(tracks));
+        });
+        if (!proceed) return;
+        _chartPrepared = true;
+      }
+      for (final id in artists) {
+        if (!refresh && _releases.containsKey(id)) continue;
+        final proceed = await tryLoad(() async {
+          final page = await musicCatalogService.getArtistReleases(id,
+              isCurrent: current);
+          if (current()) {
+            setState(
+                () => _releases[id] = page.releases.take(_shelfSize).toList());
+          }
+        });
+        if (!proceed) return;
+      }
+    } finally {
+      if (mounted && generation == _generation) {
+        setState(() {
+          _loading = false;
+          // A hidden Home can retry incomplete work when it becomes visible.
+          _prepared = current();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = widget.session;
+    final chart = musicCharts
+            .where((chart) => chart.countryCode == session.country)
+            .firstOrNull ??
+        musicCharts.first;
+    final visible = _visible;
+    if (!visible && _loading) _cancel();
+    if (visible &&
+        !_prepared &&
+        !_scheduled &&
+        !_loading &&
+        _cooldown == null) {
+      _scheduled = true;
+      final generation = _generation;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || generation != _generation) return;
+        _scheduled = false;
+        _load(chart);
+      });
+    }
+    final releaseIds = <String>{};
+    final releases = [
+      for (var index = 0; index < _shelfSize; index++)
+        for (final id in widget.artists)
+          if (_releases[id]?.elementAtOrNull(index) case final release?
+              when releaseIds.add(release.id))
+            release,
+    ].take(_shelfSize).toList();
+    final recommendations = RecommendationService.forProfile(
+        session.database, session.app.profileId);
+    final tracks = recommendations.eligibleMusic(_chartTracks);
+    final locals = AppLocalizations.of(context)!;
+    final refreshSelection = _loading || _cooldown != null
+        ? null
+        : () => _load(chart, refresh: true);
+    if (releases.isEmpty && tracks.isEmpty) {
+      if (!_failed && !(_prepared && _loading)) return const SizedBox.shrink();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(_loading ? locals.musicDiscoverLoading : locals.musicLoadError),
+          TextButton(
+            key: const ValueKey('music-home-fresh-retry'),
+            onPressed: refreshSelection,
+            child: Text(locals.retry),
+          ),
+        ],
+      );
+    }
+
+    bool current() => _current(session);
+    final refresh = IconButton(
+      key: const ValueKey('music-home-fresh-refresh'),
+      tooltip: locals.refresh,
+      onPressed: refreshSelection,
+      icon: const Icon(Icons.refresh_rounded),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (releases.isNotEmpty) ...[
+          _SectionHeading(
+              title: locals.musicSavedArtistReleases,
+              action: tracks.isEmpty ? refresh : null),
+          MusicCatalogShelf(
+            key: const ValueKey('music-home-releases'),
+            itemCount: releases.length,
+            itemBuilder: (context, index) {
+              final release = releases[index];
+              return MusicCatalogCard(
+                title: release.title,
+                subtitle: release.artists.join(', '),
+                thumbnails: release.thumbnails,
+                onOpen: () {
+                  if (current() &&
+                      _releases.values
+                          .any((items) => items.contains(release))) {
+                    context.router.push(MusicRoute(playlistId: release.id));
+                  }
+                },
+              );
+            },
+          ),
+        ],
+        if (tracks.isNotEmpty) ...[
+          _SectionHeading(
+              title: chart.countryCode == null
+                  ? locals.musicWorldwideChart
+                  : locals.musicRegionalChart,
+              action: refresh),
+          MusicCatalogShelf(
+            key: const ValueKey('music-home-chart'),
+            itemCount: tracks.length,
+            itemBuilder: (context, index) {
+              final track = tracks[index];
+              return MusicCatalogCard(
+                title: track.title,
+                subtitle: track.artists.join(', '),
+                song: track,
+                showPlayIndicator: true,
+                onOpen: () {
+                  if (!current()) return;
+                  final playable = recommendations.eligibleMusic(tracks);
+                  _openSong(context, track.videoId,
+                      playable.map((track) => track.toVideo()));
+                },
+              );
+            },
+          ),
+        ],
+        if (_failed && !_loading) Text(locals.musicDiscoverRefreshFailed),
+      ],
+    );
+  }
+}

@@ -2,9 +2,11 @@ import 'dart:convert';
 import '../home/models/phone_navigation.dart';
 import '../home/models/home_tabs_layout.dart';
 import '../content_filter/community_filter.dart';
+import '../music/models/music_cover_corners.dart';
 import '../music/models/music_library_entry.dart';
 import '../music/models/music_layout.dart';
 import '../music/models/song_transition.dart';
+import '../player/models/music_audio_quality.dart';
 import '../recommendations/recommendation_models.dart';
 import '../recommendations/recommendation_snapshot.dart';
 
@@ -397,6 +399,10 @@ class UserBackup {
     return switch (name) {
       songTransitionModeSettingName =>
         SongTransitionMode.fromStorage(value) != null,
+      musicStreamingQualitySettingName =>
+        MusicStreamingQuality.fromStorage(value) != null,
+      musicCoverCornersSettingName =>
+        MusicCoverCorners.fromStorage(value) != null,
       musicDownloadFormatSettingName =>
         const {'mp3', 'opus', 'm4a'}.contains(value),
       'home-content-mode' => const ['videos', 'music'].contains(value),

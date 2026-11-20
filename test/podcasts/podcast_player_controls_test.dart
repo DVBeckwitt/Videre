@@ -15,8 +15,8 @@ class _SlowStopPodcastPlayer extends FakePodcastPlayer {
   final stopped = Completer<void>();
 
   @override
-  Future<void> stop() async {
-    await super.stop();
+  Future<void> stop({bool clearMediaSession = true}) async {
+    await super.stop(clearMediaSession: clearMediaSession);
     await stopped.future;
   }
 }

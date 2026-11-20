@@ -1,4 +1,20 @@
+import '../../settings/models/db/settings.dart';
+import '../../utils/interfaces/db.dart';
 import '../../videos/models/adaptive_format.dart';
+
+enum MusicStreamingQuality {
+  auto,
+  dataSaver,
+  highest;
+
+  static MusicStreamingQuality? fromStorage(String? value) =>
+      values.asNameMap()[value];
+
+  static MusicStreamingQuality forDatabase(IDbClient database) =>
+      fromStorage(
+          database.getSettings(musicStreamingQualitySettingName)?.value) ??
+      auto;
+}
 
 /// An instance-advertised representation. Signed stream URLs stay in the
 /// decoder and are never part of the chooser or a saved preference.

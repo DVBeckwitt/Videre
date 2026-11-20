@@ -163,6 +163,7 @@ void main() {
       bool active = true,
       bool settle = true,
       bool television = false,
+      bool disableAnimations = false,
       Widget? configuredFeed,
       ValueChanged<List<RecommendationInterest>>? onEdit}) async {
     tester.view.physicalSize =
@@ -180,8 +181,9 @@ void main() {
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(scale)),
+          data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(scale),
+              disableAnimations: disableAnimations),
           child: child!,
         ),
         home: Scaffold(
@@ -427,6 +429,71 @@ void main() {
     expect(find.byKey(const ValueKey('video-discovery-query')), findsNothing);
     expect(api.requests, 5,
         reason: 'Opening ready suggestions only changes the view');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('returning to For You shows its cards while ranking catches up',
+      (tester) async {
+    await tester.runAsync(() async {
+      await remember('video000001', 'Local video', 0);
+      await settings.setHomeTabsLayout(HomeTabsLayout(enabledOrder: [
+        HomeTabsLayout.forYou,
+        HomeTabsLayout.yourFeeds,
+        HomeTabsLayout.discover,
+      ]));
+    });
+    await show(tester, configuredFeed: const Text('Configured feed'));
+    expect(find.text('Local video'), findsOneWidget);
+    final before = calls.length;
+    await tester.tap(find.byKey(const ValueKey('video-home-your-feeds')));
+    await tester.pumpAndSettle();
+    expect(find.text('Configured feed'), findsOneWidget);
+    expect(calls, hasLength(before),
+        reason: 'The completed rank already resolved the empty topic catalog');
+
+    final pending = Completer<Map<String, Object?>>();
+    var ranking = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      ranking = true;
+      return pending.future;
+    });
+    await tester.tap(find.byKey(const ValueKey('video-home-for-you')));
+    await tester.pump();
+    await tester.pump();
+    expect(ranking, isTrue);
+    expect(find.text('Local video'), findsOneWidget);
+    pending.complete({'state': <String, Object?>{}, 'ranked': <Object?>[]});
+    await tester.pumpAndSettle();
+    expect(find.text('Local video'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'returning to For You drops cards removed while viewing Your feeds',
+      (tester) async {
+    await tester.runAsync(() async {
+      await remember('video000001', 'Removed video', 0);
+      await settings.setHomeTabsLayout(HomeTabsLayout(enabledOrder: [
+        HomeTabsLayout.forYou,
+        HomeTabsLayout.yourFeeds,
+      ]));
+    });
+    await show(tester, configuredFeed: const Text('Configured feed'));
+    expect(find.text('Removed video'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('video-home-your-feeds')));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() => db.deleteLocalHistory('video000001'));
+    playbackHistoryRevision.value++;
+    final pending = Completer<Map<String, Object?>>();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) => pending.future);
+    await tester.tap(find.byKey(const ValueKey('video-home-for-you')));
+    await tester.pump();
+    expect(find.text('Removed video'), findsNothing);
+    pending.complete({'state': <String, Object?>{}, 'ranked': <Object?>[]});
+    await tester.pumpAndSettle();
+    expect(find.text('Removed video'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -842,7 +909,19 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
     VisibilityDetectorController.instance.notifyNow();
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 700));
+    final feed = find.byKey(const PageStorageKey('flow-video-home'));
+    final controller = tester.widget<CustomScrollView>(feed).controller!;
+    controller.jumpTo(controller.position.maxScrollExtent);
+    await tester.pump(const Duration(milliseconds: 16));
+    controller.jumpTo(0);
+    await tester.pump(const Duration(milliseconds: 16));
+    // Leaving and re-entering within a detector batching interval starts a
+    // fresh dwell, even though these cards are back in their original places.
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(impressions(), isEmpty);
+    controller.jumpTo(2);
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pump(const Duration(milliseconds: 80));
     expect(impressions().toSet(), halfVisibleIds);
     expect(impressions().length, halfVisibleIds.length);
@@ -978,6 +1057,46 @@ void main() {
             .singleWhere((row) => row['id'] == 'followed001')['isSubscribed'],
         isTrue);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('For You and Discover keep their card delegate during scroll',
+      (tester) async {
+    await tester.runAsync(() async {
+      await connect();
+      for (var i = 0; i < 6; i++) {
+        await remember('local00000$i', 'Local $i', 0);
+      }
+    });
+    discoveryQueries = ['discover music'];
+    api.discoveryResults = (_) => [
+          for (var i = 0; i < 6; i++)
+            Video(videoId: 'found00000$i', title: 'Found $i'),
+        ];
+
+    await show(tester, disableAnimations: true);
+    final feed = find.byKey(const PageStorageKey('flow-video-home'));
+    final list = find.descendant(of: feed, matching: find.byType(SliverList));
+    final controller = tester.widget<CustomScrollView>(feed).controller!;
+
+    Future<void> verifyScroll() async {
+      final delegate = tester.widget<SliverList>(list).delegate;
+      final next = controller.offset + 12;
+      controller.jumpTo(next);
+      await tester.pump();
+      expect(controller.offset, next);
+      expect(tester.widget<SliverList>(list).delegate, same(delegate));
+    }
+
+    await verifyScroll();
+    final discover = find.byKey(const ValueKey('video-home-discover'));
+    await tester.ensureVisible(discover);
+    await tester.tap(discover);
+    await tester.pumpAndSettle();
+    final forYou = find.byKey(const ValueKey('video-home-for-you'));
+    expect(tester.widget<ChoiceChip>(forYou).selected, isFalse);
+    expect(api.queries, contains('discover music'));
+    await verifyScroll();
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

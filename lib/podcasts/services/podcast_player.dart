@@ -480,7 +480,7 @@ class PodcastPlayer extends ChangeNotifier {
     }();
   }
 
-  Future<void> stop() async {
+  Future<void> stop({bool clearMediaSession = true}) async {
     if (_disposed) return;
     final saving = saveProgress();
     final wasActive = active;
@@ -501,7 +501,7 @@ class PodcastPlayer extends ChangeNotifier {
     _progressStore = null;
     final stopping = _detachAudio();
     if (wasActive) {
-      final handler = mediaHandler();
+      final handler = clearMediaSession ? mediaHandler() : null;
       handler?.playbackState.add(PlaybackState());
       handler?.queue.add(const []);
       handler?.queueTitle.add('');

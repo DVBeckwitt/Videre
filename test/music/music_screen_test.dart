@@ -75,8 +75,11 @@ class _Catalog extends MusicCatalogService {
   VideoLoadObserver? songObserver;
   final songRequests = <String>[];
   final artistRequests = <String>[];
+  final releaseRequests = <String?>[];
+  final releasePages = <String?, MusicArtistReleases>{};
   final playlistRequests = <String>[];
   Completer<MusicArtistPage>? pendingArtist;
+  Completer<MusicCollection>? pendingPlaylist;
   MusicCollection collection = const MusicCollection(
       id: 'PLpublic',
       title: 'Public playlist',
@@ -95,9 +98,9 @@ class _Catalog extends MusicCatalogService {
   Future<List<MusicTrack>> getTrendingSongs() async => [first, second];
 
   @override
-  Future<MusicCollection> getPlaylist(String id) async {
+  Future<MusicCollection> getPlaylist(String id) {
     playlistRequests.add(id);
-    return collection;
+    return pendingPlaylist?.future ?? Future.value(collection);
   }
 
   @override
@@ -118,6 +121,13 @@ class _Catalog extends MusicCatalogService {
           description: 'Artist description',
           songs: [first, second],
         ));
+  }
+
+  @override
+  Future<MusicArtistReleases> getArtistReleases(String id,
+      {String? continuation, bool Function()? isCurrent}) async {
+    releaseRequests.add(continuation);
+    return releasePages[continuation] ?? const MusicArtistReleases();
   }
 
   @override
@@ -1319,6 +1329,73 @@ void main() {
     expect(player.calls.single.videos.map((v) => v.videoId),
         [first.videoId, second.videoId]);
   });
+
+  testWidgets('artist releases page into the existing playlist flow',
+      (tester) async {
+    const album =
+        MusicCollection(id: 'OLAK5uy_release', title: 'First release');
+    const single = MusicCollection(id: 'OLAK5uy_single', title: 'Next release');
+    catalog.releasePages[null] =
+        const MusicArtistReleases(releases: [album], continuation: 'next');
+    catalog.releasePages['next'] =
+        const MusicArtistReleases(releases: [album, single]);
+    await show(tester, screen: const MusicScreen(artistId: 'UCartist'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Releases'), findsOneWidget);
+    expect(find.text(album.title), findsOneWidget);
+    await tester.ensureVisible(find.text('Load more'));
+    await tester.tap(find.text('Load more'));
+    await tester.pumpAndSettle();
+    expect(catalog.releaseRequests, [null, 'next']);
+    expect(find.text(album.title), findsOneWidget);
+    expect(find.text(single.title), findsOneWidget);
+
+    await tester.ensureVisible(find.text(single.title));
+    await tester.tap(find.text(single.title));
+    await tester.pumpAndSettle();
+    expect(catalog.playlistRequests, [single.id]);
+    expect(find.byKey(const ValueKey('music-play-all')), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text(single.title), findsOneWidget);
+    expect(catalog.releaseRequests, [null, 'next']);
+  });
+
+  for (final failed in [false, true]) {
+    testWidgets(
+        'Back from a ${failed ? 'failed' : 'pending'} release returns to its artist',
+        (tester) async {
+      const album = MusicCollection(id: 'OLAK5uy_release', title: 'Release');
+      catalog.releasePages[null] = const MusicArtistReleases(releases: [album]);
+      await show(tester, screen: const Scaffold(body: Text('Origin')));
+      final navigator = Navigator.of(tester.element(find.text('Origin')));
+      unawaited(navigator.push<void>(MaterialPageRoute(
+          builder: (_) => const MusicScreen(artistId: 'UCartist'))));
+      await tester.pumpAndSettle();
+      final request = catalog.pendingPlaylist = Completer<MusicCollection>();
+      await tester.tap(find.text(album.title));
+      await tester.pump();
+      expect(catalog.playlistRequests, [album.id]);
+      if (failed) {
+        request.completeError(StateError('Playlist unavailable'));
+        await tester.pumpAndSettle();
+        expect(find.text('Retry'), findsOneWidget);
+        await tester.tap(find.byTooltip('Back'));
+      } else {
+        await tester.binding.handlePopRoute();
+        request.complete(catalog.collection);
+      }
+      await tester.pumpAndSettle();
+      expect(find.text(album.title), findsOneWidget);
+      expect(find.text('Artist description'), findsOneWidget);
+      expect(catalog.artistRequests, [artist.id]);
+      expect(catalog.releaseRequests, [null]);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Origin'), findsOneWidget);
+    });
+  }
 
   testWidgets('starting a later playlist song retains its complete queue',
       (tester) async {

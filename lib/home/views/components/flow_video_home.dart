@@ -176,6 +176,11 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   List<String> _discoveryQueries = const [];
   late int _tasteGeneration;
   List<Video> _videos = [];
+  ({
+    List<Video> videos,
+    Map<String, String> reasons,
+    bool available
+  })? _lastForYou;
   Map<String, String> _followedChannels = const {};
   List<Video> _followedVideos = const [];
   Map<String, String> _reasons = {};
@@ -356,6 +361,9 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     if (_selectedTab == id) return;
     final request = _tabRequests()[id];
     final prepared = request == null ? null : _readyTab(request);
+    final lastForYou =
+        id == HomeTabsLayout.forYou && _sessionCurrent ? _lastForYou : null;
+    final needsCatalog = !_catalogKnown || _loading;
     _clearImpressions();
     _revision++;
     _subscriptionRevision++;
@@ -372,12 +380,28 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         _reasons = prepared.reasons;
         _available = prepared.available;
         _discoveryPrepared = true;
+      } else if (lastForYou != null) {
+        _videos = lastForYou.videos;
+        _reasons = lastForYou.reasons;
+        _available = lastForYou.available;
       }
       _feedsVisited |= id == HomeTabsLayout.yourFeeds;
     });
     if (prepared != null) return;
-    if (id == HomeTabsLayout.yourFeeds) {
-      if (_interests.isEmpty) unawaited(_resolveTopicCatalog());
+    if (lastForYou != null) {
+      // Paint the previous cards before collecting current local candidates.
+      // Impressions and newly discovered videos can change their next rank.
+      final revision = _revision;
+      final subscriptions = _subscriptionRevision;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_current || _selectedTab != id) return;
+        if (_revision == revision) unawaited(_load());
+        if (_subscriptionRevision == subscriptions) {
+          unawaited(_warmSubscriptions());
+        }
+      });
+    } else if (id == HomeTabsLayout.yourFeeds) {
+      if (needsCatalog) unawaited(_resolveTopicCatalog());
     } else if (id != HomeTabsLayout.discover) {
       unawaited(_load());
       unawaited(_warmSubscriptions());
@@ -515,13 +539,14 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     });
   }
 
-  bool get _impressionsActive =>
-      _impressionSurface &&
-      _current &&
+  bool get _rankedViewport =>
       _lifecycle == AppLifecycleState.resumed &&
       _available &&
       _selectedInterest == null &&
-      _engine.learningEnabled(RecommendationDomain.video);
+      _tasteGeneration == _engine.generation(RecommendationDomain.video) &&
+      _current;
+
+  bool get _impressionsActive => _impressionSurface && _rankedViewport;
 
   void _setDiscoveryVisible(bool discoveryVisible) {
     if (_discoveryVisible == discoveryVisible) return;
@@ -635,6 +660,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   }
 
   void _retireSubscriptions() {
+    _lastForYou = null;
     _subscriptionRevision++;
     _subscriptionRankWaiting = false;
     if (_followedVideos.isNotEmpty) {
@@ -759,6 +785,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
           continue;
         }
         _invalidateDiscoverSnapshot();
+        _lastForYou = null;
         _followedChannels = batch.channels;
         _followedVideos = batch.videos;
         _rerankSubscriptions();
@@ -770,6 +797,7 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
   }
 
   void _changed() {
+    _lastForYou = null;
     if (!_current) {
       if (_sessionCurrent) {
         // Resume-only and configured feeds still reflect local progress; they
@@ -940,6 +968,10 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         _reasons = {
           for (final entry in result.items) entry.item.videoId: entry.reason,
         };
+        if (_selectedTab == HomeTabsLayout.forYou) {
+          _lastForYou =
+              (videos: _videos, reasons: _reasons, available: _available);
+        }
         _loading = false;
         _discovering = false;
       });
@@ -1256,35 +1288,35 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
     );
   }
 
-  Widget _phoneFeed(List<Video> videos, List<Video> continuing) {
-    return SliverLayoutBuilder(builder: (context, constraints) {
-      final width = constraints.crossAxisExtent;
-      final columns = (width / 360).floor().clamp(1, 4);
-      final firstRow = videos.take(columns).toList();
-      final remainder = videos.skip(columns).toList();
-      return SliverMainAxisGroup(slivers: [
-        if (firstRow.isNotEmpty)
-          if (columns == 1)
-            SliverToBoxAdapter(child: _phoneCard(firstRow.single))
-          else
-            _grid(firstRow, columns: columns, width: width),
-        if (continuing.isNotEmpty)
-          SliverToBoxAdapter(child: _continueWatching(continuing)),
-        if (remainder.isNotEmpty)
-          if (columns == 1)
-            SliverList.builder(
-              itemCount: remainder.length,
-              itemBuilder: (context, index) => Padding(
-                key: ValueKey(remainder[index].videoId),
-                padding: const EdgeInsets.only(top: 10),
-                child: _phoneCard(remainder[index]),
-              ),
-            )
-          else
-            _grid(remainder, columns: columns, width: width),
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
-      ]);
-    });
+  Widget _phoneFeed(List<Video> videos, List<Video> continuing, double width) {
+    final columns = (width / 360).floor().clamp(1, 4);
+    final firstRow = videos.take(columns).toList();
+    final remainder = videos.skip(columns).toList();
+    return SliverMainAxisGroup(slivers: [
+      if (firstRow.isNotEmpty)
+        if (columns == 1)
+          // List and grid children already get a repaint boundary. Give the
+          // standalone card its own layer so its detector sees it leave.
+          SliverToBoxAdapter(
+              child: RepaintBoundary(child: _phoneCard(firstRow.single)))
+        else
+          _grid(firstRow, columns: columns, width: width),
+      if (continuing.isNotEmpty)
+        SliverToBoxAdapter(child: _continueWatching(continuing)),
+      if (remainder.isNotEmpty)
+        if (columns == 1)
+          SliverList.builder(
+            itemCount: remainder.length,
+            itemBuilder: (context, index) => Padding(
+              key: ValueKey(remainder[index].videoId),
+              padding: const EdgeInsets.only(top: 10),
+              child: _phoneCard(remainder[index]),
+            ),
+          )
+        else
+          _grid(remainder, columns: columns, width: width),
+      const SliverToBoxAdapter(child: SizedBox(height: 24)),
+    ]);
   }
 
   @override
@@ -1306,7 +1338,12 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
         (_lifecycle == null || _lifecycle == AppLifecycleState.resumed);
     _setDiscoveryVisible(discoveryVisible);
     // A floating video can cover individual cards while Home itself is visible.
-    final surface = homeVisible && !floatingVideo;
+    // Read the persisted consent when Home builds. Scroll and per-card
+    // visibility callbacks only need to recheck the live session/generation.
+    final surface = homeVisible &&
+        !floatingVideo &&
+        _rankedViewport &&
+        _engine.learningEnabled(RecommendationDomain.video);
     if (_impressionSurface != surface) {
       _impressionSurface = surface;
       if (!surface) _clearImpressions();
@@ -1400,60 +1437,65 @@ class _FlowVideoHomeState extends State<FlowVideoHome>
       match: videoCommunityMatches,
       builder: (context, videos, notice) => RefreshIndicator(
         onRefresh: () => _load(refresh: true),
-        child: CustomScrollView(
-          key: const PageStorageKey('flow-video-home'),
-          controller: _scroll,
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            if (widget.television)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                sliver: SliverToBoxAdapter(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(children: [
-                        Expanded(
-                          child: Text(locals.flowForYou,
-                              style: text.headlineSmall
-                                  ?.copyWith(fontWeight: FontWeight.w700)),
-                        ),
-                        IconButton(
-                          autofocus: true,
-                          tooltip: locals.settings,
-                          onPressed: () => showRecommendationSettings(context),
-                          icon: const Icon(Icons.tune_rounded),
-                        ),
-                        IconButton(
-                          tooltip: locals.search,
-                          onPressed: () => context.router.push(TvSearchRoute()),
-                          icon: const Icon(Icons.search_rounded),
-                        ),
-                      ]),
-                      if (chips.isNotEmpty) strip,
-                      if (continuing.isNotEmpty) _continueWatching(continuing),
-                      _status(context, videos, notice),
-                    ],
+        child: LayoutBuilder(builder: (context, constraints) {
+          // Only viewport width affects the card layout. Sliver constraints
+          // also change with the scroll offset.
+          final width = constraints.maxWidth;
+          return CustomScrollView(
+            key: const PageStorageKey('flow-video-home'),
+            controller: _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              if (widget.television)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Expanded(
+                            child: Text(locals.flowForYou,
+                                style: text.headlineSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700)),
+                          ),
+                          IconButton(
+                            autofocus: true,
+                            tooltip: locals.settings,
+                            onPressed: () =>
+                                showRecommendationSettings(context),
+                            icon: const Icon(Icons.tune_rounded),
+                          ),
+                          IconButton(
+                            tooltip: locals.search,
+                            onPressed: () =>
+                                context.router.push(TvSearchRoute()),
+                            icon: const Icon(Icons.search_rounded),
+                          ),
+                        ]),
+                        if (chips.isNotEmpty) strip,
+                        if (continuing.isNotEmpty)
+                          _continueWatching(continuing),
+                        _status(context, videos, notice),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: _status(context, videos, notice),
                   ),
                 ),
-              )
-            else
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: _status(context, videos, notice),
-                ),
-              ),
-            if (widget.television)
-              SliverLayoutBuilder(builder: (context, constraints) {
-                final width = constraints.crossAxisExtent;
-                return _grid(videos,
-                    columns: (width / 360).floor().clamp(1, 4), width: width);
-              })
-            else
-              _phoneFeed(videos, continuing),
-          ],
-        ),
+              if (widget.television)
+                _grid(videos,
+                    columns: (width / 360).floor().clamp(1, 4), width: width)
+              else
+                _phoneFeed(videos, continuing, width),
+            ],
+          );
+        }),
       ),
     );
     final selected = enabledIds.contains(_selectedTab);

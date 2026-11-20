@@ -15,9 +15,11 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/music/models/music_cover_corners.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
+import 'package:clipious/player/models/music_audio_quality.dart';
 import 'package:clipious/player/models/video_display_mode.dart';
 import 'package:clipious/player/states/player.dart' show PlayerRepeat;
 import 'package:clipious/search/models/db/search_history_item.dart';
@@ -475,6 +477,36 @@ Future<void> main() async {
     expect(isCommunityCoverArtEnabled(), isFalse);
   });
 
+  test('Music streaming quality belongs to the profile and survives backup',
+      () async {
+    final first = db.forProfile(db.profileId);
+    expect(
+        settingsCubit.state.musicStreamingQuality, MusicStreamingQuality.auto);
+    await settingsCubit
+        .setMusicStreamingQuality(MusicStreamingQuality.dataSaver);
+    expect(settingsCubit.state.musicStreamingQuality,
+        MusicStreamingQuality.dataSaver);
+
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    expect(MusicStreamingQuality.forDatabase(db), MusicStreamingQuality.auto);
+    await db.restoreBackup(backup, replace: false);
+    expect(
+        MusicStreamingQuality.forDatabase(db), MusicStreamingQuality.dataSaver);
+
+    await db.saveSetting(SettingsValue(
+        musicStreamingQualitySettingName, MusicStreamingQuality.highest.name));
+    expect(
+        MusicStreamingQuality.forDatabase(db), MusicStreamingQuality.highest);
+    expect(MusicStreamingQuality.forDatabase(first),
+        MusicStreamingQuality.dataSaver);
+    expect(
+        UserBackup.validSetting(
+            SettingsValue(musicStreamingQualitySettingName, 'invalid')),
+        isFalse);
+  });
+
   test('portable backups restore the format and reject unknown values',
       () async {
     await MusicDownloadFormat.opus.save(db);
@@ -777,6 +809,65 @@ Future<void> main() async {
         expect(duration, findsNothing);
       });
     }
+
+    testWidgets('$name chooses a Music streaming quality default',
+        (tester) async {
+      await showSettings(tester);
+      final setting =
+          find.byKey(const ValueKey('music-streaming-quality-setting'));
+      await tester.ensureVisible(setting);
+      await tester.pumpAndSettle();
+      final dataSaver =
+          find.byKey(const ValueKey('music-streaming-quality-dataSaver'));
+      if (name == 'TV') {
+        Focus.of(tester.element(find.text('Streaming audio quality')))
+            .requestFocus();
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        await tester.pumpAndSettle();
+        expect(dataSaver, findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(setting);
+        await tester.pumpAndSettle();
+        await tester.tap(dataSaver);
+      }
+      await tester.pumpAndSettle();
+      expect(MusicStreamingQuality.forDatabase(db),
+          MusicStreamingQuality.dataSaver);
+      expect(find.descendant(of: setting, matching: find.text('Data saver')),
+          findsOneWidget);
+    });
+
+    testWidgets('$name chooses square Music cover corners', (tester) async {
+      await showSettings(tester);
+      final setting = find.byKey(const ValueKey('music-cover-corners-setting'));
+      await tester.ensureVisible(setting);
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: setting, matching: find.text('Rounded')),
+          findsOneWidget);
+
+      if (name == 'TV') {
+        Focus.of(tester.element(find.text('Cover corners'))).requestFocus();
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        await tester.tap(setting);
+        await tester.pumpAndSettle();
+        await tester
+            .tap(find.byKey(const ValueKey('music-cover-corners-square')));
+      }
+      await tester.pumpAndSettle();
+      expect(MusicCoverCorners.forDatabase(db), MusicCoverCorners.square);
+      expect(find.descendant(of: setting, matching: find.text('Square')),
+          findsOneWidget);
+    });
 
     testWidgets('$name selects and cancels the YT Music download format',
         (tester) async {

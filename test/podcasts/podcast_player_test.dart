@@ -561,6 +561,17 @@ void main() {
       await start();
       await _flush();
       expect(player.active, isTrue);
+      await session.seek(const Duration(seconds: 27));
+      await session.onTaskRemoved();
+      expect(player.active, isFalse);
+      expect(platform.players.last.disposed, isTrue);
+      expect(session.playbackState.value.processingState,
+          AudioProcessingState.idle);
+      expect(session.mediaItem.value, isNull);
+      expect(session.queue.value, isEmpty);
+      await start();
+      await _flush();
+      expect(platform.players.last.loads.single.initialPosition?.inSeconds, 27);
       await owner.prepareForProfileSwitch();
       expect(player.active, isFalse);
       expect(platform.players.last.disposed, isTrue);
