@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "فارسی",
   "useProxyDescription": "با استفاده از پروکسی برای پخش ویدیوها از سرویس دهنده، می‌توانید محدودیت‌های منطقه‌ای یا اعمال شده توسط ISP را رد کنید",
   "@useProxyDescription": {
     "description": "Description for the use proxy settings"

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/minimize_on_swipe_down.dart';
+import 'package:clipious/router.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/comments/views/components/comments_container.dart';
 
@@ -15,6 +17,13 @@ class CommentsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hideComments = context
+        .select((SettingsCubit cubit) => cubit.state.hideCommentsByDefault);
+    if (hideComments &&
+        AutoTabsRouter.of(context, watch: true).current.name !=
+            CommentsRoute.name) {
+      return const SizedBox.shrink();
+    }
     return video == null
         ? const SizedBox.shrink()
         : MinimizeOnSwipeDown(

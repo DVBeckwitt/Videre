@@ -4,5 +4,6 @@
     <item type="mipmap" name="ic_launcher_round">@mipmap/ic_launcher</item>
     <item type="mipmap" name="ic_launcher_monochrome">@mipmap/ic_launcher</item>
     <item type="mipmap" name="ic_launcher_monochrome_round">@mipmap/ic_launcher</item>
-    <item type="mipmap" name="ic_bg_service_small">@drawable/ic_bg_service_small</item>
+    <item type="drawable" name="ic_bg_service_small">@drawable/app_icon</item>
+    <item type="mipmap" name="ic_bg_service_small">@drawable/app_icon</item>
 </resources>

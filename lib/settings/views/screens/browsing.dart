@@ -8,7 +8,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/settings.dart';
-import 'package:locale_names/locale_names.dart';
+import '../components/app_language_picker.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../../utils/views/components/select_list_dialog.dart';
@@ -126,38 +126,6 @@ class BrowsingSettingsScreen extends StatelessWidget {
     }
   }
 
-  showSelectLanguage(BuildContext context, SettingsState controller) {
-    var localsList = AppLocalizations.supportedLocales;
-    var localsStrings =
-        localsList.map((e) => e.nativeDisplayLanguageScript).toList();
-    var locals = AppLocalizations.of(context)!;
-    var cubit = context.read<SettingsCubit>();
-    var colors = Theme.of(context).colorScheme;
-
-    List<String>? localeString = controller.locale?.split('_');
-    Locale? selected = localeString != null
-        ? Locale.fromSubtags(
-            languageCode: localeString[0],
-            scriptCode: localeString.length >= 2 ? localeString[1] : null)
-        : null;
-
-    SelectList.show<String>(context,
-        values: [locals.followSystem, ...localsStrings],
-        value: selected?.nativeDisplayLanguageScript ?? locals.followSystem,
-        itemBuilder: (value, selected) => Text(
-              value,
-              style: TextStyle(color: selected ? colors.primary : null),
-            ),
-        onSelect: (value) {
-          if (value == locals.followSystem) {
-            cubit.setLocale(localsList, localsStrings, null);
-          } else {
-            cubit.setLocale(localsList, localsStrings, value);
-          }
-        },
-        title: locals.appLanguage);
-  }
-
   List<String> getCategories(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
     return [
@@ -267,12 +235,19 @@ class BrowsingSettingsScreen extends StatelessWidget {
                     initialValue: state.distractionFreeMode,
                     onToggle: cubit.setDistractionFreeMode,
                   ),
+                  SettingsTile.switchTile(
+                    leading: const Icon(Icons.chat_bubble_outline),
+                    title: Text(locals.hideCommentsByDefault),
+                    description: Text(locals.hideCommentsByDefaultDescription),
+                    initialValue: state.hideCommentsByDefault,
+                    onToggle: cubit.setHideCommentsByDefault,
+                  ),
                   SettingsTile(
                     leading: const Icon(Icons.language),
                     title: Text(locals.appLanguage),
                     value: Text(
                         cubit.getLocaleDisplayName() ?? locals.followSystem),
-                    onPressed: (ctx) => showSelectLanguage(ctx, state),
+                    onPressed: showAppLanguagePicker,
                   ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.manage_search),

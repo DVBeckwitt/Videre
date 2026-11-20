@@ -181,6 +181,51 @@ void main() {
     });
   }
 
+  for (final (hideComments, tab, nextTab) in [
+    (true, 1, 0),
+    (false, 1, 1),
+    (true, 3, 3),
+  ]) {
+    test('tab $tab advances to $nextTab with hiding=$hideComments', () async {
+      await settings.setHideCommentsByDefault(hideComments);
+      player.setAudio(true);
+      player.selectTab(tab);
+      final next = player.stream
+          .firstWhere((state) => state.currentlyPlaying?.videoId == 'b');
+
+      player.setEvent(const MediaEvent(state: MediaState.completed));
+
+      final advanced = await next.timeout(const Duration(seconds: 2));
+      expect(advanced.selectedFullScreenIndex, nextTab);
+    });
+  }
+
+  test('a new occurrence of the same video closes the comments tab', () async {
+    await settings.setHideCommentsByDefault(true);
+    await player.playVideo([videos.first, videos.first], audio: true);
+    player.selectTab(1);
+    final nextId = player.state.playQueue.single;
+    final next =
+        player.stream.firstWhere((state) => state.currentQueueId == nextId);
+
+    player.setEvent(const MediaEvent(state: MediaState.completed));
+
+    final advanced = await next.timeout(const Duration(seconds: 2));
+    expect(advanced.currentlyPlaying?.videoId, videos.first.videoId);
+    expect(advanced.selectedFullScreenIndex, 0);
+  });
+
+  test('reinstalling the same queue item preserves the comments tab', () async {
+    await settings.setHideCommentsByDefault(true);
+    player.setAudio(true);
+    player.selectTab(1);
+
+    await player.switchToVideo(videos.first);
+
+    expect(player.state.currentQueueId, playbackQueueId(videos.first));
+    expect(player.state.selectedFullScreenIndex, 1);
+  });
+
   for (final mini in [false, true]) {
     test(
         'queue advance settles an interrupted ${mini ? 'mini' : 'expanded'} drag',

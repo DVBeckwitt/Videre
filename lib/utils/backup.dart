@@ -362,6 +362,7 @@ class UserBackup {
       useSearchHistorySettingName,
       skipExponentialSettingName,
       distractionFreeModeSettingName,
+      hideCommentsByDefaultSettingName,
       hideWatchedSubscriptionsSettingName,
       subtitleBackground,
       dearrowSettingName,

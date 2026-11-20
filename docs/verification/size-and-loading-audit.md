@@ -284,3 +284,28 @@ the task's remaining debugger forward was removed.
   Invidious suite, physical-TV behavior, or broad server/device performance.
   No exact-commit hosted CI run was created during the local audit, before the
   subsequent request to publish a beta.
+
+## Local 1.22.51-beta.2 size check, 20 November 2026
+
+Two universal release-mode APKs built on Windows with the pinned Flutter 3.35.3
+SDK and the same local test signer measured 188,614,293 and 170,838,108 bytes.
+The smaller build removed the `locale_names` and `flutter_swipe_action_cell`
+dependencies and narrowed the drawable keep rule. The language picker now reads
+the same 34 native language names from Videre’s translations.
+
+Of the 17,776,185 bytes saved, 17,661,952 came from `libapp.so` across the three
+ABIs. All 41 other native libraries matched byte-for-byte. Native libraries
+remained uncompressed and the 64-bit payloads retained 16 KB alignment. The
+release resource table retained the launcher, notification and media icons.
+
+Four superseded README screenshots accounted for 7,254,262 bytes in the
+checkout. Disabling unused Freezed pattern methods removed 8,505 generated
+lines across 44 files. Two generator runs with the pinned dependencies produced
+identical files.
+
+The offline suite passed 4,301 tests with six live-service skips. On the saved
+Android 16 emulator, the release-mode build showed separate Simplified and
+Traditional Chinese choices, opened and canceled an advanced server header
+dialog, and displayed a playback notification with a resource icon. This device
+run used build code 60952 so the original beta could be restored in place.
+The restored APK matched its original SHA-256 digest.

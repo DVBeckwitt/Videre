@@ -13,6 +13,7 @@ import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/models/home_tabs_layout.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
 import 'package:clipious/music/models/music_cover_corners.dart';
@@ -1204,19 +1205,65 @@ Future<void> main() async {
     expect(SettingsState.init().autoplayQueue, isTrue);
   });
 
+  test(
+      'the language picker has a distinct native name for every supported locale',
+      () {
+    final names = nativeLanguageNames.values;
+    expect(names, everyElement(isNotEmpty));
+    expect(names.toSet().length, AppLocalizations.supportedLocales.length);
+    expect(parseSavedLocale('null'), isNull);
+    expect(parseSavedLocale(''), isNull);
+  });
+
   test('locale changes finish saving to both foreground and background storage',
       () async {
-    await settingsCubit.setLocale([const Locale('fr')], ['French'], 'French');
+    await settingsCubit.setLocale(const Locale('fr'));
 
     expect(settingsCubit.state.locale, 'fr');
     expect(SettingsState.init().locale, 'fr');
     expect(await fileDb.getLocale(), 'fr');
 
-    await settingsCubit.setLocale([const Locale('fr')], ['French'], null);
+    const traditionalChinese =
+        Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant');
+    await settingsCubit.setLocale(traditionalChinese);
+    expect(SettingsState.init().locale, 'zh_Hant');
+    expect(parseSavedLocale(await fileDb.getLocale()), traditionalChinese);
+    expect(settingsCubit.getLocaleDisplayName(), '中文（繁體）');
+
+    await settingsCubit.setLocale(null);
 
     expect(settingsCubit.state.locale, isNull);
     expect(SettingsState.init().locale, isNull);
     expect(await fileDb.getLocale(), isNull);
+  });
+
+  test('legacy or imported locale variants display their effective language',
+      () async {
+    for (final (key, expected, name) in [
+      ('nb_NO', const Locale('nb', 'NO'), 'norsk bokmål'),
+      ('fr-CA', const Locale('fr', 'CA'), 'français'),
+      (
+        'zh_Hans',
+        const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
+        '中文'
+      ),
+      (
+        'zh-Hant-TW',
+        const Locale.fromSubtags(
+            languageCode: 'zh', scriptCode: 'Hant', countryCode: 'TW'),
+        '中文（繁體）'
+      ),
+    ]) {
+      await db.saveSetting(SettingsValue(localeSettingName, key));
+      final restored = TestSettingsCubit(SettingsState.init(), appCubit);
+      try {
+        expect(restored.state.locale, key);
+        expect(parseSavedLocale(key), expected);
+        expect(restored.getLocaleDisplayName(), name);
+      } finally {
+        await restored.close();
+      }
+    }
   });
 
   test('search history defaults on and respects saved choices after reload',
@@ -1304,6 +1351,15 @@ Future<void> main() async {
             .getSettings(videoDisplayModeSettingName)
             ?.value,
         VideoDisplayMode.crop.name);
+  });
+
+  test('hiding comments defaults off and persists each choice', () async {
+    expect(settingsCubit.state.hideCommentsByDefault, isFalse);
+    for (final value in [true, false]) {
+      await settingsCubit.setHideCommentsByDefault(value);
+      expect(settingsCubit.state.hideCommentsByDefault, value);
+      expect(SettingsState.init().hideCommentsByDefault, value);
+    }
   });
 
   test('hiding watched subscriptions defaults off and persists', () async {

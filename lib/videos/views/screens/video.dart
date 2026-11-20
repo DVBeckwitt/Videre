@@ -73,6 +73,8 @@ class VideoScreen extends StatelessWidget {
     var player = context.read<PlayerCubit>();
     var settings = context.read<SettingsCubit>();
     var distractionFreeMode = settings.state.distractionFreeMode;
+    final hideComments = context
+        .select((SettingsCubit cubit) => cubit.state.hideCommentsByDefault);
     return MultiBlocProvider(
       providers: [
         BlocProvider(
@@ -224,7 +226,8 @@ class VideoScreen extends StatelessWidget {
               child: AutoTabsRouter.tabBar(
                   animatePageTransition: AppMotion.allowsMovement(context),
                   key: ValueKey(videoState.video),
-                  physics: deviceType == DeviceType.phone
+                  physics: deviceType == DeviceType.phone &&
+                          (distractionFreeMode || !hideComments)
                       ? const BouncingScrollPhysics(
                           parent: AlwaysScrollableScrollPhysics(),
                         )

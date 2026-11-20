@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:awesome_notifications/awesome_notifications.dart';
+import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:clipious/globals.dart';
@@ -166,16 +167,10 @@ class _NotificationCheck {
 }
 
 Future<AppLocalizations> getLocalization([FileDB? settings]) async {
-  List<String>? localeString;
-  String dbLocale =
-      await (settings ?? fileDb).getLocale() ?? Intl.getCurrentLocale();
-  localeString = dbLocale.split('_');
-
-  Locale locale = Locale.fromSubtags(
-      languageCode: localeString[0],
-      scriptCode: localeString.length >= 2 ? localeString[1] : null);
-
-  return await AppLocalizations.delegate.load(locale);
+  final locale = parseSavedLocale(await (settings ?? fileDb).getLocale()) ??
+      parseSavedLocale(Intl.getCurrentLocale()) ??
+      const Locale('en');
+  return AppLocalizations.delegate.load(locale);
 }
 
 Future<void> _handlePlaylistNotifications(_NotificationCheck check) async {

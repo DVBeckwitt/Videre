@@ -173,7 +173,9 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
                 child: video != null
                     ? PageView(
                         controller: _tabController,
-                        physics: getDeviceType() == DeviceType.phone
+                        physics: getDeviceType() == DeviceType.phone &&
+                                (distractionFree ||
+                                    !settings.hideCommentsByDefault)
                             ? const BouncingScrollPhysics(
                                 parent: AlwaysScrollableScrollPhysics(),
                               )
@@ -193,16 +195,20 @@ class _ExpandedPlayerState extends State<ExpandedPlayer> {
                             child: VideoInfo(video: video, loadDislikes: true),
                           ),
                           if (!distractionFree)
-                            MinimizeOnSwipeDown(
-                              enabled: getDeviceType() == DeviceType.phone &&
-                                  !controller.isPip,
-                              scrollable: true,
-                              onSwipeDown: player.showMiniPlayer,
-                              child: CommentsContainer(
-                                video: video,
-                                key: ValueKey('comms-${video.videoId}'),
-                              ),
-                            ),
+                            if (!settings.hideCommentsByDefault ||
+                                selectedIndex == 1)
+                              MinimizeOnSwipeDown(
+                                enabled: getDeviceType() == DeviceType.phone &&
+                                    !controller.isPip,
+                                scrollable: true,
+                                onSwipeDown: player.showMiniPlayer,
+                                child: CommentsContainer(
+                                  video: video,
+                                  key: ValueKey('comms-${video.videoId}'),
+                                ),
+                              )
+                            else
+                              const SizedBox.shrink(),
                           if (!distractionFree)
                             SingleChildScrollView(
                                 child: RecommendedVideos(video: video)),

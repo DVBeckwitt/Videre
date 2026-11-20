@@ -1823,6 +1823,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     emit(state.copyWith(selectedFullScreenIndex: index));
   }
 
+  int _tabForVideo(PlayerState snapshot, IdedVideo? video) {
+    final selected = snapshot.selectedFullScreenIndex;
+    if (selected == 1 &&
+        video is Video &&
+        playbackQueueId(video) != snapshot.currentQueueId &&
+        settings.state.hideCommentsByDefault) {
+      return 0;
+    }
+    return selected;
+  }
+
   void setAudio(bool? newValue) {
     if (state.isAudio && newValue != true) _cancelMusicSelection();
     emit(state.copyWith(isAudio: newValue ?? false));
@@ -3163,6 +3174,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           rewindStep: settings.state.skipStep,
           mediaCommand: mediaCommand,
           currentlyPlaying: currentlyPlaying,
+          selectedFullScreenIndex: _tabForVideo(snapshot, currentlyPlaying),
           backendRecovery:
               preparedMusic == null ? snapshot.backendRecovery : null,
           requestedBackend: currentlyPlaying?.backendPlayback,
@@ -3236,6 +3248,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         // Do not carry the previous video's position into a newly chosen song.
         emit(state.copyWith(
             currentlyPlaying: video is Video ? video : null,
+            selectedFullScreenIndex: _tabForVideo(state, video),
             offlineCurrentlyPlaying: video is DownloadedVideo ? video : null,
             isPlaying: false,
             position:

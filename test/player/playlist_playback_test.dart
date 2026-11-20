@@ -343,7 +343,7 @@ void main() {
       data['version'] = version;
       await db
           .saveSetting(SettingsValue(playbackSessionSetting, jsonEncode(data)));
-      await settings.setPlayerRepeatMode(PlayerRepeat.repeatAll);
+      await settings.setRepeatMode(PlayerRepeat.repeatAll);
       await player.resumeSession();
       expect(player.playlistReference, isNull);
       expect(player.playlistComplete, isTrue);

@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
+import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
@@ -27,7 +28,6 @@ import 'package:clipious/notifications/notifications.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/podcasts/services/podcast_downloads.dart';
 import 'package:clipious/router.dart';
-import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -221,20 +221,8 @@ class MyApp extends StatelessWidget {
               darkColorScheme = darkColorScheme.copyWith(surface: Colors.black);
             }
 
-            List<String>? localeString;
-            var dbLocale = locale;
-            if (dbLocale != null && dbLocale != 'null') {
-              localeString = dbLocale.split('_');
-            }
-
-            log.fine(
-                'locale from db ${db.getSettings(localeSettingName)?.value} from cubit: $dbLocale, $localeString');
-            Locale? savedLocale = localeString != null
-                ? Locale.fromSubtags(
-                    languageCode: localeString[0],
-                    scriptCode:
-                        localeString.length >= 2 ? localeString[1] : null)
-                : null;
+            final savedLocale = parseSavedLocale(locale);
+            log.fine('Saved locale: $savedLocale');
 
             var colors = getColorSchemeOutsideOfMaterial(context,
                 dark: darkColorScheme, light: lightColorScheme);

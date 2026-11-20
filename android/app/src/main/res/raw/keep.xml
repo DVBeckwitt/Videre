@@ -1,3 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Notification and playback plugins look up these resource names at runtime. -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-        tools:keep="@drawable/*,@raw/slow_spring_board" />
+    tools:keep="@drawable/app_icon,@drawable/audio_service_*,@drawable/ic_bg_service_small,@mipmap/ic_bg_service_small,@mipmap/ic_launcher*" />

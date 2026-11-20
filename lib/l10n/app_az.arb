@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "azərbaycan",
   "removeFromPlayList": "Oynatma siyahısından sil",
   "@removeFromPlayList": {
     "description": "Menu item description to show remove a video from a playlist"

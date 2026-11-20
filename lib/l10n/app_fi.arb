@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "suomi",
   "noChannels": "Ei kanavia",
   "@noChannels": {
     "description": "when there are no channels to display"

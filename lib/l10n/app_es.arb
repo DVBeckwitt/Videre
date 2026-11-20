@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "español",
   "subscriptions": "Suscripciones",
   "@subscriptions": {
     "description": "User subscriptions"

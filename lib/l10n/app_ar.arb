@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "العربية",
   "removeFromPlayList": "إزالة من القائمة التشغيل",
   "@removeFromPlayList": {
     "description": "Menu item description to show remove a video from a playlist"

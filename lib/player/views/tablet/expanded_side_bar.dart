@@ -121,12 +121,16 @@ class _ExpandedSideBarState extends State<ExpandedSideBar>
                               ),
                             ),
                             if (!distractionFreeMode)
-                              SingleChildScrollView(
-                                child: CommentsContainer(
-                                  video: video,
-                                  key: ValueKey('comms-${video.videoId}'),
-                                ),
-                              ),
+                              if (!settings.hideCommentsByDefault ||
+                                  selectedIndex == 1)
+                                SingleChildScrollView(
+                                  child: CommentsContainer(
+                                    video: video,
+                                    key: ValueKey('comms-${video.videoId}'),
+                                  ),
+                                )
+                              else
+                                const SizedBox.shrink(),
                             if (!distractionFreeMode)
                               SingleChildScrollView(
                                   child: RecommendedVideos(video: video)),

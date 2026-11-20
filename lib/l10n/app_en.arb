@@ -1,4 +1,8 @@
 {
+  "nativeLanguageName": "English",
+  "@nativeLanguageName": {
+    "description": "Name of this language in the language itself, including the script when needed, for the language picker."
+  },
   "profiles": "Profiles",
   "downloadSignInRequired": "Sign in to this download’s account, then retry.",
   "profileRecoveryRequired": "Your library could not be reopened. Retry to safely restore your profile.",
@@ -1042,6 +1046,14 @@
   "distractionFreeModeDescription": "Disable video comments and recommendations",
   "@distractionFreeModeDescription": {
     "description": "Description for distraction free mode"
+  },
+  "hideCommentsByDefault": "Hide comments by default",
+  "@hideCommentsByDefault": {
+    "description": "Title for the setting that blurs comment previews"
+  },
+  "hideCommentsByDefaultDescription": "Blur comment previews until you open them",
+  "@hideCommentsByDefaultDescription": {
+    "description": "Description for the setting that blurs comment previews"
   },
   "secondsShortForm": "secs",
   "@secondsShortForm": {

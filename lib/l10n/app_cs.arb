@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "čeština",
   "errorAddingVideoToPlaylist": "Chyba při přidání videa do seznamu videí",
   "@errorAddingVideoToPlaylist": {
     "description": "Error while adding video to playlist"

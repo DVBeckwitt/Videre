@@ -914,6 +914,14 @@ void main() {
     }
   });
 
+  test('hiding comments survives a portable backup restore', () async {
+    await source
+        .saveSetting(SettingsValue(hideCommentsByDefaultSettingName, 'true'));
+    await target.restoreBackup(
+        UserBackup.parse((await source.exportBackup()).encode()));
+    expect(target.getSettings(hideCommentsByDefaultSettingName)?.value, 'true');
+  });
+
   test('watched subscription visibility survives backup restore', () async {
     for (final value in ['true', 'false']) {
       await source.saveSetting(

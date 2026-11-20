@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "română",
   "playlists": "Playlisturi",
   "@playlists": {
     "description": "User playlists"

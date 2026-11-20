@@ -23,6 +23,11 @@ import 'package:logging/logging.dart';
 
 import '../screens/music.dart';
 
+void _showActionError(BuildContext context) {
+  final message = AppLocalizations.of(context)!.musicLibraryActionError;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
 /// A dialog or collection operation may outlive its original profile.
 class MusicLibrarySession {
   final AppCubit app;
@@ -471,11 +476,7 @@ class MusicLibraryActions extends StatefulWidget {
         }
       }
     } catch (_) {
-      if (context.mounted && session.isCurrent) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:
-                Text(AppLocalizations.of(context)!.musicLibraryActionError)));
-      }
+      if (context.mounted && session.isCurrent) _showActionError(context);
     } finally {
       await changes.cancel();
     }
@@ -549,13 +550,19 @@ class MusicLibraryActions extends StatefulWidget {
 
 class _MusicLibraryActionsState extends State<MusicLibraryActions> {
   bool _busy = false;
-  MusicLibrarySession? _menuSession;
-  List<Video>? _menuVideos;
-  String? _menuPlaylistId;
-  Future<void> Function()? _menuOnPlay;
-  List<DownloadedVideo>? _menuDownloads;
+  ({
+    MusicLibrarySession session,
+    MusicLibraryActions source,
+    List<Video> videos,
+    List<DownloadedVideo>? downloads,
+  })? _menu;
   ModalRoute<dynamic>? _menuRoute;
   StreamSubscription<AppState>? _sessionChanges;
+
+  void _clearMenu() {
+    _menu = null;
+    _menuRoute = null;
+  }
 
   @override
   void didChangeDependencies() {
@@ -563,14 +570,9 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
     _sessionChanges?.cancel();
     _sessionChanges = context.read<AppCubit>().stream.listen((_) {
       if (!mounted) return;
-      if (_menuSession?.isCurrent == false) {
+      if (_menu?.session.isCurrent == false) {
         final route = _menuRoute;
-        _menuSession = null;
-        _menuVideos = null;
-        _menuPlaylistId = null;
-        _menuOnPlay = null;
-        _menuDownloads = null;
-        _menuRoute = null;
+        _clearMenu();
         if (route != null && route.isActive) {
           route.navigator?.removeRoute(route);
         }
@@ -586,32 +588,20 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
   }
 
   Future<void> _act(_LibraryAction action) async {
-    final menuSession = _menuSession;
-    final videos = _menuVideos ?? List<Video>.unmodifiable(widget.videos);
-    final playlistId =
-        menuSession == null ? widget.localPlaylistId : _menuPlaylistId;
-    final onPlay = menuSession == null ? widget.onPlay : _menuOnPlay;
-    final downloads = menuSession == null ? widget.downloads : _menuDownloads;
-    _menuSession = null;
-    _menuVideos = null;
-    _menuPlaylistId = null;
-    _menuOnPlay = null;
-    _menuDownloads = null;
-    _menuRoute = null;
+    final menu = _menu;
+    final source = menu?.source ?? widget;
+    final videos = menu?.videos ?? List<Video>.unmodifiable(source.videos);
+    final downloads = menu == null ? source.downloads : menu.downloads;
+    _clearMenu();
     final session =
-        menuSession ?? MusicLibrarySession(context.read<AppCubit>());
-    if (!session.isCurrent) return;
-    if (_busy) return;
+        menu?.session ?? MusicLibrarySession(context.read<AppCubit>());
+    if (!session.isCurrent || _busy) return;
     setState(() => _busy = true);
     try {
-      await MusicLibraryActions._apply(
-          context, session, action, videos, playlistId, onPlay, downloads);
+      await MusicLibraryActions._apply(context, session, action, videos,
+          source.localPlaylistId, source.onPlay, downloads);
     } catch (_) {
-      if (mounted && session.isCurrent) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:
-                Text(AppLocalizations.of(context)!.musicLibraryActionError)));
-      }
+      if (mounted && session.isCurrent) _showActionError(context);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -658,22 +648,16 @@ class _MusicLibraryActionsState extends State<MusicLibraryActions> {
         style: widget.iconStyle,
         enabled: enabled,
         onOpened: () {
-          _menuSession = MusicLibrarySession(context.read<AppCubit>());
-          _menuVideos = List<Video>.unmodifiable(widget.videos);
-          _menuPlaylistId = widget.localPlaylistId;
-          _menuOnPlay = widget.onPlay;
-          _menuDownloads = widget.downloads == null
-              ? null
-              : List<DownloadedVideo>.unmodifiable(widget.downloads!);
+          _menu = (
+            session: MusicLibrarySession(context.read<AppCubit>()),
+            source: widget,
+            videos: List<Video>.unmodifiable(widget.videos),
+            downloads: widget.downloads == null
+                ? null
+                : List<DownloadedVideo>.unmodifiable(widget.downloads!),
+          );
         },
-        onCanceled: () {
-          _menuSession = null;
-          _menuVideos = null;
-          _menuPlaylistId = null;
-          _menuOnPlay = null;
-          _menuDownloads = null;
-          _menuRoute = null;
-        },
+        onCanceled: _clearMenu,
         onSelected: _act,
         itemBuilder: (_) => MusicLibraryActions._items(
             context, widget.videos, widget.localPlaylistId,
@@ -744,11 +728,7 @@ class _MusicBookmarkButtonState extends State<MusicBookmarkButton> {
     try {
       await session.setBookmark(widget.entry, saved: saved);
     } catch (_) {
-      if (mounted && session.isCurrent) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content:
-                Text(AppLocalizations.of(context)!.musicLibraryActionError)));
-      }
+      if (mounted && session.isCurrent) _showActionError(context);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

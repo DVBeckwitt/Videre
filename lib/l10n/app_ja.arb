@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "日本語",
   "playListName": "再生リスト名",
   "@playListName": {
     "description": "Place holder for new playlist name text field"

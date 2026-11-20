@@ -1,4 +1,5 @@
 {
+  "nativeLanguageName": "中文",
   "useThisServer": "使用此实例",
   "@useThisServer": {
     "description": "Use this server label"

@@ -15,7 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
-import 'package:locale_names/locale_names.dart';
+import '../../components/app_language_picker.dart';
 import 'package:logging/logging.dart';
 
 import '../../../../feedback/views/open_feedback.dart';
@@ -75,34 +75,6 @@ class TVSettingsScreen extends StatelessWidget {
 
   openAppLayout(BuildContext context) {
     AutoRouter.of(context).push(const TvAppLayoutSettingsRoute());
-  }
-
-  showSelectLanguage(BuildContext context) {
-    var localsList = AppLocalizations.supportedLocales;
-    var localsStrings =
-        localsList.map((e) => e.nativeDisplayLanguageScript).toList();
-    var locals = AppLocalizations.of(context)!;
-    var cubit = context.read<SettingsCubit>();
-
-    List<String>? localeString = cubit.state.locale?.split('_');
-    Locale? selected = localeString != null
-        ? Locale.fromSubtags(
-            languageCode: localeString[0],
-            scriptCode: localeString.length >= 2 ? localeString[1] : null)
-        : null;
-
-    AutoRouter.of(context).push(TvSelectFromListRoute(
-      title: locals.appLanguage,
-      options: [locals.followSystem, ...localsStrings],
-      selected: selected?.nativeDisplayLanguageScript ?? locals.followSystem,
-      onSelect: (String selected) {
-        if (selected == locals.followSystem) {
-          cubit.setLocale(localsList, localsStrings, null);
-        } else {
-          cubit.setLocale(localsList, localsStrings, selected);
-        }
-      },
-    ));
   }
 
   selectTheme(BuildContext context) {
@@ -264,7 +236,8 @@ class TVSettingsScreen extends StatelessWidget {
                   title: locals.appLanguage,
                   description:
                       cubit.getLocaleDisplayName() ?? locals.followSystem,
-                  onSelected: (context) => showSelectLanguage(context),
+                  onSelected: (context) =>
+                      showAppLanguagePicker(context, television: true),
                 ),
                 SettingsTile(
                   title: 'Return YouTube Dislike',

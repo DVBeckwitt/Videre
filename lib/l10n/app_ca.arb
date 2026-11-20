@@ -1,4 +1,5 @@
 {
+    "nativeLanguageName": "català",
     "privatePlaylist": "Privada",
     "@privatePlaylist": {
         "description": "Private playlist"

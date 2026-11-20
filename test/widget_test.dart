@@ -8,6 +8,7 @@ import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/channels/models/channel_videos.dart';
 import 'package:clipious/comments/models/comment.dart';
 import 'package:clipious/comments/models/video_comments.dart';
+import 'package:clipious/comments/views/components/comments_container.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart' as globals;
@@ -413,19 +414,20 @@ Future<void> _pumpExpandedPlayer(
   bool distractionFree = false,
   int selectedIndex = 3,
   int videoIndex = 0,
+  SettingsState? settingsState,
 }) async {
   final video = (globals.service as _TestService).videos[videoIndex];
-  final settingsState = SettingsState.init();
+  final initialSettings = settingsState ?? SettingsState.init();
   await _pumpHomepage(
     tester,
     size,
     settingsState: distractionFree
-        ? settingsState.copyWith(settings: {
-            ...settingsState.settings,
+        ? initialSettings.copyWith(settings: {
+            ...initialSettings.settings,
             distractionFreeModeSettingName:
                 SettingsValue(distractionFreeModeSettingName, 'true'),
           })
-        : settingsState,
+        : initialSettings,
     playerState: PlayerState.init([video]).copyWith(
       currentlyPlaying: video,
       isMini: false,
@@ -447,10 +449,11 @@ void _mockVideoWakelock() {
 }
 
 Future<void> _pumpVideo(WidgetTester tester, Size size,
-    {PlayerState? playerState}) async {
+    {PlayerState? playerState, SettingsState? settingsState}) async {
   tester.platformDispatcher.textScaleFactorTestValue = 0.9;
   addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-  await _pumpHomepage(tester, size, playerState: playerState);
+  await _pumpHomepage(tester, size,
+      playerState: playerState, settingsState: settingsState);
   unawaited(appRouter.push(VideoRoute(videoId: 'video-0')));
   await tester.pumpAndSettle();
 }
@@ -2559,6 +2562,11 @@ void main() {
         findsNothing);
     expect(find.byType(VideoThumbnailView), findsOneWidget);
     expect(find.text('A real instance comment.'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('watch-open-comments')),
+            matching: find.byType(ImageFiltered)),
+        findsNothing);
     expect(service.commentSorts, ['top']);
 
     await tester.tap(find.byKey(const ValueKey('watch-open-description')));
@@ -2581,6 +2589,56 @@ void main() {
     expect(tester.element(screen).read<PlayerCubit>().state.hasVideo, isFalse);
   });
 
+  for (final playing in [false, true]) {
+    testWidgets(
+        '${playing ? 'Playback' : 'Video preview'} blurs the comment until tapped',
+        (tester) async {
+      const spoiler = 'A comment with a spoiler.';
+      final service = globals.service as _TestService;
+      service.comments = [
+        Comment('Viewer', [], 'viewer', '', false, spoiler, 'Today', 0,
+            'spoiler', false, null, null),
+      ];
+      final settings = SettingsState.init().copyWith(settings: {
+        hideCommentsByDefaultSettingName:
+            SettingsValue(hideCommentsByDefaultSettingName, 'true'),
+      });
+      const size = Size(390, 844);
+      if (playing) {
+        await _pumpExpandedPlayer(tester, size, settingsState: settings);
+      } else {
+        await _pumpVideo(tester, size, settingsState: settings);
+      }
+
+      final comments = find.byKey(const ValueKey('watch-open-comments'));
+      final comment = find.text(spoiler, findRichText: true);
+      final blur =
+          find.descendant(of: comments, matching: find.byType(ImageFiltered));
+      final spoilerSemantics =
+          find.bySemanticsLabel(RegExp(RegExp.escape(spoiler)));
+      await tester.ensureVisible(blur);
+      await tester.pumpAndSettle();
+      expect(find.descendant(of: blur, matching: comment), findsOneWidget);
+      expect(spoilerSemantics, findsNothing);
+      expect(service.commentSorts, ['top']);
+
+      await tester.tap(blur);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ChoiceChip, 'Top'), findsOneWidget);
+      expect(
+          find.descendant(
+              of: find.byType(CommentsContainer), matching: comment),
+          findsOneWidget);
+      expect(service.commentSorts, ['top']);
+
+      await tester.tapAt(const Offset(18, 40));
+      await tester.pumpAndSettle();
+      expect(blur, findsOneWidget);
+      expect(spoilerSemantics, findsNothing);
+      expect(service.commentSorts, ['top']);
+    });
+  }
+
   testWidgets('tablet video tabs ignore horizontal swipes', (tester) async {
     await _pumpVideo(tester, const Size(1024, 768));
 
@@ -2591,6 +2649,54 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tabBar.controller!.index, 0);
+  });
+
+  testWidgets('tablet video loads hidden comments only on the Comments tab',
+      (tester) async {
+    final service = globals.service as _TestService;
+    final settings = SettingsState.init().copyWith(settings: {
+      hideCommentsByDefaultSettingName:
+          SettingsValue(hideCommentsByDefaultSettingName, 'true'),
+    });
+    await _pumpVideo(tester, const Size(1024, 768), settingsState: settings);
+    expect(service.commentSorts, isEmpty);
+
+    await tester.tap(find.widgetWithText(Tab, 'Recommended'));
+    await tester.pumpAndSettle();
+    expect(service.commentSorts, isEmpty);
+
+    await tester.tap(find.widgetWithText(Tab, 'Comments'));
+    await tester.pumpAndSettle();
+    expect(service.commentSorts, ['top']);
+  });
+
+  testWidgets('spoiler protection requires a tap in landscape phone tabs',
+      (tester) async {
+    final service = globals.service as _TestService;
+    final settings = SettingsState.init().copyWith(settings: {
+      hideCommentsByDefaultSettingName:
+          SettingsValue(hideCommentsByDefaultSettingName, 'true'),
+    });
+    await _pumpVideo(tester, const Size(640, 360), settingsState: settings);
+
+    final video = find.byType(VideoScreen);
+    final horizontalPager = find.descendant(
+      of: video,
+      matching: find.byWidgetPredicate((widget) =>
+          widget is Scrollable && widget.axisDirection == AxisDirection.right),
+    );
+    final pager = tester.getRect(horizontalPager.first);
+    final navigation =
+        find.descendant(of: video, matching: find.byType(NavigationBar));
+    await tester.dragFrom(
+        pager.centerRight - const Offset(24, 0), Offset(-pager.width * 0.8, 0));
+    await tester.pumpAndSettle();
+    expect(tester.widget<NavigationBar>(navigation).selectedIndex, 0);
+    expect(service.commentSorts, isEmpty);
+
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Comments'));
+    await tester.pumpAndSettle();
+    expect(service.commentSorts, ['top']);
   });
 
   testWidgets('phone watch queue opens and closes while retaining the decoder',

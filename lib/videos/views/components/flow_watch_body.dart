@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,6 +18,7 @@ import '../../../settings/states/settings.dart';
 import '../../../subscription_management/view/components/subscribe_button.dart';
 import '../../../utils.dart';
 import '../../../utils/views/components/channel_avatar.dart';
+import '../../../utils/views/components/conditional_wrap.dart';
 import '../../models/video.dart';
 import 'add_to_playlist_button.dart';
 import 'community_browse.dart';
@@ -313,6 +316,8 @@ class _FlowCommentsPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final locals = AppLocalizations.of(context)!;
+    final blurPreview = context
+        .select((SettingsCubit cubit) => cubit.state.hideCommentsByDefault);
     return BlocProvider(
       create: (_) => CommentsCubit(
         CommentsState.init(video: video, source: 'youtube', sortBy: 'top'),
@@ -354,18 +359,30 @@ class _FlowCommentsPreview extends StatelessWidget {
                     ]),
                     if (first != null && snippet.isNotEmpty) ...[
                       const SizedBox(height: 10),
-                      Row(children: [
-                        ChannelAvatar(
-                          name: first.author,
-                          images: first.authorThumbnails,
-                          size: 24,
+                      ConditionalWrap(
+                        wrapIf: blurPreview,
+                        wrapper: (child) => ExcludeSemantics(
+                          child: ClipRect(
+                            child: ImageFiltered(
+                              imageFilter:
+                                  ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                              child: child,
+                            ),
+                          ),
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(snippet,
-                              maxLines: 2, overflow: TextOverflow.ellipsis),
-                        ),
-                      ]),
+                        child: Row(children: [
+                          ChannelAvatar(
+                            name: first.author,
+                            images: first.authorThumbnails,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(snippet,
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          ),
+                        ]),
+                      ),
                     ],
                   ],
                 ),

@@ -50,6 +50,7 @@ const musicCommunityCoverSettingName = 'music-community-cover-art-enabled';
 const musicDownloadFormatSettingName = 'music-download-output-format';
 const navigationBarLabelBehaviorSettingName = 'navigation-bar-label-behavior';
 const distractionFreeModeSettingName = 'distraction-free-mode';
+const hideCommentsByDefaultSettingName = 'hide-comments-by-default';
 const hideWatchedSubscriptionsSettingName = 'hide-watched-subscriptions';
 const backgroundNotificationsSettingName = 'background-notifications';
 const backgroundCheckFrequency = "background-check-frequency";

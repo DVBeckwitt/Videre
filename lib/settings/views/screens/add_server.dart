@@ -3,7 +3,6 @@ import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:clipious/content_filter/community_filter.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
@@ -21,8 +20,7 @@ import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/settings/views/components/community_filter_choice.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
-import 'package:clipious/settings/views/components/nerdvpn_api_key_setup.dart';
-import 'package:clipious/settings/views/components/server_account_dialogs.dart';
+import 'package:clipious/settings/views/components/add_server_options.dart';
 import 'package:clipious/settings/views/screens/network_proxy.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/views/components/conditional_wrap.dart';
@@ -198,28 +196,6 @@ class AddServerScreen extends StatelessWidget {
     }
   }
 
-  void showAddHeaderDialog(BuildContext context) {
-    var locals = AppLocalizations.of(context)!;
-    showServerKeyValueDialog(context,
-        field1Title: locals.name,
-        field2Title: locals.value,
-        field2Secret: false,
-        okText: locals.add, onOk: (dialogContext, key, value) async {
-      var cubit = context.read<AddServerCubit>();
-      await runServerAccountAction(dialogContext, () async {
-        await cubit.addHeader(key, value);
-        if (dialogContext.mounted &&
-            ModalRoute.of(dialogContext)?.isCurrent == true) {
-          Navigator.of(dialogContext).pop();
-        }
-      });
-    });
-  }
-
-  void showBasicAuthDialog(BuildContext context) => showServerBasicAuthDialog(
-      context,
-      (key, value) => context.read<AddServerCubit>().addHeader(key, value));
-
   static Future<void> validateAndClose(BuildContext context) async {
     final route = ModalRoute.of(context);
     // A popped form can remain mounted through its reverse transition.
@@ -311,8 +287,6 @@ class AddServerScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     var locals = AppLocalizations.of(context)!;
 
-    final textTheme = Theme.of(context).textTheme;
-    final colors = Theme.of(context).colorScheme;
     final device = getDeviceType();
     return Scaffold(
       appBar: AppBar(
@@ -399,135 +373,9 @@ class AddServerScreen extends StatelessWidget {
                                 ),
                               ]),
                       ),
-                      ListenableBuilder(
-                        listenable: Listenable.merge([
-                          cubit.urlController,
-                          cubit.apiKeyController,
-                        ]),
-                        builder: (context, _) => Column(children: [
-                          if (cubit.usesNerdVpn)
-                            NerdVpnApiKeySetup(
-                              serverUrl: AddServerCubit.normalizeUrl(
-                                  cubit.urlController.text)!,
-                              apiKeyController: cubit.apiKeyController,
-                              loading: state.loading,
-                            ),
-                          if (!cubit.usesManualNerdVpnKey)
-                            SwitchListTile(
-                              title: Text(locals.protectedServer),
-                              subtitle: Text(locals.protectedServerHelp),
-                              value: state.protectedServer,
-                              onChanged: state.loading
-                                  ? null
-                                  : cubit.setProtectedServer,
-                            ),
-                        ]),
-                      ),
-                      ListTile(
-                        leading: AnimatedRotation(
-                            duration: AppMotion.duration(context),
-                            curve: animationCurve,
-                            turns: state.showAdvanced ? 0.5 : 0,
-                            child: const Icon(Icons.expand_less)),
-                        title: Text(locals.advancedConfiguration),
-                        onTap: state.loading
-                            ? null
-                            : () => cubit.setShowAdvanced(!state.showAdvanced),
-                      ),
-                      if (state.showAdvanced)
-                        Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                              Text(
-                                locals.customHeaders,
-                                style: textTheme.bodyLarge
-                                    ?.copyWith(color: colors.primary),
-                              ),
-                              Text(locals.customHeadersExplanation,
-                                  style: textTheme.bodySmall),
-                              const Gap(10),
-                              ...state.headers.keys.map((k) {
-                                String display = state.headers[k] ?? '';
-                                if (k.toLowerCase() == 'authorization' ||
-                                    k.toLowerCase() == 'x-invidious-token') {
-                                  display = "········";
-                                }
-
-                                return ListTile(
-                                  title: Text(k),
-                                  subtitle: Text(display),
-                                  trailing: IconButton(
-                                    icon: const Icon(Icons.delete),
-                                    onPressed: () => cubit.removeHeader(k),
-                                  ),
-                                );
-                              }),
-                              ListTile(
-                                leading: const Icon(Icons.key),
-                                title: Text(locals.addBasicAuth),
-                                onTap: () => showBasicAuthDialog(context),
-                              ),
-                              ListTile(
-                                leading: const Icon(Icons.add),
-                                title: Text(locals.addHeader),
-                                onTap: () => showAddHeaderDialog(context),
-                              )
-                            ])
-                            .animate()
-                            .slideY(
-                                begin: -0.2,
-                                end: 0,
-                                curve: animationCurve,
-                                duration: AppMotion.duration(context))
-                            .fade(
-                                begin: 0,
-                                end: 1,
-                                curve: animationCurve,
-                                duration: AppMotion.fadeDuration(context),
-                                delay: AppMotion.fadeDuration(
-                                    context, animationDuration ~/ 4)),
-                      FilledButton.tonal(
-                          onPressed: state.loading || !state.valid
-                              ? null
-                              : () => validateAndClose(context),
-                          child: state.loading
-                              ? const SizedBox.square(
-                                  dimension: 20,
-                                  child: MotionLoadingIndicator(
-                                      child: CircularProgressIndicator(
-                                    strokeWidth: 1,
-                                  )))
-                              : ListenableBuilder(
-                                  listenable: Listenable.merge([
-                                    cubit.urlController,
-                                    cubit.apiKeyController,
-                                  ]),
-                                  builder: (context, _) => Text(
-                                      cubit.usesNerdVpn &&
-                                              !cubit.usesManualNerdVpnKey
-                                          ? locals.nerdVpnSignInAndAdd
-                                          : locals.testAndAddServer),
-                                )),
-                      ListenableBuilder(
-                        listenable: Listenable.merge([
-                          cubit.urlController,
-                          cubit.apiKeyController,
-                        ]),
-                        builder: (context, _) => cubit.usesManualNerdVpnKey
-                            ? const SizedBox.shrink()
-                            : CheckboxListTile(
-                                title: Text(
-                                  locals.alsoTestServerConfig,
-                                  style: textTheme.bodySmall,
-                                ),
-                                value: state.advancedTest,
-                                onChanged: state.loading ||
-                                        state.publicInstance != null
-                                    ? null
-                                    : (value) =>
-                                        cubit.setAdvancedTest(value ?? true),
-                              ),
+                      AddServerOptions(
+                        state: state,
+                        onSubmit: () => validateAndClose(context),
                       ),
                     ],
                   ),

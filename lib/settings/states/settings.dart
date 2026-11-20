@@ -11,7 +11,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/workmanager.dart';
-import 'package:locale_names/locale_names.dart';
+import 'package:clipious/l10n/app_languages.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../globals.dart';
@@ -197,22 +197,10 @@ class SettingsCubit extends Cubit<SettingsState> {
     updateApp();
   }
 
-  Future<void> setLocale(
-      List<Locale> locals, List<String> localStrings, String? locale) async {
-    if (locale == null) {
-      await _setLocale(null);
-    } else {
-      var selectedIndex = localStrings.indexOf(locale);
-
-      Locale selectedLocale = locals[selectedIndex];
-
-      String toSave = selectedLocale.languageCode;
-      if (selectedLocale.scriptCode != null) {
-        toSave += '_${selectedLocale.scriptCode}';
-      }
-
-      await _setLocale(toSave);
-    }
+  Future<void> setLocale(Locale? locale) async {
+    final key = locale?.toString();
+    await _set(localeSettingName, key);
+    await fileDb.setLocale(key);
     updateApp();
   }
 
@@ -220,12 +208,10 @@ class SettingsCubit extends Cubit<SettingsState> {
     appCubit.rebuildApp();
   }
 
-  setShuffle(bool b) async {
-    await setPlayerShuffleMode(b);
-  }
+  Future<void> setShuffle(bool value) => _set(playerShuffle, value);
 
   Future<void> setRepeatMode(PlayerRepeat repeat) =>
-      setPlayerRepeatMode(repeat);
+      _saveSettingInOrder(playerRepeat, () => repeat.index.toString());
 
   toggleShuffle() {
     setShuffle(!state.playerShuffleMode);
@@ -237,19 +223,13 @@ class SettingsCubit extends Cubit<SettingsState> {
         return next.toString();
       });
 
-  setLastSubtitle(String s) async {
-    await setLastSubtitles(s);
-  }
+  Future<void> setLastSubtitle(String value) => _set(lastSubtitle, value);
 
   String? getLocaleDisplayName() {
-    List<String>? localeString = state.locale?.split('_');
-    Locale? l = localeString != null
-        ? Locale.fromSubtags(
-            languageCode: localeString[0],
-            scriptCode: localeString.length >= 2 ? localeString[1] : null)
-        : null;
-
-    return l?.nativeDisplayLanguageScript;
+    final locale = parseSavedLocale(state.locale);
+    return locale == null
+        ? null
+        : lookupAppLocalizations(locale).nativeLanguageName;
   }
 
   Future<EnableBackGroundNotificationResponse> setBackgroundNotifications(
@@ -423,22 +403,10 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setForceTvUi(bool b) async => await _set(forceTvUiSettingName, b);
 
-  _setLocale(String? s) async {
-    await _set(localeSettingName, s);
-    await fileDb.setLocale(s);
-  }
-
   setSearchHistoryLimit(int b) async =>
       await _set(searchHistoryLimitSettingName, b);
 
   setLastSpeed(double d) async => await _set(lastSpeedSettingName, d);
-
-  setPlayerShuffleMode(bool b) async => await _set(playerShuffle, b);
-
-  Future<void> setPlayerRepeatMode(PlayerRepeat repeatMode) =>
-      _saveSettingInOrder(playerRepeat, () => repeatMode.index.toString());
-
-  setLastSubtitles(String s) async => await _set(lastSubtitle, s);
 
   setPlayRecommendedNext(bool b) async =>
       await _set(playRecommendedNextSettingName, b);
@@ -596,6 +564,9 @@ class SettingsCubit extends Cubit<SettingsState> {
 
   setDistractionFreeMode(bool b) async =>
       await _set(distractionFreeModeSettingName, b);
+
+  Future<void> setHideCommentsByDefault(bool value) =>
+      _saveSettingInOrder(hideCommentsByDefaultSettingName, value.toString);
 
   Future<void> setHideWatchedSubscriptions(bool value) async {
     await _set(hideWatchedSubscriptionsSettingName, value);
@@ -835,6 +806,9 @@ sealed class SettingsState with _$SettingsState {
 
   bool get distractionFreeMode =>
       _get(distractionFreeModeSettingName)?.value == "true";
+
+  bool get hideCommentsByDefault =>
+      _get(hideCommentsByDefaultSettingName)?.value == 'true';
 
   bool get hideWatchedSubscriptions =>
       _get(hideWatchedSubscriptionsSettingName)?.value == 'true';
