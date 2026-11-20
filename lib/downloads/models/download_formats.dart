@@ -21,6 +21,22 @@ enum DownloadContainer {
 
   String mimeType(bool audioOnly) => '${audioOnly ? 'audio' : 'video'}/$name';
 
+  bool acceptsResponseType(String? contentType) {
+    final mime = contentType?.split(';').first.trim().toLowerCase() ?? '';
+    // Proxies can omit the type, serve bytes generically, or label an
+    // audio-only file by its container (e.g. video/webm for a .webm file).
+    if (mime.isEmpty ||
+        mime == 'application/octet-stream' ||
+        mime == 'binary/octet-stream') {
+      return true;
+    }
+    return mime == 'audio/$name' ||
+        mime == 'video/$name' ||
+        mime == 'application/$name' ||
+        (this == mp4 &&
+            const {'audio/m4a', 'audio/x-m4a', 'video/x-m4v'}.contains(mime));
+  }
+
   static DownloadContainer? forVideo(AdaptiveFormat format) =>
       switch ((_mimeType(format), format.encoding?.toLowerCase())) {
         ('video/webm', 'vp9') => webm,

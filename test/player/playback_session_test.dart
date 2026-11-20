@@ -591,6 +591,64 @@ void main() {
       });
     }
 
+    test(
+        'media stop exits rotated audio fullscreen and restores Android chrome',
+        () async {
+      final view =
+          TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
+      view.devicePixelRatio = 1;
+      view.physicalSize = const Size(390, 844);
+      addTearDown(view.resetDevicePixelRatio);
+      addTearDown(view.resetPhysicalSize);
+
+      final calls = <MethodCall>[];
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        calls.add(call);
+        return null;
+      });
+      addTearDown(() =>
+          messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      await settings
+          .saveSetting(SettingsValue(fullScreenOnLandscapeSettingName, 'true'));
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      player.seedState(player.state.copyWith(
+          currentlyPlaying: const Video(videoId: 'rotation'),
+          isAudio: true,
+          isMini: false,
+          isHidden: false,
+          orientation: Orientation.portrait));
+      view.physicalSize = const Size(844, 390);
+      player.didChangeMetrics();
+      expect(player.state.fullScreenState, FullScreenState.fullScreen);
+
+      calls.clear();
+      await app_main.mediaHandler.stop();
+      expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+      // A late rotation event must not reopen the overlay during its exit animation.
+      player.onOrientationChange();
+      expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+      expect(
+          calls
+              .where((call) =>
+                  call.method == 'SystemChrome.setEnabledSystemUIOverlays')
+              .last
+              .arguments,
+          [SystemUiOverlay.top.toString(), SystemUiOverlay.bottom.toString()]);
+      expect(
+          calls
+              .where((call) =>
+                  call.method == 'SystemChrome.setPreferredOrientations')
+              .last
+              .arguments,
+          isEmpty);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(player.state.isHidden, isTrue);
+      expect(player.state.fullScreenState, FullScreenState.notFullScreen);
+    });
+
     test('resizing into PiP preserves the expanded portrait layout', () async {
       final view =
           TestWidgetsFlutterBinding.instance.platformDispatcher.implicitView!;
@@ -1145,6 +1203,55 @@ void main() {
       expect(player.savedSession!.musicHistoryEntries, {song.videoId});
     });
 
+    for (final playNext in [true, false]) {
+      test(
+          'queueing the active Music upload from Video retains both origins (play next: $playNext)',
+          () async {
+        player.audioSession = await AudioSession.instance;
+        app_main.mediaHandler = MediaHandler(player);
+        const song = Video(
+            videoId: 'shared-song',
+            musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+        await player.playVideo([song], fromMusic: true, audio: true);
+        const watch = Video(videoId: 'shared-song');
+        for (var attempt = 0; attempt < 2; attempt++) {
+          if (playNext) {
+            player.playVideoNext(watch);
+          } else {
+            player.queueVideos([watch]);
+          }
+        }
+        final ids = player.state.videos.map(playbackQueueId).toList();
+        expect(ids, hasLength(2));
+        expect(ids.toSet(), hasLength(2));
+        expect(player.state.currentQueueId, ids.first);
+        expect(player.state.playQueue, orderedEquals([ids.last]));
+
+        final database = db as SembastSqfDb;
+        await database.settingsStore
+            .record(playbackSessionSetting)
+            .onSnapshot(database.db)
+            .firstWhere((snapshot) =>
+                PlaybackSession.decode(snapshot?.value['value'] as String?)
+                    ?.next
+                    .contains(ids.last) ==
+                true)
+            .timeout(const Duration(seconds: 5));
+        expect(player.savedSession!.musicHistoryEntries, {ids.first});
+        await player.resumeSession();
+        expect(player.state.currentQueueId, ids.first);
+        expect(db.getPlaybackHistory(PlaybackHistoryOrigin.video), isEmpty);
+        await player.skipToVideo(1);
+        expect(player.state.currentQueueId, ids.last);
+        expect(
+            db.getPlaybackHistory(PlaybackHistoryOrigin.video).single.videoId,
+            song.videoId);
+        expect(
+            db.getPlaybackHistory(PlaybackHistoryOrigin.music).single.videoId,
+            song.videoId);
+      });
+    }
+
     test(
         'deleting a song while playback is loading fences its pending history write',
         () async {
@@ -1308,6 +1415,27 @@ void main() {
       player.seedAudioStart(const Duration(seconds: 37));
       decoder.switchToOfflineVideo(song);
       expect(decoder.startedAt, const Duration(seconds: 37));
+    });
+
+    test(
+        'explicit download playback records a locally replayable history entry',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const saved = DownloadedVideo(
+          videoId: 'owned',
+          title: 'Owned audio',
+          accountId: 'owner',
+          lengthSeconds: 120,
+          quality: 'audio',
+          audioOnly: true,
+          downloadComplete: true);
+      await db.upsertDownload(saved);
+      await player.playOfflineVideos([saved]);
+      final entry = db.getPlaybackHistory(PlaybackHistoryOrigin.video).single;
+      expect(entry.replayDownload(db), saved);
+      await db.upsertDownload(saved.copyWith(accountId: 'another-owner'));
+      expect(entry.replayDownload(db), isNull);
     });
 
     test('TV restores the chosen mode for music and ordinary video sessions',

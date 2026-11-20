@@ -1587,7 +1587,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         !isClosed &&
         startupGeneration == _videoSwitchGeneration;
     final startVideos = state.videos;
-    if (startVideos.isEmpty && _initialLocalMusic == null) restoreSession();
+    final startDownload = state.offlineVideos.firstOrNull;
+    if (startVideos.isEmpty &&
+        startDownload == null &&
+        _initialLocalMusic == null) {
+      restoreSession();
+    }
     emit(state.copyWith(
         orientation: getOrientation(),
         forwardStep: settings.state.skipStep,
@@ -1623,6 +1628,24 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     } else if (_initialLocalMusic != null && startupActive()) {
       await playLocalMusic(_initialLocalMusic,
           startIndex: _initialPlaylistIndex);
+    } else if (startDownload != null && startupActive()) {
+      final owned = db.profileId == startDownload.profileId &&
+          _profileDatabase.profileId == startDownload.profileId;
+      final download = owned
+          ? _profileDatabase.getDownloadByVideoId(startDownload.videoId)
+          : null;
+      if (download == null ||
+          download.profileId != startDownload.profileId ||
+          download.accountId != startDownload.accountId ||
+          !download.downloadComplete ||
+          download.downloadFailed ||
+          download.storageFailed ||
+          download.authenticationRequired ||
+          isLocalMusicPlaybackId(download.videoId)) {
+        setEvent(const MediaEvent(state: MediaState.error));
+      } else {
+        await playOfflineVideos([download], fromMusic: _initialFromMusic);
+      }
     } else if (startVideos.isNotEmpty && startupActive()) {
       final reference = _initialPlaylistReference;
       final switching = reference == null
@@ -1871,6 +1894,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
   void hide() {
     if (isClosed || state.isClosing) return;
+    _exitFullscreenOnStop();
     _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     unawaited(_finishLearning());
@@ -2022,6 +2046,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   /// Save under the current person and retire decoders without a UI animation.
   Future<void> _retirePlaybackSession({required bool changingProfile}) async {
     if (isClosed) return;
+    _exitFullscreenOnStop();
     _activeHistoryWrite?.cancel();
     _cancelMusicSelection();
     _adjacentMusic.reset();
@@ -2199,15 +2224,21 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
   }
 
+  // A Video action may reuse a Video occurrence, but a Music occurrence of
+  // the same upload keeps its own history when played, replayed, or restored.
+  Iterable<Video> get _videoSectionQueue => state.videos
+      .where((entry) => !_musicHistoryEntries.contains(playbackQueueId(entry)));
+
   void queueVideos(List<Video> videos) {
-    final ids = state.videos.map((video) => video.videoId).toSet();
+    final ids = _videoSectionQueue.map((video) => video.videoId).toSet();
     final additions = videos
         .where((video) => !video.filtered && ids.add(video.videoId))
         .toList();
     if (additions.isEmpty) return;
-    _musicHistoryEntries.removeAll(additions.map(playbackQueueId));
-    emit(state
-        .copyWith(offlineVideos: [], videos: [...state.videos, ...additions]));
+    final queue = assignPlaybackQueueIds([...state.videos, ...additions]);
+    _musicHistoryEntries
+        .removeAll(queue.skip(state.videos.length).map(playbackQueueId));
+    emit(state.copyWith(offlineVideos: [], videos: queue));
     generatePlayQueue();
   }
 
@@ -3263,6 +3294,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             ImageObject.getBestThumbnail(historyVideo.videoThumbnails)?.url ??
                 '',
             authorId: historyVideo.authorId,
+            playedFromDownload: offlineCurrentlyPlaying != null,
+            downloadAccountId: offlineCurrentlyPlaying?.accountId,
             lengthSeconds: historyVideo.lengthSeconds,
             musicMetadata: historyVideo.musicMetadata));
         if (!active()) return;
@@ -4256,16 +4289,17 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (state.videos.isEmpty) {
       playVideo([video]);
     } else {
-      final existing = state.videos
+      final existing = _videoSectionQueue
               .where((item) => playbackQueueId(item) == playbackQueueId(video))
               .firstOrNull ??
-          state.videos
+          _videoSectionQueue
               .where((item) => item.videoId == video.videoId)
               .firstOrNull;
-      final target = existing ?? video.copyWith(queueEntryId: null);
-      final videos =
-          existing == null ? [...state.videos, target] : state.videos;
-      final queueId = playbackQueueId(target);
+      final videos = existing == null
+          ? assignPlaybackQueueIds(
+              [...state.videos, video.copyWith(queueEntryId: null)])
+          : state.videos;
+      final queueId = playbackQueueId(existing ?? videos.last);
       _musicHistoryEntries.remove(queueId);
       var playQueue = ListQueue<String>.from(state.playQueue)
         ..removeWhere((id) => id == queueId)
@@ -4653,6 +4687,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         mediaCommand: MediaCommand(MediaCommandType.pitch, value: pitch)));
   }
 
+  void _exitFullscreenOnStop() {
+    if (state.fullScreenState == FullScreenState.fullScreen) {
+      setFullScreen(FullScreenState.notFullScreen);
+    }
+  }
+
   void setFullScreen(FullScreenState fsState) {
     emit(state.copyWith(
         fullScreenState: fsState,
@@ -4766,6 +4806,8 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
             null;
     // A PiP window resize is not a rotation of the phone.
     if (!musicAudio &&
+        !state.isClosing &&
+        !state.isHidden &&
         !state.isPip &&
         getDeviceType() == DeviceType.phone &&
         (state.orientation == Orientation.landscape) &&

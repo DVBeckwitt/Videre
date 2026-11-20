@@ -290,6 +290,34 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'expanded audio keeps Info and Queue reachable in short landscape',
+      (tester) async {
+    const size = Size(760, 360);
+    viewport.value = const MediaQueryData(
+      size: size,
+      textScaler: TextScaler.linear(1.7),
+    );
+    await player.seed(player.state.copyWith(
+      isMini: false,
+      orientation: Orientation.landscape,
+      top: 0,
+      currentlyPlaying: song.copyWith(musicMetadata: null, lengthSeconds: 180),
+    ));
+    await pumpPlayer(tester, physicalSize: size);
+
+    final info = tester.getRect(find.byType(PageView));
+    final tabs = tester.getRect(find.byType(NavigationBar));
+    expect(info.height, greaterThanOrEqualTo(kMinInteractiveDimension));
+    expect(tabs.bottom, closeTo(size.height, 0.01));
+    expect(tester.getSize(audioBuilder).width, size.width);
+    final queueTab = find.byType(NavigationDestination).last;
+    await tester.tap(queueTab);
+    await tester.pump();
+    expect(player.state.selectedFullScreenIndex, 3);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final music in [true, false]) {
     testWidgets(
         music

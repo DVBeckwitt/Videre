@@ -1,14 +1,11 @@
 import 'dart:async';
 
-import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../app/states/app.dart';
 import '../../../../globals.dart';
 import '../../../../l10n/generated/app_localizations.dart';
-import '../../../../music/views/screens/music.dart';
-import '../../../../router.dart';
 import '../../../../utils/models/paginated_list.dart';
 import '../../../../utils/motion.dart';
 import '../../../../utils/states/item_list.dart';
@@ -17,6 +14,7 @@ import '../../../../utils/views/tv/components/tv_overscan.dart';
 import '../../../models/video.dart';
 import '../../../states/video_in_list.dart';
 import '../../../states/history.dart';
+import '../../components/history_video.dart';
 import '../components/video_item.dart';
 
 class TvHistoryScreen extends StatefulWidget {
@@ -144,21 +142,10 @@ class _TvHistoryScreenState extends State<TvHistoryScreen> {
                                 final rowHeight = cardContext.size?.height;
                                 if (widget.onOpenVideo != null) {
                                   await widget.onOpenVideo!(cardContext, video);
-                                } else if (source.opensMusic(video)) {
-                                  try {
-                                    await MusicScreen.playTracks(
-                                        cardContext, [video]);
-                                  } catch (_) {
-                                    if (cardContext.mounted) {
-                                      ScaffoldMessenger.of(cardContext)
-                                          .showSnackBar(SnackBar(
-                                              content: Text(
-                                                  locals.musicPlaybackError)));
-                                    }
-                                  }
                                 } else {
-                                  await AutoRouter.of(cardContext).push(
-                                      TvVideoRoute(videoId: video.videoId));
+                                  await openHistoryEntry(
+                                      cardContext, source, video,
+                                      television: true);
                                 }
                                 if (cardContext.mounted) {
                                   cardContext

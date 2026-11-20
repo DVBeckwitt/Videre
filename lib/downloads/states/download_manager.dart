@@ -601,7 +601,9 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                   ? automaticAudio
                   : DownloadContainer.forVideo(selectedVideo));
           final audio = formats.audioFor(container);
-          if (audio == null || (!video.audioOnly && selectedVideo == null)) {
+          if (container == null ||
+              audio == null ||
+              (!video.audioOnly && selectedVideo == null)) {
             throw const DownloadFormatsUnavailable();
           }
           final caption = vid.captions
@@ -661,7 +663,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
             recovery.checkCurrent();
             final url = mediaUrls[format]!;
             final size = int.tryParse(format.clen);
-            final rendition = RenditionIdentity.fromFormat(format, server);
+            final rendition =
+                RenditionIdentity.fromSelection(vid, format, server);
             // Without immutable rendition proof, a refreshed URL (even on
             // the same backend) must begin a new file.
             final identity = rendition == null
@@ -678,13 +681,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                 identity: identity,
                 beforeRequest: recovery.checkCurrent,
                 expectedSize: size != null && size > 0 ? size : null,
-                acceptsContentType: (contentType) {
-                  final mime =
-                      contentType?.split(';').first.trim().toLowerCase() ?? '';
-                  return mime != 'text/html' &&
-                      !mime.endsWith('json') &&
-                      !mime.endsWith('xml');
-                },
+                acceptsContentType: container.acceptsResponseType,
                 headers: server.headersForUrl(url),
                 onProgress: (count, total) =>
                     update(count, total, step, steps));
@@ -803,7 +800,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
                   video: vid,
                   server: server,
                   audioOnly: video.audioOnly,
-                  container: container!,
+                  container: container,
                   audio: audio,
                   videoFormat: selectedVideo,
                   byteLength: integrity.byteLength,

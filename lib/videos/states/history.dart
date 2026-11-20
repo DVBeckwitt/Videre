@@ -36,8 +36,12 @@ enum HistorySource {
       ? db.getHistoryVideoByVideoId(id)
       : db.getPlaybackHistoryVideo(origin!, id);
 
-  bool opensMusic(Video entry) =>
-      this == music || (origin == null && entry.musicMetadata != null);
+  bool opensMusic(Video entry, HistoryVideoCache? cached) {
+    final section = origin ?? (this == device ? cached?.origin : null);
+    return section == null
+        ? entry.musicMetadata != null
+        : section == PlaybackHistoryOrigin.music;
+  }
 }
 
 class HistoryCubit extends Cubit<void> {

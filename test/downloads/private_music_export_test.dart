@@ -180,6 +180,20 @@ void main() {
   });
 
   testWidgets(
+      'the paused row clears its resume deadline without another state change',
+      (tester) async {
+    final video = _song.copyWith(downloadComplete: false);
+    downloads.retryAt = DateTime.now().add(const Duration(minutes: 2));
+    downloads.setPending(DownloadManagerState(pausedVideoIds: {video.videoId}));
+    final locals = await mount(tester, DownloadedVideoView(video: video));
+    expect(find.textContaining('Paused. Resume after'), findsOneWidget);
+    await tester.pump(const Duration(minutes: 2));
+    expect(find.text(locals.downloadPaused), findsOneWidget);
+    expect(find.textContaining('Paused. Resume after'), findsNothing);
+    expect(downloads.actions, isEmpty);
+  });
+
+  testWidgets(
       'a paused download enables explicit resume when its cooldown ends',
       (tester) async {
     final video = _song.copyWith(downloadComplete: false);

@@ -1,4 +1,8 @@
 import 'package:auto_route/annotations.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/player/models/media_event.dart';
+import 'package:clipious/utils/motion.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,6 +29,8 @@ class TvPlayerScreen extends StatefulWidget {
   final PlaylistLoadSession? playlistLoader;
   final int startIndex;
   final bool? audio;
+  final DownloadedVideo? _download;
+  final bool _fromMusic;
 
   const TvPlayerScreen(
       {super.key,
@@ -35,7 +41,22 @@ class TvPlayerScreen extends StatefulWidget {
       this.playlistLoader,
       this.startIndex = 0,
       this.audio,
-      this.receiveRemote = false});
+      this.receiveRemote = false})
+      : _download = null,
+        _fromMusic = false;
+
+  const TvPlayerScreen.download(
+      {super.key, required DownloadedVideo download, required bool fromMusic})
+      : _download = download,
+        _fromMusic = fromMusic,
+        videos = const [],
+        resumeSession = false,
+        startAt = null,
+        receiveRemote = false,
+        playlistReference = null,
+        playlistLoader = null,
+        startIndex = 0,
+        audio = null;
 
   @override
   State<TvPlayerScreen> createState() => _TvPlayerScreenState();
@@ -49,9 +70,12 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
     var settings = context.read<SettingsCubit>();
     return BlocProvider(
       create: (context) => PlayerCubit(
-          PlayerState.init(widget.videos).copyWith(startAt: widget.startAt),
+          PlayerState.init(widget.videos).copyWith(
+              startAt: widget.startAt,
+              offlineVideos: [if (widget._download case final item?) item]),
           settings,
           resume: widget.resumeSession,
+          fromMusic: widget._fromMusic,
           playlistReference: widget.playlistReference,
           playlistLoader: widget.playlistLoader,
           startIndex: widget.startIndex,
@@ -79,6 +103,15 @@ class _TvPlayerScreenState extends State<TvPlayerScreen> {
                       });
                     }
                     if (!state.hasVideo) {
+                      if (widget._download != null) {
+                        return Center(
+                          child: state.mediaEvent.state == MediaState.error
+                              ? Text(AppLocalizations.of(context)!
+                                  .couldntLoadVideo)
+                              : const MotionLoadingIndicator(
+                                  child: CircularProgressIndicator()),
+                        );
+                      }
                       return Center(
                           child: RemoteControlButton(
                               player: context.read<PlayerCubit>()));

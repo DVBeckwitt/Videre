@@ -1,3 +1,5 @@
+import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:json_annotation/json_annotation.dart';
@@ -53,18 +55,51 @@ class HistoryVideoCache {
   // Preserve catalog artwork routing and reopen listened songs as Music.
   MusicMetadata? musicMetadata;
 
+  final bool playedFromDownload;
+  final String? downloadAccountId;
+  @JsonKey(includeFromJson: false, includeToJson: false)
+  PlaybackHistoryOrigin? origin;
+
   String videoId;
   DateTime created = DateTime.now();
 
   String thumbnail;
 
   HistoryVideoCache(this.videoId, this.title, this.author, this.thumbnail,
-      {this.authorId, this.lengthSeconds, this.musicMetadata});
+      {this.authorId,
+      this.lengthSeconds,
+      this.musicMetadata,
+      this.playedFromDownload = false,
+      this.downloadAccountId});
 
   factory HistoryVideoCache.fromJson(Map<String, dynamic> json) =>
       _$HistoryVideoCacheFromJson(json);
 
-  Map<String, dynamic> toJson() => _$HistoryVideoCacheToJson(this);
+  Map<String, dynamic> toJson() {
+    final row = _$HistoryVideoCacheToJson(this);
+    if (!playedFromDownload) {
+      row.remove('playedFromDownload');
+      row.remove('downloadAccountId');
+    }
+    return row;
+  }
+
+  /// An explicit offline play can reopen the same profile's saved rendition,
+  /// including older downloads which have no online substitution provenance.
+  DownloadedVideo? replayDownload(IDbClient database) {
+    if (!playedFromDownload) return null;
+    final saved = database.getDownloadByVideoId(videoId);
+    if (saved == null ||
+        saved.profileId != database.profileId ||
+        saved.accountId != downloadAccountId ||
+        !saved.downloadComplete ||
+        saved.downloadFailed ||
+        saved.storageFailed ||
+        saved.authenticationRequired) {
+      return null;
+    }
+    return saved;
+  }
 
   Video toVideo() {
     return Video(

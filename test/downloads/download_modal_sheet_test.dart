@@ -143,6 +143,43 @@ void main() {
     expect(selector.selectedValue(metadata.accounts.single!), 'a');
   });
 
+  for (final (status, code) in [(429, 'rate_limited'), (503, 'unavailable')]) {
+    test(
+        'NerdVPN $code preserves the advertised cooldown for a reopened picker',
+        () async {
+      final preferred = selector.withSelection(
+          account.copyWith(
+              url: 'https://invidious.nerdvpn.de', backendSelector: selector),
+          'a');
+      await db.useServer(preferred);
+      final limited = _Metadata(() async {
+        throw InvidiousServiceError('Gateway temporarily unavailable',
+            statusCode: status,
+            errorCode: code,
+            isGatewayResponse: true,
+            retryAfter: const Duration(minutes: 2));
+      });
+      service = limited;
+      final first = DownloadModalSheetCubit(
+          const DownloadModalSheetState(), const Video(videoId: 'video'));
+      addTearDown(first.close);
+      await _loaded(first);
+      expect(limited.accounts, hasLength(1));
+      final deadline = first.state.retryAt;
+      expect(deadline, isNotNull);
+
+      final restarted = _Metadata(() async => _playable());
+      service = restarted;
+      final second = DownloadModalSheetCubit(
+          const DownloadModalSheetState(), const Video(videoId: 'other'));
+      addTearDown(second.close);
+      await _loaded(second);
+      expect(restarted.accounts, isEmpty);
+      expect(second.state.retryAt, deadline);
+      expect(second.state.failed, isTrue);
+    });
+  }
+
   test('saved picker choices expire when the same account changes credentials',
       () async {
     service = _Metadata(() async => _playable());

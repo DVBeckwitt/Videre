@@ -139,7 +139,7 @@ class Service {
   late BackendHealth _backendHealth = BackendHealth(now: _now);
   BackendHealth get backendHealth => _backendHealth;
   final Future<void> Function(Duration) _wait;
-  final _getRequests = <String, Future<Response>>{};
+  final _getRequests = <Object, Future<Response>>{};
   final _interactiveVideoRequests = <(
     String,
     Server,
@@ -258,6 +258,7 @@ class Service {
   Future<Response> _get(ServerRequest request,
       {bool cache = false,
       bool coalesce = false,
+      Server? sharedPlaybackOwner,
       Future<void> Function()? beforeRequest}) async {
     final key = request._cacheKey;
     if (cache) {
@@ -268,26 +269,39 @@ class Service {
         return cached.response;
       }
     }
-    if (beforeRequest != null) {
-      // A guarded request belongs to one operation. Do not let its lifetime
-      // control a coalesced lookup made by another caller.
+    Future<Response> send() {
+      const timeout = Duration(seconds: 15);
+      if (beforeRequest == null) return _sendGet(request).timeout(timeout);
       var expired = false;
       return _sendGet(request, beforeRequest: () async {
         await beforeRequest();
         if (expired) throw TimeoutException('Request expired.');
-      }).timeout(const Duration(seconds: 15), onTimeout: () {
+      }).timeout(timeout, onTimeout: () {
         expired = true;
         throw TimeoutException('Request expired.');
       });
     }
+
+    // Operation-specific cancellation must not govern another caller. Plain
+    // playback reads share the same saved account and connection lifetime.
+    if (beforeRequest != null && sharedPlaybackOwner == null) return send();
     if (coalesce || cache) {
       // Share only the HTTP work. Each caller decodes and applies its settings.
-      return _getRequests.putIfAbsent(key, () {
+      final requestKey = sharedPlaybackOwner == null
+          ? key
+          : (
+              key,
+              sharedPlaybackOwner,
+              db,
+              NetworkProxy.instance.config,
+              _sessionRevision
+            );
+      return _getRequests.putIfAbsent(requestKey, () {
         late final Future<Response> pending;
-        pending = _sendGet(request)
-            .timeout(const Duration(seconds: 15))
-            .whenComplete(() {
-          if (identical(_getRequests[key], pending)) _getRequests.remove(key);
+        pending = send().whenComplete(() {
+          if (identical(_getRequests[requestKey], pending)) {
+            _getRequests.remove(requestKey);
+          }
         });
         return pending;
       });
@@ -945,17 +959,8 @@ class Service {
     final proxy = NetworkProxy.instance.config;
     final request = await buildRequest(urlGetVideo,
         pathParams: {':id': videoId}, serverOverride: server);
+    Server? sharedPlaybackOwner;
     if (backendRequest != null) {
-      if (!backendRequest.matches(await db.getCurrentlySelectedServer())) {
-        throw StateError(
-            'The playback connection changed while loading this video.');
-      }
-      if (loadObserver?.isCurrent() == false) {
-        throw StateError('The video load was cancelled.');
-      }
-      onBackendRequest?.call(backendRequest);
-    }
-    if (loadObserver != null && backendRequest != null) {
       bool connectionCurrent() =>
           identical(db, originalDb) &&
           originalDb.profileId == profileId &&
@@ -967,14 +972,31 @@ class Service {
           backendRequest
               .matches(await originalDb.getCurrentlySelectedServer()) &&
           connectionCurrent();
-      if (!connectionCurrent()) {
-        throw StateError('The playback connection changed.');
+      Future<void> checkConnection() async {
+        if (!await unchanged()) {
+          throw StateError('The playback connection changed.');
+        }
       }
-      return _getInteractiveVideoMetadata(request, backendRequest, loadObserver,
-          unchanged: unchanged, retry: metadataRetry);
+
+      await checkConnection();
+      if (loadObserver?.isCurrent() == false) {
+        throw StateError('The video load was cancelled.');
+      }
+      onBackendRequest?.call(backendRequest);
+      if (loadObserver != null) {
+        return _getInteractiveVideoMetadata(
+            request, backendRequest, loadObserver,
+            unchanged: unchanged, retry: metadataRetry);
+      }
+      if (beforeRequest == null) {
+        beforeRequest = checkConnection;
+        sharedPlaybackOwner = backendRequest.preferredServer;
+      }
     }
-    Future<Response> get() =>
-        _get(request, coalesce: true, beforeRequest: beforeRequest);
+    Future<Response> get() => _get(request,
+        coalesce: true,
+        sharedPlaybackOwner: sharedPlaybackOwner,
+        beforeRequest: beforeRequest);
     if (!isNerdVpnUrl(request.uri.toString())) {
       final response = await get();
       return _decodeVideoMetadata(response);

@@ -97,9 +97,17 @@ class DownloadRecovery {
       } catch (error) {
         checkCurrent();
         final response = _responseError(error);
-        if (response?.isGatewayAccessFailure == true) rethrow;
+        if (response != null && response.isGatewayAccessFailure) {
+          final temporary = const {'rate_limited', 'unavailable'}
+              .contains(response.errorCode);
+          if (!temporary ||
+              (response.retryAfter == null && !response.retryAfterIsInvalid)) {
+            rethrow;
+          }
+        }
         if (response != null &&
-            (response.isRateLimited ||
+            (response.isGatewayAccessFailure ||
+                response.isRateLimited ||
                 response.retryAfterIsInvalid ||
                 (response.retryAfter ?? Duration.zero) > Duration.zero)) {
           // Missing/invalid rate-limit guidance pauses the job. Give other
@@ -119,7 +127,9 @@ class DownloadRecovery {
             await _owner.saveSetting(
                 SettingsValue(key, deadline.toUtc().toIso8601String()));
           }
-          if (response.retryAfter == null ||
+          // A gateway refusal always pauses the job, even for short delays.
+          if (response.isGatewayAccessFailure ||
+              response.retryAfter == null ||
               delay > _maximumWait ||
               attempt >= 3 ||
               const {401, 403, 404, 410, 451}.contains(response.statusCode)) {

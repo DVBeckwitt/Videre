@@ -180,7 +180,10 @@ class UserBackup {
               video.thumbnail =
                   _safeThumbnailUrl(video.thumbnail, videoArtwork: true) ?? '';
               video.musicMetadata = _safeMusicMetadata(video.musicMetadata);
-              return video.toJson();
+              // The download itself and its account binding stay on this device.
+              return video.toJson()
+                ..remove('playedFromDownload')
+                ..remove('downloadAccountId');
             case 'filters':
               final filter = VideoFilter.fromJson(value);
               final id = value['uuid'] as String;

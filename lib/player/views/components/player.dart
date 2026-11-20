@@ -168,6 +168,13 @@ class _PlayerState extends State<Player> {
             context.select((PlayerCubit value) => value.state.orientation);
         final flowWatch = !isTv && !isAudio && currentlyPlaying != null;
         final offlineVideo = showPlayer && !isAudio && currentlyPlaying == null;
+        final expandedAudio = !isTv &&
+            showPlayer &&
+            isAudio &&
+            !isMusic &&
+            !isMini &&
+            !isFullScreen;
+        final needsInlineControls = offlineVideo || expandedAudio;
         final watchLayout = FlowWatchLayout.forWindow(viewport);
         final wideWatch = flowWatch &&
             watchLayout == FlowWatchLayout.wide &&
@@ -224,31 +231,32 @@ class _PlayerState extends State<Player> {
         // resizing does not move this overlay. Keep it above the keyboard and
         // bound a drag to the current viewport, including after a resize.
         final padding = MediaQuery.paddingOf(context);
-        final offlineHeaderHeight =
+        final headerHeight =
             (themeData.appBarTheme.toolbarHeight ?? kToolbarHeight) +
                 padding.top;
-        final offlinePhoneChrome = deviceType == DeviceType.phone ||
+        final phoneChrome = deviceType == DeviceType.phone ||
             (deviceType == DeviceType.tablet &&
                 orientation == Orientation.portrait);
         // The legacy phone player includes a clipped bottom navigation bar.
-        final offlineControlsHeight = kMinInteractiveDimension +
+        final inlineControlsHeight = kMinInteractiveDimension +
             16 +
-            (offlinePhoneChrome
+            (phoneChrome
                 ? .65 *
                     ((themeData.navigationBarTheme.height ?? 80) +
                         padding.bottom)
                 : 0);
-        // Keep the watch actions reachable on short windows.
-        final expandedVideoHeight = flowWatch && !isFullScreen
-            ? max(0.0, maxHeight - padding.vertical - 120)
-            : offlineVideo && !isFullScreen
-                ? max(
-                    0.0,
-                    maxHeight -
-                        offlineHeaderHeight -
-                        padding.bottom -
-                        offlineControlsHeight)
-                : maxHeight;
+        var expandedVideoHeight = maxHeight;
+        if (flowWatch && !isFullScreen) {
+          expandedVideoHeight = max(0.0, maxHeight - padding.vertical - 120);
+        } else if (needsInlineControls && !isFullScreen) {
+          final bodyHeight =
+              max(0.0, maxHeight - headerHeight - padding.bottom);
+          expandedVideoHeight = max(0.0, bodyHeight - inlineControlsHeight);
+          if (expandedAudio) {
+            // Share a short viewport with the scrollable Info or Queue pane.
+            expandedVideoHeight = min(expandedVideoHeight, bodyHeight / 2);
+          }
+        }
         final keyboardInset = isMini && !isFullScreen
             ? MediaQuery.viewInsetsOf(context).bottom
             : 0.0;
@@ -448,10 +456,10 @@ class _PlayerState extends State<Player> {
                                                         isPip ||
                                                         isFullScreen ||
                                                         flowWatch ||
-                                                        (offlineVideo &&
+                                                        (needsInlineControls &&
                                                             chromeConstraints
                                                                     .maxHeight <
-                                                                offlineHeaderHeight)
+                                                                headerHeight)
                                                     ? const SizedBox.shrink()
                                                     : ConstrainedBox(
                                                         // AppBar clips its toolbar when allocated less
@@ -623,7 +631,7 @@ class _PlayerState extends State<Player> {
                                                                               expandedVideoHeight,
                                                                               stageConstraints.maxWidth * 9 / 16);
                                                                           final showControls =
-                                                                              !offlineVideo || (stageConstraints.maxHeight >= inlineVideoHeight + offlineControlsHeight && stageConstraints.maxWidth >= 3 * kMinInteractiveDimension + 16);
+                                                                              !needsInlineControls || (stageConstraints.maxHeight >= inlineVideoHeight + inlineControlsHeight && stageConstraints.maxWidth >= 3 * kMinInteractiveDimension + 16);
                                                                           return Column(
                                                                             mainAxisSize: isMini
                                                                                 ? MainAxisSize.min
@@ -639,7 +647,9 @@ class _PlayerState extends State<Player> {
                                                                                 flex: isFullScreen || floating ? 1 : 0,
                                                                                 fit: FlexFit.tight,
                                                                                 child: Container(
-                                                                                    width: isFullScreen || floating ? double.infinity : null,
+                                                                                    // Give the seek bar the stage width even when the
+                                                                                    // centered audio thumbnail is limited by height.
+                                                                                    width: isFullScreen || floating || expandedAudio ? double.infinity : null,
                                                                                     // SafeArea takes effect before the floating
                                                                                     // bounds finish animating into the watch page.
                                                                                     constraints: BoxConstraints(maxHeight: min(stageConstraints.maxHeight, isMini ? miniBounds?.height ?? targetHeight : expandedVideoHeight)),

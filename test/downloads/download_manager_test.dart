@@ -297,6 +297,9 @@ void main() {
     documentsDirectory =
         await Directory.systemTemp.createTemp('videre-download-manager-test-');
     mediaServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    // These fixtures serve binary media unless a case declares another MIME.
+    // Dart's HttpServer otherwise labels even byte-array responses text/plain.
+    mediaServer!.defaultResponseHeaders.contentType = ContentType.binary;
     messenger.setMockMethodCallHandler(
         pathProvider, (_) async => documentsDirectory.path);
     db = await SembastSqfDb.createInMemory();
@@ -2639,25 +2642,73 @@ void main() {
     ]);
   });
 
-  test('a declared HTML error page cannot become an audio download', () async {
+  for (final mime in ['text/html', 'text/plain', 'image/png', 'audio/mp4']) {
+    test('a declared $mime response cannot become a WebM audio download',
+        () async {
+      await queueDownloadWithBackends();
+      var requests = 0;
+      mediaServer!.listen((request) async {
+        requests++;
+        request.response.headers.contentType = ContentType.parse(mime);
+        request.response.add(List.filled(8, 42));
+        await request.response.close();
+      });
+      late Server route;
+      service = _DownloadService((id) async {
+        final metadata = downloadRendition(id, route);
+        if (mime == 'text/html') metadata.adaptiveFormats!.single.clen = '';
+        return metadata;
+      }, onServer: (server) => route = server!);
+      await manager.setWifiOnly(false);
+      await waitFor((state) =>
+          state.videos.single.downloadFailed ||
+          state.videos.single.downloadComplete);
+      expect(db.getDownloadByVideoId(video.videoId)!.downloadFailed, isTrue);
+      expect(requests, 1);
+      expect(await File(await video.downloadPath).exists(), isFalse);
+    });
+  }
+
+  test('a refreshed ambiguous rendition starts at byte zero on the alternate',
+      () async {
     await queueDownloadWithBackends();
-    var requests = 0;
+    const replacement = [11, 12, 13, 14, 15, 16, 17, 18];
+    final requests = <(String?, String?)>[];
     mediaServer!.listen((request) async {
-      requests++;
-      request.response.headers.contentType = ContentType.html;
-      request.response.write('<html>Access required</html>');
+      final cookie = request.headers.value(HttpHeaders.cookieHeader);
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      requests.add((cookie, range));
+      if (cookie == 'ROUTE=one' && range != null) {
+        request.response.statusCode = HttpStatus.serviceUnavailable;
+      } else if (cookie == 'ROUTE=one') {
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers
+            .set(HttpHeaders.contentRangeHeader, 'bytes 0-2/8');
+        request.response.add([1, 2, 3]);
+      } else if (range != null) {
+        request.response.statusCode = HttpStatus.partialContent;
+        request.response.headers
+            .set(HttpHeaders.contentRangeHeader, 'bytes 3-7/8');
+        request.response.add(replacement.sublist(3));
+      } else {
+        request.response.add(replacement);
+      }
       await request.response.close();
     });
     late Server route;
     service = _DownloadService((id) async {
-      final result = downloadRendition(id, route);
-      result.adaptiveFormats!.single.clen = '';
-      return result;
+      final metadata = downloadRendition(id, route);
+      final conflicting = downloadRendition(id, route).adaptiveFormats!.single
+        ..itag = '250'
+        ..bitrate = '64000';
+      return metadata.copyWith(
+          adaptiveFormats: [...metadata.adaptiveFormats!, conflicting]);
     }, onServer: (server) => route = server!);
     await manager.setWifiOnly(false);
-    await waitFor((state) => state.videos.single.downloadFailed);
-    expect(requests, 1);
-    expect(await File(await video.downloadPath).exists(), isFalse);
+    await waitFor((state) => state.videos.single.downloadComplete);
+    expect(requests,
+        [('ROUTE=one', null), ('ROUTE=one', 'bytes=3-'), ('ROUTE=two', null)]);
+    expect(await File(await video.downloadPath).readAsBytes(), replacement);
   });
 
   test(

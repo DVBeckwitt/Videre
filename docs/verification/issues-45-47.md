@@ -60,3 +60,62 @@ were skipped. The formatter checked 851 files. Strict analysis passed and
 the application analyzer added no diagnostics relative to Beta 3. The Android
 JVM suites passed 65 app tests, 146 transport tests and 72 recommendation
 tests.
+
+## Follow-up regression pass
+
+At 760 × 360 logical pixels and 1.7× text, the expanded audio-only player
+could allocate zero height to Info. A widget regression now opens both Info
+and Queue with automatic fullscreen disabled. A separate Android check found
+that stopping playback after rotation could leave a blank fullscreen surface
+over Home until Back was pressed.
+
+The download regressions cover two jobs sharing a server-provided cooldown,
+a paused row updating at the deadline without another state change, and a
+partial transfer moving to a backend with ambiguous rendition metadata. The
+latter must begin at byte zero. Transfer tests also exercise servers that
+return text, an image or the wrong media container with HTTP 200. Playback
+tests change accounts or reset the session while a retry is waiting and
+check that the old request is never sent.
+
+History tests queue the same upload from Video while it is playing from
+Music, restore the queue, and verify which history receives each play. They
+also cover ordering imported timestamps, refreshing an empty list, reopening
+a previously played download and stripping its device-specific file binding
+from a portable backup.
+
+On the initial issue build, the API 36 phone emulator ran in forced TV mode.
+D-pad and Center opened Video
+history, focused a video card and switched to combined history. Back restored
+focus to History. Music Library opened the separately cleared Music history.
+In TV Settings, choosing Classic purple returned focus to the palette row
+with the selected value.
+
+The follow-up release-mode x64 build had SHA-256
+`956230fc3139208c3c7799f2e7c399d6677e3ed99e85c4fb19c4300419ef9283`.
+The in-place emulator update used the installed test certificate and had
+SHA-256 `baf537e182de37d8cdad25adfbb3b3bf22d819392af82ebd1c4f254f6a1e6787`.
+All 1,496 application entries matched. The packaged Dart binary changed from
+the earlier candidate and contained the new offline-history field.
+
+With Android text at 170%, a 1080 × 540 landscape viewport and automatic
+fullscreen disabled, the earlier build showed only the header and artwork.
+The updated build showed the controls and Info content. Its four tabs ended
+at y=504, the start of the bottom inset. Tapping Queue displayed the current
+item and kept the controls visible.
+
+With automatic fullscreen enabled, Android’s media Stop key restored Home and
+both system bars from landscape audio playback. The media session reported
+`NONE`, and tapping Downloads opened it immediately without pressing Back.
+
+On the phone, a completed audio-only download was paused at 11.910 seconds
+and stopped. Video history displayed the item at 9%. Selecting it there
+reopened the offline player at 11 seconds, and playback advanced to 16.891
+seconds. In TV mode, D-pad selection of the same history entry played the
+download through Android’s audio output. The available test server received
+zero metadata or media requests during either replay.
+
+The final offline run passed all 4,398 tests in 4 minutes 2 seconds and
+skipped six opt-in live Music cases. Formatting checked 851 files. Strict
+analysis passed and the application analyzer matched all 221 pre-existing
+diagnostics. All 283 Android JVM tests, 14 Windows release-helper checks,
+10 APK-signing tests and five validation-helper groups passed.

@@ -635,29 +635,34 @@ class SembastSqfDb extends IDbClient {
 
   @override
   List<HistoryVideoCache> getLocalHistory() {
-    final entries = [
-      for (final record in historyVideoCacheStore.findSync(db))
-        HistoryVideoCache.fromJson(record.value),
+    final entries = _historyByDate([
+      historyVideoCacheStore,
       for (final origin in PlaybackHistoryOrigin.values)
-        ...getPlaybackHistory(origin),
-    ]..sort((a, b) => b.created.compareTo(a.created));
+        playbackHistoryStore(origin),
+    ]);
     final ids = <String>{};
     return entries.where((entry) => ids.add(entry.videoId)).toList();
   }
 
   @override
   List<HistoryVideoCache> getPlaybackHistory(PlaybackHistoryOrigin origin) =>
-      playbackHistoryStore(origin)
-          .findSync(db,
-              finder: Finder(sortOrders: [SortOrder('created', false)]))
-          .map((record) => HistoryVideoCache.fromJson(record.value))
-          .toList();
+      _historyByDate([playbackHistoryStore(origin)]);
+
+  List<HistoryVideoCache> _historyByDate(
+          List<StoreRef<String, Map<String, Object?>>> stores) =>
+      [
+        for (final store in stores)
+          for (final record in store.findSync(db))
+            HistoryVideoCache.fromJson(record.value),
+      ]..sort((a, b) => b.created.compareTo(a.created));
 
   @override
   HistoryVideoCache? getPlaybackHistoryVideo(
       PlaybackHistoryOrigin origin, String videoId) {
     final row = playbackHistoryStore(origin).record(videoId).getSync(db);
-    return row == null ? null : HistoryVideoCache.fromJson(row);
+    return row == null
+        ? null
+        : (HistoryVideoCache.fromJson(row)..origin = origin);
   }
 
   @override

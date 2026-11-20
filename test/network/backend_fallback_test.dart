@@ -235,6 +235,41 @@ void main() {
     expect(routes, ['0', '1', '2']);
   });
 
+  for (final resetSession in [false, true]) {
+    test(
+        'an unobserved alternate drops a queued 429 retry on '
+        '${resetSession ? 'session reset' : 'account change'}', () async {
+      final requested = <String?>[];
+      client = MockClient((request) async {
+        requested.add(requestCookieValue(request.headers, 'ROUTE'));
+        if (requested.length == 1) return failed(503);
+        if (requested.length == 2) {
+          return http.Response('{"error":"slow down"}', 429,
+              request: request,
+              headers: {
+                'retry-after': '1',
+                'content-type': 'application/json'
+              });
+        }
+        return ok();
+      });
+      addTearDown(client.close);
+      api = Service(
+          httpClient: client,
+          wait: (_) async {
+            if (resetSession) {
+              api.clearSessionCaches();
+            } else {
+              await db.useServer(const Server(
+                  id: 'new-account', url: 'https://instance.example'));
+            }
+          });
+
+      await expectLater(api.getVideo('test-video'), throwsStateError);
+      expect(requested, ['0', '1']);
+    });
+  }
+
   test('playback learns working alternatives from ordinary metadata requests',
       () async {
     final routes = <String?>[];

@@ -851,6 +851,27 @@ void main() {
     expect(target.getLocalHistory().single.title, 'Example video');
   });
 
+  test(
+      'portable history leaves the saved file and account on its original device',
+      () async {
+    await source.recordPlaybackHistory(
+        PlaybackHistoryOrigin.music,
+        HistoryVideoCache(id, 'Saved music', 'Artist', '',
+            playedFromDownload: true,
+            downloadAccountId: 'private-download-owner'));
+    final backup = await source.exportBackup();
+    expect(backup.encode(), isNot(contains('private-download-owner')));
+    expect(backup.sections['musicHistory']!.single,
+        isNot(contains('playedFromDownload')));
+    await target.restoreBackup(backup);
+    expect(
+        target
+            .getPlaybackHistory(PlaybackHistoryOrigin.music)
+            .single
+            .playedFromDownload,
+        isFalse);
+  });
+
   test('scoped history rejects device IDs when importing a portable backup',
       () async {
     final raw = jsonDecode((await source.exportBackup()).encode())

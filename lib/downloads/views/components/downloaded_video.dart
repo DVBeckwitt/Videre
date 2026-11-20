@@ -127,24 +127,28 @@ class DownloadedVideoView extends StatelessWidget {
     final progress = state.downloadProgresses[video.videoId];
     final paused = state.pausedVideoIds.contains(video.videoId);
     final pending = !video.downloadComplete && !video.downloadFailed;
-    String? status;
+    Widget label(String text) =>
+        Text(text, style: Theme.of(context).textTheme.bodySmall);
+    Widget? status;
     if (video.authenticationRequired) {
-      status = locals.downloadSignInRequired;
+      status = label(locals.downloadSignInRequired);
     } else if (video.storageFailed) {
-      status = locals.downloadFolderError;
+      status = label(locals.downloadFolderError);
     } else if (video.downloadFailed) {
-      status = locals.videoFailedDownloadRetry;
+      status = label(locals.videoFailedDownloadRetry);
     } else if (paused) {
-      final retryAt = cubit.retryAtFor(video);
-      status = retryAt == null
-          ? locals.downloadPaused
-          : locals.downloadResumeAfter(downloadRetryTime(context, retryAt));
+      status = DownloadRetryAvailability(
+        retryAt: cubit.retryAtFor(video),
+        builder: (context, waitUntil) => label(waitUntil == null
+            ? locals.downloadPaused
+            : locals.downloadResumeAfter(waitUntil)),
+      );
     } else if (state.waitingForWifi) {
-      status = locals.downloadsWaitingForWifi;
+      status = label(locals.downloadsWaitingForWifi);
     } else if (progress?.retryAt != null) {
-      status = locals.downloadRetryWaiting;
+      status = label(locals.downloadRetryWaiting);
     } else if (progress == null) {
-      status = locals.downloadQueued;
+      status = label(locals.downloadQueued);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -201,7 +205,7 @@ class DownloadedVideoView extends StatelessWidget {
         if (!video.downloadComplete && status != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: Text(status, style: Theme.of(context).textTheme.bodySmall),
+            child: status,
           ),
       ],
     );

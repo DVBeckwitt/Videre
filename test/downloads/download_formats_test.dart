@@ -27,6 +27,29 @@ AdaptiveFormat _audio(String id,
             AudioTrack(id: id, displayName: id, audioIsDefault: isDefault));
 
 void main() {
+  test(
+      'download response types allow generic bytes and compatible container labels',
+      () {
+    for (final type in [
+      null,
+      '',
+      'application/octet-stream',
+      'binary/octet-stream'
+    ]) {
+      for (final container in DownloadContainer.values) {
+        expect(container.acceptsResponseType(type), isTrue);
+      }
+    }
+    for (final type in ['audio/webm', 'video/webm; codecs="opus"']) {
+      expect(DownloadContainer.webm.acceptsResponseType(type), isTrue);
+      expect(DownloadContainer.mp4.acceptsResponseType(type), isFalse);
+    }
+    for (final type in ['VIDEO/MP4', 'audio/x-m4a', 'application/mp4']) {
+      expect(DownloadContainer.mp4.acceptsResponseType(type), isTrue);
+      expect(DownloadContainer.webm.acceptsResponseType(type), isFalse);
+    }
+  });
+
   test('audio selection preserves language before comparing bitrate', () {
     final spanish = _audio('es', bitrate: '256000');
     final english = _audio('en', isDefault: true);

@@ -131,72 +131,69 @@ class _HistoryViewState extends State<HistoryView> {
           var historyCubit = context.read<HistoryCubit>();
           return Stack(
             children: [
-              state.error != ItemListErrors.none
-                  ? Center(
-                      child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Text(switch (state.error) {
-                        ItemListErrors.nerdVpnApprovalPending =>
-                          locals.nerdVpnAccessPendingShort,
-                        ItemListErrors.invalidScope =>
-                          locals.itemListErrorInvalidScope,
-                        _ => locals.itemlistErrorGeneric
-                      }),
-                    ))
-                  : !state.loading && state.items.isEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: Text(widget.music
-                                ? locals.noMusicPlaybackHistory
-                                : locals.noHistory),
-                          ),
-                        )
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 3),
-                          child: RefreshIndicator(
-                            onRefresh: () {
-                              if (!widget.music) {
-                                unawaited(service.syncHistory());
-                              }
-                              return listCubit.refreshItems();
-                            },
-                            child:
-                                NotificationListener<ScrollUpdateNotification>(
-                              onNotification: (notice) {
-                                if (widget.nestedScroll && notice.depth == 0) {
-                                  listCubit.onScrollEvent(notice.metrics);
-                                }
-                                return false;
-                              },
-                              child: ListView.builder(
-                                controller: widget.nestedScroll
-                                    ? null
-                                    : listCubit.scrollController,
-                                primary: widget.nestedScroll ? true : null,
-                                scrollDirection: Axis.vertical,
-                                itemCount: state.items.length +
-                                    (state.loading ? 5 : 0),
-                                itemBuilder: (context, index) => Padding(
-                                  padding: EdgeInsets.only(
-                                      bottom: index == state.items.length - 1
-                                          ? 70.0
-                                          : 0),
-                                  child: index >= state.items.length
-                                      ? const CompactVideoPlaceHolder()
-                                      : HistoryVideoView(
-                                          key: ValueKey(state.items[index]),
-                                          videoId: state.items[index],
-                                          source: source,
-                                          onLongPress: () => _confirmRemoval(
-                                              context,
-                                              historyCubit,
-                                              state.items[index])),
-                                ),
-                              ),
-                            ),
-                          ),
+              if (!state.loading &&
+                  (state.error != ItemListErrors.none || state.items.isEmpty))
+                Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(switch (state.error) {
+                    ItemListErrors.none => widget.music
+                        ? locals.noMusicPlaybackHistory
+                        : locals.noHistory,
+                    ItemListErrors.nerdVpnApprovalPending =>
+                      locals.nerdVpnAccessPendingShort,
+                    ItemListErrors.invalidScope =>
+                      locals.itemListErrorInvalidScope,
+                    _ => locals.itemlistErrorGeneric
+                  }),
+                  IconButton(
+                      icon: const Icon(Icons.refresh),
+                      tooltip: state.error == ItemListErrors.none
+                          ? locals.refresh
+                          : locals.retry,
+                      onPressed: listCubit.refreshItems),
+                ]))
+              else
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: RefreshIndicator(
+                    onRefresh: () {
+                      if (!widget.music) {
+                        unawaited(service.syncHistory());
+                      }
+                      return listCubit.refreshItems();
+                    },
+                    child: NotificationListener<ScrollUpdateNotification>(
+                      onNotification: (notice) {
+                        if (widget.nestedScroll && notice.depth == 0) {
+                          listCubit.onScrollEvent(notice.metrics);
+                        }
+                        return false;
+                      },
+                      child: ListView.builder(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        controller: widget.nestedScroll
+                            ? null
+                            : listCubit.scrollController,
+                        primary: widget.nestedScroll ? true : null,
+                        scrollDirection: Axis.vertical,
+                        itemCount: state.items.length + (state.loading ? 5 : 0),
+                        itemBuilder: (context, index) => Padding(
+                          padding: EdgeInsets.only(
+                              bottom:
+                                  index == state.items.length - 1 ? 70.0 : 0),
+                          child: index >= state.items.length
+                              ? const CompactVideoPlaceHolder()
+                              : HistoryVideoView(
+                                  key: ValueKey(state.items[index]),
+                                  videoId: state.items[index],
+                                  source: source,
+                                  onLongPress: () => _confirmRemoval(context,
+                                      historyCubit, state.items[index])),
                         ),
+                      ),
+                    ),
+                  ),
+                ),
               if (state.loading) const TopListLoading(),
               Positioned(
                   bottom: 15,

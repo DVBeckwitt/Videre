@@ -32,12 +32,14 @@ class RenditionIdentity {
   });
 
   static RenditionIdentity? fromFormat(AdaptiveFormat format, Server server) =>
-      _fromSelection(
+      fromSelection(
           Video(videoId: 'download-rendition', adaptiveFormats: [format]),
           format,
           server);
 
-  static RenditionIdentity? _fromSelection(
+  /// Resolve the selected URL against all representations in this response.
+  /// Ambiguous and live sources cannot identify bytes across requests.
+  static RenditionIdentity? fromSelection(
       Video video, AdaptiveFormat format, Server server) {
     final parsed = parseMediaUrl(format.url);
     if (parsed == null) return null;
@@ -189,11 +191,10 @@ class DownloadPlaybackProvenance {
         !_validFormatPair(audioOnly, container, audio, videoFormat)) {
       return null;
     }
-    final audioIdentity =
-        RenditionIdentity._fromSelection(video, audio, server);
+    final audioIdentity = RenditionIdentity.fromSelection(video, audio, server);
     final videoIdentity = videoFormat == null
         ? null
-        : RenditionIdentity._fromSelection(video, videoFormat, server);
+        : RenditionIdentity.fromSelection(video, videoFormat, server);
     // Checking each supplied format as well protects against a stale selection
     // whose URL was reused for changed metadata in the current video response.
     if (audioIdentity == null ||

@@ -3,12 +3,14 @@ import 'dart:async';
 import 'package:auto_route/auto_route.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/player/views/tv/screens/tv_player_view.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -115,6 +117,13 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   final calls = <({List<Video> videos, bool? audio, Duration? startAt})>[];
   bool failPlayback = false;
+  final offline = <({String id, bool music})>[];
+
+  @override
+  Future<void> playOfflineVideos(List<DownloadedVideo> videos,
+      {int startIndex = 0, bool fromMusic = false}) async {
+    offline.add((id: videos[startIndex].videoId, music: fromMusic));
+  }
 
   @override
   Future<void> playVideo(List<Video> videos,
@@ -240,6 +249,23 @@ void main() {
     Focus.of(cardContext(tester, id)).requestFocus();
     await tester.pump();
   }
+
+  testWidgets('an empty phone history can refresh after a new play',
+      (tester) async {
+    await tester.pumpWidget(BlocProvider<AppCubit>.value(
+      value: app,
+      child: MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(body: HistoryView()),
+      ),
+    ));
+    await settle(tester);
+    await tester.runAsync(() => seed('first'));
+    await tester.tap(find.byTooltip('Refresh'));
+    await settle(tester);
+    expect(find.byKey(const ValueKey('first')), findsOneWidget);
+  });
 
   testWidgets('phone history swipes preserve rows and holding offers deletion',
       (tester) async {
@@ -476,7 +502,13 @@ void main() {
   }
 
   for (final tv in [false, true]) {
-    for (final selection in ['Music', 'video', 'unavailable Music']) {
+    for (final selection in [
+      'Music',
+      'video',
+      'unavailable Music',
+      'saved Music',
+      'saved video'
+    ]) {
       testWidgets('${tv ? 'TV' : 'phone'} history opens $selection selection',
           (tester) async {
         final originalIsTv = app_main.isTv;
@@ -484,13 +516,26 @@ void main() {
         addTearDown(() => app_main.isTv = originalIsTv);
         const music = MusicMetadata(
             title: 'Saved song', artist: 'Artist', album: 'Album');
-        final musicSource = selection != 'video';
+        final musicSource = !selection.endsWith('video');
+        final saved = selection.startsWith('saved');
+        if (saved) {
+          await tester.runAsync(() => db.upsertDownload(const DownloadedVideo(
+              videoId: 'song',
+              title: 'Saved file',
+              lengthSeconds: 105,
+              quality: 'audio',
+              accountId: 'source-account',
+              audioOnly: true,
+              downloadComplete: true)));
+        }
         await tester.runAsync(() => db.recordPlaybackHistory(
             musicSource
                 ? PlaybackHistoryOrigin.music
                 : PlaybackHistoryOrigin.video,
             HistoryVideoCache('song', 'Saved song', 'Artist', '',
-                musicMetadata: selection == 'video' ? null : music)));
+                musicMetadata: musicSource ? music : null,
+                playedFromDownload: saved,
+                downloadAccountId: saved ? 'source-account' : null)));
         final player = _Player()
           ..failPlayback = selection == 'unavailable Music';
         final router = _Router();
@@ -539,7 +584,19 @@ void main() {
         }
         await settle(tester);
 
-        if (selection == 'video') {
+        if (saved) {
+          expect(player.calls, isEmpty);
+          expect(router.pushed, isEmpty);
+          if (tv) {
+            final route = navigator.currentState!.pushed.single
+                as MaterialPageRoute<void>;
+            final screen = route.builder(cardContext(tester, 'song'));
+            expect(screen, isA<TvPlayerScreen>());
+            route.dispose();
+          } else {
+            expect(player.offline, [(id: 'song', music: musicSource)]);
+          }
+        } else if (selection == 'video') {
           expect(router.pushed.single.routeName,
               tv ? TvVideoRoute.name : VideoRoute.name);
           expect(player.calls, isEmpty);

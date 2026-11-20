@@ -136,6 +136,25 @@ void main() {
     expect(other.getPlaybackHistory(music).single.title, 'Music title');
   });
 
+  test('scoped and combined histories order timestamp instants consistently',
+      () async {
+    const music = PlaybackHistoryOrigin.music;
+    final instant = DateTime.utc(2026, 11, 20);
+    for (final entry in [
+      HistoryVideoCache('earlier', 'Earlier', null, '')..created = instant,
+      HistoryVideoCache('later', 'Later', null, '')
+        ..created = instant.add(const Duration(microseconds: 1)),
+    ]) {
+      await database.recordPlaybackHistory(music, entry);
+    }
+    for (final history in [
+      database.getPlaybackHistory(music),
+      database.getLocalHistory(),
+    ]) {
+      expect(history.map((entry) => entry.videoId), ['later', 'earlier']);
+    }
+  });
+
   for (final combined in [false, true]) {
     for (final clear in [false, true]) {
       test(

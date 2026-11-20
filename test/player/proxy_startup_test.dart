@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clipious/app/states/app.dart';
+import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
@@ -18,6 +19,7 @@ import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/sponsor_segment.dart';
 import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:clipious/videos/models/db/history_video_cache.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -42,7 +44,8 @@ class _StartupPlayer extends PlayerCubit {
   late Future<void> ready;
   int metricsChanges = 0;
 
-  _StartupPlayer(super.initialState, super.settings, {super.resume});
+  _StartupPlayer(super.initialState, super.settings,
+      {super.resume, super.fromMusic});
 
   // Record the real initialization future without replacing its native awaits.
   @override
@@ -157,6 +160,45 @@ void main() {
     expect(resumed.state.position, const Duration(seconds: 35));
     expect(resumed.state.isHidden, isFalse);
     await resumed.close();
+
+    // An explicit TV history download reopens the current local file, never
+    // a dormant online queue or a replacement owned by another account.
+    const selected = DownloadedVideo(
+        videoId: 'local-replay',
+        title: 'Saved',
+        quality: '720p',
+        lengthSeconds: 60,
+        accountId: 'owner',
+        downloadComplete: true);
+    final updated = selected.copyWith(title: 'Updated on device');
+    await db.upsertDownload(updated);
+    final offlineState =
+        PlayerState.init(null).copyWith(offlineVideos: [selected]);
+    final local =
+        player = _StartupPlayer(offlineState, settings, fromMusic: true);
+    await local.ready;
+    expect(local.state.currentlyPlaying, isNull);
+    expect(local.state.offlineCurrentlyPlaying, updated);
+    expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music).single.videoId,
+        selected.videoId);
+    await local.close();
+
+    for (final saved in [
+      selected.copyWith(accountId: 'other'),
+      selected.copyWith(storageFailed: true),
+      null
+    ]) {
+      if (saved == null) {
+        await db.deleteDownload(selected);
+      } else {
+        await db.upsertDownload(saved);
+      }
+      final stale = player = _StartupPlayer(offlineState, settings);
+      await stale.ready;
+      expect(stale.state.hasVideo, isFalse);
+      expect(stale.state.mediaEvent.state, MediaState.error);
+      await stale.close();
+    }
 
     // Even a cached AudioSession.instance yields at the real native await.
     // Closing before it resumes must not register an observer afterward.
