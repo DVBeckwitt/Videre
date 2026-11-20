@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+  const codec = StandardMethodCodec();
   const tree = 'content://documents/tree/primary%3AMusic';
   const folder = {'uri': tree, 'name': 'Music'};
   const uri = '$tree/document/primary%3AMusic%2Ftrack.flac';
@@ -27,12 +29,29 @@ void main() {
   late Future<List<Object?>> Function() scan;
   late Future<bool?> Function() checkAccess;
   Future<void> Function()? pickerWait;
+  int? scanId;
+  Object? renamed;
+  bool denySystem = false;
+  Future<void> emitBatch(List<Object?> documents, {int? id}) async {
+    await messenger.handlePlatformMessage(
+      channel.name,
+      codec.encodeMethodCall(MethodCall('trackBatch', {
+        'scanId': id ?? scanId,
+        'tracks': documents,
+      })),
+      null,
+    );
+  }
+
   setUp(() {
     library = LocalMusicLibrary();
     calls = [];
     saved = null;
     choice = null;
     pickerWait = null;
+    scanId = null;
+    renamed = null;
+    denySystem = false;
     scan = () async => [doc];
     checkAccess = () async => true;
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -40,13 +59,20 @@ void main() {
       switch (call.method) {
         case 'getFolder':
           return saved;
-        case 'pickFolder':
+        case 'pickFolder' || 'pickSystem':
+          if (call.method == 'pickSystem' && denySystem) {
+            throw PlatformException(code: 'AUDIO_PERMISSION_DENIED');
+          }
           await pickerWait?.call();
           if (choice != null) saved = choice;
           return choice;
         case 'listTracks':
           expect(call.arguments['treeUri'], saved?['uri']);
+          scanId = call.arguments['scanId'] as int?;
           return scan();
+        case 'renameTrack':
+          expect(call.arguments['treeUri'], saved?['uri']);
+          return renamed;
         case 'checkFolderAccess':
           expect(call.arguments['treeUri'], saved?['uri']);
           return checkAccess();
@@ -256,5 +282,120 @@ void main() {
     expect(saved, isNull);
     expect(library.enabled, isFalse);
     expect(calls, isNot(contains('listTracks')));
+  });
+
+  test('a batch supplies playable tracks before refresh finishes', () async {
+    saved = folder;
+    final entered = Completer<void>();
+    final blocked = Completer<List<Object?>>();
+    scan = () {
+      entered.complete();
+      return blocked.future;
+    };
+    final id = const LocalMusicTrack(uri: uri, title: 'Title').playbackId;
+    final restoring = library.loadForPlayback([id]);
+    await entered.future;
+    expect(library.scanning, isTrue);
+    final refreshing = library.refresh();
+    await emitBatch([doc]);
+    final track = library.tracks.single;
+    await restoring;
+    expect(library.loaded, isFalse);
+    expect(library.containsUri(uri), isTrue);
+    blocked.complete([
+      {...doc, 'title': 'Enriched title'}
+    ]);
+    await refreshing;
+    expect(library.scanning, isFalse);
+    expect(library.trackById(track.playbackId)?.title, 'Enriched title');
+  });
+
+  test('refresh batches retain prior members until the final result', () async {
+    saved = folder;
+    await library.refresh();
+    final entered = Completer<void>();
+    final blocked = Completer<List<Object?>>();
+    scan = () {
+      entered.complete();
+      return blocked.future;
+    };
+    final refreshing = library.refresh();
+    await entered.future;
+    final another = {...doc, 'uri': '$tree/document/another'};
+    await emitBatch([another]);
+    expect(library.tracks, hasLength(2));
+    blocked.complete([another]);
+    await refreshing;
+    expect(library.tracks.single.uri, another['uri']);
+    expect(library.containsUri(uri), isFalse);
+    await emitBatch([doc]);
+    expect(library.containsUri(uri), isFalse);
+  });
+
+  test('system music admits only MediaStore audio item URIs', () async {
+    const system = 'content://media/external/audio/media';
+    choice = {
+      'uri': system,
+      'name': 'Android music library',
+      'selectionId': 'a'
+    };
+    scan = () async => [
+          {
+            ...doc,
+            'uri': 'content://media/external_primary/audio/media/125',
+            'fileName': 'track.flac',
+            'addedMs': 12345,
+            'modifiedMs': 23456,
+            'canRename': true,
+          },
+          {...doc, 'uri': '$system/not-an-id'},
+          {...doc, 'uri': '$system/1?limit=5'},
+          {...doc, 'uri': 'content://media/external/video/media/1'},
+          {...doc, 'uri': 'content://media/internal/audio/media/1'},
+          doc,
+        ];
+    expect(await library.chooseSystem(), isTrue);
+    expect(library.isSystem, isTrue);
+    final track = library.tracks.single;
+    expect(track.fileName, 'track.flac');
+    expect(track.dateAdded?.millisecondsSinceEpoch, 12345);
+    expect(track.dateModified?.millisecondsSinceEpoch, 23456);
+    expect(track.canRename, isTrue);
+    expect(library.acceptsSessionSelection('a'), isTrue);
+  });
+
+  test('denying the Android library preserves a selected folder', () async {
+    saved = folder;
+    await library.refresh();
+    final track = library.tracks.single;
+    denySystem = true;
+    expect(await library.chooseSystem(), isFalse);
+    expect(library.error, 'AUDIO_PERMISSION_DENIED');
+    expect(library.isSystem, isFalse);
+    expect(library.folderName, 'Music');
+    expect(library.trackById(track.playbackId), same(track));
+    expect(calls.where((method) => method == 'listTracks'), hasLength(1));
+  });
+
+  test('provider rename replaces the live URI and preserves playback identity',
+      () async {
+    saved = folder;
+    scan = () async => [
+          {...doc, 'fileName': 'track.flac', 'canRename': true},
+        ];
+    await library.refresh();
+    final original = library.tracks.single;
+    const newUri = '$tree/document/primary%3AMusic%2Fnew.flac';
+    renamed = {
+      ...doc,
+      'uri': newUri,
+      'identityUri': uri,
+      'fileName': 'new.flac',
+      'canRename': true,
+    };
+    expect(await library.renameTrack(original, 'new.flac'), isTrue);
+    expect(library.containsUri(uri), isFalse);
+    expect(library.trackById(original.playbackId)?.uri, newUri);
+    expect(library.tracks.single.title, 'Title');
   });
 }

@@ -98,6 +98,7 @@ class PlaybackSession {
               .any((v) => isLocalMusicPlaybackId(v.videoId)) ||
           (offlineIds.any(isLocalMusicPlaybackId) &&
               (offlineIds.any((id) => !isLocalMusicPlaybackId(id)) ||
+                  offlineIds.toSet().length != offlineIds.length ||
                   playlistReference != null ||
                   playlistEntries.isNotEmpty))) {
         return null;

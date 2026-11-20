@@ -261,11 +261,24 @@ of **Video downloads**. Changes apply to new downloads. To share an existing
 private song, open **Downloads** and choose **Export a copy of this song**.
 
 **Music → Library → On this device** plays audio already on your device.
-Local playback starts off. Choose a folder using Android's picker to grant
-read-only access, then select a song. Videre uses embedded tags and artwork.
-The queue, speed and pitch controls work offline. The folder is available
-across Videre profiles. **Forget folder** removes Videre's local Music access
-and leaves the files in place.
+Local playback starts off. **Choose a folder** grants access to that folder and
+its subfolders. **Use Android music library** asks for audio permission and
+shows files indexed by Android. The selected source is available across Videre
+profiles. Videre keeps a device-local index and loads tags and artwork in the
+background. You can play songs while the library updates.
+
+Use **Sort** to choose the field and direction. When Android cannot provide
+the date a file was added, Videre uses the date it first discovered the file.
+The song menu offers **Rename file** for supported files, with an Android write
+prompt when required. This changes the filename and preserves embedded tags.
+Forgetting the library leaves your audio files in place.
+
+Tap a song to play the displayed list from that song. **Play next** inserts
+the song after the current track and **Add to queue** appends it. Either action
+starts a local queue if you're listening to nothing. Videre asks before
+replacing an active queue from another source. In **Queue**, drag the handle
+on an upcoming track or choose **Move up** or **Move down**. You can add the
+same file more than once. The queue, speed and pitch controls work offline.
 
 ## Google Takeout import
 

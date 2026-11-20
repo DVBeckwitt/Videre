@@ -37,6 +37,7 @@ import '../../videos/models/sponsor_segment_types.dart';
 import '../../videos/models/video.dart';
 import '../../videos/services/download_audio_tracks.dart';
 import 'resumable_download.dart';
+import '../services/download_rename.dart';
 import '../services/download_storage.dart';
 import '../services/download_mux.dart';
 
@@ -82,6 +83,8 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
   late final Future<void> _ready;
   late IDbClient _library;
   StreamSubscription<dynamic>? _networkSubscription;
+  late final StreamSubscription<({IDbClient database, Set<String> profiles})>
+      _renames;
   final Set<Future<void>> _mutations = {};
   final Set<String> _deleting = {};
   final Set<String> _enqueuing = {};
@@ -102,6 +105,13 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       {DownloadStorage? storage, this.encodeMusic = runMusicDownloadMux})
       : storage = storage ?? DownloadStorage() {
     _library = db.forProfile(db.profileId);
+    _renames = localMusicDownloadRenames.listen((change) {
+      if (identical(change.database, db) &&
+          _current &&
+          change.profiles.contains(_library.profileId)) {
+        setVideos();
+      }
+    });
     _ready = onReady();
     NetworkProxy.instance.addBeforeApply(_proxyChanging);
   }
@@ -1152,12 +1162,11 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
           sameTarget && !previous!.complete ? previous.uri : null,
           outputSong.fileName,
           outputSong.mimeType);
-      await library.upsertDownload(saved.copyWith(
-          exportedMusic: ExportedMusicCopy(folder, uri, format)));
+      await library.saveDownloadExport(
+          saved.videoId, ExportedMusicCopy(folder, uri, format));
       await storage.writeDocument(input, uri, token);
-      await library.upsertDownload(saved.copyWith(
-          exportedMusic:
-              ExportedMusicCopy(folder, uri, format, complete: true)));
+      await library.saveDownloadExport(saved.videoId,
+          ExportedMusicCopy(folder, uri, format, complete: true));
       setVideos();
       return true;
     } finally {
@@ -1192,6 +1201,7 @@ class DownloadManagerCubit extends Cubit<DownloadManagerState> {
       progress.cancelToken.cancel();
     }
     await _networkSubscription?.cancel();
+    await _renames.cancel();
     await Future.wait(List.of(_mutations));
     await _activeJob;
     return super.close();

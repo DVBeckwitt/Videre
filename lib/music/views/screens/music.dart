@@ -809,12 +809,12 @@ class MusicScreenState extends State<MusicScreen> {
             unawaited(library.initialize());
             return ListenableBuilder(
                 listenable: library,
-                builder: (context, _) =>
-                    library.acceptsSessionSelection(saved.localSelectionId) &&
-                            (!library.loaded ||
-                                library.trackById(saved.currentId) != null)
-                        ? resume
-                        : const SizedBox.shrink());
+                builder: (context, _) => library
+                            .acceptsSessionSelection(saved.localSelectionId) &&
+                        (!library.loaded ||
+                            localMusicTrackForPlayback(saved.currentId) != null)
+                    ? resume
+                    : const SizedBox.shrink());
           }
           final offline = db.getDownloadByVideoId(saved.currentId);
           if (offline?.downloadComplete == true &&

@@ -177,6 +177,15 @@ abstract class IDbClient {
 
   Future<void> upsertDownload(DownloadedVideo vid);
 
+  Future<void> saveDownloadExport(
+      String videoId, ExportedMusicCopy copy) async {
+    final download = getDownloadByVideoId(videoId);
+    if (download == null || !download.downloadComplete) {
+      throw StateError('The original download is unavailable');
+    }
+    await upsertDownload(download.copyWith(exportedMusic: copy));
+  }
+
   Future<void> deleteDownload(DownloadedVideo vid);
 
   DownloadedVideo? getDownloadByVideoId(String videoId);

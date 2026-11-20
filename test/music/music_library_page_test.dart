@@ -183,7 +183,7 @@ void main() {
     await tester.tap(device);
     await tester.pumpAndSettle();
     expect(find.text('Choose music folder'), findsOneWidget);
-    expect(nativeCalls, ['getFolder']);
+    expect(nativeCalls, ['getFolder', 'pendingRenames']);
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   for (final cancel in [false, true]) {

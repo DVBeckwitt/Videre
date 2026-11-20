@@ -1001,6 +1001,7 @@ class _MusicQueueState extends State<MusicQueue> {
     (String, int, int) owner,
     List<String> order,
     List<String> upcoming,
+    String? active,
     int from,
   })? _drag;
   Set<String>? _selection;
@@ -1068,7 +1069,6 @@ class _MusicQueueState extends State<MusicQueue> {
     final order = videos.map(playbackQueueId).toList();
     final ids = order.toSet();
     final upcoming = state.playQueue.where(ids.contains).toList();
-    if (_drag?.order.length != order.length) _drag = null;
     final active = order.indexOf(currentId ?? '');
     final text = Theme.of(context).textTheme;
     final scaler = MediaQuery.textScalerOf(context);
@@ -1146,7 +1146,13 @@ class _MusicQueueState extends State<MusicQueue> {
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
       itemCount: videos.length,
       onReorderStart: (index) {
-        _drag = (owner: owner, order: order, upcoming: upcoming, from: index);
+        _drag = (
+          owner: owner,
+          order: order,
+          upcoming: upcoming,
+          active: currentId,
+          from: index,
+        );
       },
       onReorderEnd: (index) {
         if (_drag?.from == index) _drag = null;
@@ -1159,14 +1165,22 @@ class _MusicQueueState extends State<MusicQueue> {
             settings.state.settings[_lockSetting]?.value == 'true') {
           return;
         }
-        // The drop indexes belong to the timeline the user picked up.
-        if (drag != null && (drag.owner != owner || drag.from != from)) return;
+        // Touch drops use the timeline at pickup. Flutter's accessibility
+        // move actions call onReorder directly and use this rendered timeline.
+        if ((drag != null && (drag.owner != owner || drag.from != from)) ||
+            (drag == null ? currentId : drag.active) != _activeId(player)) {
+          return;
+        }
         final expectedOrder = drag?.order ?? order;
         final expectedUpcoming = drag?.upcoming ?? upcoming;
         final latest = _entries(player).map(playbackQueueId).toList();
         if (!listEquals(latest, expectedOrder) ||
             !listEquals(player.state.playQueue.where(ids.contains).toList(),
-                expectedUpcoming)) {
+                expectedUpcoming) ||
+            from < 0 ||
+            from >= expectedOrder.length ||
+            to < 0 ||
+            to > expectedOrder.length) {
           return;
         }
         final moving = expectedOrder[from];
@@ -1179,8 +1193,10 @@ class _MusicQueueState extends State<MusicQueue> {
         final video = item is Video ? item : null;
         final offline = item is DownloadedVideo ? item : null;
         final music = video?.musicMetadata ?? offline?.musicMetadata;
+        final title = music?.title ?? video?.title ?? offline?.title ?? '';
         final artist = music?.artist ?? video?.author ?? offline?.author ?? '';
         final isActive = id == currentId;
+        final isEarlier = active >= 0 && index < active;
         final mountedVideo = state.currentlyPlaying;
         final artworkVideo = isActive &&
                 mountedVideo != null &&
@@ -1205,16 +1221,20 @@ class _MusicQueueState extends State<MusicQueue> {
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12)),
               selectedTileColor: colors.surfaceContainerHighest,
+              textColor: isEarlier ? colors.onSurfaceVariant : null,
               leading: SizedBox.square(
                 dimension: 46,
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(7),
                   child: Stack(fit: StackFit.expand, children: [
-                    MusicPlaybackArtwork(
-                        music: artworkVideo?.musicMetadata ?? music,
-                        video: artworkVideo,
-                        offline: offline,
-                        placeholderSize: 22),
+                    Opacity(
+                      opacity: isEarlier ? 0.6 : 1,
+                      child: MusicPlaybackArtwork(
+                          music: artworkVideo?.musicMetadata ?? music,
+                          video: artworkVideo,
+                          offline: offline,
+                          placeholderSize: 22),
+                    ),
                     if (isActive)
                       ColoredBox(
                         color: Colors.black54,
@@ -1223,16 +1243,13 @@ class _MusicQueueState extends State<MusicQueue> {
                             isPlaying
                                 ? Icons.equalizer
                                 : Icons.play_arrow_rounded,
-                            semanticLabel: isPlaying
-                                ? locals.musicPause
-                                : locals.musicPlay,
+                            semanticLabel: locals.musicQueueNowPlaying,
                             color: Colors.white),
                       ),
                   ]),
                 ),
               ),
-              title: Text(music?.title ?? video?.title ?? offline?.title ?? '',
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
               subtitle: Text(
                   onDevice && artist.isEmpty ? locals.onDevice : artist,
                   maxLines: 1,
@@ -1265,8 +1282,7 @@ class _MusicQueueState extends State<MusicQueue> {
                       key: ValueKey('music-queue-select-$id'),
                       value: selection.contains(id),
                       onChanged: (_) => toggle(id),
-                      semanticLabel:
-                          music?.title ?? video?.title ?? offline?.title,
+                      semanticLabel: title,
                     )
                   : !editing || isActive
                       ? null
@@ -1277,18 +1293,20 @@ class _MusicQueueState extends State<MusicQueue> {
                                   'music-queue-drag-${playbackQueueId(item)}'),
                               index: index,
                               child: Tooltip(
-                                message: AppLocalizations.of(context)!
-                                    .musicQueueReorder,
-                                child: const Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: Icon(Icons.drag_handle_rounded),
+                                message: locals.musicQueueReorder,
+                                child: const ColoredBox(
+                                  color: Colors.transparent,
+                                  child: SizedBox.square(
+                                    dimension: 48,
+                                    child: Icon(Icons.drag_handle_rounded),
+                                  ),
                                 ),
                               ),
                             ),
                           PopupMenuButton<int>(
                             key: ValueKey(
                                 'music-queue-menu-${playbackQueueId(item)}'),
-                            tooltip: AppLocalizations.of(context)!.musicQueue,
+                            tooltip: locals.musicQueueRowActions(title),
                             onSelected: (action) {
                               if (!current() ||
                                   settings.state.settings[_lockSetting]
@@ -1339,10 +1357,10 @@ class _MusicQueueState extends State<MusicQueue> {
                               PopupMenuItem(
                                 value: 0,
                                 child: canMoveUp || canMoveDown
-                                    ? Text(locals.delete)
+                                    ? Text(locals.musicQueueRemove)
                                     : PlayerModalBackHandler(
                                         priority: 5,
-                                        child: Text(locals.delete)),
+                                        child: Text(locals.musicQueueRemove)),
                               ),
                             ],
                           ),
@@ -1360,8 +1378,16 @@ class _MusicQueueState extends State<MusicQueue> {
             Expanded(
                 child: Padding(
               padding: const EdgeInsetsDirectional.only(start: 20),
-              child: Text(locals.musicTrackCount(videos.length),
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              child: Tooltip(
+                message: locals.musicTrackCount(videos.length),
+                excludeFromSemantics: true,
+                child: Text(
+                    locked
+                        ? locals.musicQueueLocked
+                        : locals.musicTrackCount(videos.length),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+              ),
             )),
             const _MusicShuffleButton(
                 controlKey: ValueKey('music-queue-shuffle')),
@@ -1375,9 +1401,11 @@ class _MusicQueueState extends State<MusicQueue> {
             IconButton(
               key: const ValueKey('music-queue-lock'),
               tooltip: locked ? locals.musicQueueUnlock : locals.musicQueueLock,
+              isSelected: locked,
               onPressed: () => settings
                   .saveSetting(SettingsValue(_lockSetting, '${!locked}')),
-              icon: Icon(locked ? Icons.lock_outline : Icons.lock_open_rounded),
+              icon: const Icon(Icons.lock_open_rounded),
+              selectedIcon: const Icon(Icons.lock_rounded),
             ),
           ])
         : Row(children: [

@@ -6,6 +6,7 @@ import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
+import 'package:clipious/downloads/services/download_rename.dart';
 import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
@@ -303,6 +304,61 @@ void main() {
     expect(manager.state.waitingForWifi, true);
     expect(manager.state.downloadProgresses, isEmpty);
     expect(manager.state.totalProgress, 0);
+  });
+
+  test(
+      'local file rename updates completed download references across profiles',
+      () async {
+    const libraryTree = 'content://documents/tree/primary%3AMusic';
+    const downloadTree = 'content://documents/tree/primary%3AMusic%2FVidere';
+    const beforeId = 'primary%3AMusic%2FVidere%2FOld.mp3';
+    const middleId = 'primary%3AMusic%2FVidere%2FMid.mp3';
+    const afterId = 'primary%3AMusic%2FVidere%2FNew%20name.mp3';
+    const saved = '$downloadTree/document/$beforeId';
+    const renamed = '$downloadTree/document/$afterId';
+    final library = db;
+    final profile = await library.createProfile('Other');
+    final other = library.forProfile(profile.id);
+    final managed = video.copyWith(
+        downloadComplete: true, folderUri: downloadTree, storageUri: saved);
+    await library.upsertDownload(managed);
+    final pending =
+        managed.copyWith(videoId: 'pending', downloadComplete: false);
+    await library.upsertDownload(pending);
+    final foreign = managed.copyWith(
+        videoId: 'foreign',
+        storageUri: saved.replaceFirst('documents', 'other'));
+    await library.upsertDownload(foreign);
+    final exported = managed.copyWith(
+        profileId: profile.id,
+        folderUri: null,
+        storageUri: null,
+        exportedMusic: const ExportedMusicCopy(
+            downloadTree, saved, MusicDownloadFormat.mp3,
+            complete: true));
+    await other.upsertDownload(exported);
+
+    final liveUpdate = manager.stream.firstWhere((state) => state.videos.any(
+        (download) =>
+            download.videoId == managed.videoId &&
+            download.storageUri == renamed));
+    await reconcileLocalMusicDownloadRename(
+        '$libraryTree/document/$beforeId', '$libraryTree/document/$middleId');
+    await reconcileLocalMusicDownloadRename(
+        '$libraryTree/document/$middleId', '$libraryTree/document/$afterId');
+    await liveUpdate;
+    // A journal acknowledgement can be interrupted after the transaction.
+    await reconcileLocalMusicDownloadRename(
+        '$libraryTree/document/$middleId', '$libraryTree/document/$afterId');
+
+    expect(library.getDownloadByVideoId(managed.videoId),
+        managed.copyWith(storageUri: renamed));
+    expect(library.getDownloadByVideoId(pending.videoId), pending);
+    expect(library.getDownloadByVideoId(foreign.videoId), foreign);
+    expect(
+        other.getDownloadByVideoId(exported.videoId)?.exportedMusic,
+        const ExportedMusicCopy(downloadTree, renamed, MusicDownloadFormat.mp3,
+            complete: true));
   });
 
   test('folder selection persists, cancellation and reset preserve old jobs',

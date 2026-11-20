@@ -125,7 +125,7 @@ class _AdjacentMusicPreparation {
         if (isLocalMusicPlaybackId(entry.videoId)) {
           final track = localMusicTrackForPlayback(entry.videoId);
           if (track == null) return null;
-          resolved = localMusicPlaybackEntry(track, profile);
+          resolved = localMusicPlaybackEntry(track, profile, occurrenceId: id);
         } else {
           resolved = entry;
         }

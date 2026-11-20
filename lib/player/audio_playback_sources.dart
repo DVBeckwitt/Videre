@@ -66,7 +66,21 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     // must never select a playlist decoder that opens nested URLs.
     sources.add(ProgressiveAudioSource(Uri.parse(track.uri)));
   } else if (offlineVideo != null) {
-    final path = await offlineVideo.effectivePath;
+    // The local library can rename a managed document while this queue still
+    // holds the previous provider URI. Resolve the current owned download on
+    // the next decoder open, leaving the mounted audio descriptor alone.
+    final managed = offlineVideo.storageUri != null &&
+            offlineVideo.profileId == db.profileId
+        ? db.getDownloadByVideoId(offlineVideo.videoId)
+        : null;
+    final path = managed != null &&
+            managed.downloadComplete &&
+            managed.storageUri != null &&
+            managed.profileId == offlineVideo.profileId &&
+            managed.audioOnly == offlineVideo.audioOnly &&
+            managed.folderUri == offlineVideo.folderUri
+        ? managed.storageUri!
+        : await offlineVideo.effectivePath;
     if (!isCurrent()) return null;
     sources.add(Uri.tryParse(path)?.scheme == 'content'
         ? AudioSource.uri(Uri.parse(path))

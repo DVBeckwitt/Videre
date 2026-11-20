@@ -50,8 +50,9 @@ class SembastSqfDb extends IDbClient {
 
   // Default keeps the original stores. Migrating never duplicates or removes
   // its library, downloads or accounts; new people receive empty stores.
-  String _storeName(String name) =>
+  static String _profileStoreName(String name, String profileId) =>
       profileId == PersonProfile.defaultId ? name : 'profile:$profileId:$name';
+  String _storeName(String name) => _profileStoreName(name, profileId);
 
   StoreRef<String, Map<String, Object?>> get downloadedVideosStore =>
       stringMapStoreFactory.store(_storeName('downloadedVideo'));
@@ -378,6 +379,96 @@ class SembastSqfDb extends IDbClient {
       return d;
     }).toList();
   }
+
+  /// The provider renamed a shared document. Update existing references in one
+  /// transaction so retries and profile switches cannot resurrect an old URI.
+  Future<Set<String>> reconcileDownloadedDocumentRename(
+      String oldUri, String newUri) async {
+    final old = _contentDocumentUri(oldUri);
+    final current = _contentDocumentUri(newUri);
+    if (old == null || current == null || old == current) return {};
+
+    final before = old.pathSegments;
+    final after = current.pathSegments;
+    final renamedSafDocument = old.authority == current.authority &&
+        _isTreeDocument(before) &&
+        _isTreeDocument(after) &&
+        before[1] == after[1];
+    final renamedMediaStoreItem = old.authority == 'media' &&
+        current.authority == 'media' &&
+        _isPrimaryMediaStoreAudio(before) &&
+        _isPrimaryMediaStoreAudio(after);
+    if (!renamedSafDocument && !renamedMediaStoreItem) return {};
+
+    String? replacement(Object? value) {
+      if (value is! String) return null;
+      final uri = _contentDocumentUri(value);
+      if (uri == null || uri.authority != old.authority) return null;
+      if (renamedMediaStoreItem) return uri == old ? newUri : null;
+      final stored = uri.pathSegments;
+      if (!_isTreeDocument(stored) || stored[3] != before[3]) return null;
+      // A download can have its own grant to another tree containing the same
+      // document. The provider ID changes on rename, the tree grant does not.
+      final treePrefix = value.substring(0, value.lastIndexOf('/') + 1);
+      return '$treePrefix${Uri.encodeComponent(after[3])}';
+    }
+
+    return db.transaction((txn) async {
+      final changedProfiles = <String>{};
+      for (final profile in await _profilesStore.find(txn)) {
+        final store = stringMapStoreFactory
+            .store(_profileStoreName('downloadedVideo', profile.key));
+        final records = await store.find(txn,
+            finder: Finder(filter: Filter.equals('downloadComplete', true)));
+        for (final record in records) {
+          final row = record.value;
+          if ((row['profileId'] ?? PersonProfile.defaultId) != profile.key) {
+            continue;
+          }
+          final storageUri = replacement(row['storageUri']);
+          final exported = row['exportedMusic'];
+          final exportedUri = exported is Map && exported['complete'] == true
+              ? replacement(exported['uri'])
+              : null;
+          if (storageUri == null && exportedUri == null) continue;
+          await record.ref.put(txn, {
+            ...row,
+            if (storageUri != null) 'storageUri': storageUri,
+            if (exportedUri != null)
+              'exportedMusic': {...(exported as Map), 'uri': exportedUri},
+          });
+          changedProfiles.add(profile.key);
+        }
+      }
+      return changedProfiles;
+    });
+  }
+
+  static Uri? _contentDocumentUri(String value) {
+    final uri = Uri.tryParse(value);
+    return uri != null &&
+            uri.scheme == 'content' &&
+            uri.host.isNotEmpty &&
+            uri.host == uri.authority &&
+            !uri.hasQuery &&
+            !uri.hasFragment
+        ? uri
+        : null;
+  }
+
+  static bool _isTreeDocument(List<String> path) =>
+      path.length == 4 &&
+      path[0] == 'tree' &&
+      path[1].isNotEmpty &&
+      path[2] == 'document' &&
+      path[3].isNotEmpty;
+
+  static bool _isPrimaryMediaStoreAudio(List<String> path) =>
+      path.length == 4 &&
+      path[0] == 'external_primary' &&
+      path[1] == 'audio' &&
+      path[2] == 'media' &&
+      RegExp(r'^[1-9][0-9]*$').hasMatch(path[3]);
 
   @override
   List<VideoFilter> getAllFilters() {
@@ -844,6 +935,18 @@ class SembastSqfDb extends IDbClient {
     await _writeProfile((owner, txn) =>
         owner.downloadedVideosStore.record(vid.videoId).put(txn, vid.toJson()));
   }
+
+  @override
+  Future<void> saveDownloadExport(String videoId, ExportedMusicCopy copy) =>
+      _writeProfile((owner, txn) async {
+        final record = owner.downloadedVideosStore.record(videoId);
+        final download = await record.get(txn);
+        if (download == null || download['downloadComplete'] != true) {
+          throw StateError('The original download is unavailable');
+        }
+        // A provider rename can update the source reference during an export.
+        await record.put(txn, {...download, 'exportedMusic': copy.toJson()});
+      });
 
   @override
   Future<void> upsertHistoryVideo(HistoryVideoCache vid) async {

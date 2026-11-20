@@ -1590,9 +1590,9 @@ void main() {
 
     await tap(tester, 'music-queue-menu-${next.videoId}');
     await tester.pumpAndSettle();
-    expect(find.text('Delete'), findsOneWidget);
+    expect(find.text('Remove from queue'), findsOneWidget);
     await pressAndroidBack(tester);
-    expect(find.text('Delete'), findsNothing);
+    expect(find.text('Remove from queue'), findsNothing);
     expect(find.byType(MusicQueue), findsOneWidget);
     expect(player.state.isMini, isFalse);
 
@@ -1674,8 +1674,10 @@ void main() {
     expect(drag, findsOneWidget);
     await tap(tester, 'music-queue-lock');
     expect(drag, findsNothing);
+    expect(find.text('Queue editing locked'), findsOneWidget);
     await tap(tester, 'music-queue-lock');
     expect(drag, findsOneWidget);
+    expect(find.text('Queue editing locked'), findsNothing);
 
     final duplicateRow = find.byKey(ValueKey('music-queue-$duplicateId'));
     await tester.drag(duplicateRow, const Offset(340, 0));
@@ -1923,6 +1925,27 @@ void main() {
     expect(player.sought, isNull);
   });
 
+  testWidgets('drag handle moves a repeat occurrence in playback order',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, next, song]);
+    final repeat = playbackQueueId(songs.last);
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of([next.videoId, repeat])));
+    await pump(tester, size: const Size(1024, 720));
+    final row = find.byKey(ValueKey('music-queue-$repeat'));
+    final rowHeight = tester.getSize(row).height;
+    final handle = find.byKey(ValueKey('music-queue-drag-$repeat'));
+
+    await tester.drag(handle, Offset(0, -rowHeight * 0.9));
+    await tester.pumpAndSettle();
+
+    expect(player.state.playQueue.toList(), [repeat, next.videoId]);
+    expect(player.state.currentQueueId, playbackQueueId(songs.first));
+    expect(player.sought, isNull);
+  });
+
   testWidgets('wide queue shows the real upcoming order and can collapse',
       (tester) async {
     final songs = assignPlaybackQueueIds([song, next, song]);
@@ -1996,6 +2019,24 @@ void main() {
     expect(tester.getRect(row).center.dy, closeTo(viewport.center.dy, 1));
   });
 
+  testWidgets('queue reorder accepts accessibility moves without a drag',
+      (tester) async {
+    final songs = assignPlaybackQueueIds([song, next, song]);
+    final initialOrder = songs.skip(1).map(playbackQueueId).toList();
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of(initialOrder)));
+    await pump(tester, size: const Size(1024, 720));
+
+    // Flutter's custom semantics actions invoke this callback directly.
+    final list =
+        tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+    list.onReorder(2, 1);
+    expect(player.state.playQueue.toList(), initialOrder.reversed.toList());
+    expect(player.state.currentlyPlaying, songs.first);
+  });
+
   testWidgets('a queue order change retires a pending indexed drag',
       (tester) async {
     final songs = assignPlaybackQueueIds([song, next, song]);
@@ -2012,6 +2053,29 @@ void main() {
     await player.seed(player.state.copyWith(playQueue: ListQueue.of(newOrder)));
     await tester.pump();
     list().onReorder(1, 3);
+    expect(player.state.playQueue.toList(), newOrder);
+    expect(player.state.currentlyPlaying, songs.first);
+  });
+
+  testWidgets('appending to the queue retires a pending indexed drag',
+      (tester) async {
+    final appended = next.copyWith(videoId: 'appended');
+    final songs = assignPlaybackQueueIds([song, next, song]);
+    final initialOrder = songs.skip(1).map(playbackQueueId).toList();
+    await player.seed(player.state.copyWith(
+        videos: songs,
+        currentlyPlaying: songs.first,
+        playQueue: ListQueue.of(initialOrder)));
+    await pump(tester, size: const Size(1024, 720));
+    ReorderableListView list() =>
+        tester.widget<ReorderableListView>(find.byType(ReorderableListView));
+    list().onReorderStart!(2);
+    final newOrder = [...initialOrder, appended.videoId];
+    await player.seed(player.state.copyWith(
+        videos: [...songs, appended], playQueue: ListQueue.of(newOrder)));
+    await tester.pump();
+
+    list().onReorder(2, 1);
     expect(player.state.playQueue.toList(), newOrder);
     expect(player.state.currentlyPlaying, songs.first);
   });
