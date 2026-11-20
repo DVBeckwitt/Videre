@@ -6,6 +6,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/models/music_download_format.dart';
 import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -879,6 +880,9 @@ void main() {
       addTearDown(videos.dispose);
       final downloads = _Downloads();
       final library = MusicLibraryService.forProfile(db, db.profileId);
+      if (action == 'Download audio') {
+        await tester.runAsync(() => MusicDownloadFormat.opus.save(db));
+      }
       await show(tester,
           body: BlocProvider<DownloadManagerCubit>.value(
             value: downloads,
@@ -903,7 +907,6 @@ void main() {
           await tester.tap(find.text('Watch Later'));
         }
         if (action == 'Download audio') {
-          expect(find.text('Save as MP3'), findsOneWidget);
           expect(find.text('Highest quality available').hitTestable(),
               findsOneWidget);
           await tester
@@ -911,6 +914,7 @@ void main() {
           await tester.pumpAndSettle();
           await tester.tap(find.text('M4A (AAC)').hitTestable().last);
           await tester.pumpAndSettle();
+          expect(find.text('Save as Opus'), findsOneWidget);
           await tester.tap(find.text('Download'));
           await tester.pumpAndSettle();
         }

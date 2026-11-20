@@ -451,6 +451,94 @@ Future<void> main() async {
     expect(settingsCubit.state.packageInfo.buildNumber, info.buildNumber);
   });
 
+  test('legacy speed is inherited until each mode saves its own adjustments',
+      () async {
+    await settingsCubit.saveSetting(SettingsValue(lastSpeedSettingName, '1.5'));
+    expect(settingsCubit.state.playbackSpeed(music: false), 1.5);
+    expect(settingsCubit.state.playbackSpeed(music: true), 1.5);
+    expect(settingsCubit.state.playbackPitch(music: true), 0);
+    final database = db;
+    final pending = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, Completer<void>());
+    try {
+      final writes = [
+        settingsCubit.setLastSpeed(1.75),
+        settingsCubit.setLastPitch(2, music: false),
+      ];
+      expect(settingsCubit.state.playbackSpeed(music: true), 1.5);
+      expect(settingsCubit.state.playbackSpeed(music: false), 1.75);
+      expect(settingsCubit.state.playbackPitch(music: false), 2);
+      writes.addAll([
+        settingsCubit.setLastSpeed(0.8, music: true),
+        settingsCubit.setLastSpeed(0.9, music: true),
+        settingsCubit.setLastPitch(-3, music: true),
+      ]);
+      expect(settingsCubit.state.playbackSpeed(music: true), 0.9);
+      expect(settingsCubit.state.playbackPitch(music: true), -3);
+      pending.complete();
+      await Future.wait(writes);
+    } finally {
+      if (!pending.isCompleted) pending.complete();
+      db = database;
+    }
+    final reloaded = SettingsState.init();
+    expect(reloaded.playbackSpeed(music: false), 1.75);
+    expect(reloaded.playbackPitch(music: false), 2);
+    expect(reloaded.playbackSpeed(music: true), 0.9);
+    expect(reloaded.playbackPitch(music: true), -3);
+    expect(db.getSettings(lastSpeedSettingName)?.value, '1.5');
+  });
+
+  test('an unusable native speed falls back without rejecting old backups',
+      () async {
+    final legacy = SettingsValue(lastSpeedSettingName, '1e-300');
+    expect(UserBackup.validSetting(legacy), isTrue);
+    await settingsCubit.saveSetting(legacy);
+    expect(SettingsState.init().playbackSpeed(music: false), 1.0);
+    expect(SettingsState.init().playbackSpeed(music: true), 1.0);
+
+    await settingsCubit.saveSetting(SettingsValue(lastSpeedSettingName, '9.0'));
+    await settingsCubit
+        .saveSetting(SettingsValue(musicSpeedSettingName, '1e-300'));
+    expect(SettingsState.init().playbackSpeed(music: true), 9.0);
+  });
+
+  test('pending playback preferences stay pinned to their original profile',
+      () async {
+    final database = db;
+    final original = database.forProfile(database.profileId);
+    final other = await database.createProfile('Other');
+    final pending = Completer<void>();
+    db = _DelayedSettingsDb(original, pending, Completer<void>());
+    final saved = settingsCubit.setLastPitch(-4, music: true);
+    db = database;
+    await database.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    pending.complete();
+    await saved;
+    expect(settingsCubit.state.playbackPitch(music: true), 0);
+    expect(database.getSettings(musicPitchSettingName), isNull);
+    expect(original.getSettings(musicPitchSettingName)?.value, '-4');
+  });
+
+  test('a failed playback preference save restores the previous choice',
+      () async {
+    await settingsCubit.setLastPitch(1, music: true);
+    final database = db;
+    final pending = Completer<void>(), started = Completer<void>();
+    db = _DelayedSettingsDb(database, pending, started);
+    final failed = expectLater(
+        settingsCubit.setLastPitch(-4, music: true), throwsStateError);
+    await started.future;
+    expect(settingsCubit.state.playbackPitch(music: true), -4);
+    pending.completeError(StateError('write failed'));
+    await failed;
+    db = database;
+    expect(settingsCubit.state.playbackPitch(music: true), 1);
+    expect(SettingsState.init().playbackPitch(music: true), 1);
+  });
+
   test('Music download formats default to MP3 and belong to each profile',
       () async {
     final first = db.forProfile(db.profileId);
@@ -898,10 +986,14 @@ Future<void> main() async {
       expect(find.descendant(of: setting, matching: find.text('MP3')),
           findsOneWidget);
       await openFormatChoice();
-      for (final format in MusicDownloadFormat.values) {
+      for (final (format, label) in const [
+        (MusicDownloadFormat.mp3, 'MP3'),
+        (MusicDownloadFormat.opus, 'Opus (Best quality)'),
+        (MusicDownloadFormat.m4a, 'M4A (AAC)'),
+      ]) {
         final row =
             find.byKey(ValueKey('music-download-format-${format.name}'));
-        expect(find.descendant(of: row, matching: find.text(format.label)),
+        expect(find.descendant(of: row, matching: find.text(label)),
             findsOneWidget);
       }
       final opus = find.byKey(const ValueKey('music-download-format-opus'));
@@ -914,7 +1006,9 @@ Future<void> main() async {
       }
       await tester.pumpAndSettle();
       expect(MusicDownloadFormat.forDatabase(db), MusicDownloadFormat.opus);
-      expect(find.descendant(of: setting, matching: find.text('Opus')),
+      expect(
+          find.descendant(
+              of: setting, matching: find.text('Opus (Best quality)')),
           findsOneWidget);
       await openFormatChoice();
       if (name == 'TV') {

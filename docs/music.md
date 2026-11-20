@@ -191,8 +191,10 @@ Shuffle, repeat, seeking, playback speed, and the sleep timer reuse the existing
 player. The audio decoder remains mounted when the artwork player is minimized
 or expanded. TV uses focusable audio controls with the same playback engine.
 
-**Sound** opens the shared speed and independent pitch controls plus an optional
-Android equalizer. **Bass boost** and **Treble boost** adjust the appropriate
+Turn on **Settings → Video player → Remember playback speed and pitch** to keep
+separate values for Music and video in your profile. In Music, open **Sound**
+to adjust either value or use the Android equalizer.
+**Bass boost** and **Treble boost** adjust the appropriate
 device bands; individual frequency sliders use the device's actual gain range.
 **Reset equalizer** returns the bands to flat and disables the effect. The
 equalizer starts disabled, applies only to Music's current audio session, and
@@ -248,8 +250,9 @@ The Wi-Fi preference, retry, and profile ownership rules apply. TV does not
 offer downloads.
 
 Music downloads select the highest available compatible audio bitrate by default.
-Under **Settings → YT Music**, choose **MP3** (the default), **Opus** (Ogg), or
-**M4A (AAC)** for the saved file. Videre writes the available song title, artist
+Under **Settings → YT Music**, choose **MP3** (the default), **Opus (Best quality)**,
+or **M4A (AAC)** for the saved file. Opus preserves an Opus source in an Ogg file.
+M4A preserves an AAC source. Videre writes the available song title, artist
 and album into the file. The output format applies to new downloads and explicit
 exports.
 
@@ -276,8 +279,8 @@ Forgetting the library leaves your audio files in place.
 Tap a song to play the displayed list from that song. **Play next** inserts
 the song after the current track and **Add to queue** appends it. Either action
 starts a local queue if you're listening to nothing. Videre asks before
-replacing an active queue from another source. In **Queue**, drag the handle
-on an upcoming track or choose **Move up** or **Move down**. You can add the
+replacing an active queue from another source. In **Queue**, you can drag tracks
+above or below the playing song, or choose **Move up** or **Move down**. You can add the
 same file more than once. The queue, speed and pitch controls work offline.
 
 ## Google Takeout import

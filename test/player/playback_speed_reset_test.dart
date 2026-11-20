@@ -15,6 +15,7 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/format_stream.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -50,6 +51,12 @@ class _RetainedAudioPlayer implements AudioPlayer {
 
   @override
   double get speed => nativeSpeed;
+
+  @override
+  int? get androidAudioSessionId => null;
+
+  @override
+  Stream<int?> get androidAudioSessionIdStream => const Stream.empty();
 
   @override
   ProcessingState get processingState => nativeProcessingState;
@@ -261,9 +268,11 @@ void main() {
         expect(nativeVideoSpeed, remember ? 2 : 1);
         expect(player.state.speed, remember ? 2 : 1);
         expect(videoSpeedCalls.last, remember ? 2 : 1);
-        expect(nativeVideoPitch, 1);
-        expect(player.state.pitchSemitones, 0);
-        expect(video.getPitchSemitones(), 0);
+        final nextPitch = remember ? 7 : 0;
+        expect(nativeVideoPitch,
+            closeTo(pitchFactorForSemitones(nextPitch), 0.000001));
+        expect(player.state.pitchSemitones, nextPitch);
+        expect(video.getPitchSemitones(), nextPitch);
       } finally {
         await video.close();
       }
@@ -537,9 +546,9 @@ void main() {
         expect(native.sources, hasLength(2));
         expect(native.nativeSpeed, remember ? 2 : 1);
         expect(native.speedsAtPlay.last, remember ? 2 : 1);
-        expect(native.nativePitch, 1);
-        expect(native.pitchesAtPlay.last, 1);
-        expect(player.state.pitchSemitones, 0);
+        expect(native.nativePitch, remember ? 0.5 : 1);
+        expect(native.pitchesAtPlay.last, remember ? 0.5 : 1);
+        expect(player.state.pitchSemitones, remember ? -12 : 0);
       } finally {
         await audio.close();
       }
@@ -658,12 +667,102 @@ void main() {
     });
   }
 
+  test('the same ID can switch between independent video and Music settings',
+      () async {
+    await settings.setRememberPlayBackSpeed(true);
+    final video = videoCubit();
+    final native = _RetainedAudioPlayer();
+    final first = _video('first');
+    final song = first.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    AudioPlayerCubit? audio;
+    try {
+      await video.playVideo(false);
+      video.setSpeed(1.75);
+      video.setPitchSemitones(7);
+      await video.close();
+      player.setAudio(true);
+      audio = _AudioWithoutAutostart(
+          AudioPlayerState(video: song), player, settings, native);
+      await audio.playVideo(false);
+      expect((native.speedsAtPlay.last, native.pitchesAtPlay.last), (1.0, 1.0));
+      audio.setSpeed(0.75);
+      audio.setPitchSemitones(-12);
+      audio.switchVideo(first); // The same ordinary video in audio-only mode.
+      await _flush();
+      expect(native.speedsAtPlay.last, 1.75);
+      expect(native.pitchesAtPlay.last,
+          closeTo(pitchFactorForSemitones(7), 0.000001));
+      audio.switchVideo(song);
+      await _flush();
+      expect(
+          (native.speedsAtPlay.last, native.pitchesAtPlay.last), (0.75, 0.5));
+    } finally {
+      if (!video.isClosed) await video.close();
+      await audio?.close();
+    }
+  });
+
+  test(
+      'live playback starts neutral and keeps adjustments out of saved video settings',
+      () async {
+    await settings.setRememberPlayBackSpeed(true);
+    final video = videoCubit();
+    try {
+      await video.playVideo(false);
+      video.setSpeed(1.75);
+      video.setPitchSemitones(7);
+      video.switchVideo(_video('live').copyWith(liveNow: true));
+      await _flush();
+      expect((nativeVideoSpeed, nativeVideoPitch), (1.0, 1.0));
+      video.setSpeed(1.25);
+      video.setPitchSemitones(-12);
+      await _flush();
+      video.switchVideo(_video('next'));
+      await _flush();
+      expect(nativeVideoSpeed, 1.75);
+      expect(nativeVideoPitch, closeTo(pitchFactorForSemitones(7), 0.000001));
+    } finally {
+      await video.close();
+    }
+  });
+
+  test(
+      'late native notifications cannot replace a newer choice or Music settings',
+      () async {
+    await settings.setRememberPlayBackSpeed(true);
+    final song = _video('first').copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    final video = videoCubit();
+    try {
+      video.switchVideo(song);
+      await _flush();
+      video.setSpeed(1.75);
+      video.setPitchSemitones(12);
+      await _flush();
+      video.onVideoListener(BetterPlayerEvent(BetterPlayerEventType.setSpeed,
+          parameters: {'speed': 1.25}));
+      video.onVideoListener(BetterPlayerEvent(BetterPlayerEventType.setPitch,
+          parameters: {'pitch': 0.5}));
+      expect((player.state.speed, player.state.pitchSemitones), (1.75, 12));
+      player.setAudio(true);
+      await video.videoController!.setSpeed(1.5);
+      await video.videoController!.setPitch(0.5);
+      expect(settings.state.playbackSpeed(music: true), 1);
+      expect(settings.state.playbackPitch(music: true), 0);
+      expect(settings.state.playbackSpeed(music: false), 1.75);
+      expect(settings.state.playbackPitch(music: false), 12);
+    } finally {
+      await video.close();
+    }
+  });
+
   test('speed chosen before native creation survives a mode change', () async {
     final video = videoCubit();
     final native = _RetainedAudioPlayer();
     AudioPlayerCubit? audio;
     try {
-      player.speedForVideo('first');
+      player.playbackTuningFor(_video('first'));
       video.setSpeed(1.5);
       expect(videoSpeedCalls, isEmpty);
       expect(player.state.speed, 1.5);
@@ -716,6 +815,8 @@ void main() {
 
   test('unsupported platforms load video without calling the pitch bridge',
       () async {
+    await settings.setRememberPlayBackSpeed(true);
+    await settings.setLastPitch(7, music: false);
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     final video = videoCubit();
     try {
@@ -738,7 +839,7 @@ void main() {
     video.videoController = BetterPlayerController(
         const BetterPlayerConfiguration(allowedScreenSleep: true));
     try {
-      player.pitchForVideo('first');
+      player.playbackTuningFor(_video('first'));
       video.setPitchSemitones(12);
       await _flush();
       expect(videoPitchCalls, 0);

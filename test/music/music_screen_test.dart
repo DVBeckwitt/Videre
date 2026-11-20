@@ -935,7 +935,11 @@ void main() {
     unawaited(Navigator.of(origin.context).push<void>(MaterialPageRoute(
         builder: (_) => MusicScreen(
             videoId: second.videoId,
-            queue: [first.toVideo(), second.toVideo(), first.toVideo()],
+            queue: [
+              Video(videoId: first.videoId),
+              second.toVideo(),
+              first.toVideo()
+            ],
             startIndex: 1))));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
@@ -949,6 +953,8 @@ void main() {
     expect(tvPlayer, isNot(same(player)));
     expect(tvPlayer.state.videos.map((video) => video.videoId),
         [first.videoId, second.videoId, first.videoId]);
+    expect(tvPlayer.state.videos.first.musicMetadata?.title, first.videoId);
+    expect(tvPlayer.state.videos.last.musicMetadata?.title, first.title);
     expect(catalog.songRequests, [second.videoId]);
 
     await tester.binding.handlePopRoute();
@@ -1104,15 +1110,26 @@ void main() {
     expect(service.getLocalPlaylists().single.videos, isEmpty);
   });
 
-  testWidgets('saved tracks play without a catalog lookup', (tester) async {
+  testWidgets('Music marks unlabeled queue entries and keeps catalog metadata',
+      (tester) async {
+    const unlabeled = Video(
+        videoId: 'unlabeled01',
+        title: 'Local playlist title',
+        author: 'Uploader',
+        queueEntryId: 'second occurrence');
     await show(tester, screen: Builder(builder: (context) {
       return TextButton(
-          onPressed: () => MusicScreen.playTracks(context, [first.toVideo()]),
+          onPressed: () =>
+              MusicScreen.playTracks(context, [first.toVideo(), unlabeled]),
           child: const Text('Play saved track'));
     }));
     await tester.tap(find.text('Play saved track'));
     await tester.pumpAndSettle();
-    expect(player.calls.single.videos.single.musicMetadata?.album, 'Album');
+    final songs = player.calls.single.videos;
+    expect(songs.first.musicMetadata?.album, 'Album');
+    expect(songs.last.musicMetadata?.title, unlabeled.title);
+    expect(songs.last.musicMetadata?.artist, unlabeled.author);
+    expect(songs.last.queueEntryId, unlabeled.queueEntryId);
     expect(player.calls.single.audio, isTrue);
     expect(player.calls.single.startAt, Duration.zero);
     expect(catalog.searches, isEmpty);

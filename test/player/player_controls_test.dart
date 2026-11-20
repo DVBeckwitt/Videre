@@ -141,6 +141,8 @@ void main() {
         isHidden: false,
         isPlaying: true,
         currentlyPlaying: video,
+        forwardStep: settings.state.skipStep,
+        rewindStep: settings.state.skipStep,
         speed: 1.37,
         aspectRatio: aspectRatio,
       ),
@@ -564,14 +566,63 @@ void main() {
     final back = player.state.rewindStep;
     await doubleTap(bounds.width * .15);
     expect(player.state.position, beforeBack - Duration(seconds: back));
-    final beforeEdge = player.state.position;
-    await doubleTap(5);
-    expect(player.state.position, beforeEdge,
-        reason: 'Android Back owns the outer edge');
     await tester.pump(const Duration(seconds: 1));
-    expect(player.state.position, beforeEdge);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  for (final (label, height, insets) in [
+    ('wide', 220.0, const FakeViewPadding()),
+    ('tall', 680.0, const FakeViewPadding(left: 20, right: 24)),
+  ]) {
+    testWidgets('Flow $label stage seeks on edge taps and ignores edge swipes',
+        (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      tester.view.systemGestureInsets = insets;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetSystemGestureInsets);
+      await tester.runAsync(() => settings.setSkipStep(15));
+      final videoPlayer = await createPlayingVideo(tester,
+          aspectRatio: 390 / height, lengthSeconds: 180);
+      const startingPosition = Duration(seconds: 60);
+      player.seek(startingPosition);
+      await tester.pumpWidget(hostControls(SizedBox(
+        width: 390,
+        height: height,
+        child: PlayerControls(mediaPlayerCubit: videoPlayer),
+      )));
+      await tester.pump();
+      final bounds = tester.getRect(find.byType(PlayerControls));
+      final left = bounds.topLeft + Offset(5, bounds.height * .3);
+      final right = bounds.topRight + Offset(-5, bounds.height * .3);
+
+      Future<void> doubleTap(Offset point) async {
+        await tester.tapAt(point);
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.tapAt(point);
+        await tester.pump();
+      }
+
+      await doubleTap(left);
+      expect(player.state.position, const Duration(seconds: 45));
+      await doubleTap(right);
+      expect(player.state.position, startingPosition);
+
+      await tester.pump(const Duration(seconds: 1));
+      for (final (point, inward) in [(left, 1.0), (right, -1.0)]) {
+        final swipe = await tester.startGesture(point);
+        await swipe.moveBy(Offset(30 * inward, 0));
+        await swipe.moveBy(Offset(130 * inward, 0));
+        await tester.pump();
+        expect(find.byType(SeekPreview), findsNothing);
+        await swipe.up();
+        await tester.pump();
+        expect(player.state.position, startingPosition);
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 
   testWidgets(
       'Flow horizontal drag previews 90s across the stage and commits on release',

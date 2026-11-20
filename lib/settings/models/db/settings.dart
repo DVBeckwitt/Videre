@@ -27,7 +27,12 @@ const localeSettingName = 'locale';
 const useSearchHistorySettingName = 'use-search-history';
 const searchHistoryLimitSettingName = 'search-history-limit';
 const remeberPlaybackSpeed = 'remember-playback-speed';
+// Older versions stored one speed for every type of playback.
 const lastSpeedSettingName = 'last-speed';
+const videoSpeedSettingName = 'video-playback-speed';
+const musicSpeedSettingName = 'music-playback-speed';
+const videoPitchSettingName = 'video-playback-pitch';
+const musicPitchSettingName = 'music-playback-pitch';
 const rememberVideoQualitySettingName = 'remember-video-quality';
 const lastVideoQualitySettingName = 'last-video-quality';
 const lockOrientationFullScreen = 'lock-orientation-fullscreen';

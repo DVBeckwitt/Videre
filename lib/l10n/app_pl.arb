@@ -574,9 +574,9 @@
   "@editVideoFilter": {
     "description": "Title when editting a filter"
   },
-  "rememberPlaybackSpeedDescription": "Automatycznie ustawia prędkość odtwarzania na ostatnio wybraną prędkość",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Zapisuj prędkość i wysokość dźwięku osobno dla filmów i muzyki.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "sponsorBlockCategoryPreviewDescription": "Zbiór klipów, które pokazują co pojawi się w tym filmie lub innych filmach z serii, w których wszystkie informacje są powtarzane w dalszej części filmu.",
   "@sponsorBlockCategoryPreviewDescription": {
@@ -788,9 +788,9 @@
   "@videoFilterOperationNotContain": {
     "description": "Label for video filter operation Does not contain"
   },
-  "rememberPlaybackSpeed": "Zapamiętaj prędkość odtwarzania",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Zapamiętaj prędkość odtwarzania i wysokość dźwięku",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoFailedDownloadRetry": "Pobieranie nie powiodło się. Stuknij, aby ponowić próbę",
   "@videoFailedDownloadRetry": {

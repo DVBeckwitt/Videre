@@ -762,13 +762,13 @@
   "@fillFullscreenDescription": {
     "description": "Setting description for filling video to screen in landscape"
   },
-  "rememberPlaybackSpeed": "Kom ihåg uppspelningshastighet",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Kom ihåg uppspelningshastighet och tonhöjd",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
-  "rememberPlaybackSpeedDescription": "Ange automatiskt uppspelningshastigheten till den senast angivna hastigheten",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Spara hastighet och tonhöjd separat för videor och musik.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "downloads": "Nedladdningar",
   "@downloads": {

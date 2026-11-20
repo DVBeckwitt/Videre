@@ -66,8 +66,9 @@ class VideoPlayerSettingsScreen extends StatelessWidget {
                 leading: const Icon(Icons.speed),
                 initialValue: state.rememberPlayBackSpeed,
                 onToggle: cubit.toggleRememberPlaybackSpeed,
-                title: Text(locals.rememberPlaybackSpeed),
-                description: Text(locals.rememberPlaybackSpeedDescription),
+                title: Text(locals.rememberPlaybackSpeedAndPitch),
+                description:
+                    Text(locals.rememberPlaybackSpeedAndPitchDescription),
               ),
               SettingsTile.switchTile(
                 leading: const Icon(Icons.hd),

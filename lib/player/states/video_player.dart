@@ -526,16 +526,26 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       // Loading a source resets river_player's Dart value to 1 without resetting
       // the native rate. Apply our rate for every source, including resolution
       // changes, while keeping it unchanged for the current video.
-      if (videoController?.videoPlayerController != null) {
-        videoController?.setSpeed(_playbackSpeed);
+      final decoder = videoController?.videoPlayerController;
+      if (decoder != null) {
+        // Restore the decoder without emitting a user speed/pitch selection.
+        decoder.setSpeed(_playbackSpeed);
         if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-          videoController
-              ?.setPitch(pitchFactorForSemitones(_playbackPitchSemitones));
+          decoder.setPitch(pitchFactorForSemitones(_playbackPitchSemitones));
         }
       }
     }
 
     final nativeValue = videoController?.videoPlayerController?.value;
+    // An older native request can complete after a newer choice or mode switch.
+    if (event.betterPlayerEventType == BetterPlayerEventType.setSpeed &&
+            (player.state.isAudio ||
+                nativeValue?.speed != event.parameters?['speed']) ||
+        event.betterPlayerEventType == BetterPlayerEventType.setPitch &&
+            (player.state.isAudio ||
+                nativeValue?.pitch != event.parameters?['pitch'])) {
+      return;
+    }
     final video = state.video;
     if (video != null && nativeValue != null) {
       if (_playbackInitialized &&
@@ -590,13 +600,21 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         break;
       case BetterPlayerEventType.setPitch:
         final semitones = semitonesForPitchFactor(event.parameters?['pitch']);
-        if (semitones != null) _playbackPitchSemitones = semitones;
+        if (semitones != null && semitones != _playbackPitchSemitones) {
+          _playbackPitchSemitones = semitones;
+          player.rememberPlaybackTuning(state.video ?? state.offlineVideo,
+              pitch: semitones);
+        }
         break;
       case BetterPlayerEventType.setSpeed:
         final speed = event.parameters?['speed'];
-        if (speed is num && speed.isFinite && speed > 0) {
+        if (speed is num &&
+            speed.isFinite &&
+            speed > 0 &&
+            speed != _playbackSpeed) {
           _playbackSpeed = speed.toDouble();
-          settings.setLastSpeed(_playbackSpeed);
+          player.rememberPlaybackTuning(state.video ?? state.offlineVideo,
+              speed: _playbackSpeed);
         }
         break;
       default:
@@ -1176,8 +1194,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             ? settings.state.lastVideoQuality
             : null;
       }
-      _playbackPitchSemitones = player.pitchForVideo(idedVideo.videoId);
-      _playbackSpeed = player.speedForVideo(idedVideo.videoId);
+      final tuning = player.playbackTuningFor(idedVideo);
+      _playbackPitchSemitones = tuning.pitch;
+      _playbackSpeed = tuning.speed;
       newState = newState.copyWith(bufferPosition: Duration.zero);
 
       if (startAt == null) {
@@ -1916,7 +1935,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   void setSpeed(double d) {
     super.setSpeed(d);
     _playbackSpeed = d;
-    settings.setLastSpeed(d);
+    player.rememberPlaybackTuning(state.video ?? state.offlineVideo, speed: d);
     if (videoController?.videoPlayerController != null) {
       videoController?.setSpeed(d);
     }
@@ -1926,6 +1945,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   void setPitchSemitones(int semitones) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     _playbackPitchSemitones = clampPitchSemitones(semitones);
+    player.rememberPlaybackTuning(state.video ?? state.offlineVideo,
+        pitch: _playbackPitchSemitones);
     // A loading/recovering player can exist before its native controller does.
     // Keep the choice now; initialization applies it once the decoder exists.
     if (videoController?.videoPlayerController != null) {

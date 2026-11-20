@@ -302,10 +302,9 @@ class _SongTransitionPlayback {
           decoder.playbackEvent.errorCode != null) {
         return;
       }
-      final rate = owner.player.previewSpeedForVideo(entry.videoId);
-      final pitch = pitchFactorForSemitones(
-          owner.player.previewPitchForVideo(entry.videoId));
-      if (decoder.speed != rate) await decoder.setSpeed(rate);
+      final tuning = owner.player.playbackTuningFor(entry, preview: true);
+      final pitch = pitchFactorForSemitones(tuning.pitch);
+      if (decoder.speed != tuning.speed) await decoder.setSpeed(tuning.speed);
       if (!current()) return;
       if (!kIsWeb &&
           defaultTargetPlatform == TargetPlatform.android &&
@@ -322,7 +321,7 @@ class _SongTransitionPlayback {
       // For a short successor, leave room to promote it before its own EOF.
       if (remainingMs <= 0 ||
           nextDuration == null ||
-          remainingMs >= nextDuration.inMilliseconds / rate) {
+          remainingMs >= nextDuration.inMilliseconds / tuning.speed) {
         if (current()) stop();
         return;
       }

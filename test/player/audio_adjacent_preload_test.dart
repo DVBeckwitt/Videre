@@ -125,6 +125,8 @@ class _Decoder {
   final seeks = <Duration>[];
   final loadPositions = <Duration>[];
   double get volume => volumes.lastOrNull ?? 1;
+  double speed = 1;
+  double pitch = 1;
   bool playing = false;
   int pauses = 0;
   bool disposed = false;
@@ -237,6 +239,12 @@ void main() {
           }
           if (method.method == 'setVolume') {
             decoder.volumes.add((method.arguments['volume'] as num).toDouble());
+          }
+          if (method.method == 'setSpeed') {
+            decoder.speed = method.arguments['speed'] as double;
+          }
+          if (method.method == 'setPitch') {
+            decoder.pitch = method.arguments['pitch'] as double;
           }
           if (method.method == 'seek') {
             final position =
@@ -761,6 +769,11 @@ void main() {
   test(
       'device crossfade retains the playing document through a reconstructed queue entry',
       () async {
+    await settings.setRememberPlayBackSpeed(true);
+    await settings.setLastSpeed(2, music: false);
+    await settings.setLastPitch(-3, music: false);
+    await settings.setLastSpeed(1.25, music: true);
+    await settings.setLastPitch(12, music: true);
     final tracks = await scanDeviceMusic();
     final queue = [
       for (final track in tracks) localMusicPlaybackEntry(track, db.profileId)
@@ -784,6 +797,8 @@ void main() {
     await _until(
         () => incoming.playing && incoming.volume > 0 && outgoing.volume < 1,
         'Both document decoders overlap');
+    expect((outgoing.speed, outgoing.pitch), (1.25, 2.0));
+    expect((incoming.speed, incoming.pitch), (1.25, 2.0));
     await incoming.report(
         ProcessingStateMessage.ready, const Duration(milliseconds: 500));
     final seekCount = incoming.seeks.length;
@@ -807,6 +822,11 @@ void main() {
     expect(incoming.playedTracks, ['Finale.mp3']);
     expect(incoming.seeks.skip(seekCount), isEmpty);
     expect(incoming.volume, 1);
+    expect((incoming.speed, incoming.pitch), (1.25, 2.0));
+    expect(player.state.speed, 1.25);
+    expect(player.state.pitchSemitones, 12);
+    expect(settings.state.playbackSpeed(music: false), 2);
+    expect(settings.state.playbackPitch(music: false), -3);
     expect(outgoing.disposed, isTrue);
     expect(audio.audioPlayer!.position,
         greaterThanOrEqualTo(const Duration(milliseconds: 500)));

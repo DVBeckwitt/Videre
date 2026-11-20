@@ -588,13 +588,13 @@
   "@redirectInvidiousLink": {
     "description": "asking user to share redirecting invidious link"
   },
-  "rememberPlaybackSpeed": "Recordar la velocidad de reproducción",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Recordar la velocidad de reproducción y el tono",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
-  "rememberPlaybackSpeedDescription": "Ajuste automático de la velocidad de reproducción a la última velocidad seleccionada",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Guarda la velocidad y el tono por separado para los vídeos y la música.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "videoFilterAllChannels": "Todos los canales",
   "@videoFilterAllChannels": {

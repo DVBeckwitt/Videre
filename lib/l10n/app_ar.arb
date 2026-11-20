@@ -296,9 +296,9 @@
   "@channel": {
     "description": "A single channel"
   },
-  "rememberPlaybackSpeed": "تذكر سرعة التشغيل",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "تذكّر سرعة التشغيل وحدّة الصوت",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "downloadsPlayAll": "تشغيل الكل",
   "@downloadsPlayAll": {
@@ -674,9 +674,9 @@
   "@fillFullscreenDescription": {
     "description": "Setting description for filling video to screen in landscape"
   },
-  "rememberPlaybackSpeedDescription": "ضبط سرعة التشغيل تلقائياً على آخر سرعة تم تحديدها",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "تُحفظ إعدادات سرعة التشغيل وحدّة الصوت لكل من الفيديوهات والموسيقى على حدة.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "videoAlreadyDownloaded": "تم تنزيل الفيديو بالفعل",
   "@videoAlreadyDownloaded": {

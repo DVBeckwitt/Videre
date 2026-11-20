@@ -369,13 +369,13 @@
   "@fillFullscreen": {
     "description": "Title to maximize video to fit screen"
   },
-  "rememberPlaybackSpeed": "Oynatma hızını hatırla",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Oynatma hızını ve ses perdesini hatırla",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
-  "rememberPlaybackSpeedDescription": "Oynatma hızını otomatik olarak seçilen son hıza ayarlayın",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Videolar ve müzik için oynatma hızını ve ses perdesini ayrı ayrı kaydet.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "downloads": "İndirilenler",
   "@downloads": {

@@ -552,9 +552,9 @@
   "@videoFiltersExplanation": {
     "description": "Description on how filter work"
   },
-  "rememberPlaybackSpeedDescription": "Régler automatiquement la vitesse de lecture sur la dernière vitesse sélectionnée",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Enregistrer séparément la vitesse de lecture et la hauteur du son pour les vidéos et la musique.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "videoFiltersSettingTileDescriptions": "Définir des règles pour filtrer les vidéos",
   "@videoFiltersSettingTileDescriptions": {
@@ -722,9 +722,9 @@
   "@lockFullScreenToLandscapeDescription": {
     "description": "Setting description for forcing video to landscape when in full screen"
   },
-  "rememberPlaybackSpeed": "Mémoriser la vitesse de lecture",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Mémoriser la vitesse de lecture et la hauteur du son",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "skipSslVerificationDescription": "Pour utiliser un certificat SSL autosigné ou en cas d''erreur serveur liée à SSL.",
   "@skipSslVerificationDescription": {

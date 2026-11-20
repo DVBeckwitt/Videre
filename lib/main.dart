@@ -9,7 +9,6 @@ import 'package:videre_recommendations/videre_recommendations.dart';
 import 'package:clipious/utils/upstream_licenses.dart';
 
 import 'package:dynamic_color/dynamic_color.dart';
-import 'package:feedback/feedback.dart';
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -101,9 +100,7 @@ Future<void> main() async {
     log.severe("failed to set high refresh mode", err);
   }
 
-  runApp(BetterFeedback(
-    feedbackBuilder: buildFeedbackScreenshotForm,
-    localizationsDelegates: [AppLocalizations.delegate],
+  runApp(VidereFeedbackHost(
     child: MultiBlocProvider(providers: [
       BlocProvider(
         create: (context) {

@@ -630,9 +630,9 @@
   "@videoFilterOperationLowerThan": {
     "description": "Label for video filter operation Lower than"
   },
-  "rememberPlaybackSpeedDescription": "Автоматичне встановлення швидкості відтворення відповідно до останньої обраної швидкості",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Зберігати швидкість і висоту тону окремо для відео й музики.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "videoFiltersSettingTileDescriptions": "Визначити правила для фільтрації відео",
   "@videoFiltersSettingTileDescriptions": {
@@ -738,9 +738,9 @@
   "@videoFilterOperationNotContain": {
     "description": "Label for video filter operation Does not contain"
   },
-  "rememberPlaybackSpeed": "Запам’ятовувати швидкість відтворення",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Запам’ятовувати швидкість відтворення й висоту тону",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoFilterOperationContains": "Містить",
   "@videoFilterOperationContains": {

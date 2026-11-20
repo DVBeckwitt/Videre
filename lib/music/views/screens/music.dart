@@ -51,6 +51,7 @@ import 'package:clipious/utils/motion.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
 import 'package:clipious/utils/views/components/channel_avatar.dart';
 import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
@@ -130,8 +131,14 @@ class MusicScreen extends StatefulWidget {
           {PlaylistReference? reference,
           int? startIndex,
           Duration startAt = Duration.zero}) =>
-      _playTracks(context, videos,
+      _playTracks(context, videos.map(_songEntry).toList(),
           reference: reference, startIndex: startIndex, startAt: startAt);
+
+  static Video _songEntry(Video video) => video.musicMetadata != null
+      ? video
+      : video.copyWith(
+          musicMetadata: video.resolveMusicMetadata(
+              MusicMetadata(title: video.videoId, artist: '')));
 
   static Future<void> _playTracks(BuildContext context, List<Video> videos,
       {PlaylistReference? reference,
@@ -633,7 +640,9 @@ class MusicScreenState extends State<MusicScreen> {
       final fromShelf = index >= 0 &&
           index < widget.queue.length &&
           widget.queue[index].videoId == song.videoId;
-      final videos = fromShelf ? List.of(widget.queue) : [resolved];
+      final videos = fromShelf
+          ? widget.queue.map(MusicScreen._songEntry).toList()
+          : [resolved];
       if (fromShelf) {
         videos[index] =
             resolved.copyWith(queueEntryId: videos[index].queueEntryId);

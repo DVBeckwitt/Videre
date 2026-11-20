@@ -1185,7 +1185,7 @@ class _MusicQueueState extends State<MusicQueue> {
         }
         final moving = expectedOrder[from];
         final before = to == expectedOrder.length ? null : expectedOrder[to];
-        player.moveQueueOccurrence(moving, beforeId: before);
+        player.moveMusicQueueOccurrence(moving, beforeId: before);
       },
       itemBuilder: (context, index) {
         final item = videos[index];
@@ -1206,9 +1206,8 @@ class _MusicQueueState extends State<MusicQueue> {
         final isPlaying = player.openingMusicEntry == null &&
             state.isPlaying &&
             player.playbackStatus == MediaState.playing;
-        final nextIndex = upcoming.indexOf(id);
-        final canMoveUp = nextIndex > 0;
-        final canMoveDown = nextIndex >= 0 && nextIndex < upcoming.length - 1;
+        final canMoveUp = index > 0;
+        final canMoveDown = index < order.length - 1;
         final colors = Theme.of(context).colorScheme;
         return Builder(
           key: ValueKey(('music-queue-row', id)),
@@ -1316,15 +1315,17 @@ class _MusicQueueState extends State<MusicQueue> {
                               }
                               // A menu may outlive a queue update. Resolve the occurrence
                               // again rather than applying its old index to another song.
-                              final latest = player.state.playQueue.toList();
+                              final latest = _entries(player)
+                                  .map(playbackQueueId)
+                                  .toList();
                               final currentIndex = latest.indexOf(id);
                               if (action == -1 && currentIndex > 0) {
-                                player.moveQueueOccurrence(id,
+                                player.moveMusicQueueOccurrence(id,
                                     beforeId: latest[currentIndex - 1]);
                               } else if (action == 1 &&
                                   currentIndex >= 0 &&
                                   currentIndex < latest.length - 1) {
-                                player.moveQueueOccurrence(id,
+                                player.moveMusicQueueOccurrence(id,
                                     beforeId: currentIndex + 2 < latest.length
                                         ? latest[currentIndex + 2]
                                         : null);

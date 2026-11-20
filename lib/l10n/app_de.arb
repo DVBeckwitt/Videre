@@ -608,9 +608,9 @@
   "@channel": {
     "description": "A single channel"
   },
-  "rememberPlaybackSpeed": "Wiedergabegeschwindigkeit merken",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Wiedergabegeschwindigkeit und Tonhöhe merken",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "optional": "optional",
   "@optional": {
@@ -710,9 +710,9 @@
   "@videoFilterOperationLowerThan": {
     "description": "Label for video filter operation Lower than"
   },
-  "rememberPlaybackSpeedDescription": "Wiedergabegeschwindigkeit automatisch auf die zuletzt gewählte Geschwindigkeit einstellen",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Geschwindigkeit und Tonhöhe für Videos und Musik getrennt speichern.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "redirectInvidiousLink": "Invidious Redirect-Link teilen",
   "@redirectInvidiousLink": {

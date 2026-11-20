@@ -492,9 +492,9 @@
   "@topSorting": {
     "description": "Content sorting: top"
   },
-  "rememberPlaybackSpeed": "Muista toistonopeus",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Muista toistonopeus ja sävelkorkeus",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoFilterHideLabel": "Piilota",
   "@videoFilterHideLabel": {
@@ -592,9 +592,9 @@
   "@build": {
     "description": "build label"
   },
-  "rememberPlaybackSpeedDescription": "Aseta toistonopeus automaattisesti viimeksi valittuun nopeuteen",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Tallenna toistonopeus ja sävelkorkeus erikseen videoille ja musiikille.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "shareLinkWithTimestamp": "Lisää aikaleima",
   "@shareLinkWithTimestamp": {

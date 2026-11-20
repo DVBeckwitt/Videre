@@ -574,9 +574,9 @@
   "@rememberSubtitleLanguage": {
     "description": "Settings label for remembering subtitle language"
   },
-  "rememberPlaybackSpeedDescription": "Автоматически менять скорость воспроизведения на последнюю выбранную",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Сохранять скорость и высоту тона отдельно для видео и музыки.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "shareLinkWithTimestamp": "Добавить отметку времени",
   "@shareLinkWithTimestamp": {
@@ -700,9 +700,9 @@
   "@videoFilterHideAllFromChannel": {
     "description": "Label for video filter switch to allow to hide all videos from a channel"
   },
-  "rememberPlaybackSpeed": "Запомнить скорость воспроизведения",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Запоминать скорость воспроизведения и высоту тона",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "download": "Скачать",
   "@download": {

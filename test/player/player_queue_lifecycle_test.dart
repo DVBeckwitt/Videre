@@ -27,11 +27,12 @@ class _QueuePlayer extends TestPlayerCubit {
         videos: [video], currentlyPlaying: video, position: position));
   }
 
-  void seedQueue({bool offline = false}) {
-    const videos = [
-      Video(videoId: 'a'),
-      Video(videoId: 'b'),
-      Video(videoId: 'c')
+  void seedQueue({bool offline = false, List<Video> unscheduled = const []}) {
+    final videos = [
+      const Video(videoId: 'a'),
+      const Video(videoId: 'b'),
+      const Video(videoId: 'c'),
+      ...unscheduled,
     ];
     final downloads = videos
         .map((video) => DownloadedVideo(
@@ -128,6 +129,71 @@ void main() {
     expect(player.currentIndex, 0);
     expect(player.state.playedVideos, isEmpty);
     expect(player.state.playQueue, [first, 'b']);
+  });
+
+  for (final offline in [false, true]) {
+    test('Music order moves previous and upcoming across current ($offline)',
+        () {
+      player.seedQueue(offline: offline);
+      final active = player.state.currentlyPlaying;
+      final activeDownload = player.state.offlineCurrentlyPlaying;
+      Iterable<String> sourceIds() =>
+          (offline ? player.state.offlineVideos : player.state.videos)
+              .map(playbackQueueId);
+
+      player.moveMusicQueueOccurrence('a', beforeId: 'c');
+      expect(sourceIds(), ['b', 'a', 'c']);
+      expect(player.state.playedVideos, isEmpty);
+      expect(player.state.playQueue, ['a', 'c']);
+
+      player.moveMusicQueueOccurrence('c', beforeId: 'b');
+      expect(sourceIds(), ['c', 'b', 'a']);
+      expect(player.state.playedVideos, ['c']);
+      expect(player.state.playQueue, ['a']);
+      expect(player.state.currentlyPlaying, same(active));
+      expect(player.state.offlineCurrentlyPlaying, same(activeDownload));
+    });
+  }
+
+  test('shuffled Music reorder preserves the mounted repeat and source order',
+      () async {
+    await settings.setShuffle(true);
+    await settings.setRepeatMode(PlayerRepeat.repeatAll);
+    player.seedDuplicateQueue();
+    final source = player.state.videos;
+    final active = player.state.currentlyPlaying;
+    final first = playbackQueueId(source.first);
+    final repeated = playbackQueueId(source.last);
+
+    player.moveMusicQueueOccurrence(first);
+    expect(player.state.playedVideos, ['b']);
+    expect(player.state.playQueue, [first]);
+
+    player.moveMusicQueueOccurrence(first, beforeId: 'b');
+    expect(player.state.playedVideos, [first, 'b']);
+    expect(player.state.playQueue, isEmpty);
+    expect(player.state.currentQueueId, repeated);
+    expect(player.state.currentlyPlaying, same(active));
+    expect(player.state.videos, source);
+  });
+
+  test('Music reorder respects visible songs missing from a saved next queue',
+      () {
+    player.seedQueue(unscheduled: const [
+      Video(videoId: 'd'),
+      Video(videoId: 'e'),
+      Video(videoId: 'f'),
+    ]);
+    final active = player.state.currentlyPlaying;
+    player.moveMusicQueueOccurrence('a', beforeId: 'e');
+    expect(player.state.playedVideos, isEmpty);
+    expect(player.state.playQueue, ['c', 'd', 'a']);
+    expect(player.state.videos.map(playbackQueueId),
+        ['b', 'c', 'd', 'a', 'e', 'f']);
+
+    player.moveMusicQueueOccurrence('c');
+    expect(player.state.playQueue, ['d', 'a', 'e', 'f', 'c']);
+    expect(player.state.currentlyPlaying, same(active));
   });
 
   test('removing one repeated song leaves the current occurrence intact', () {

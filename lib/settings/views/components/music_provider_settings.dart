@@ -115,7 +115,12 @@ class MusicProviderSettings extends StatelessWidget {
         title: locals.musicDownloadFormatSetting,
         values: MusicDownloadFormat.values,
         read: () => MusicDownloadFormat.forDatabase(db),
-        label: (format) => format.label,
+        label: (format) => format == MusicDownloadFormat.opus
+            ? locals.musicDownloadOpusBestQuality
+            : format.label,
+        description: (format) => format == MusicDownloadFormat.opus
+            ? locals.musicDownloadOpusHelp
+            : null,
         optionKey: (format) => ValueKey('music-download-format-${format.name}'),
         save: (format) => format.save(db),
       ),

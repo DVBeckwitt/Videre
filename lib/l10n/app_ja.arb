@@ -588,9 +588,9 @@
   "@redirectInvidiousLink": {
     "description": "asking user to share redirecting invidious link"
   },
-  "rememberPlaybackSpeed": "再生速度を記憶",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "再生速度と音程を記憶",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoFiltered": "次の理由で動画をフィルター済み:",
   "@videoFiltered": {
@@ -604,9 +604,9 @@
   "@videoFilterOperationHigherThan": {
     "description": "Label for video filter operation Higher than"
   },
-  "rememberPlaybackSpeedDescription": "最後に選択した再生速度を自動で設定",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "動画と音楽で、再生速度と音程を個別に保存します。",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "playNext": "次に再生",
   "@playNext": {

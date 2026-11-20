@@ -670,9 +670,9 @@
   "@videoFilterOperationNotContain": {
     "description": "Label for video filter operation Does not contain"
   },
-  "rememberPlaybackSpeedDescription": "Definir automaticamente a velocidade de reprodução para a última velocidade selecionada",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Guardar a velocidade e o tom separadamente para os vídeos e a música.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "addToPlaylist": "Adicionar à lista de reprodução",
   "@addToPlaylist": {
@@ -754,9 +754,9 @@
   "@lockFullScreenToLandscapeDescription": {
     "description": "Setting description for forcing video to landscape when in full screen"
   },
-  "rememberPlaybackSpeed": "Recordar a velocidade de reprodução",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Recordar a velocidade de reprodução e o tom",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoAddedToQueue": "Vídeo adicionado à fila de espera",
   "@videoAddedToQueue": {

@@ -7,6 +7,7 @@ import '../music/models/music_library_entry.dart';
 import '../music/models/music_layout.dart';
 import '../music/models/song_transition.dart';
 import '../player/models/music_audio_quality.dart';
+import '../player/models/playback_pitch.dart';
 import '../recommendations/recommendation_models.dart';
 import '../recommendations/recommendation_snapshot.dart';
 
@@ -385,17 +386,26 @@ class UserBackup {
       searchHistoryLimitSettingName: (1, 100000),
       skipStepSettingName: (1, 600),
       lastVideoQualitySettingName: (0, 16384),
+      videoPitchSettingName: (minimumPitchSemitones, maximumPitchSemitones),
+      musicPitchSettingName: (minimumPitchSemitones, maximumPitchSemitones),
     };
     if (ranges.containsKey(name)) {
       final number = int.tryParse(value), range = ranges[name]!;
       return number != null && number >= range.$1 && number <= range.$2;
     }
-    if (name == lastSpeedSettingName || name == subtitleSizeSettingName) {
+    const decimalLimits = {
+      lastSpeedSettingName: 10,
+      videoSpeedSettingName: 10,
+      musicSpeedSettingName: 10,
+      subtitleSizeSettingName: 200,
+    };
+    final maximum = decimalLimits[name];
+    if (maximum != null) {
       final number = double.tryParse(value);
       return number != null &&
           number.isFinite &&
           number > 0 &&
-          number <= (name == lastSpeedSettingName ? 10 : 200);
+          number <= maximum;
     }
     return switch (name) {
       songTransitionModeSettingName =>

@@ -1198,11 +1198,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _playbackOffline = offline;
     _wantsToPlay = player.shouldStartPlayback;
     _terminalErrorSent = false;
-    final videoId =
-        offline ? state.offlineVideo!.videoId : state.video!.videoId;
-    _playbackPitchSemitones = player.pitchForVideo(videoId);
-    _playbackSpeed = player.speedForVideo(videoId);
     final entry = (offline ? state.offlineVideo : state.video)!;
+    final videoId = entry.videoId;
+    final tuning = player.playbackTuningFor(entry);
+    _playbackPitchSemitones = tuning.pitch;
+    _playbackSpeed = tuning.speed;
     final id = playbackQueueId(entry);
     final candidate = _standbys[id];
     final reservation = _manual;
@@ -1535,7 +1535,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     super.setSpeed(d);
     _playbackSpeed = d;
     audioPlayer?.setSpeed(d);
-    settings.setLastSpeed(d);
+    player.rememberPlaybackTuning(state.video ?? state.offlineVideo, speed: d);
   }
 
   @override
@@ -1547,6 +1547,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   void setPitchSemitones(int semitones) {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     _playbackPitchSemitones = clampPitchSemitones(semitones);
+    player.rememberPlaybackTuning(state.video ?? state.offlineVideo,
+        pitch: _playbackPitchSemitones);
     audioPlayer?.setPitch(pitchFactorForSemitones(_playbackPitchSemitones));
     _reportPitch(_playbackPitchSemitones);
   }

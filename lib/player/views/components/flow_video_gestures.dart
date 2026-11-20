@@ -190,12 +190,11 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
       behavior: HitTestBehavior.translucent,
       excludeFromSemantics: true,
       gestures: {
-        _FlowTapRecognizer:
-            GestureRecognizerFactoryWithHandlers<_FlowTapRecognizer>(
-          () => _FlowTapRecognizer(supportedDevices: _touch),
+        TapGestureRecognizer:
+            GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+          () => TapGestureRecognizer(supportedDevices: _touch),
           (recognizer) => recognizer
             ..gestureSettings = gestureSettings
-            ..acceptPosition = _outsideBackInset
             ..onTapUp = _tap,
         ),
         if (widget.canSeek)
@@ -239,19 +238,6 @@ class _FlowVideoGesturesState extends State<FlowVideoGestures> {
       ),
     );
   }
-}
-
-mixin _FlowPointerFilter on GestureRecognizer {
-  bool Function(Offset)? acceptPosition;
-
-  @override
-  bool isPointerAllowed(PointerDownEvent event) =>
-      (acceptPosition?.call(event.localPosition) ?? true) &&
-      super.isPointerAllowed(event);
-}
-
-class _FlowTapRecognizer extends TapGestureRecognizer with _FlowPointerFilter {
-  _FlowTapRecognizer({super.supportedDevices});
 }
 
 class _FlowSeekDragRecognizer extends HorizontalDragGestureRecognizer {

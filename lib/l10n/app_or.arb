@@ -646,9 +646,9 @@
   "@channel": {
     "description": "A single channel"
   },
-  "rememberPlaybackSpeedDescription": "ସ୍ୱୟଂଚାଳିତ ଭାବରେ ଚୟିତ ଶେଷ ବେଗରେ ଖେଳିବା ବେଗକୁ ସ୍ୱୟଂଚାଳିତ ଭାବରେ ସେଟ କରନ୍ତୁ",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "ଭିଡିଓ ଓ ସଙ୍ଗୀତ ପାଇଁ ପ୍ଲେବ୍ୟାକ୍ ବେଗ ଓ ସ୍ୱରର ଉଚ୍ଚତା ଅଲଗା ଅଲଗା ସଞ୍ଚୟ କରନ୍ତୁ।",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "copyToClipBoard": "କ୍ଲିପବୋର୍ଡରେ ନକଲ କରନ୍ତୁ",
   "@copyToClipBoard": {
@@ -724,9 +724,9 @@
   "@lockFullScreenToLandscape": {
     "description": "Title to force full screen to landscape"
   },
-  "rememberPlaybackSpeed": "ଚଲାବୁଲା ଗତି ମନେରଖନ୍ତୁ",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "ପ୍ଲେବ୍ୟାକ୍ ବେଗ ଓ ସ୍ୱରର ଉଚ୍ଚତା ମନେ ରଖନ୍ତୁ",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoAlreadyDownloaded": "ଭିଡିଓ ପୂର୍ବରୁ ଡାଉନଲୋଡ ହୋଇଛି",
   "@videoAlreadyDownloaded": {

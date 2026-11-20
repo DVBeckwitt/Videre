@@ -596,9 +596,9 @@
   "@channel": {
     "description": "A single channel"
   },
-  "rememberPlaybackSpeedDescription": "Setați automat viteza de redare la ultima viteză selectată",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Salvează separat viteza și înălțimea sunetului pentru videoclipuri și muzică.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "videoFilterHideDescription": "În mod prestabilit, videoclipurile filtrate nu sunt ascunse, ci afișate ca fiind obscucate cu motivul (motivele) pentru care au fost filtrate. Această setare elimină videoclipurile filtrate din liste.",
   "@videoFilterHideDescription": {
@@ -644,9 +644,9 @@
   "@videoFilterHide": {
     "description": "Label for settings to hide filtered videos"
   },
-  "rememberPlaybackSpeed": "Reținere viteza de redare",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Reține viteza de redare și înălțimea sunetului",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "addToPlaylist": "Adaugă la playlist",
   "@addToPlaylist": {

@@ -774,9 +774,9 @@
   "@deletePlaylistNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
   },
-  "rememberPlaybackSpeedDescription": "سرعت پخش را به صورت خودکار به آخرین سرعت انتخاب شده عوض کن",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "تنظیمات سرعت پخش و زیروبمی صدا را برای ویدیوها و موسیقی جداگانه نگه دار.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "searchSortRating": "امتیاز",
   "@searchSortRating": {
@@ -818,9 +818,9 @@
   "@videoFilters": {
     "description": "Title for video filter settings"
   },
-  "rememberPlaybackSpeed": "سرعت پخش ویدیو را به خاطر بسپار",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "سرعت پخش و زیروبمی صدا را به خاطر بسپار",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "enableNotificationDescriptions": "یک سرویس در پیش‌زمینه اجرا می‌کند تا ضمن بررسی، شما را از تغییراتی که رصد می‌کند آگاه سازد",
   "@enableNotificationDescriptions": {

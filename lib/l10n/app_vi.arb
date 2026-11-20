@@ -768,9 +768,9 @@
   "@lockFullScreenToLandscape": {
     "description": "Title to force full screen to landscape"
   },
-  "rememberPlaybackSpeed": "Ghi nhớ tốc độ phát lại",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Ghi nhớ tốc độ phát và cao độ",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "noDownloadedVideos": "Không có video đã tải xuống, hãy duyệt, nhấn và giữ video trong danh sách hoặc nhấn vào nút tải xuống trên màn hình video để tải xuống",
   "@noDownloadedVideos": {
@@ -904,9 +904,9 @@
   "@lockFullScreenToLandscapeDescription": {
     "description": "Setting description for forcing video to landscape when in full screen"
   },
-  "rememberPlaybackSpeedDescription": "Tự động đặt tốc độ phát lại về tốc độ đã chọn cuối cùng",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Lưu riêng tốc độ phát và cao độ cho video và nhạc.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "downloads": "Tải xuống",
   "@downloads": {

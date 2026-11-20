@@ -1946,6 +1946,42 @@ void main() {
     expect(player.sought, isNull);
   });
 
+  testWidgets('dragging a previous song across the current song queues it next',
+      (tester) async {
+    final earlier = next.copyWith(videoId: 'earlier');
+    final tail = next.copyWith(videoId: 'tail');
+    final duplicate = song.copyWith(queueEntryId: 'previous');
+    final previous = playbackQueueId(duplicate);
+    final current = player.state.currentlyPlaying!;
+    final currentId = playbackQueueId(current);
+    final position = player.state.position;
+    await player.seed(player.state.copyWith(
+      videos: [earlier, duplicate, current, next, tail],
+      playedVideos: [earlier.videoId, previous],
+      playQueue: ListQueue.of([next.videoId, tail.videoId]),
+    ));
+    await pump(tester, size: const Size(1024, 720));
+    final handle = find.byKey(ValueKey('music-queue-drag-$previous'));
+    expect(handle.hitTestable(), findsOneWidget);
+    expect(find.byKey(ValueKey('music-queue-drag-$currentId')), findsNothing);
+
+    await tap(tester, 'music-queue-lock');
+    expect(handle, findsNothing);
+    await tap(tester, 'music-queue-lock');
+
+    final row = find.byKey(ValueKey('music-queue-$previous'));
+    await tester.drag(handle, Offset(0, tester.getSize(row).height * 0.9));
+    await tester.pumpAndSettle();
+
+    expect(player.state.playedVideos, [earlier.videoId]);
+    expect(player.state.playQueue.toList(),
+        [previous, next.videoId, tail.videoId]);
+    expect(player.state.currentQueueId, currentId);
+    expect(player.state.currentlyPlaying, same(current));
+    expect(player.state.position, position);
+    expect(player.sought, isNull);
+  });
+
   testWidgets('wide queue shows the real upcoming order and can collapse',
       (tester) async {
     final songs = assignPlaybackQueueIds([song, next, song]);

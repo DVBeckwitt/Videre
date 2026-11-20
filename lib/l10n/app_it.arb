@@ -616,9 +616,9 @@
   "@videoDownloadAudioOnly": {
     "description": "Label for toggle to download audio only "
   },
-  "rememberPlaybackSpeedDescription": "Imposta automaticamente la velocità di riproduzione all''ultima velocità selezionata",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Salva separatamente la velocità e la tonalità per i video e la musica.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "unSubscribeQuestion": "Disiscrivi ?",
   "@unSubscribeQuestion": {
@@ -716,9 +716,9 @@
   "@lockFullScreenToLandscape": {
     "description": "Title to force full screen to landscape"
   },
-  "rememberPlaybackSpeed": "Ricorda velocità riproduzione",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Ricorda la velocità di riproduzione e la tonalità",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "downloads": "Download",
   "@downloads": {

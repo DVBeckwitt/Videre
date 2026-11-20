@@ -834,6 +834,36 @@ void main() {
     expect((await target.getServers()).single.authToken, 'keep');
   });
 
+  test('legacy speed and independent speed and pitch survive backup restore',
+      () async {
+    const preferences = {
+      remeberPlaybackSpeed: 'true',
+      lastSpeedSettingName: '1.75',
+      videoSpeedSettingName: '1.5',
+      musicSpeedSettingName: '0.85',
+      videoPitchSettingName: '-12',
+      musicPitchSettingName: '12',
+    };
+    for (final entry in preferences.entries) {
+      await source.saveSetting(SettingsValue(entry.key, entry.value));
+    }
+    await target.restoreBackup(
+        UserBackup.parse((await source.exportBackup()).encode()));
+    for (final entry in preferences.entries) {
+      expect(target.getSettings(entry.key)?.value, entry.value);
+    }
+    for (final key in [videoPitchSettingName, musicPitchSettingName]) {
+      for (final invalid in ['-13', '13', '0.5']) {
+        expect(UserBackup.validSetting(SettingsValue(key, invalid)), isFalse);
+      }
+    }
+    for (final key in [videoSpeedSettingName, musicSpeedSettingName]) {
+      for (final invalid in ['0', '-1', '11', 'NaN', 'Infinity']) {
+        expect(UserBackup.validSetting(SettingsValue(key, invalid)), isFalse);
+      }
+    }
+  });
+
   test('quality preference and opt-out survive backup restore', () async {
     await source
         .saveSetting(SettingsValue(rememberVideoQualitySettingName, 'false'));

@@ -117,8 +117,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   static final _runtimePlayers = <PlayerCubit>{};
   static PodcastPlayer? _podcastOwner;
   static Future<MediaHandler>? _sharedMediaInitialization;
-  String? _pitchVideoId;
-  String? _speedVideoId;
+  ({String id, bool music, bool live})? _tuningSource;
   int _nextLocalOccurrence = 1;
   static Future<void> _sessionWrite = Future.value();
   static const _learningCheckpointInterval = Duration(seconds: 15);
@@ -1848,8 +1847,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _clearMetadataRetry();
     // Background playback must stop before the closing animation can run.
     pause();
-    _pitchVideoId = null;
-    _speedVideoId = null;
+    _tuningSource = null;
     final generation = ++_progressGeneration;
     _videoSwitchGeneration++;
     _requestedBackendVideoId = null;
@@ -2019,8 +2017,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _manualSelectionPending = false;
     _clearBackendProgress();
     cancelSleep();
-    _pitchVideoId = null;
-    _speedVideoId = null;
+    _tuningSource = null;
     // Invoke teardown before the empty state removes the decoder widgets.
     // Its synchronous prefix invalidates setup; await native stop below.
     final stopping = Future.wait(
@@ -3799,7 +3796,75 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         videos: applyOrder(state.videos),
         offlineVideos: applyOrder(state.offlineVideos),
         playQueue: ListQueue.of(order)));
-    unawaited(_saveSession(state));
+  }
+
+  List<IdedVideo> _musicQueueTimeline() => playbackQueueTraversal<IdedVideo>(
+        state.videos.isNotEmpty ? state.videos : state.offlineVideos,
+        played: state.playedVideos,
+        current: state.currentQueueId,
+        upcoming: state.playQueue,
+      );
+
+  /// Moves a song in the Music timeline without switching the mounted item.
+  void moveMusicQueueOccurrence(String movedId, {String? beforeId}) {
+    final currentId = state.currentQueueId;
+    if (isClosed ||
+        _switchingProfile ||
+        _sessionTransitionPending ||
+        state.isClosing ||
+        movedId == currentId) {
+      return;
+    }
+    final currentUpcoming = state.playQueue;
+    if (currentId == null) {
+      moveQueueOccurrence(movedId, beforeId: beforeId);
+      return;
+    }
+    final timeline = _musicQueueTimeline();
+    final ids = timeline.map(playbackQueueId).toList();
+    final from = ids.indexOf(movedId);
+    final to = beforeId == null ? ids.length : ids.indexOf(beforeId);
+    final active = ids.indexOf(currentId);
+    if (from < 0 || to < 0 || active < 0 || from == to || from + 1 == to) {
+      return;
+    }
+
+    // Restored sessions can contain visible tail entries with no saved next
+    // slot. Queue only the ones that must precede the explicitly moved song.
+    final scheduled = currentUpcoming.toSet();
+    final tail = to > active
+        ? ids
+            .getRange(active + 1, to)
+            .where((id) => id != movedId && !scheduled.contains(id))
+        : const <String>[];
+    if (scheduled.contains(movedId) &&
+        beforeId != currentId &&
+        (scheduled.contains(beforeId) || (beforeId == null && tail.isEmpty))) {
+      moveQueueOccurrence(movedId, beforeId: beforeId);
+      return;
+    }
+
+    final previous = state.playedVideos.where((id) => id != movedId).toList();
+    final upcoming = [...currentUpcoming.where((id) => id != movedId), ...tail];
+    final destination = to <= active ? previous : upcoming;
+    final slot = beforeId == null || beforeId == currentId
+        ? -1
+        : destination.indexOf(beforeId);
+    destination.insert(slot < 0 ? destination.length : slot, movedId);
+    final entry = timeline.removeAt(from);
+    timeline.insert(to > from ? to - 1 : to, entry);
+    final shuffled = settings.state.playerShuffleMode;
+    final online = state.videos.isNotEmpty;
+    emit(state.copyWith(
+      videos: shuffled || !online
+          ? state.videos
+          : timeline.whereType<Video>().toList(),
+      offlineVideos: shuffled || online
+          ? state.offlineVideos
+          : timeline.whereType<DownloadedVideo>().toList(),
+      playedVideos: previous,
+      playQueue: ListQueue.of(upcoming),
+    ));
   }
 
   /// Select a row in the same timeline order displayed by the Music queue.
@@ -3812,13 +3877,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     }
     _cancelMusicSelection();
     if (state.currentQueueId == id) return;
-    List<IdedVideo> readTimeline() => playbackQueueTraversal<IdedVideo>(
-          state.videos.isNotEmpty ? state.videos : state.offlineVideos,
-          played: state.playedVideos,
-          current: state.currentQueueId,
-          upcoming: state.playQueue,
-        );
-    var timeline = readTimeline();
+    var timeline = _musicQueueTimeline();
     var index = timeline.indexWhere((item) => playbackQueueId(item) == id);
     if (index < 0) return;
     final selected = timeline[index];
@@ -3831,7 +3890,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     if (_isMusicEntry(selected) && _canPrepareMusicSelection) {
       prepared = await _prepareMusicSelection(selected, Duration.zero);
       if (prepared == null || request != _musicSelectionRequestRevision) return;
-      timeline = readTimeline();
+      timeline = _musicQueueTimeline();
       index = timeline.indexWhere((item) => playbackQueueId(item) == id);
       if (index < 0 || state.currentQueueId == id) {
         _abandonMusicSelection();
@@ -4477,35 +4536,43 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         mediaCommand: MediaCommand(MediaCommandType.speed, value: d)));
   }
 
-  /// Speed belongs to the video, not the decoder used to play it. Only a new
-  /// video applies the saved preference or returns to normal speed.
-  double speedForVideo(String videoId) {
-    if (_speedVideoId != videoId) {
-      final speed = previewSpeedForVideo(videoId);
-      _speedVideoId = videoId;
-      emit(state.copyWith(speed: speed));
+  /// A standby decoder can preview an incoming song before it becomes active.
+  ({double speed, int pitch}) playbackTuningFor(IdedVideo entry,
+      {bool preview = false}) {
+    final source = (
+      id: entry.videoId,
+      music: state.isAudio && _isMusicEntry(entry),
+      live: entry is Video && entry.liveNow == true,
+    );
+    if (_tuningSource == source) {
+      return (speed: state.speed, pitch: state.pitchSemitones);
     }
-    return state.speed;
+    final remember = !source.live && settings.state.rememberPlayBackSpeed;
+    final speed =
+        remember ? settings.state.playbackSpeed(music: source.music) : 1.0;
+    final pitch =
+        remember && !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+            ? settings.state.playbackPitch(music: source.music)
+            : 0;
+    if (!preview) {
+      _tuningSource = source;
+      emit(state.copyWith(speed: speed, pitchSemitones: pitch));
+    }
+    return (speed: speed, pitch: pitch);
   }
 
-  /// Retain pitch across decoders/retries for this video, never across videos.
-  int pitchForVideo(String videoId) {
-    if (_pitchVideoId != videoId) {
-      final pitch = previewPitchForVideo(videoId);
-      _pitchVideoId = videoId;
-      emit(state.copyWith(pitchSemitones: pitch));
+  void rememberPlaybackTuning(IdedVideo? entry, {double? speed, int? pitch}) {
+    if (entry == null || entry is Video && entry.liveNow == true) return;
+    final music = state.isAudio && _isMusicEntry(entry);
+    void save(Future<void> write) {
+      unawaited(write.catchError((Object error, StackTrace stack) {
+        log.warning('Could not save playback speed or pitch', error, stack);
+      }));
     }
-    return state.pitchSemitones;
+
+    if (speed != null) save(settings.setLastSpeed(speed, music: music));
+    if (pitch != null) save(settings.setLastPitch(pitch, music: music));
   }
-
-  double previewSpeedForVideo(String videoId) => _speedVideoId == videoId
-      ? state.speed
-      : settings.state.rememberPlayBackSpeed
-          ? settings.state.lastSpeed
-          : 1;
-
-  int previewPitchForVideo(String videoId) =>
-      _pitchVideoId == videoId ? state.pitchSemitones : 0;
 
   void setPitchSemitones(int semitones) {
     final pitch = clampPitchSemitones(semitones);

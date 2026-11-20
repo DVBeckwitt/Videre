@@ -1,6 +1,3 @@
-import 'dart:async';
-
-import 'package:feedback/feedback.dart' as capture;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -19,7 +16,6 @@ bool _feedbackFormOpen = false;
 Future<void> openFeedbackForm(BuildContext context) async {
   if (_feedbackFormOpen) return;
   final navigator = Navigator.of(context);
-  final screenshotController = capture.BetterFeedback.of(context);
   final player = context.read<PlayerCubit>();
   final controller = FeedbackController(
     collectDiagnostics: () => collectFeedbackDiagnostics(player: player.state),
@@ -28,7 +24,7 @@ Future<void> openFeedbackForm(BuildContext context) async {
   try {
     await controller.initialize();
     while (navigator.mounted) {
-      final result = await navigator.push<_FeedbackAction>(MaterialPageRoute(
+      final formRoute = MaterialPageRoute<_FeedbackAction>(
         builder: (formContext) => FeedbackFormScreen(
           controller: controller,
           onCaptureScreenshot: () async {
@@ -36,35 +32,17 @@ Future<void> openFeedbackForm(BuildContext context) async {
             return null;
           },
         ),
-      ));
+      );
+      final result = await navigator.push(formRoute);
       await controller.save();
       if (result != _FeedbackAction.captureScreenshot || !navigator.mounted) {
         break;
       }
-      final finished = Completer<void>();
-      var captureActive = true;
-      void onVisibilityChanged() {
-        if (!screenshotController.isVisible && !finished.isCompleted) {
-          captureActive = false;
-          finished.complete();
-        }
-      }
-
-      screenshotController.addListener(onVisibilityChanged);
-      try {
-        // Wait until the route transition has removed the report form before
-        // exposing the underlying app to the opt-in screenshot editor.
-        await Future<void>.delayed(const Duration(milliseconds: 350));
-        if (!navigator.mounted) break;
-        screenshotController.show((feedback) async {
-          if (!captureActive) return;
-          final pixels = await prepareFeedbackScreenshot(feedback.screenshot);
-          if (captureActive) await controller.setScreenshot(pixels);
-        });
-        await finished.future;
-      } finally {
-        screenshotController.removeListener(onVisibilityChanged);
-      }
+      // Let the form finish closing before showing the screen to annotate.
+      await formRoute.completed;
+      if (!navigator.mounted) break;
+      final pixels = await VidereFeedbackHost.capture(navigator.context);
+      if (pixels != null) await controller.setScreenshot(pixels);
     }
   } finally {
     try {

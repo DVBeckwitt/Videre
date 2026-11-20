@@ -586,9 +586,9 @@
   "@exponentialSkip": {
     "description": "Title for the setting to enable the exponential skipping"
   },
-  "rememberPlaybackSpeed": "Afspeel­snelheid onthouden",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Afspeelsnelheid en toonhoogte onthouden",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "videoAddedToQueue": "Video toegevoegd aan wachtrij",
   "@videoAddedToQueue": {
@@ -1106,9 +1106,9 @@
   "@fillFullscreenDescription": {
     "description": "Setting description for filling video to screen in landscape"
   },
-  "rememberPlaybackSpeedDescription": "Stel de afspeelsnelheid automatisch in op de laatstgekozen snelheid",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Bewaar de snelheid en toonhoogte apart voor video’s en muziek.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "youCanSubscribeAgainLater": "Je kan je later opnieuw op dit kanaal abonneren",
   "@youCanSubscribeAgainLater": {

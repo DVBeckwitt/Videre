@@ -11,6 +11,7 @@ import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/video_player.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:river_player/river_player.dart';
@@ -165,16 +166,17 @@ void main() {
   });
 
   test('pitch command clamps and new-video reset is independent of speed', () {
+    final first = Video(videoId: 'first');
+    expect(player.playbackTuningFor(first), (speed: 1.0, pitch: 0));
     reportSpeed(1.75);
-    expect(player.pitchForVideo('first'), 0);
     player.setPitchSemitones(7);
     expect(player.state.pitchSemitones, 7);
     expect(player.state.speed, 1.75);
     expect(player.state.mediaCommand?.type, MediaCommandType.pitch);
     expect(player.state.mediaCommand?.value, 7);
-    expect(player.pitchForVideo('first'), 7);
-    expect(player.pitchForVideo('second'), 0);
-    expect(player.state.speed, 1.75);
+    expect(player.playbackTuningFor(first), (speed: 1.75, pitch: 7));
+    expect(player.playbackTuningFor(Video(videoId: 'second')),
+        (speed: 1.0, pitch: 0));
     player.setPitchSemitones(-100);
     expect(player.state.pitchSemitones, -12);
     player.setPitchSemitones(100);

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data' show Float32List;
 
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:bloc/bloc.dart';
@@ -25,6 +26,7 @@ import '../../home/models/home_tabs_layout.dart';
 import '../../music/models/music_layout.dart';
 import '../../music/models/song_transition.dart';
 import '../../player/models/music_audio_quality.dart';
+import '../../player/models/playback_pitch.dart';
 import '../../player/models/video_display_mode.dart';
 import '../../player/states/player.dart';
 import '../../recommendations/recommendation_service.dart';
@@ -406,7 +408,40 @@ class SettingsCubit extends Cubit<SettingsState> {
   setSearchHistoryLimit(int b) async =>
       await _set(searchHistoryLimitSettingName, b);
 
-  setLastSpeed(double d) async => await _set(lastSpeedSettingName, d);
+  Future<void> setLastSpeed(double value, {bool music = false}) =>
+      _savePlaybackPreference(
+          music ? musicSpeedSettingName : videoSpeedSettingName, value);
+
+  Future<void> setLastPitch(int semitones, {required bool music}) =>
+      _savePlaybackPreference(
+          music ? musicPitchSettingName : videoPitchSettingName,
+          clampPitchSemitones(semitones));
+
+  Future<void> _savePlaybackPreference(String name, num value) {
+    if (isClosed) return Future.value();
+    final profile = db.profileId;
+    final owner = db.forProfile(profile);
+    final session = appCubit.state.sessionRevision;
+    final setting = SettingsValue(name, value.toString());
+    // A track switch or preload can read this preference in the same turn.
+    emit(state.copyWith(settings: {...state.settings, name: setting}));
+    return _queueSettingWrite(name, () async {
+      try {
+        await owner.saveSetting(setting);
+      } catch (_) {
+        if (!isClosed &&
+            db.profileId == profile &&
+            appCubit.state.sessionRevision == session &&
+            identical(state.settings[name], setting)) {
+          final saved = owner.getSettings(name);
+          final restored = {...state.settings}..remove(name);
+          if (saved != null) restored[name] = saved;
+          emit(state.copyWith(settings: restored));
+        }
+        rethrow;
+      }
+    });
+  }
 
   setPlayRecommendedNext(bool b) async =>
       await _set(playRecommendedNextSettingName, b);
@@ -453,6 +488,10 @@ class SettingsCubit extends Cubit<SettingsState> {
       }
     }
 
+    return _queueSettingWrite(name, save);
+  }
+
+  Future<void> _queueSettingWrite(String name, Future<void> Function() save) {
     // Each adjustment sees the result of the previous write to this setting.
     final previous = _pendingSettingWrites[name] ?? Future<void>.value();
     final saving = previous.then((_) => save());
@@ -666,8 +705,27 @@ sealed class SettingsState with _$SettingsState {
   int get searchHistoryLimit => int.parse(
       _get(searchHistoryLimitSettingName)?.value ?? searchHistoryDefaultLength);
 
-  double get lastSpeed =>
-      double.parse(_get(lastSpeedSettingName)?.value ?? "1.0");
+  double get lastSpeed => playbackSpeed(music: false);
+
+  double playbackSpeed({required bool music}) {
+    double? readSpeed(String name) {
+      final speed = double.tryParse(_get(name)?.value ?? '');
+      if (speed == null || !speed.isFinite || speed <= 0 || speed > 10) {
+        return null;
+      }
+      // Both Android decoders narrow the rate to a 32-bit float.
+      return Float32List.fromList([speed]).single > 0 ? speed : null;
+    }
+
+    return readSpeed(music ? musicSpeedSettingName : videoSpeedSettingName) ??
+        readSpeed(lastSpeedSettingName) ??
+        1.0;
+  }
+
+  int playbackPitch({required bool music}) {
+    final setting = _get(music ? musicPitchSettingName : videoPitchSettingName);
+    return clampPitchSemitones(int.tryParse(setting?.value ?? '') ?? 0);
+  }
 
   bool get playerShuffleMode => _get(playerShuffle)?.value == "true";
 

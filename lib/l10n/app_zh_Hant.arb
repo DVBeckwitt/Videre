@@ -846,9 +846,9 @@
   "@deletePlaylistNotificationTitle": {
     "description": "Title for dialog to confirm whether to delete playlist notifications"
   },
-  "rememberPlaybackSpeedDescription": "自動將播放速度設定為最後選擇的速度",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "分別儲存影片與音樂的播放速度和音高設定。",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "searchSortRating": "評分",
   "@searchSortRating": {
@@ -882,9 +882,9 @@
   "@videoFilters": {
     "description": "Title for video filter settings"
   },
-  "rememberPlaybackSpeed": "記住播放速度",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "記住播放速度與音高",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
   "enableNotificationDescriptions": "執行前臺服務以檢查並通知您正在監視的變化",
   "@enableNotificationDescriptions": {

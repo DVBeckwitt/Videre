@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:auto_route/auto_route.dart';
 import 'package:clipious/feedback/feedback_controller.dart';
 import 'package:clipious/feedback/models/feedback_report.dart';
 import 'package:clipious/feedback/services/feedback_store.dart';
@@ -549,6 +550,180 @@ void main() {
     await tester.pumpAndSettle();
     expect(keyed('send'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('screenshot capture preserves the current route and edge taps',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final navigator = GlobalKey<NavigatorState>();
+    const probeKey = ValueKey('feedback-edge-probe');
+    Future<Uint8List?>? result;
+    await tester.pumpWidget(VidereFeedbackHost(
+      child: MaterialApp(
+        navigatorKey: navigator,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: Builder(builder: (context) {
+            return TextButton(
+              onPressed: () {
+                var leftTaps = 0;
+                var rightTaps = 0;
+                Navigator.of(context).push<void>(MaterialPageRoute(
+                  builder: (context) => Scaffold(
+                    body: StatefulBuilder(
+                      key: probeKey,
+                      builder: (context, setState) => GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTapUp: (details) => setState(() {
+                          if (details.globalPosition.dx < 195) {
+                            leftTaps++;
+                          } else {
+                            rightTaps++;
+                          }
+                        }),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('Left $leftTaps, right $rightTaps'),
+                              TextButton(
+                                onPressed: () {
+                                  result = VidereFeedbackHost.capture(context);
+                                },
+                                child: const Text('Start screenshot'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ));
+              },
+              child: const Text('Open second route'),
+            );
+          }),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('Open second route'));
+    await tester.pumpAndSettle();
+
+    final probe = find.byKey(probeKey);
+    final originalState = tester.state(probe);
+    final originalRoute = ModalRoute.of(tester.element(probe));
+    Future<void> tapEdges() async {
+      await tester.tapAt(const Offset(0.5, 150));
+      await tester.tapAt(const Offset(389.5, 150));
+      await tester.pump();
+    }
+
+    await tapEdges();
+    expect(find.text('Left 1, right 1'), findsOneWidget);
+    await tester.tap(find.text('Start screenshot'));
+    await tester.pumpAndSettle();
+    expect(keyed('attach-captured-screenshot'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('close_controls_column')));
+    await tester.pumpAndSettle();
+    expect(await result!, isNull);
+    expect(keyed('attach-captured-screenshot'), findsNothing);
+    expect(tester.state(probe), same(originalState));
+    expect(ModalRoute.of(tester.element(probe)), same(originalRoute));
+    expect(navigator.currentState!.canPop(), isTrue);
+    expect(find.text('Left 1, right 1'), findsOneWidget);
+    await tapEdges();
+    expect(find.text('Left 2, right 2'), findsOneWidget);
+
+    await tester.tap(find.text('Start screenshot'));
+    await tester.pumpAndSettle();
+    final editor = capture.BetterFeedback.of(tester.element(probe));
+    await tester.runAsync(() async {
+      // Engine image encoding and the editor's capture delay use real time.
+      await tester.tap(keyed('attach-captured-screenshot'));
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (editor.isVisible && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    expect(editor.isVisible, isFalse);
+    await tester.pumpAndSettle();
+    expect(validFeedbackScreenshot((await result!)!), isTrue);
+    expect(keyed('attach-captured-screenshot'), findsNothing);
+    expect(tester.state(probe), same(originalState));
+    expect(find.text('Left 2, right 2'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('cancelling capture can reopen a form on a nested AutoRoute',
+      (tester) async {
+    bool? editorWasMountedAtReopen;
+    Future<void> openForm(BuildContext context) async {
+      final navigator = Navigator.of(context);
+      final form = MaterialPageRoute<bool>(
+        builder: (context) => Scaffold(
+          body: TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Capture from form'),
+          ),
+        ),
+      );
+      if (await navigator.push(form) != true) return;
+      await form.completed;
+      await VidereFeedbackHost.capture(navigator.context);
+      editorWasMountedAtReopen = navigator.context
+              .findAncestorWidgetOfExactType<capture.BetterFeedback>() !=
+          null;
+      await navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const Scaffold(body: Text('Reopened form')),
+      ));
+    }
+
+    final router = RootStackRouter.build(routes: [
+      NamedRouteDef(
+        name: 'FeedbackShell',
+        path: '/',
+        builder: (_, __) => const AutoRouter(),
+        children: [
+          NamedRouteDef(
+            name: 'FeedbackSettings',
+            path: '',
+            builder: (context, _) => Scaffold(
+              body: TextButton(
+                onPressed: () => unawaited(openForm(context)),
+                child: const Text('Open feedback'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    ]);
+    addTearDown(router.dispose);
+    await tester.pumpWidget(VidereFeedbackHost(
+      child: MaterialApp.router(
+        routerConfig: router.config(),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open feedback'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Capture from form'));
+    await tester.pumpAndSettle();
+    expect(keyed('attach-captured-screenshot'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('close_controls_column')));
+    await tester.pumpAndSettle();
+
+    expect(editorWasMountedAtReopen, isFalse);
+    expect(find.text('Reopened form'), findsOneWidget);
+    expect(keyed('attach-captured-screenshot'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   for (final locale in [const Locale('en'), const Locale('af')]) {

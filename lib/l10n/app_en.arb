@@ -937,13 +937,13 @@
   "@fillFullscreenDescription": {
     "description": "Setting description for filling video to screen in landscape"
   },
-  "rememberPlaybackSpeed": "Remember playback speed",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "Remember playback speed and pitch",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
-  "rememberPlaybackSpeedDescription": "Automatically set playback speed to the last speed selected",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "Keep separate speed and pitch settings for videos and Music.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "downloads": "Downloads",
   "@downloads": {
@@ -1561,7 +1561,7 @@
   "playbackSpeedAndPitch": "Speed and pitch",
   "playbackPitch": "Pitch",
   "playbackPitchUnit": "Semitones",
-  "playbackPitchHelp": "Change pitch without changing playback speed. Pitch resets for each new video.",
+  "playbackPitchHelp": "Change pitch without changing playback speed.",
   "playbackPitchValue": "Semitones: {value}",
   "@playbackPitchValue": {"description": "Signed pitch offset in semitones; for example +2 or -3.", "placeholders": {"value": {"type": "String"}}},
   "decreasePlaybackPitch": "Lower pitch by 1 semitone",
@@ -1733,6 +1733,8 @@
   "musicDownloadAudio": "Download audio",
   "musicDownloadHighestQuality": "Highest quality available",
   "musicDownloadFormatSetting": "Music download format",
+  "musicDownloadOpusBestQuality": "Opus (Best quality)",
+  "musicDownloadOpusHelp": "Keeps the original quality of Opus audio. For AAC audio, M4A keeps the original quality.",
   "musicDownloadOutput": "Save as {format}",
   "@musicDownloadOutput": {"placeholders": {"format": {"type": "String"}}},
   "musicDownloadQualityHelp": "Each song uses the highest available audio bitrate. Choose WebM or M4A to limit the audio source to that format.",

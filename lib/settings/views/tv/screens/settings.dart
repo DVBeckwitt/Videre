@@ -359,8 +359,8 @@ class TVSettingsScreen extends StatelessWidget {
                       onChanged: (value) {}, value: state.rememberSubtitles),
                 ),
                 SettingsTile(
-                  title: locals.rememberPlaybackSpeed,
-                  description: locals.rememberPlaybackSpeedDescription,
+                  title: locals.rememberPlaybackSpeedAndPitch,
+                  description: locals.rememberPlaybackSpeedAndPitchDescription,
                   onSelected: (context) => cubit.toggleRememberPlaybackSpeed(
                       !state.rememberPlayBackSpeed),
                   trailing: Switch(

@@ -1282,13 +1282,13 @@
   "@fillFullscreenDescription": {
     "description": "Setting description for filling video to screen in landscape"
   },
-  "rememberPlaybackSpeed": "பிளேபேக் வேகத்தை நினைவில் கொள்ளுங்கள்",
-  "@rememberPlaybackSpeed": {
-    "description": "Setting label for remembering playback speed"
+  "rememberPlaybackSpeedAndPitch": "பிளேபேக் வேகத்தையும் சுருதியையும் நினைவில் கொள்",
+  "@rememberPlaybackSpeedAndPitch": {
+    "description": "Setting that remembers playback speed and pitch"
   },
-  "rememberPlaybackSpeedDescription": "தேர்ந்தெடுக்கப்பட்ட கடைசி வேகத்திற்கு தானாகவே பின்னணி வேகத்தை அமைக்கவும்",
-  "@rememberPlaybackSpeedDescription": {
-    "description": "Settings description for remembering playback speed"
+  "rememberPlaybackSpeedAndPitchDescription": "வீடியோக்களுக்கும் இசைக்கும் வேகத்தையும் சுருதியையும் தனித்தனியாகச் சேமிக்கவும்.",
+  "@rememberPlaybackSpeedAndPitchDescription": {
+    "description": "Videos and Music each remember their own playback speed and pitch"
   },
   "downloadsPlayAll": "அனைத்தையும் விளையாடுங்கள்",
   "@downloadsPlayAll": {
