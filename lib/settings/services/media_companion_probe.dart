@@ -21,11 +21,17 @@ bool get supportsMediaCompanionDiscovery =>
 // Uncertain results leave setup usable. Only an origin is presented for consent.
 Future<Set<String>> discoverSetupMediaCompanions(
     Server server, Video video, http.Client client,
-    {required bool Function() isCurrent}) async {
+    {required bool Function() isCurrent,
+    bool reportUnavailable = false}) async {
+  Set<String> unavailable() {
+    if (reportUnavailable) throw StateError('Sample media check unavailable');
+    return {};
+  }
+
   if (!supportsMediaCompanionDiscovery ||
       !isMediaCompanionEligibleServer(server) ||
       !isCurrent()) {
-    return {};
+    return unavailable();
   }
   final proxy = NetworkProxy.instance.config;
   const budget = Duration(seconds: 4);
@@ -38,7 +44,7 @@ Future<Set<String>> discoverSetupMediaCompanions(
       !NetworkProxy.instance.isChanging &&
       identical(NetworkProxy.instance.config, proxy);
 
-  Future<Set<String>> inspect() async {
+  Future<Set<String>?> inspect() async {
     final combined = (video.formatStreams ?? [])
         .reversed
         .where((stream) =>
@@ -71,23 +77,34 @@ Future<Set<String>> discoverSetupMediaCompanions(
 
     final found = <String>{};
     final seen = <Uri>{};
+    final resolved = <Uri>{};
+    var incomplete = routes.isEmpty;
     final frontend = Uri.parse(server.url);
     var requests = 0;
     for (final (raw, manifest) in routes) {
-      if (!current()) return {};
+      if (!current()) return null;
       var uri = Uri.parse(proxyMediaUrl(raw, server, adaptive: manifest));
-      if (isMediaCompanionAccountRoute(uri)) return {};
+      if (isMediaCompanionAccountRoute(uri)) return null;
       if (!sameMediaOrigin(uri, frontend)) {
         final origin = _companionOrigin(uri, requireMediaPath: false);
-        if (origin != null) found.add(origin);
+        if (origin == null) {
+          incomplete = true;
+        } else {
+          found.add(origin);
+        }
         continue;
       }
       // The worker client buffers API response bodies and cannot perform a
       // read-only gateway probe. Foreground setup uses the streaming client.
-      if (client is NativeProxyHttpClient) continue;
+      if (client is NativeProxyHttpClient) {
+        incomplete = true;
+        continue;
+      }
+      final hops = <Uri>[];
       for (var hop = 0; hop < 2 && requests < 4; hop++) {
-        if (!current()) return {};
+        if (!current()) return null;
         if (!seen.add(uri)) break;
+        hops.add(uri);
         requests++;
         final request = http.Request('GET', uri)
           ..followRedirects = false
@@ -101,19 +118,22 @@ Future<Set<String>> discoverSetupMediaCompanions(
             .listen(null, onError: (Object _, StackTrace __) {})
             .cancel()
             .catchError((Object _) {}));
-        if (!current()) return {};
+        if (!current()) return null;
         if (const {401, 403, 407, 429}.contains(response.statusCode) ||
             response.headers.containsKey('retry-after')) {
-          return {};
+          return null;
         }
         if (response.statusCode == 200 &&
             response.headers['content-type']
                     ?.toLowerCase()
                     .startsWith('text/html') ==
                 true) {
-          return {};
+          return null;
         }
         if (!const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
+          if (response.statusCode == 200 || response.statusCode == 206) {
+            resolved.add(uri);
+          }
           break;
         }
         final location = response.headers['location'];
@@ -121,31 +141,39 @@ Future<Set<String>> discoverSetupMediaCompanions(
         final relative = Uri.tryParse(location);
         if (relative == null) break;
         final target = uri.resolveUri(relative);
-        if (isMediaCompanionAccountRoute(target)) return {};
+        if (isMediaCompanionAccountRoute(target)) return null;
         if (target.userInfo.isNotEmpty) break;
         if (!sameMediaOrigin(target, frontend)) {
           final origin = _companionOrigin(target, requireMediaPath: true);
-          if (origin != null) found.add(origin);
+          if (origin != null) {
+            resolved.add(uri);
+            found.add(origin);
+          }
           break;
         }
         uri = target;
       }
+      if (resolved.contains(uri)) {
+        resolved.addAll(hops);
+      } else {
+        incomplete = true;
+      }
     }
-    return current()
-        ? found.difference(trustedMediaCompanionOrigins(server))
-        : {};
+    if (!current()) return null;
+    final candidates = found.difference(trustedMediaCompanionOrigins(server));
+    return incomplete && candidates.isEmpty ? null : candidates;
   }
 
+  Set<String>? result;
   try {
-    return await inspect().timeout(budget, onTimeout: () {
+    result = await inspect().timeout(budget, onTimeout: () {
       expired = true;
-      return <String>{};
+      return null;
     });
   } catch (_) {
-    // Failed probes may contain signed request URLs. They are optional and
-    // must neither expose those URLs nor interfere with a validated sign-in.
-    return {};
+    // Network exceptions can contain signed stream URLs.
   }
+  return result ?? unavailable();
 }
 
 String? _companionOrigin(Uri uri, {required bool requireMediaPath}) {

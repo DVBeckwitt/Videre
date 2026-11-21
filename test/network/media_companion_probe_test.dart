@@ -124,6 +124,40 @@ void main() {
         {'https://media.example:8443'});
   });
 
+  test('saved check separates a healthy sample from an unavailable sample',
+      () async {
+    const sample = Video(videoId: 'sample', dashUrl: manifest);
+    final healthy = MockClient((_) async => http.Response('', 206));
+    expect(
+        await discoverSetupMediaCompanions(server, sample, healthy,
+            isCurrent: () => true, reportUnavailable: true),
+        isEmpty);
+    for (final (video, client) in [
+      (const Video(videoId: 'sample'), healthy),
+      (sample, MockClient((_) async => http.Response('', 403))),
+      (sample, MockClient((_) async => http.Response('', 503))),
+      (
+        sample,
+        MockClient((_) async =>
+            http.Response('', 200, headers: {'content-type': 'text/html'}))
+      ),
+      (
+        sample,
+        MockClient((_) async => throw StateError('private stream details'))
+      ),
+    ]) {
+      await expectLater(
+          discoverSetupMediaCompanions(server, video, client,
+              isCurrent: () => true, reportUnavailable: true),
+          throwsA(isA<StateError>().having((error) => error.message,
+              'safe message', 'Sample media check unavailable')));
+      expect(
+          await discoverSetupMediaCompanions(server, video, client,
+              isCurrent: () => true),
+          isEmpty);
+    }
+  });
+
   test('setup skips an advertised frontend sign-in route', () async {
     final seen = <Uri>[];
     final client = MockClient((request) async {
@@ -208,20 +242,29 @@ void main() {
         ['$frontend/video.mp4', '$frontend/proxied']);
   });
 
-  test('late headers are cancelled after the aggregate deadline', () async {
-    final delayed = Completer<http.StreamedResponse>();
-    final cancelled = Completer<void>();
-    final body = StreamController<List<int>>(onCancel: cancelled.complete);
-    final client = MockClient.streaming((_, __) => delayed.future);
-    final result = discoverSetupMediaCompanions(
-        server, const Video(videoId: 'sample', dashUrl: manifest), client,
-        isCurrent: () => true);
-    expect(await result.timeout(const Duration(seconds: 7)), isEmpty);
-    delayed.complete(http.StreamedResponse(body.stream, 307,
-        headers: {'location': 'https://media.example/stream.mpd'}));
-    await cancelled.future.timeout(const Duration(seconds: 1));
-    await body.close();
-  });
+  for (final reportUnavailable in [true, false]) {
+    test(
+        'late headers are cancelled after the aggregate deadline, explicit=$reportUnavailable',
+        () async {
+      final delayed = Completer<http.StreamedResponse>();
+      final cancelled = Completer<void>();
+      final body = StreamController<List<int>>(onCancel: cancelled.complete);
+      final client = MockClient.streaming((_, __) => delayed.future);
+      final result = discoverSetupMediaCompanions(
+          server, const Video(videoId: 'sample', dashUrl: manifest), client,
+          isCurrent: () => true, reportUnavailable: reportUnavailable);
+      final bounded = result.timeout(const Duration(seconds: 7));
+      if (reportUnavailable) {
+        await expectLater(bounded, throwsStateError);
+      } else {
+        expect(await bounded, isEmpty);
+      }
+      delayed.complete(http.StreamedResponse(body.stream, 307,
+          headers: {'location': 'https://media.example/stream.mpd'}));
+      await cancelled.future.timeout(const Duration(seconds: 1));
+      await body.close();
+    });
+  }
 
   test('ineligible frontend and stale profile never start the optional probe',
       () async {

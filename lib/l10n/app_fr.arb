@@ -4,6 +4,7 @@
   "releaseNotesInstalledVersion": "{version} (installée)",
   "releaseNotesUnavailable": "Les notes de cette version ne sont pas incluses dans l’application.",
   "releaseNotesGithub": "Page de la version sur GitHub",
+  "releaseNotesLinks": "Liens de cette version",
   "nerdVpnAccountSignIn": "Se connecter à NerdVPN",
   "nerdVpnAccountSignInHelp": "Autorisez Videre à synchroniser vos abonnements et votre historique de visionnage.",
   "nerdVpnSignInAndAdd": "Se connecter et ajouter NerdVPN",

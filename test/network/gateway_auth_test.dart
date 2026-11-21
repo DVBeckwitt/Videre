@@ -535,6 +535,55 @@ void main() {
     });
   }
 
+  for (final code in [429, 503]) {
+    test('HTTP $code survives failure to store its retry time', () async {
+      const account =
+          Server(url: 'https://invidious.nerdvpn.de', id: 'storage');
+      messenger.setMockMethodCallHandler(access, (call) async {
+        if (call.method == 'recover') {
+          throw PlatformException(code: 'STORAGE_FAILURE');
+        }
+        return {'state': 'ready'};
+      });
+      messenger.setMockMethodCallHandler(browser, (call) async {
+        if (call.method == 'signIn') {
+          throw PlatformException(
+              code: 'GATEWAY_TOKEN_UNAVAILABLE',
+              details: {'statusCode': code, 'retryAfter': '60'});
+        }
+        return null;
+      });
+      await expectLater(
+          GatewayAuth.signIn(account),
+          throwsA(isA<NerdVpnSignInFailed>()
+              .having(
+                  (e) => e.problem,
+                  'HTTP error',
+                  code == 429
+                      ? NerdVpnSignInProblem.rateLimited
+                      : NerdVpnSignInProblem.serviceUnavailable)
+              .having((e) => e.retryAt, 'unconfirmed retry time', isNull)));
+    });
+  }
+
+  test('a superseded cooldown write cannot show a stale exchange error',
+      () async {
+    const account = Server(url: 'https://invidious.nerdvpn.de', id: 'stale');
+    messenger.setMockMethodCallHandler(access, (call) async {
+      if (call.method == 'recover') return {'superseded': true};
+      return {'state': 'ready'};
+    });
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      if (call.method == 'signIn') {
+        throw PlatformException(
+            code: 'GATEWAY_TOKEN_UNAVAILABLE',
+            details: {'statusCode': 503, 'retryAfter': '60'});
+      }
+      return null;
+    });
+    expect(await GatewayAuth.signIn(account), isNull);
+  });
+
   test('late onion token cooldown cannot block a newer credential', () async {
     const account = Server(url: onionOrigin, id: 'onion-late-cooldown');
     final loginStarted = Completer<void>();

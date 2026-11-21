@@ -8,6 +8,7 @@ import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/settings/services/gateway_auth.dart';
 import 'package:clipious/settings/states/add_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/video.dart';
@@ -24,6 +25,7 @@ class _OnboardingService extends Service {
   bool cancelled = false;
   bool failValidation = false;
   Object? validationError;
+  NerdVpnSignInFailed? signInError;
   Object? videoError;
   Completer<void>? signInWait;
   Completer<void>? validationWait;
@@ -38,6 +40,7 @@ class _OnboardingService extends Service {
   Future<Server?> authenticateNerdVpn(Server original) async {
     events.add('token-sign-in');
     await signInWait?.future;
+    if (signInError != null) throw signInError!;
     if (cancelled) return null;
     return authorized = original.copyWith(authToken: 'test-account-token');
   }
@@ -45,6 +48,7 @@ class _OnboardingService extends Service {
   @override
   Future<Server?> authenticateProtected(Server original) async {
     events.add('protected-sign-in');
+    if (signInError != null) throw signInError!;
     if (cancelled) return null;
     return authorized = original.copyWith(
         authToken: 'test-account-token', gatewayEnabled: true);
@@ -161,6 +165,76 @@ void main() {
     expect(api.events, ['token-sign-in', 'stats', 'video']);
     expect(api.validationHeaders?[gatewayContextHeader], isNotNull);
     expect(api.signedOut, isEmpty);
+  });
+
+  for (final protected in [false, true]) {
+    test('draft retry honors NerdVPN cooldown (protected: $protected)',
+        () async {
+      var now = DateTime.utc(2031, 7, 12);
+      await cubit.close();
+      cubit = AddServerCubit(const AddServerState(), now: () => now)
+        ..selectPublicInstance(_origin);
+      final retryAt = now.add(const Duration(minutes: 20));
+      final error = NerdVpnSignInFailed(
+          protected
+              ? NerdVpnSignInProblem.serviceUnavailable
+              : NerdVpnSignInProblem.rateLimited,
+          retryAt);
+      api.signInError = error;
+      cubit.setProtectedServer(protected);
+      await expectLater(cubit.validateServer(), throwsA(same(error)));
+      api.signInError = null;
+      cubit.setProtectedServer(!protected);
+      cubit.urlController.text = 'https://elsewhere.example';
+      cubit.urlController.text = '$_origin:443/';
+      await expectLater(
+          cubit.validateServer(),
+          throwsA(isA<NerdVpnSignInFailed>()
+              .having((e) => e.problem, 'reason', NerdVpnSignInProblem.cooldown)
+              .having((e) => e.retryAt, 'retry time', retryAt)));
+      expect(api.events, [protected ? 'protected-sign-in' : 'token-sign-in']);
+
+      cubit.apiKeyController.text = _manualKey;
+      expect((await cubit.validateServer())!.authToken, isNull);
+      expect(api.events.sublist(1), ['stats', 'video']);
+
+      cubit.apiKeyController.clear();
+      now = retryAt;
+      expect((await cubit.validateServer())!.authToken, 'test-account-token');
+      expect(api.events.sublist(3), [
+        protected ? 'token-sign-in' : 'protected-sign-in',
+        'stats',
+        'video'
+      ]);
+    });
+  }
+
+  test('a draft cooldown stays with its origin and account draft', () async {
+    final failure = NerdVpnSignInFailed(NerdVpnSignInProblem.rateLimited,
+        DateTime.now().toUtc().add(const Duration(minutes: 5)));
+    api.signInError = failure;
+    await expectLater(cubit.validateServer(), throwsA(same(failure)));
+    api.signInError = null;
+
+    cubit.urlController.text = 'https://another.example';
+    cubit.setProtectedServer(true);
+    expect((await cubit.validateServer())!.gatewayEnabled, isTrue);
+    cubit.urlController.text = _origin;
+    await expectLater(
+        cubit.validateServer(),
+        throwsA(isA<NerdVpnSignInFailed>().having(
+            (e) => e.problem, 'reason', NerdVpnSignInProblem.cooldown)));
+    await cubit.close();
+    cubit = AddServerCubit(const AddServerState())
+      ..selectPublicInstance(_origin);
+    expect((await cubit.validateServer())!.authToken, 'test-account-token');
+  });
+
+  test('a superseded route cannot open the sign-in browser for its draft',
+      () async {
+    expect(await cubit.validateServer(isRouteCurrent: () => false), isNull);
+    expect(api.events, isEmpty);
+    expect(calls, isEmpty);
   });
 
   test('clearnet API key bypasses browser and forces authenticated video probe',

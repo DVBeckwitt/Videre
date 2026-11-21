@@ -251,19 +251,25 @@ class Service {
         await _getScopedVideoMetadata(setupSampleVideoId, prepared, () {
       if (!current()) throw StateError('Media host check cancelled');
     });
-    return discoverMediaCompanionsForSetup(prepared, video, isCurrent: current);
+    return _probeMediaCompanions(prepared, video,
+        isCurrent: current, reportUnavailable: true);
   }
 
   Future<Set<String>> discoverMediaCompanionsForSetup(
-      Server server, Video video,
-      {required bool Function() isCurrent}) async {
+          Server server, Video video, {required bool Function() isCurrent}) =>
+      _probeMediaCompanions(server, video,
+          isCurrent: isCurrent, reportUnavailable: false);
+
+  Future<Set<String>> _probeMediaCompanions(Server server, Video video,
+      {required bool Function() isCurrent,
+      required bool reportUnavailable}) async {
     // The foreground transport can own and abort its optional request without
     // closing the main service's pool. Preserve injected and worker routing.
     final owned = _usesDefaultTransport ? _scopedClient() : null;
     try {
       return await discoverSetupMediaCompanions(
           server, video, owned ?? httpClient,
-          isCurrent: isCurrent);
+          isCurrent: isCurrent, reportUnavailable: reportUnavailable);
     } finally {
       owned?.close();
     }

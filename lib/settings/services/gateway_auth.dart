@@ -141,20 +141,28 @@ class GatewayAuth {
             details is Map &&
             (details['statusCode'] == 429 || details['statusCode'] == 503)) {
           final code = details['statusCode'] as int;
-          final recovered = await NerdVpnAccess.instance.recover(
-              context.encoded,
-              error: code == 429 ? 'rate_limited' : 'unavailable',
-              statusCode: code,
-              retryAfter: details['retryAfter'] as String?,
-              failedIntent: access?.apiKeyIntent,
-              revision: access?.revision,
-              retry: false);
+          DateTime? retryAt;
+          try {
+            final recovered = await NerdVpnAccess.instance.recover(
+                context.encoded,
+                error: code == 429 ? 'rate_limited' : 'unavailable',
+                statusCode: code,
+                retryAfter: details['retryAfter'] as String?,
+                failedIntent: access?.apiKeyIntent,
+                revision: access?.revision,
+                retry: false);
+            retryAt = recovered.retryAt;
+          } on NerdVpnAccessRequired catch (failure) {
+            if (failure.state == 'superseded') return null;
+            // The exchange already established the HTTP failure. Only show a
+            // retry deadline when the account store confirmed it.
+          }
           if (!isCurrent()) return null;
           throw NerdVpnSignInFailed(
               code == 429
                   ? NerdVpnSignInProblem.rateLimited
                   : NerdVpnSignInProblem.serviceUnavailable,
-              recovered.retryAt);
+              retryAt);
         }
         throw const NerdVpnSignInFailed(NerdVpnSignInProblem.connection);
       }

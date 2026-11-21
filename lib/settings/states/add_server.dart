@@ -14,6 +14,7 @@ import '../../network/youtube_privacy.dart';
 import '../../utils/invidious_image.dart';
 import '../models/db/server.dart';
 import '../models/errors/invidious_service_error.dart';
+import '../services/gateway_auth.dart';
 import '../services/media_companion_probe.dart';
 
 part 'add_server.freezed.dart';
@@ -44,11 +45,16 @@ class AddServerCubit extends Cubit<AddServerState> {
   final TextEditingController nameController = TextEditingController();
   final TextEditingController apiKeyController = TextEditingController();
   final String _profileId = db.profileId;
+  final DateTime Function() _now;
+  // Each submit has its own provisional account. Keep a server's retry time
+  // in this profile's draft even if the address is edited and restored.
+  final _signInRetryTimes = <String, DateTime>{};
   String? _apiKeyOrigin;
   String? _lastSetupAddress;
   int _addressRevision = 0;
 
-  AddServerCubit(super.initialState) {
+  AddServerCubit(super.initialState, {DateTime Function() now = DateTime.now})
+      : _now = now {
     urlController.addListener(
       () {
         if (!isClosed) {
@@ -215,9 +221,27 @@ class AddServerCubit extends Cubit<AddServerState> {
         }
       }
       if (protectedServer || (nerdVpn && manualKey == null)) {
-        final authenticated = protectedServer
-            ? await service.authenticateProtected(server)
-            : await service.authenticateNerdVpn(server);
+        if (!current()) return null;
+        final origin = Uri.parse(server.url).origin;
+        final retryAt = nerdVpn ? _signInRetryTimes[origin] : null;
+        if (retryAt != null) {
+          if (retryAt.isAfter(_now())) {
+            throw NerdVpnSignInFailed(NerdVpnSignInProblem.cooldown, retryAt);
+          }
+          _signInRetryTimes.remove(origin);
+        }
+        final Server? authenticated;
+        try {
+          authenticated = protectedServer
+              ? await service.authenticateProtected(server)
+              : await service.authenticateNerdVpn(server);
+        } on NerdVpnSignInFailed catch (error) {
+          final deadline = error.retryAt;
+          if (!isClosed && nerdVpn && deadline != null) {
+            _signInRetryTimes[origin] = deadline;
+          }
+          rethrow;
+        }
         if (authenticated == null) {
           await discardProtectedSession();
           return null;

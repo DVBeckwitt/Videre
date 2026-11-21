@@ -24,12 +24,14 @@ import '../test_app_cubit.dart';
 class _CompanionCheck extends Service {
   final requests = <Server>[];
   final hosts = <String>{};
+  bool unavailable = false;
 
   @override
   Future<Set<String>> findMediaCompanions(Server server,
       {required bool Function() isCurrent}) async {
     expect(isCurrent(), isTrue);
     requests.add(server);
+    if (unavailable) throw StateError('private stream details');
     return hosts;
   }
 }
@@ -218,6 +220,14 @@ void main() {
           unorderedEquals([origin, suggested]));
       await selectTile('Find media hosts');
       expect(find.textContaining('This sample did not reveal'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      check.unavailable = true;
+      await selectTile('Find media hosts');
+      expect(find.textContaining('Videre could not check the sample video'),
+          findsOneWidget);
+      expect(find.textContaining('private stream details'), findsNothing);
+      expect(find.textContaining('This sample did not reveal'), findsNothing);
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       if (tv) {

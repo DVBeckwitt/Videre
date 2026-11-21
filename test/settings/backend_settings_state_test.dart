@@ -150,7 +150,13 @@ void main() {
       expect(app.state.server!.url, other.url);
     });
 
-    for (final change in ['none', 'credentials', 'session', 'cancel']) {
+    for (final change in [
+      'none',
+      'credentials',
+      'session',
+      'cancel',
+      'rate limited'
+    ]) {
       test('sample host lookup on an inactive account with $change change',
           () async {
         final platform = debugDefaultTargetPlatformOverride;
@@ -174,6 +180,10 @@ void main() {
                 headers: {'content-type': 'application/json'});
           }
           expect(request.followRedirects, isFalse);
+          if (change == 'rate limited') {
+            return http.Response('private stream details', 429,
+                headers: {'retry-after': '30'});
+          }
           return http.Response('', 307,
               headers: {'location': 'https://media.example:8443/stream.mpd'});
         });
@@ -199,7 +209,7 @@ void main() {
           expect(visited.length, 2);
         } else {
           await expectLater(check, throwsStateError);
-          expect(visited.length, 1);
+          expect(visited.length, change == 'rate limited' ? 2 : 1);
         }
         expect(
             db.getAccount(instance.accountId)!.mediaCompanionOrigins, isEmpty);

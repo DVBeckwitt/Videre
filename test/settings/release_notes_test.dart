@@ -96,4 +96,52 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Videre 1.22.51 Beta 4'), findsOneWidget);
   }, variant: TargetPlatformVariant({TargetPlatform.android}));
+
+  for (final television in [false, true]) {
+    testWidgets(
+        'a note link offers its tagged address for copying (TV: $television)',
+        (tester) async {
+      final copied = <Object?>[];
+      final messenger = tester.binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') copied.add(call.arguments);
+        return null;
+      });
+      addTearDown(() =>
+          messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+      await open(tester, '1.22.40', television: television);
+      const label = 'Music network details';
+      const address =
+          'https://github.com/DVBeckwitt/Videre/blob/v1.22.40/docs/music.md#network-boundary';
+      if (television) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        await tester.pumpAndSettle();
+        expect(find.text('GitHub release page'), findsOneWidget);
+        final menuLink = find.descendant(
+            of: find.byType(PopupMenuItem<Uri>), matching: find.text(label));
+        for (var i = 0;
+            i < 3 && !Focus.of(tester.element(menuLink)).hasFocus;
+            i++) {
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pumpAndSettle();
+        }
+        await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      } else {
+        final inlineLink = find.text(label).hitTestable();
+        await tester.scrollUntilVisible(inlineLink, 200);
+        await tester.pumpAndSettle();
+        await tester.tap(inlineLink);
+      }
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(SelectableText, address), findsOneWidget);
+      expect(copied, isEmpty);
+      await tester.tap(find.text('Copy to clipboard'));
+      await tester.pumpAndSettle();
+      expect(copied, [
+        {'text': address}
+      ]);
+    }, variant: TargetPlatformVariant({TargetPlatform.android}));
+  }
 }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:pub_semver/pub_semver.dart';
 
 const _releaseDirectory = 'docs/releases/';
+final _noteLink = RegExp(r'\[([^\]]+)\]\(([^)\s]+)\)');
 
 List<String> releaseVersionsFromAssets(Iterable<String> assets) {
   final versions = <Version>[];
@@ -70,56 +71,63 @@ class _ReleaseNotesScreenState extends State<ReleaseNotesScreen> {
         }
         final versions = snapshot.data ?? const <String>[];
         final hasNotes = versions.contains(_selected);
-        return Column(children: [
-          Row(children: [
+        final picker = DropdownButton<String>(
+          autofocus: widget.television,
+          isExpanded: true,
+          value: _selected,
+          items: [
+            if (!versions.contains(_installed)) _installed,
+            ...versions,
+          ].map((version) {
+            return DropdownMenuItem(
+              value: version,
+              child: Text(version == _installed
+                  ? locals.releaseNotesInstalledVersion(version)
+                  : version),
+            );
+          }).toList(),
+          onChanged: (value) {
+            if (value != null) setState(() => _selected = value);
+          },
+        );
+        final source = Uri.https('github.com',
+            '/DVBeckwitt/Videre/blob/v$_selected/docs/releases/v$_selected.md');
+        return FutureBuilder<String>(
+          key: ValueKey(_selected),
+          future: hasNotes
+              ? _bundle!.loadString('${_releaseDirectory}v$_selected.md')
+              : null,
+          builder: (context, note) => Column(children: [
+            Row(children: [
+              Expanded(child: picker),
+              if (hasNotes)
+                PopupMenuButton<Uri>(
+                  tooltip: locals.releaseNotesLinks,
+                  icon: const Icon(Icons.link),
+                  onSelected: (url) => openExternalLink(context, url),
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: Uri.https('github.com',
+                          '/DVBeckwitt/Videre/releases/tag/v$_selected'),
+                      child: Text(locals.releaseNotesGithub),
+                    ),
+                    for (final link in _noteLink.allMatches(note.data ?? ''))
+                      PopupMenuItem(
+                        value: source.resolve(link[2]!),
+                        child: Text(link[1]!.replaceAll(RegExp(r'\s+'), ' ')),
+                      ),
+                  ],
+                ),
+            ]),
             Expanded(
-              child: DropdownButton<String>(
-                autofocus: widget.television,
-                isExpanded: true,
-                value: _selected,
-                items: [
-                  if (!versions.contains(_installed)) _installed,
-                  ...versions,
-                ].map((version) {
-                  return DropdownMenuItem(
-                    value: version,
-                    child: Text(version == _installed
-                        ? locals.releaseNotesInstalledVersion(version)
-                        : version),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) setState(() => _selected = value);
-                },
-              ),
+              child: note.connectionState == ConnectionState.waiting
+                  ? const Center(child: CircularProgressIndicator())
+                  : note.hasData
+                      ? _NoteBody(markdown: note.requireData, source: source)
+                      : Center(child: Text(locals.releaseNotesUnavailable)),
             ),
-            if (hasNotes)
-              IconButton(
-                tooltip: locals.releaseNotesGithub,
-                icon: const Icon(Icons.link),
-                onPressed: () => openExternalLink(
-                    context,
-                    Uri.https('github.com',
-                        '/DVBeckwitt/Videre/releases/tag/v$_selected')),
-              ),
           ]),
-          Expanded(
-            child: hasNotes
-                ? FutureBuilder<String>(
-                    key: ValueKey(_selected),
-                    future: _bundle!
-                        .loadString('${_releaseDirectory}v$_selected.md'),
-                    builder: (context, note) {
-                      if (note.connectionState != ConnectionState.done) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      return note.hasData
-                          ? _NoteBody(markdown: note.requireData)
-                          : Center(child: Text(locals.releaseNotesUnavailable));
-                    })
-                : Center(child: Text(locals.releaseNotesUnavailable)),
-          ),
-        ]);
+        );
       },
     );
     return Scaffold(
@@ -141,8 +149,9 @@ class _ReleaseNotesScreenState extends State<ReleaseNotesScreen> {
 }
 
 class _NoteBody extends StatefulWidget {
-  const _NoteBody({required this.markdown});
+  const _NoteBody({required this.markdown, required this.source});
   final String markdown;
+  final Uri source;
 
   @override
   State<_NoteBody> createState() => _NoteBodyState();
@@ -158,7 +167,7 @@ class _NoteBodyState extends State<_NoteBody> {
   }
 
   KeyEventResult _scrollWithRemote(FocusNode node, KeyEvent event) {
-    if (event is KeyUpEvent || !_scroll.hasClients) {
+    if (!node.hasPrimaryFocus || event is KeyUpEvent || !_scroll.hasClients) {
       return KeyEventResult.ignored;
     }
     final down = event.logicalKey == LogicalKeyboardKey.arrowDown;
@@ -210,14 +219,41 @@ class _NoteBodyState extends State<_NoteBody> {
         .replaceAll(RegExp(r'\s+'), ' ')
         .replaceFirst(RegExp(r'^#+ '), '')
         .replaceFirst(RegExp(r'^- '), '• ')
-        .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]+\)'), (m) => m[1]!)
         .replaceAll('**', '')
         .replaceAll('`', '');
+    final style = heading ? theme.titleLarge : theme.bodyLarge;
+    final spans = <InlineSpan>[];
+    var start = 0;
+    for (final link in _noteLink.allMatches(text)) {
+      spans.add(TextSpan(text: text.substring(start, link.start)));
+      final url = widget.source.resolve(link[2]!);
+      spans.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Semantics(
+          link: true,
+          child: InkWell(
+            onTap: () => openExternalLink(context, url),
+            child: Text(link[1]!,
+                style: style?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    decoration: TextDecoration.underline)),
+          ),
+        ),
+      ));
+      start = link.end;
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Semantics(
         header: heading,
-        child: Text(text, style: heading ? theme.titleLarge : theme.bodyLarge),
+        child: spans.isEmpty
+            ? Text(text, style: style)
+            : Text.rich(
+                TextSpan(children: [
+                  ...spans,
+                  TextSpan(text: text.substring(start)),
+                ]),
+                style: style),
       ),
     );
   }

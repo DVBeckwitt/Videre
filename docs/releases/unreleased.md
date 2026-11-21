@@ -10,8 +10,8 @@ you can leave the list empty.
 
 Open **Settings → Manage servers**, select the instance account, and choose
 **Find media hosts** under **Media companion hosts**. Videre checks one sample
-video and shows the exact addresses it finds for you to review. Other videos may use
-different addresses. Ask your instance operator for the public HTTPS address
+video and shows the exact addresses it finds for you to review. Other videos
+may use different addresses. Ask your instance operator for the public HTTPS address
 if you need to enter one manually. For example, enter
 `https://media.example.org:8443` if they give you
 `https://media.example.org:8443/companion`.
@@ -25,6 +25,8 @@ Your sign-in credentials stay with your Invidious instance.
 
 - Ordinary HTTPS NerdVPN accounts have a dedicated **Sign in to NerdVPN**
   action. Sign-in errors explain connection failures, rate limits, and
-  temporary server outages, and show when to retry if a time is available.
+  temporary server outages. When NerdVPN sets a retry time, Videre shows it
+  and waits before opening sign-in again.
 - **Settings → About → Release notes** opens the notes for your installed
-  version and lets you read older releases offline.
+  version and lets you read older releases offline. Open a link in the notes
+  to see its address and copy it.

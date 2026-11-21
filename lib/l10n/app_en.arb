@@ -2245,6 +2245,7 @@
   "@releaseNotesInstalledVersion": {"placeholders": {"version": {"type": "String"}}},
   "releaseNotesUnavailable": "Release notes for this version aren’t included in this app.",
   "releaseNotesGithub": "GitHub release page",
+  "releaseNotesLinks": "Links in this release",
   "downloadFolderDefaultDetails": "Music downloads go to Music/Videre on Android 10 or later. On earlier versions, choose a music folder when prompted. Other audio uses app storage.",
   "downloadFolderPrivateDetails": "Save files inside Videre.",
   "downloadFolderCustomDetails": "Save files in a folder accessible to other apps.",
