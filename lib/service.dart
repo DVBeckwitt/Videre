@@ -225,17 +225,33 @@ class Service {
 
   Future<Set<String>> findMediaCompanions(Server server,
       {required bool Function() isCurrent}) async {
+    final database = db;
+    final owner = database.forProfile(server.profileId);
     final revision = _sessionRevision;
     final proxy = NetworkProxy.instance.config;
-    bool current() =>
+    bool sessionCurrent() =>
         isCurrent() &&
+        identical(db, database) &&
+        database.profileId == server.profileId &&
         revision == _sessionRevision &&
         !NetworkProxy.instance.isChanging &&
         identical(proxy, NetworkProxy.instance.config);
-    final video = await _getScopedVideoMetadata(setupSampleVideoId, server, () {
+    if (!sessionCurrent()) throw StateError('Media host check cancelled');
+    // Secure key import can remove a legacy header from this account.
+    // Compare the prepared connection with the saved record after migration.
+    final prepared = await preparePlaybackServer(serverOverride: server);
+    final connection = BackendPlayback(prepared);
+    bool current() {
+      if (!sessionCurrent()) return false;
+      final saved = owner.getAccount(server.accountId);
+      return saved != null && connection.matchesConnection(saved);
+    }
+
+    final video =
+        await _getScopedVideoMetadata(setupSampleVideoId, prepared, () {
       if (!current()) throw StateError('Media host check cancelled');
     });
-    return discoverMediaCompanionsForSetup(server, video, isCurrent: current);
+    return discoverMediaCompanionsForSetup(prepared, video, isCurrent: current);
   }
 
   Future<Set<String>> discoverMediaCompanionsForSetup(

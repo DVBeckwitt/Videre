@@ -4,7 +4,6 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import '../../app/states/app.dart';
 import '../../globals.dart';
 import '../../player/states/player.dart';
-import '../../player/models/backend_playback.dart';
 import '../../recommendations/subscription_recommendations.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../network/media_companion.dart';
@@ -105,14 +104,12 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
       throw StateError('Server selection changed');
     }
     final saved = _savedServer();
-    final connection = BackendPlayback(saved);
     final activeAccount = app.state.server?.accountId;
     return service.findMediaCompanions(saved,
         isCurrent: () =>
             isCurrent() &&
             _matchesAccount(saved) &&
-            app.state.server?.accountId == activeAccount &&
-            connection.matchesConnection(_savedServer()));
+            app.state.server?.accountId == activeAccount);
   }
 
   Future<void> setMediaCompanionOrigin(Server expected, String origin,

@@ -166,6 +166,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  Future<MethodCall> openSignIn(WidgetTester tester,
+      {required bool television, required String label}) async {
+    const browser = MethodChannel('videre/gateway_auth');
+    final signIns = <MethodCall>[];
+    messenger.setMockMethodCallHandler(browser, (call) async {
+      if (call.method == 'signIn') signIns.add(call);
+      return null; // Cancel without submitting an account grant.
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(browser, null));
+    final tile = find.ancestor(
+        of: find.text(label),
+        matching:
+            find.byType(television ? tv.SettingsTile : phone.SettingsTile));
+    final action = television
+        ? tester.widget<tv.SettingsTile>(tile).onSelected!
+        : tester.widget<phone.SettingsTile>(tile).onPressed!;
+    await tester.runAsync(() async => await action(tester.element(tile)));
+    await tester.pumpAndSettle();
+    return signIns.single;
+  }
+
   test('existing HTTP authorization keeps the configured gateway sign-in', () {
     final state = ServerSettingsState(
         server: _account
@@ -669,6 +690,25 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets(
+        '${television ? 'TV' : 'phone'} generic gateway sign-in preserves the configured base path',
+        (tester) async {
+      const account = Server(
+          id: 'private-gateway',
+          url: 'https://gateway.example:8443/services/invidious');
+      await showManager(tester, television: television, account: account);
+      final locals =
+          AppLocalizations.of(tester.element(find.byType(Scaffold).first))!;
+      expect(find.byType(NerdVpnAccessSettings), findsNothing);
+      expect(find.text(locals.nerdVpnAccountSignIn), findsNothing);
+      final signIn = await openSignIn(tester,
+          television: television, label: locals.protectedServerSignIn);
+      expect(signIn.arguments['persistSession'], isTrue);
+      expect(signIn.arguments['serverUrl'], account.url);
+      expect(calls, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
     for (final gateway in [false, true]) {
       testWidgets(
           '${television ? 'TV' : 'phone'} NerdVPN sign-in honors saved gateway mode $gateway and masks legacy keys',
@@ -678,24 +718,13 @@ void main() {
           gatewayEnabled: gateway,
           customHeaders: {'X-Invidious-Token': _manualKey},
         );
-        const browser = MethodChannel('videre/gateway_auth');
-        final signIns = <MethodCall>[];
         nativeStatus['intent'] = 1;
-        messenger.setMockMethodCallHandler(browser, (call) async {
-          if (call.method == 'signIn') signIns.add(call);
-          return null; // Cancel without submitting an account grant.
-        });
-        addTearDown(() => messenger.setMockMethodCallHandler(browser, null));
         await showManager(tester, television: television, account: account);
         final locals = AppLocalizations.of(
             tester.element(find.byType(NerdVpnAccessSettings)))!;
         final label = gateway
             ? locals.protectedServerSignIn
             : locals.nerdVpnAccountSignIn;
-        final tile = find.ancestor(
-            of: find.text(label),
-            matching:
-                find.byType(television ? tv.SettingsTile : phone.SettingsTile));
         expect(
             find.text(gateway
                 ? locals.nerdVpnAccountSignIn
@@ -704,13 +733,10 @@ void main() {
         if (!gateway) expect(find.text(locals.cookieLogin), findsNothing);
         expect(find.text(_manualKey), findsNothing);
         expect(find.text('········'), findsOneWidget);
-        final action = television
-            ? tester.widget<tv.SettingsTile>(tile).onSelected!
-            : tester.widget<phone.SettingsTile>(tile).onPressed!;
-        await tester.runAsync(() async => await action(tester.element(tile)));
-        await tester.pumpAndSettle();
-        expect(signIns.single.arguments['persistSession'], gateway);
-        expect(signIns.single.arguments['serverUrl'], account.url);
+        final signIn =
+            await openSignIn(tester, television: television, label: label);
+        expect(signIn.arguments['persistSession'], gateway);
+        expect(signIn.arguments['serverUrl'], account.url);
         expect(db.getAccount(account.accountId)?.authToken, account.authToken);
         expect(tester.takeException(), isNull);
       });

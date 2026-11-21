@@ -207,6 +207,77 @@ void main() {
       });
     }
 
+    for (final editDuringImport in [false, true]) {
+      test(
+          'sample host check migrates a saved NerdVPN key, concurrent edit=$editDuringImport',
+          () async {
+        final platform = debugDefaultTargetPlatformOverride;
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = platform);
+        const legacy = Server(
+            url: 'https://invidious.nerdvpn.de',
+            id: 'old-account',
+            customHeaders: {
+              'X-Invidious-Token': 'nvpn_0123456789abcdefghijklmnopqrstuv',
+              'X-Preference': 'retained',
+            });
+        await db.upsertServer(legacy);
+        final editor =
+            ServerSettingsCubit(ServerSettingsState(server: legacy), app);
+        addTearDown(editor.close);
+        const access = MethodChannel('videre/nerdvpn_access');
+        final importing = Completer<void>();
+        final finishImport = Completer<void>();
+        messenger.setMockMethodCallHandler(access, (call) async {
+          if (call.method == 'status') {
+            return {'state': 'missing', 'revision': 0};
+          }
+          expect(call.method, 'setKey');
+          importing.complete();
+          await finishImport.future;
+          return {'state': 'ready', 'revision': 1};
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(access, null));
+        final previous = service;
+        var requests = 0;
+        final client = MockClient((request) async {
+          requests++;
+          expect(request.url.origin, legacy.url);
+          expect(request.headers.containsKey('X-Invidious-Token'), isFalse);
+          expect(request.headers['X-Preference'], 'retained');
+          if (request.url.path == '/api/v1/videos/$setupSampleVideoId') {
+            return http.Response(
+                '{"videoId":"$setupSampleVideoId","title":"sample","dashUrl":"${legacy.url}/api/manifest/dash/sample","adaptiveFormats":[],"formatStreams":[],"captions":[]}',
+                200,
+                headers: {'content-type': 'application/json'});
+          }
+          return http.Response('', 307,
+              headers: {'location': 'https://stream.example/stream.mpd'});
+        });
+        service = Service(httpClient: client);
+        addTearDown(() {
+          client.close();
+          service = previous;
+        });
+        final check = editor.findMediaCompanions(legacy, isCurrent: () => true);
+        await importing.future.timeout(const Duration(seconds: 3));
+        if (editDuringImport) {
+          await db.upsertServer(legacy.copyWith(authToken: 'replacement'));
+        }
+        finishImport.complete();
+        if (editDuringImport) {
+          await expectLater(check, throwsStateError);
+          expect(requests, 0);
+        } else {
+          expect(await check, {'https://stream.example'});
+          expect(requests, 2);
+        }
+        expect(db.getAccount(legacy.accountId)!.customHeaders,
+            {'X-Preference': 'retained'});
+        expect(db.mediaCompanionDecision(legacy), isNull);
+      });
+    }
+
     test('a previous profile’s open editor cannot grant a playback host',
         () async {
       var nativeEdits = 0;
