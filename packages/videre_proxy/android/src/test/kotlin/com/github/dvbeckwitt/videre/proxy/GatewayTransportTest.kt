@@ -176,7 +176,19 @@ class GatewayTransportTest {
             GatewayCookieAccessRegistry.provider = FakeSessions()
             GatewayTransportInterceptor().intercept(Chain(request, status = 307,
                 location = "$destination/companion/stream", mime = "text/html")).close()
-            for ((status, location) in listOf(302 to "$destination/login", 403 to null, 200 to null)) {
+            val manifest = request.newBuilder().url("https://instance.example/api/manifest/dash/id/example").build()
+            GatewayTransportInterceptor().intercept(Chain(manifest, status = 302,
+                location = "/signed/stream.mpd", mime = "text/html")).close()
+            val secondHop = manifest.newBuilder().url("https://instance.example/signed/stream.mpd").build()
+            GatewayTransportInterceptor().intercept(Chain(secondHop, status = 307,
+                location = "$destination/media", mime = "text/html")).close()
+            val apiRequest = policy.newApiCall(manifest, ApiRedirectOptions(sameOriginOnly = true)).request()
+            assertThrows(GatewayAuthenticationRequired::class.java) {
+                GatewayTransportInterceptor().intercept(Chain(apiRequest, status = 302,
+                    location = "/signed/stream.mpd", mime = "text/html"))
+            }
+            for ((status, location) in listOf(302 to "$destination/login", 302 to "$destination/signin", 302 to "/login",
+                302 to "/unknown-auth", 302 to "/oauth2/authorize/challenge.mpd", 302 to "", 403 to null, 200 to null)) {
                 assertThrows(GatewayAuthenticationRequired::class.java) {
                     GatewayTransportInterceptor().intercept(Chain(request, status = status, location = location, mime = "text/html"))
                 }

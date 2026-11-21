@@ -70,3 +70,8 @@ A second profile received its own prompt for the same instance. This time
 setup continued with no hosts approved. After restarting Videre, adding
 another account in that profile completed without another prompt. Both
 accounts in that profile showed an empty list.
+
+After the playback and account-lifecycle regression fixes, the existing EU
+guest account played the setup video with its previously approved host.
+On the updated Android x86_64 build, the media session advanced from 1.583
+to 7.833 seconds.

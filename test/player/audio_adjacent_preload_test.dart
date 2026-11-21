@@ -484,6 +484,32 @@ void main() {
         isEmpty);
   });
 
+  test('a blocked manual source cannot open a fallback with stale credentials',
+      () async {
+    final original = loaded('current').single;
+    final selected = next.copyWith(adaptiveFormats: [
+      ...next.adaptiveFormats!,
+      AdaptiveFormat(null, '64000', null, '${_server.url}/last', '139',
+          'audio/mp4', '100', '1', 'RECTANGULAR', 'mp4', 'mp4a', null, null),
+    ]);
+    blockedTracks.add('next');
+    heldTrack = 'next';
+    final held = loadGate = Completer<void>();
+    try {
+      final pending =
+          audio.prepareMusicSelection(selected, Duration.zero, () => true);
+      await _until(() => loaded('next').isNotEmpty, 'First source is loading');
+      await db.upsertServer((await db.getCurrentlySelectedServer())
+          .copyWith(authToken: 'changed-test-token'));
+      held.complete();
+      expect(await pending, isFalse);
+      expect(loaded('last'), isEmpty);
+      expectOriginalPlaying(original);
+    } finally {
+      if (!held.isCompleted) held.complete();
+    }
+  });
+
   test(
       'exhausting retryable native sources releases the manual slot and reports the final cause',
       () async {

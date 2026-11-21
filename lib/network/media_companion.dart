@@ -56,6 +56,37 @@ String? _serverOrigin(Server server) {
 bool isMediaCompanionEligibleServer(Server server) =>
     _serverOrigin(server) != null;
 
+bool isMediaCompanionAccountRoute(Uri uri) =>
+    uri.pathSegments.any((segment) => const {
+          'login',
+          'signin',
+          'sign-in',
+          'logout',
+          'signout',
+          'sign-out',
+          'register',
+          'token_manager',
+          'switchbackend',
+          'auth',
+          'authorize',
+          'oauth',
+          'oauth2',
+          'outpost.goauthentik.io',
+          'openid-connect',
+          '.well-known',
+          'saml',
+        }.contains(segment.toLowerCase())) ||
+    uri.path.startsWith('/if/flow/');
+
+bool isMediaCompanionPlaybackRoute(Uri uri) {
+  if (isMediaCompanionAccountRoute(uri)) return false;
+  final path = uri.path.toLowerCase();
+  return uri.pathSegments.contains('videoplayback') ||
+      path.contains('/api/manifest/') ||
+      path.endsWith('.mpd') ||
+      path.endsWith('.m3u8');
+}
+
 /// A reverse proxy can serve distinct instances at different base paths.
 String? mediaCompanionInstanceAddress(Server server) {
   final origin = _serverOrigin(server);

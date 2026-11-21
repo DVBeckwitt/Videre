@@ -1451,6 +1451,35 @@ void main() {
     expect(retryService.retryCalls, 0);
   });
 
+  test(
+      'credentials changed while an origin fallback buffers prevent audio restart',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred)
+            .copyWith(adaptiveFormats: [_adaptive('${preferred.url}/audio')]));
+    await audio.playVideo(false);
+    final initialPlays = native.playCalls;
+    final held = native.loadGate = Completer<void>();
+    try {
+      audio.onPlaybackError(PlayerException(0, 'Media source blocked', 0,
+          mediaOriginBlocked: true));
+      await _flush();
+      expect(native.sources, hasLength(2));
+      await db.upsertServer((await db.getCurrentlySelectedServer())
+          .copyWith(authToken: 'changed-test-token'));
+      held.complete();
+      await _flush();
+      expect(native.playCalls, initialPlays);
+      expect(native.playing, isFalse);
+      expect(audio.state.error, isNotNull);
+      expect(player.refreshCalls, 0);
+      expect(retryService.retryCalls, 0);
+    } finally {
+      if (!held.isCompleted) held.complete();
+    }
+  });
+
   test('a final unrelated decoder error supersedes an earlier origin block',
       () async {
     final native = _NativeAudio()

@@ -1,8 +1,15 @@
 package com.github.dvbeckwitt.videre.proxy
 
+import java.io.ByteArrayInputStream
 import java.io.IOException
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.asResponseBody
 import okio.ByteString.Companion.encodeUtf8
+import okio.buffer
+import okio.source
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -24,6 +31,27 @@ class MediaCompanionGrantsTest {
     }
 
     private fun revoked(account: Map<String, Any>) = account + ("origins" to emptyList<String>())
+
+    @Test fun `revocation while waiting for redirect headers closes the response`() {
+        val origin = "https://redirect-revoke.example"
+        val settings = account(31, origin)
+        MediaCompanionGrants.update(settings)
+        val policy = MediaCompanions.parse(settings, origin)
+        val request = Request.Builder().url(origin)
+            .tag(SelectedOriginScope::class.java, SelectedOriginScope(policy.origin, true, policy)).build()
+        var closed = false
+        val body = object : ByteArrayInputStream(byteArrayOf()) {
+            override fun close() { closed = true }
+        }.source().buffer().asResponseBody()
+        val client = OkHttpClient.Builder().addInterceptor(SelectedOriginRedirectGuard())
+            .addInterceptor { chain ->
+                MediaCompanionGrants.update(revoked(settings))
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(307).message("Temporary Redirect").header("Location", source).body(body).build()
+            }.build()
+        assertThrows(IOException::class.java) { client.newCall(request).execute().use {} }
+        assertTrue("The rejected redirect response must release its body.", closed)
+    }
 
     @Test fun `batch revokes both linked accounts and keeps other profiles instances and strict sources active`() {
         val origin = "https://revoke-fixture.example"

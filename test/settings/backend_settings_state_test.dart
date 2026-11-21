@@ -16,6 +16,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import '../support/media_companion_transport.dart';
 import '../test_app_cubit.dart';
 
 class _TokenLoginService extends Service {
@@ -145,6 +146,25 @@ void main() {
       expect((await db.getCurrentlySelectedServer()).url, other.url);
       expect((await fileDb.getCurrentlySelectedServer()).url, other.url);
       expect(app.state.server!.url, other.url);
+    });
+
+    test('a previous profile’s open editor cannot grant a playback host',
+        () async {
+      var nativeEdits = 0;
+      mockMediaCompanionTransport(onSetOrigins: (_) async => nativeEdits++);
+      final original = db.forProfile(db.profileId);
+      final second = await db.createProfile('Second person');
+      await db.useProfile(second.id);
+      final secondAccount = instance.copyWith(profileId: second.id);
+      await db.upsertServer(secondAccount);
+
+      await expectLater(
+          settings.setMediaCompanionOrigin(instance, 'https://media.example',
+              enabled: true),
+          throwsStateError);
+      expect(original.mediaCompanionDecision(instance), isNull);
+      expect(db.mediaCompanionDecision(secondAccount), isNull);
+      expect(nativeEdits, 0);
     });
 
     test('settings stay bound to their original person after a profile switch',

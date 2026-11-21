@@ -324,7 +324,6 @@ class DashManifestResolver {
       if (allowsMediaCompanion(server, destination)) {
         return _MediaRedirect.trustedCompanion;
       }
-      onMediaOriginBlocked();
       return _MediaRedirect.blockedOrigin;
     }
 
@@ -383,7 +382,10 @@ class DashManifestResolver {
           // original source URL and never fetch the companion in this client.
           final redirect = classifyMediaRedirect(response, target);
           if (redirect == _MediaRedirect.trustedCompanion) return url;
-          if (redirect == _MediaRedirect.blockedOrigin) return null;
+          if (redirect == _MediaRedirect.blockedOrigin) {
+            onMediaOriginBlocked!();
+            return null;
+          }
           final location = response.headers['location'];
           if (TorBrowser.isOnionAddress(instance) &&
               (location == null ||
@@ -416,6 +418,8 @@ class DashManifestResolver {
       if (page.statusCode != 200) return null;
       final document = html.parse(page.body);
       var blockedWatchSource = false;
+      Uri? frontend;
+      String? companion;
       for (final source in document.querySelectorAll('video#player source')) {
         if (source.attributes['type']?.toLowerCase() !=
             'application/dash+xml') {
@@ -446,26 +450,38 @@ class DashManifestResolver {
           if (allowsMediaCompanion(server, recovered)) {
             // Only the native media transport may request the companion. Keep
             // the signed query's exact spelling, order and repeated fields.
-            return src.startsWith('//') ? '${watch.scheme}:$src' : src;
+            companion ??= src.startsWith('//') ? '${watch.scheme}:$src' : src;
+          } else {
+            blockedWatchSource = true;
           }
-          blockedWatchSource = true;
           continue;
         }
-        // Use the URL exactly as supplied by the player, including its signature
-        // and proxy parameters. Retry once; never loop on a rejected signature.
-        final (response: retry, :target) = await _get(recovered, server,
+        frontend ??= recovered;
+      }
+      if (frontend != null) {
+        // Keep the frontend route that already works on instances advertising
+        // multiple sources. Probe only one signed address.
+        final (response: retry, :target) = await _get(frontend, server,
             playbackManifest: onMediaOriginBlocked != null);
         checkRetryable(retry);
         if (retry.statusCode == 200) {
           final reused = provideManifest(retry, target);
-          return (reused == true ? target : recovered).toString();
+          return (reused == true ? target : frontend).toString();
         }
-        if (classifyMediaRedirect(retry, target) ==
-            _MediaRedirect.trustedCompanion) {
-          return recovered.toString();
+        final redirect = classifyMediaRedirect(retry, target);
+        if (redirect == _MediaRedirect.trustedCompanion) {
+          return frontend.toString();
+        }
+        if (redirect == _MediaRedirect.blockedOrigin) {
+          if (companion == null) onMediaOriginBlocked!();
+          return companion;
+        }
+        if (retry.statusCode == 404 || retry.statusCode == 410) {
+          return companion;
         }
         return null;
       }
+      if (companion != null) return companion;
       if (blockedWatchSource) onMediaOriginBlocked!();
     } catch (error) {
       if (error is NerdVpnAccessRequired ||

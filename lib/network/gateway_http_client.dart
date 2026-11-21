@@ -74,16 +74,23 @@ class GatewayHttpClient implements HttpClient {
         scope.uri != uri ||
         method != 'GET' ||
         !response.isRedirect ||
-        location == null) {
+        location == null ||
+        location.trim().isEmpty) {
       return false;
     }
     final relative = Uri.tryParse(location);
     if (relative == null) return false;
     final target = uri.resolveUri(relative);
-    return target.scheme == 'https' &&
-        target.host.isNotEmpty &&
-        target.userInfo.isEmpty &&
-        scope.origins.contains(target.origin);
+    if (target.scheme != 'https' ||
+        target.host.isEmpty ||
+        target.userInfo.isNotEmpty ||
+        isMediaCompanionAccountRoute(target)) {
+      return false;
+    }
+    return scope.origins.contains(target.origin) ||
+        (context.allows(target) &&
+            isMediaCompanionPlaybackRoute(uri) &&
+            isMediaCompanionPlaybackRoute(target));
   }
 
   final HttpClient _delegate;
@@ -509,8 +516,9 @@ class _GatewayExchange {
         final location = response.headers.value(HttpHeaders.locationHeader);
         // An HTML redirect body describes the handoff, not a login page.
         // Native ingestion still checks Location and applies every Set-Cookie.
-        final handoff = GatewayHttpClient._isManifestHandoff(
-            context, uri, method, response, location);
+        final handoff = !(follow ?? followRedirects) &&
+            GatewayHttpClient._isManifestHandoff(
+                context, uri, method, response, location);
         await client._ingest(context.encoded, uri,
             response.headers[HttpHeaders.setCookieHeader] ?? const [],
             statusCode: response.statusCode,

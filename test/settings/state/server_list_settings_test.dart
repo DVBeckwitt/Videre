@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
 import 'package:clipious/settings/states/server_settings.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 
@@ -145,6 +148,109 @@ void main() {
     }
   });
 
+  group('protected setup handoff', () {
+    const api = MethodChannel('videre/nerdvpn_access');
+    const gateway = MethodChannel('videre/gateway_sessions');
+    const browser = MethodChannel('videre/gateway_auth');
+    const candidate = Server(
+        id: 'new-setup',
+        url: 'https://invidious.nerdvpn.de',
+        gatewayEnabled: true);
+    final key = GatewayRequestContext.forAccount(
+            candidate.profileId, candidate.accountId, candidate.url)!
+        .encoded;
+    final clearedKeys = <String>[];
+    final revokedGateways = <String>[];
+    late ServerListSettingsCubit list;
+    setUp(() {
+      final platform = debugDefaultTargetPlatformOverride;
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = platform);
+      clearedKeys.clear();
+      revokedGateways.clear();
+      list =
+          ServerListSettingsCubit(ServerListSettingsState(dbServers: []), app);
+      messenger.setMockMethodCallHandler(api, (call) async {
+        if (call.method == 'clear')
+          clearedKeys.add(call.arguments['context'] as String);
+        return {'state': 'ready'};
+      });
+      messenger.setMockMethodCallHandler(browser, (call) async => null);
+      messenger.setMockMethodCallHandler(gateway, (call) async {
+        if (call.method == 'signOut') {
+          revokedGateways.add(call.arguments['context'] as String);
+          return null;
+        }
+        return {'supported': true, 'enabled': true, 'revision': 1};
+      });
+    });
+    tearDown(() async {
+      for (final channel in [api, gateway, browser]) {
+        messenger.setMockMethodCallHandler(channel, null);
+      }
+      await list.close();
+    });
+
+    test('leaving setup releases a manual NerdVPN key with no saved account',
+        () async {
+      expect(
+          await list.saveServer(candidate.copyWith(gatewayEnabled: false),
+              isRouteCurrent: () => false),
+          isNull);
+      expect(clearedKeys, [key]);
+      expect(db.getAccount(candidate.accountId), isNull);
+    });
+
+    test('a failed grant transaction releases only the new protected login',
+        () async {
+      final sibling =
+          candidate.copyWith(id: 'already-saved', authToken: 'test-only');
+      await db.upsertServer(sibling);
+      mockMediaCompanionTransport(onSetOrigins: (_) async {
+        throw PlatformException(code: 'CANNOT_SET_GRANT');
+      });
+      await expectLater(
+          list.saveServer(candidate, setupDecision: {'https://media.example'}),
+          throwsA(isA<PlatformException>()));
+      expect(clearedKeys, [key]);
+      expect(revokedGateways, [key]);
+      expect(db.getAccount(candidate.accountId), isNull);
+      expect(db.getAccount(sibling.accountId)?.authToken, sibling.authToken);
+    });
+
+    test('a duplicate or canceled save cannot sign out a committed account',
+        () async {
+      await db.upsertServer(candidate);
+      await expectLater(list.saveServer(candidate), throwsStateError);
+      expect(await list.saveServer(candidate, isRouteCurrent: () => false),
+          isNull);
+      expect(clearedKeys, isEmpty);
+      expect(revokedGateways, isEmpty);
+      expect(db.getAccount(candidate.accountId), isNotNull);
+    });
+
+    test(
+        'an unreadable store keeps native credentials and preserves the save error',
+        () async {
+      final original = db;
+      mockMediaCompanionTransport(onSetOrigins: (_) async {
+        throw PlatformException(code: 'CANNOT_SET_GRANT');
+      });
+      db = _UnavailableSetupDatabase();
+      try {
+        await expectLater(
+            list.saveServer(candidate,
+                setupDecision: {'https://media.example'}),
+            throwsA(isA<PlatformException>()
+                .having((e) => e.code, 'code', 'CANNOT_SET_GRANT')));
+      } finally {
+        db = original;
+      }
+      expect(clearedKeys, isEmpty);
+      expect(revokedGateways, isEmpty);
+    });
+  });
+
   test('rapid switches cannot mix the app and background server', () async {
     const first = Server(url: 'https://first.example');
     const second = Server(url: 'https://second.example');
@@ -257,4 +363,11 @@ class _PendingSessionService extends Service {
     if (!started.isCompleted) started.complete();
     await finish.future;
   }
+}
+
+class _UnavailableSetupDatabase extends Fake implements IDbClient {
+  @override
+  String get profileId => 'default';
+  @override
+  Future<Never> getProfiles() async => throw StateError('Database unavailable');
 }

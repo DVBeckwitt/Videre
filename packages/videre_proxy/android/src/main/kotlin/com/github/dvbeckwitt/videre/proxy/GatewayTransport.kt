@@ -1,5 +1,6 @@
 package com.github.dvbeckwitt.videre.proxy
 
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
@@ -10,6 +11,19 @@ internal data class NerdVpnRequestRevision(val revision: Long?, val key: String?
     override fun toString() = "NerdVpnRequestRevision(revision=$revision)"
 }
 internal data class NerdVpnExpectedIntent(val intent: Long)
+
+private val accountPathSegments = setOf("login", "signin", "sign-in", "logout", "signout", "sign-out",
+    "register", "token_manager", "switchbackend", "auth", "authorize", "oauth", "oauth2",
+    "outpost.goauthentik.io", "openid-connect", ".well-known", "saml")
+
+private fun isAccountRoute(url: HttpUrl): Boolean =
+    url.encodedPath.startsWith("/if/flow/", true) || url.pathSegments.any { it.lowercase() in accountPathSegments }
+
+private fun isPlaybackRoute(url: HttpUrl): Boolean {
+    val path = url.encodedPath
+    return path.contains("/api/manifest/") || path.endsWith("/videoplayback") ||
+        path.contains("/videoplayback/") || path.endsWith(".mpd", true) || path.endsWith(".m3u8", true)
+}
 
 internal fun prepareGatewayRequest(request: Request, sourceContext: GatewayContext? = null): Request {
     val marker = request.header(GATEWAY_CONTEXT_HEADER)
@@ -47,12 +61,16 @@ internal class GatewayTransportInterceptor : Interceptor {
         if (session.enabled) {
             try {
                 val location = response.header("Location")
-                val companions = request.tag(SelectedOriginScope::class.java)?.companions
+                val scope = request.tag(SelectedOriginScope::class.java)
+                val target = location?.takeIf { it.isNotBlank() }?.let(request.url::resolve)
                 // Some instances use an HTML body on a 302/307 media handoff.
                 // Its MIME type describes the redirect page, not a login page
                 // served instead of the stream. Login Locations remain checked.
-                val mediaHandoff = companions != null && response.isRedirect &&
-                    location?.let(request.url::resolve)?.let(companions::permitsCompanion) == true
+                val mediaHandoff = scope?.media == true && request.method in setOf("GET", "HEAD") &&
+                    response.isRedirect && target != null && !isAccountRoute(target) &&
+                    (scope.companions?.permitsCompanion(target) == true ||
+                        (context.allows(target) && !isAccountRoute(request.url) &&
+                            isPlaybackRoute(request.url) && isPlaybackRoute(target)))
                 val required = sessions.ingest(context, request.url, response.headers("Set-Cookie"),
                     response.code, if (mediaHandoff) null else response.header("Content-Type"), location, session.revision)
                 if (required) throw GatewayAuthenticationRequired()

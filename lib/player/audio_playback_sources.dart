@@ -8,6 +8,7 @@ import '../downloads/services/download_playback_source.dart';
 import '../extensions.dart';
 import '../globals.dart';
 import '../network/media_companion.dart';
+import '../network/network_proxy.dart';
 import '../videos/models/adaptive_format.dart';
 import '../videos/models/video.dart';
 import 'media_source.dart';
@@ -19,11 +20,20 @@ import 'models/playback_cache_identity.dart';
 /// The same ordered, admitted renditions are used for playback and preloading.
 typedef AudioPlaybackSources = ({
   List<AudioSource> sources,
+  BackendPlayback? playbackRoute,
   BackendPlayback? menuRoute,
   Set<MusicAudioQuality> qualities,
   Map<AudioSource, MusicAudioQuality> sourceQualities,
   MusicStreamingQuality streamingQuality,
 });
+
+bool audioPlaybackRouteIsCurrent(BackendPlayback route) {
+  final selected = db.getAccount(route.preferredServer.accountId);
+  return selected != null &&
+      selected.inUse &&
+      !NetworkProxy.instance.isChanging &&
+      route.matches(selected);
+}
 
 bool samePreparedAudioSource(
     AudioPlaybackSources? prepared, AudioPlaybackSources active,
@@ -61,6 +71,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   final sources = <AudioSource>[];
   final qualities = <MusicAudioQuality>{};
   final sourceQualities = <AudioSource, MusicAudioQuality>{};
+  BackendPlayback? playbackRoute;
   BackendPlayback? menuRoute;
   var streamingQuality = MusicStreamingQuality.auto;
   if (isLocalMusicPlaybackId(offlineVideo?.videoId)) {
@@ -102,6 +113,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
       throw StateError('Playback context changed');
     }
     final server = playback?.server ?? selectedServer;
+    playbackRoute = playback ?? BackendPlayback(selectedServer);
     final companions =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android
             ? mediaCompanionContext(selectedServer)
@@ -109,7 +121,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     if (video == null) return null;
     final music = video.musicMetadata != null;
     if (music) {
-      menuRoute = playback ?? BackendPlayback(server);
+      menuRoute = playbackRoute;
       streamingQuality =
           streamingQualityOverride ?? MusicStreamingQuality.forDatabase(db);
     }
@@ -198,6 +210,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   }
   return (
     sources: sources,
+    playbackRoute: playbackRoute,
     menuRoute: menuRoute,
     qualities: qualities,
     sourceQualities: sourceQualities,

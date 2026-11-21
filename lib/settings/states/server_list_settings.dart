@@ -35,10 +35,26 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
         db.profileId == server.profileId &&
         server.profileId == _profileDb.profileId &&
         (isRouteCurrent?.call() ?? true);
+    final Server? saved;
+    try {
+      saved = current()
+          ? await _profileDb.addAccountWithMediaCompanions(server,
+              isCurrent: current, setupDecision: setupDecision)
+          : null;
+    } catch (_) {
+      try {
+        await service.discardUnsavedSetupSession(server);
+      } catch (_) {
+        // An unreadable account store cannot establish whether the save
+        // committed. Preserve the original save error for the route.
+      }
+      rethrow;
+    }
+    if (saved == null) {
+      await service.discardUnsavedSetupSession(server);
+      return null;
+    }
     if (!current()) return null;
-    final saved = await _profileDb.addAccountWithMediaCompanions(server,
-        isCurrent: current, setupDecision: setupDecision);
-    if (saved == null || !current()) return null;
     // The database knows whether this was the first account. The on-screen
     // list may still be refreshing when setup is opened.
     if (saved.inUse) {

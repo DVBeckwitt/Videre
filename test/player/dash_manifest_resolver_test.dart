@@ -1083,6 +1083,42 @@ void main() {
   final companionAccount =
       server.copyWith(mediaCompanionOrigins: ['https://media.example:8443']);
 
+  for (final localStatus in [200, 302, 404, 403]) {
+    test('signed frontend takes priority over a companion, status=$localStatus',
+        () async {
+      final requests = <String>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        final url = request.url.toString();
+        requests.add(url);
+        if (url == original) return http.Response('No check ID.', 400);
+        if (request.url.path == '/watch') {
+          return http.Response('''<video id="player">
+            <source type="application/dash+xml" src="$signedCompanion">
+            <source type="application/dash+xml" src="$recovered">
+          </video>''', 200);
+        }
+        expect(url, recovered);
+        return http.Response(localStatus == 200 ? staticMpd : '', localStatus,
+            request: request,
+            headers: localStatus == 302
+                ? {'location': 'https://unapproved.example/other'}
+                : {});
+      }));
+      final result = resolver.resolve(original, videoId, companionAccount,
+          onMediaOriginBlocked: () => fail('Both sources are permitted'));
+      if (localStatus == 403) {
+        await expectLater(
+            result,
+            throwsA(isA<InvidiousServiceError>()
+                .having((e) => e.statusCode, 'status', 403)));
+      } else {
+        expect(await result, localStatus == 200 ? recovered : signedCompanion);
+      }
+      expect(requests, hasLength(3));
+      expect(requests.last, recovered);
+    });
+  }
+
   for (final relative in [false, true]) {
     test('signed watch-page companion is handed to native, relative=$relative',
         () async {

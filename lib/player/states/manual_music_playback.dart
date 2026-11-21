@@ -51,7 +51,12 @@ class _ManualMusicDecoder {
       if (!active()) return false;
       final plan = await resolve();
       if (plan == null || !active()) return false;
+      BackendPlayback? blockedRoute;
       for (var index = 0; index < plan.sources.length; index++) {
+        if (blockedRoute != null &&
+            !audioPlaybackRouteIsCurrent(blockedRoute)) {
+          return false;
+        }
         try {
           if (index != 0 ||
               !decoderReady ||
@@ -75,6 +80,7 @@ class _ManualMusicDecoder {
           if (index == plan.sources.length - 1 && error.backendRetryable) {
             exhaustedSourceError = error;
           }
+          if (error.mediaOriginBlocked) blockedRoute = plan.playbackRoute;
           continue;
         }
         if (!active() || !decoderReady) return false;

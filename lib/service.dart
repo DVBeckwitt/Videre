@@ -1828,6 +1828,40 @@ class Service {
     return authenticated;
   }
 
+  /// Protected setup creates account-scoped native credentials before the
+  /// add-server route can save its new account. A failed save may already have
+  /// committed, so only clear a session whose account is verifiably absent.
+  Future<void> discardUnsavedSetupSession(Server server) async {
+    if (server.id == null ||
+        (!server.gatewayEnabled && !NerdVpnAccess.supports(server))) {
+      return;
+    }
+    Future<void> clear() async {
+      _beginAuthentication(server);
+      try {
+        await NerdVpnAccess.instance.clear(server);
+      } finally {
+        await GatewayAuth.signOut(server);
+      }
+    }
+
+    if ((await db.getProfiles())
+        .any((profile) => profile.id == server.profileId)) {
+      final owner = db.forProfile(server.profileId);
+      if (owner is SembastSqfDb) {
+        // Serialize with another pending save of the same account.
+        await owner.db.transaction((txn) async {
+          if (!await owner.serversStore.record(server.accountId).exists(txn)) {
+            await clear();
+          }
+        });
+        return;
+      }
+      if (owner.getAccount(server.accountId) != null) return;
+    }
+    await clear();
+  }
+
   Future<Server?> logOutProtected(Server server) async {
     final generation = _beginAuthentication(server);
     await NerdVpnAccess.instance.clear(server);

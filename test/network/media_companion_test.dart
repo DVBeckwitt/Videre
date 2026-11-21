@@ -466,4 +466,53 @@ void main() {
         () => removed.mediaCompanionDecision(formerAccount), throwsStateError);
     expect(db.mediaCompanionDecision(account), isNull);
   });
+
+  test('a refused profile removal preserves every native companion grant',
+      () async {
+    final platform = debugDefaultTargetPlatformOverride;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = platform);
+    final db = await SembastSqfDb.createInMemory();
+    addTearDown(db.close);
+    final profile = await db.createProfile('Temporary');
+    final owner = db.forProfile(profile.id);
+    final first = account.copyWith(profileId: profile.id, id: 'a');
+    final second = first.copyWith(id: 'z');
+    String key(Server server) => GatewayRequestContext.forAccount(
+            server.profileId, server.accountId, server.url)!
+        .encoded;
+    final native = <String, List>{};
+    var refuseRemoval = false;
+    mockMediaCompanionTransport(onSetOrigins: (call) async {
+      final batch = call.arguments as Map;
+      final entries = (batch['accounts'] as List? ?? [batch]).cast<Map>();
+      if (refuseRemoval &&
+          entries.any((entry) =>
+              entry['gatewayContext'] == key(second) &&
+              (entry['origins'] as List).isEmpty)) {
+        throw PlatformException(code: 'UNAVAILABLE');
+      }
+      for (final entry in entries) {
+        native[entry['gatewayContext'] as String] = entry['origins'] as List;
+      }
+    });
+    await owner.addAccountWithMediaCompanions(first,
+        isCurrent: () => true, setupDecision: {origin});
+    await owner.addAccountWithMediaCompanions(second, isCurrent: () => true);
+    refuseRemoval = true;
+    await expectLater(
+        db.deleteProfile(profile.id), throwsA(isA<PlatformException>()));
+    for (final server in [first, second]) {
+      expect(
+          owner.getAccount(server.accountId)!.mediaCompanionOrigins, [origin]);
+      expect(native[key(server)], [origin]);
+    }
+
+    refuseRemoval = false;
+    await db.deleteProfile(profile.id);
+    expect((await db.getProfiles()).map((profile) => profile.id),
+        isNot(contains(profile.id)));
+    expect(native[key(first)], isEmpty);
+    expect(native[key(second)], isEmpty);
+  });
 }

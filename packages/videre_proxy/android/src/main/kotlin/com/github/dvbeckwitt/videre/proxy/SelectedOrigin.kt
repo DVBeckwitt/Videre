@@ -79,7 +79,7 @@ internal class SelectedOriginRedirectGuard : Interceptor {
         if (response.isRedirect && target != null) {
             try {
                 requireSelectedOrigin(request, target)
-            } catch (error: SelectedOriginBlocked) {
+            } catch (error: IOException) {
                 response.close()
                 throw error
             }

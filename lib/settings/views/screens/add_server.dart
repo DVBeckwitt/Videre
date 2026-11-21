@@ -207,7 +207,7 @@ class AddServerScreen extends StatelessWidget {
     bool current() => context.mounted && (route?.isCurrent ?? true);
     final result = await AutoRouter.of(context).push<ValidatedSetupAccount>(
         television ? const TvAddServerRoute() : const AddServerRoute());
-    if (result == null || !current()) return null;
+    if (result == null) return null;
     try {
       return await cubit.saveServer(result.server,
           isRouteCurrent: current,
@@ -236,9 +236,16 @@ class AddServerScreen extends StatelessWidget {
                   : null,
           prepareFirstInstance: () =>
               _prepareAiSListSetup(context, isCurrentRoute));
-      if (server != null && context.mounted && isCurrentRoute()) {
-        AutoRouter.of(context).maybePop<ValidatedSetupAccount>(
-            (server: server, mediaCompanionDecision: decision));
+      if (server == null) return;
+      var handedOff = false;
+      try {
+        if (context.mounted && isCurrentRoute()) {
+          handedOff = await AutoRouter.of(context)
+              .maybePop<ValidatedSetupAccount>(
+                  (server: server, mediaCompanionDecision: decision));
+        }
+      } finally {
+        if (!handedOff) await service.discardUnsavedSetupSession(server);
       }
     } catch (error) {
       if (context.mounted && isCurrentRoute()) handleError(context, error);

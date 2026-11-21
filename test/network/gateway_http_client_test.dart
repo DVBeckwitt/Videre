@@ -324,6 +324,38 @@ void main() {
     const companion = 'https://media.example/stream';
     final manifest = origin.resolve('$path?local=true');
 
+    test('HTML redirects between two frontend media routes keep the session',
+        () async {
+      const next = '/instance/api/manifest/hls_variant/sample.m3u8';
+      final raw = _Client([
+        _Response(302, headers: {
+          'location': next,
+          'content-type': 'text/html',
+          'set-cookie': 'gateway=renewed'
+        }),
+        _Response(307, headers: {
+          'location': companion,
+          'content-type': 'text/html',
+        })
+      ]);
+      final ingested = <(Uri, String?, String?, String)>[];
+      final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+          (_, uri, cookies,
+              {required statusCode, contentType, location, revision}) async {
+        ingested.add((uri, contentType, location, cookies.join(',')));
+      });
+      expect(
+          await DashManifestResolver(IOClient(client))
+              .loadTrackManifest(manifest.toString(), server),
+          isNull);
+      expect(ingested, [
+        (manifest, null, next, 'gateway=renewed'),
+        (origin.resolve(next), null, companion, '')
+      ]);
+      expect(raw.requests.map((request) => request.uri),
+          [manifest, origin.resolve(next)]);
+    });
+
     test(
         'HLS track discovery leaves an approved HTML handoff to native playback',
         () async {
@@ -433,6 +465,9 @@ void main() {
       for (final (scoped, target, url, owner, status) in [
         (false, companion, manifest, context, 302),
         (true, 'https://unapproved.example/stream', manifest, context, 302),
+        (true, 'https://media.example/signin', manifest, context, 302),
+        (true, '/unclassified', manifest, context, 302),
+        (true, '/auth/return.mpd', manifest, context, 302),
         (true, companion, origin.resolve('/api/v1/videos/video'), context, 302),
         (true, companion, manifest, otherAccount, 302),
         (true, companion, manifest, context, 403),
@@ -460,6 +495,38 @@ void main() {
                 : send(),
             throwsA(isA<GatewayAuthenticationRequired>()));
         expect(raw.requests.single.uri, url);
+      }
+    });
+
+    test('frontend redirect exemption requires a media route and manual GET',
+        () async {
+      for (final (source, autoFollow) in [
+        (origin.resolve('/api/v1/videos/video'), false),
+        (manifest, true),
+      ]) {
+        final raw = _Client([
+          _Response(302, headers: {
+            'location': '/api/manifest/hls_playlist/video',
+            'content-type': 'text/html'
+          })
+        ]);
+        String? observedType;
+        final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+            (_, __, ___,
+                {required statusCode, contentType, location, revision}) async {
+          observedType = contentType;
+          throw const GatewayAuthenticationRequired();
+        });
+        await expectLater(
+            GatewayHttpClient.withManifestProbe(server, source, () async {
+              final request = await client.getUrl(source);
+              request.followRedirects = autoFollow;
+              request.headers.set(gatewayContextHeader, context.encoded);
+              return request.close();
+            }),
+            throwsA(isA<GatewayAuthenticationRequired>()));
+        expect(observedType, 'text/html');
+        expect(raw.requests.single.uri, source);
       }
     });
   });

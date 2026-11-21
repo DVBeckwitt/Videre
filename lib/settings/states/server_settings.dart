@@ -93,6 +93,7 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
   Future<void> setMediaCompanionOrigin(Server expected, String origin,
       {required bool enabled}) async {
     if (isClosed ||
+        !isActiveProfile ||
         expected.profileId != state.server.profileId ||
         expected.accountId != state.server.accountId ||
         expected.url != state.server.url) {

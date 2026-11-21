@@ -99,6 +99,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   int? _manualRetryGeneration;
   bool _sourceAdmitted = false;
   Set<Uri> _remainingFormats = {};
+  BackendPlayback? _remainingFormatRoute;
   bool _downloadReuseFailed = false;
   bool _usingDownloadedSource = false;
   MusicAudioQuality? _qualityPreference;
@@ -181,6 +182,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _wantsToPlay = false;
     _sourceAdmitted = false;
     _remainingFormats = {};
+    _remainingFormatRoute = null;
     _resumeAfterFocus = false;
     _deferredFocusResume = false;
     _focusInterrupted = false;
@@ -856,6 +858,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     if (isClosed || _terminalErrorSent) return;
     _terminalErrorSent = true;
     _remainingFormats = {};
+    _remainingFormatRoute = null;
     _clearMusicQuality();
     _stopStallWatch();
     // A failed source is not playing. Publish pause before the error so the
@@ -951,21 +954,35 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     final offlineVideo = state.offlineVideo;
     final parentGeneration = player.backendPlaybackGeneration;
     var captureCurrentPosition = qualityRoute != null;
-    bool active() =>
-        !isClosed &&
-        parentGeneration == player.backendPlaybackGeneration &&
-        player.state.isAudio &&
-        generation == _playbackGeneration &&
-        identical(audioPlayer, current) &&
-        (offline
-            ? identical(state.offlineVideo, offlineVideo)
-            : identical(state.video, video));
     // A blocked segment can surface after the decoder was ready. Re-admit only
     // the still-untried renditions before reporting that failure.
     Set<Uri>? remainingAfterBlock =
         firstError is PlayerException && firstError.mediaOriginBlocked
             ? _remainingFormats
             : null;
+    final queueId = player.state.currentQueueId;
+    final database = db;
+    BackendPlayback? originFallbackRoute =
+        remainingAfterBlock == null ? null : _remainingFormatRoute;
+    bool active() =>
+        !isClosed &&
+        parentGeneration == player.backendPlaybackGeneration &&
+        player.state.isAudio &&
+        generation == _playbackGeneration &&
+        identical(audioPlayer, current) &&
+        (originFallbackRoute == null ||
+            (identical(db, database) &&
+                player.state.currentQueueId == queueId)) &&
+        (offline
+            ? identical(state.offlineVideo, offlineVideo)
+            : identical(state.video, video));
+    void checkFallbackRoute() {
+      final route = originFallbackRoute;
+      if (route != null && !audioPlaybackRouteIsCurrent(route)) {
+        throw StateError('Playback context changed');
+      }
+    }
+
     Object? failure = remainingAfterBlock == null ? firstError : null;
     try {
       while (active()) {
@@ -1059,6 +1076,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           }
           final (
             sources: admitted,
+            :playbackRoute,
             :menuRoute,
             :qualities,
             :sourceQualities,
@@ -1110,6 +1128,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                   await current.seek(target);
                 }
               } else {
+                checkFallbackRoute();
                 await current.setAudioSource(sources[index],
                     initialPosition: start);
               }
@@ -1124,6 +1143,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                   .whereType<UriAudioSource>()
                   .map((source) => source.uri)
                   .toSet();
+              _remainingFormatRoute = playbackRoute;
               break;
             } catch (error) {
               if (!active()) return false;
@@ -1140,6 +1160,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                   (!error.backendRetryable && !error.mediaOriginBlocked)) {
                 rethrow;
               }
+              if (error.mediaOriginBlocked) originFallbackRoute = playbackRoute;
             }
           }
           if (!active()) return false;
@@ -1162,6 +1183,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             if (current.position != position) await current.seek(position);
             if (!active()) return false;
           }
+          // Account or companion consent can change while the replacement is
+          // buffering. Verify its owning route again before permitting play.
+          checkFallbackRoute();
           // Publish the admitted position before any play/rate event:
           // MediaSession extrapolates progress from those events.
           final position = current.position;
@@ -1230,6 +1254,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _pendingSeek = null;
     _sourceAdmitted = false;
     _remainingFormats = {};
+    _remainingFormatRoute = null;
     _downloadReuseFailed = false;
     _usingDownloadedSource = false;
     _resumeAfterFocus = false;

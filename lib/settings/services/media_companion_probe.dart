@@ -72,6 +72,7 @@ Future<Set<String>> discoverSetupMediaCompanions(
     for (final (raw, manifest) in routes) {
       if (!current()) return {};
       var uri = Uri.parse(proxyMediaUrl(raw, server, adaptive: manifest));
+      if (isMediaCompanionAccountRoute(uri)) return {};
       if (!sameMediaOrigin(uri, frontend)) {
         final origin = _companionOrigin(uri, requireMediaPath: false);
         if (origin != null) found.add(origin);
@@ -116,7 +117,7 @@ Future<Set<String>> discoverSetupMediaCompanions(
         final relative = Uri.tryParse(location);
         if (relative == null) break;
         final target = uri.resolveUri(relative);
-        if (_isLoginPath(target)) return {};
+        if (isMediaCompanionAccountRoute(target)) return {};
         if (target.userInfo.isNotEmpty) break;
         if (!sameMediaOrigin(target, frontend)) {
           final origin = _companionOrigin(target, requireMediaPath: true);
@@ -143,39 +144,21 @@ Future<Set<String>> discoverSetupMediaCompanions(
   }
 }
 
-bool _isLoginPath(Uri uri) =>
-    uri.pathSegments.any((segment) => const {
-          'login',
-          'signin',
-          'sign-in',
-          'auth',
-          'authorize',
-          'oauth',
-          'oauth2',
-          'outpost.goauthentik.io',
-          'openid-connect',
-          '.well-known',
-          'saml',
-        }.contains(segment.toLowerCase())) ||
-    uri.path.startsWith('/if/flow/');
-
 String? _companionOrigin(Uri uri, {required bool requireMediaPath}) {
   if (uri.scheme != 'https' ||
       uri.host.isEmpty ||
       uri.userInfo.isNotEmpty ||
       uri.path.isEmpty ||
       uri.path == '/' ||
-      _isLoginPath(uri)) {
+      isMediaCompanionAccountRoute(uri)) {
     return null;
   }
   // Identity providers also redirect to separate HTTPS origins. For a
   // redirect, require a recognizable actual media route before prompting.
   final path = uri.path.toLowerCase();
   if (requireMediaPath &&
-      !uri.pathSegments.contains('videoplayback') &&
-      !path.contains('/api/manifest/') &&
-      !const ['.mpd', '.m3u8', '.mp4', '.m4a', '.webm', '.aac', '.opus']
-          .any(path.endsWith)) {
+      !isMediaCompanionPlaybackRoute(uri) &&
+      !const ['.mp4', '.m4a', '.webm', '.aac', '.opus'].any(path.endsWith)) {
     return null;
   }
   return parseMediaCompanionOrigin(uri.origin);

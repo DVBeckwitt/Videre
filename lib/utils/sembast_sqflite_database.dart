@@ -239,9 +239,15 @@ class SembastSqfDb extends IDbClient {
         }
         final owner = forProfile(id);
         owner._cancelPendingHistory();
+        final revocations = <Server, Set<String>>{};
         for (final row in await owner.serversStore.find(txn)) {
           final account = _mediaAccount(row.value);
-          if (account != null) await _revokeMediaCompanions(account);
+          if (account != null &&
+              account.profileId == id &&
+              account.accountId == row.key &&
+              trustedMediaCompanionOrigins(account).isNotEmpty) {
+            revocations[account] = {};
+          }
         }
         String storeName(String name) =>
             id == PersonProfile.defaultId ? name : 'profile:$id:$name';
@@ -279,6 +285,9 @@ class SembastSqfDb extends IDbClient {
           await stringMapStoreFactory.store('$name:$id').delete(txn);
         }
         await _profilesStore.record(id).delete(txn);
+        // Native validates the whole profile edit before changing any reader.
+        // A refusal rolls the database transaction back with all grants intact.
+        await setNativeMediaCompanionAccounts(revocations);
       });
 
   static Future<SembastSqfDb> create() async {

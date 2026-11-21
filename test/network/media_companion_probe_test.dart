@@ -124,6 +124,39 @@ void main() {
         {'https://media.example:8443'});
   });
 
+  test('setup skips an advertised frontend sign-in route', () async {
+    final seen = <Uri>[];
+    final client = MockClient((request) async {
+      seen.add(request.url);
+      return http.Response('', 200);
+    });
+    final video = Video(
+        videoId: 'sample',
+        dashUrl: '$frontend/auth/signin',
+        adaptiveFormats: [audio('$frontend/videoplayback')]);
+    final origins = await discoverSetupMediaCompanions(server, video, client,
+        isCurrent: () => true);
+    expect(origins, isEmpty);
+    expect(seen, isEmpty);
+  });
+
+  test('a frontend sign-out redirect ends discovery before the next GET',
+      () async {
+    final seen = <String>[];
+    final client = MockClient((request) async {
+      seen.add(request.url.path);
+      return http.Response('', 302, headers: {'location': '/signout'});
+    });
+    final video = Video(
+        videoId: 'sample',
+        dashUrl: manifest,
+        adaptiveFormats: [audio('$frontend/videoplayback')]);
+    final origins = await discoverSetupMediaCompanions(server, video, client,
+        isCurrent: () => true);
+    expect(origins, isEmpty);
+    expect(seen, ['/api/manifest/dash/id/sample']);
+  });
+
   for (final (status, location, retryAfter) in [
     (401, 'https://media.example/dash.mpd', null),
     (403, 'https://media.example/dash.mpd', null),
