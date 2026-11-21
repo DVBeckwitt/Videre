@@ -31,3 +31,17 @@ The Android app, proxy, and recommendation JVM suites passed 68, 157, and 72 tes
 In the emulator’s phone layout, the instance manager showed the optional-host explanation, custom-port example, and both documentation addresses. **Find media hosts** reported that the sample revealed no additional hosts. No approval was granted. The release notes reader opened the installed 1.22.51 notes and displayed the selected older 1.22.51 Beta 4 notes.
 
 In the same emulator’s TV layout, D-pad focus reached **Settings → Release notes**. Center opened the reader, and the version picker switched to 1.22.51 Beta 4 using Center, Down, and Center.
+
+## HTTPS and saved NerdVPN follow-up
+
+The saved ordinary NerdVPN HTTPS account loaded public search results and played a video. Android reported **PLAYING** at 0 and 4,279 ms on the patched build above.
+
+An older saved NerdVPN account could also fail its first **Find media hosts** check while Videre moved a legacy API-key header into secure storage. The follow-up regression test reproduced the cancellation and verified that the fixed check finishes the metadata and media probe after migration. A concurrent credential edit still cancels the check before either request. Phone and TV widget tests also verified that a generic protected HTTPS account retains its configured port and path and opens native sign-in without using NerdVPN API access.
+
+Formatting and strict analysis passed on the follow-up. All 4,551 offline Flutter tests passed, with six optional live tests skipped. The follow-up Android profile APK SHA-256 is `494ec6c803c5fa96fd31ccfbef7c902bd9b1ca2b1203f61d6e9abe9765b11467`. After updating, the saved NerdVPN account remained logged in and the media-host sample check completed without finding an additional host.
+
+On that final APK, a credential-free account at `https://invidious.dvbeckwitt.duckdns.org` returned live search and watch metadata. Android playback advanced from 5,524 to 12,673 ms. A separate instance at `https://eu.yt.chocolatemoo53.com` also returned search and watch results, and the sample discovered two companion addresses. Videre blocked a playback route outside the account’s approved origins. The discovery dialog was canceled without approving new hosts.
+
+The isolated Android instrumentation package passed 19 gateway-cookie, WebView and media privacy, NerdVPN transport, and HTTPS companion tests. Two session restart tests also passed in separate seed and check processes. The HTTPS companion fixture decoded an approved stream without forwarding the instance’s credentials, and the unapproved host received no connection. Generic protected HTTPS coverage used the emulator fixtures and the phone/TV widgets.
+
+The final APK also played a video through the saved NerdVPN HTTPS account. The watch metadata loaded and the native playback position advanced from 12,489 to 17,203 ms.
