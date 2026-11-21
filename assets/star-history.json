@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
   "repository": "DVBeckwitt/Videre",
-  "fetched_at": "2026-11-20",
+  "fetched_at": "2026-11-21",
   "source": "https://api.github.com/repos/DVBeckwitt/Videre/stargazers/history",
   "weeks": [
     {
       "week": 1794700800,
-      "total": 2,
+      "total": 4,
       "days": [
         1,
         0,
         1,
         0,
         0,
-        0,
-        0
+        1,
+        1
       ]
     },
     {
