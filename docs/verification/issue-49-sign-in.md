@@ -45,3 +45,38 @@ On that final APK, a credential-free account at `https://invidious.dvbeckwitt.du
 The isolated Android instrumentation package passed 19 gateway-cookie, WebView and media privacy, NerdVPN transport, and HTTPS companion tests. Two session restart tests also passed in separate seed and check processes. The HTTPS companion fixture decoded an approved stream without forwarding the instance’s credentials, and the unapproved host received no connection. Generic protected HTTPS coverage used the emulator fixtures and the phone/TV widgets.
 
 The final APK also played a video through the saved NerdVPN HTTPS account. The watch metadata loaded and the native playback position advanced from 12,489 to 17,203 ms.
+
+## Regression pass
+
+The ordinary and protected NerdVPN **Add server** paths now honor a displayed
+retry deadline on repeated submissions of the same draft. If Android cannot
+save the deadline, Videre still shows the observed HTTP 429 or 503. Fixtures
+reproduced both failures before the repair. A manual API key can still be tested
+while browser sign-in is paused.
+
+For a saved instance, **Find media hosts** now reports a failed check when
+the media probe is rejected or times out. A completed sample with no new
+hosts still shows that result. Advanced setup can continue when a sample is
+unavailable. Offline release notes now let users open and copy their links
+from the text or the TV remote menu.
+
+Pinned validation passed 4,563 offline Flutter tests with six optional live
+tests skipped. Formatting and strict analysis passed. The app-wide analyzer
+retained 221 baseline diagnostics. All 297 Android JVM tests, 14 Windows
+release-script checks, and 10 APK signing tests passed.
+
+On the persistent Android 16 emulator, each selected instance stayed active
+after restarting Videre. Playback, pause, seek, and resume worked on both the
+ordinary HTTPS instance and the saved NerdVPN HTTPS account. NerdVPN remained
+logged in and reported ready API access.
+
+The regression APK SHA-256 is
+`c3ac019f614aced1f02debc984a98eae0de6ca320dbbe9a3fd5a256449b1147d`.
+On that APK, NerdVPN search and watch metadata loaded, and native playback
+advanced from 57,194 to 63,221 ms. The sample companion probe reported that
+it could not finish the check. After switching to ordinary DVBeckwitt HTTPS
+and restarting, search and watch metadata loaded, and native playback
+advanced from 62,907 to 71,967 ms. In release notes, **Links in this release**
+opened the copy dialog for the tagged v1.22.51 playback verification page.
+The Chocolatemoo HTTPS sample offered two individually selectable companion
+origins. Dismissing the dialog preserved the existing list of approvals.
