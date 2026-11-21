@@ -120,6 +120,23 @@ void main() {
         throwsStateError);
   });
 
+  test('sample approvals merge all selected hosts in one transaction',
+      () async {
+    mockMediaCompanionTransport();
+    final db = await SembastSqfDb.createInMemory();
+    addTearDown(db.close);
+    await db.upsertServer(account);
+    await db.setMediaCompanionOrigin(account, origin, enabled: true);
+    await expectLater(
+        db.setMediaCompanionOrigins(account, {other, 'http://invalid.example'},
+            enabled: true),
+        throwsFormatException);
+    expect(db.mediaCompanionDecision(account), {origin});
+    const third = 'https://third.example';
+    await db.setMediaCompanionOrigins(account, {other, third}, enabled: true);
+    expect(db.mediaCompanionDecision(account), {origin, other, third});
+  });
+
   test('queued consent edits merge on their latest account row', () async {
     mockMediaCompanionTransport();
     final db = await SembastSqfDb.createInMemory();

@@ -47,6 +47,12 @@ class AddServerOptions extends StatelessWidget {
     final theme = Theme.of(context);
     final credentials =
         Listenable.merge([cubit.urlController, cubit.apiKeyController]);
+    final gatewaySwitch = SwitchListTile(
+      title: Text(locals.protectedServer),
+      subtitle: Text(locals.protectedServerHelp),
+      value: state.protectedServer,
+      onChanged: state.loading ? null : cubit.setProtectedServer,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -62,13 +68,11 @@ class AddServerOptions extends StatelessWidget {
                 loading: state.loading,
                 television: television,
               ),
-            if (!cubit.usesManualNerdVpnKey)
-              SwitchListTile(
-                title: Text(locals.protectedServer),
-                subtitle: Text(locals.protectedServerHelp),
-                value: state.protectedServer,
-                onChanged: state.loading ? null : cubit.setProtectedServer,
-              ),
+            if (!cubit.usesNerdVpn ||
+                (state.protectedServer &&
+                    !state.showAdvanced &&
+                    !cubit.usesManualNerdVpnKey))
+              gatewaySwitch,
           ]),
         ),
         ListTile(
@@ -87,6 +91,13 @@ class AddServerOptions extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                ListenableBuilder(
+                  listenable: credentials,
+                  builder: (context, _) =>
+                      cubit.usesNerdVpn && !cubit.usesManualNerdVpnKey
+                          ? gatewaySwitch
+                          : const SizedBox.shrink(),
+                ),
                 Text(
                   locals.customHeaders,
                   style: theme.textTheme.bodyLarge

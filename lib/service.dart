@@ -223,6 +223,21 @@ class Service {
           ? client
           : OriginScopedHttpClient(client ?? http.Client());
 
+  Future<Set<String>> findMediaCompanions(Server server,
+      {required bool Function() isCurrent}) async {
+    final revision = _sessionRevision;
+    final proxy = NetworkProxy.instance.config;
+    bool current() =>
+        isCurrent() &&
+        revision == _sessionRevision &&
+        !NetworkProxy.instance.isChanging &&
+        identical(proxy, NetworkProxy.instance.config);
+    final video = await _getScopedVideoMetadata(setupSampleVideoId, server, () {
+      if (!current()) throw StateError('Media host check cancelled');
+    });
+    return discoverMediaCompanionsForSetup(server, video, isCurrent: current);
+  }
+
   Future<Set<String>> discoverMediaCompanionsForSetup(
       Server server, Video video,
       {required bool Function() isCurrent}) async {
@@ -655,26 +670,30 @@ class Service {
   /// Performs one metadata request for a format picker or queued download.
   /// The caller owns its retry budget and its saved account may be unselected.
   Future<Video> getDownloadVideo(String videoId,
-      {required BackendPlayback route,
-      required void Function() checkCurrent}) async {
+          {required BackendPlayback route,
+          required void Function() checkCurrent}) =>
+      _getScopedVideoMetadata(videoId, route.server, checkCurrent);
+
+  Future<Video> _getScopedVideoMetadata(
+      String videoId, Server server, void Function() checkCurrent) async {
     final revision = _sessionRevision;
     var expired = false;
     void check() {
       checkCurrent();
       if (expired || _sessionRevision != revision) {
-        throw StateError('The download connection changed.');
+        throw StateError('The metadata connection changed.');
       }
     }
 
     check();
     final request = await buildRequest(urlGetVideo,
-        pathParams: {':id': videoId}, serverOverride: route.server);
+        pathParams: {':id': videoId}, serverOverride: server);
     check();
     final response = await _instanceReader(() async => check())
         .get(request.uri, headers: request.headers)
         .timeout(const Duration(seconds: 15), onTimeout: () {
       expired = true;
-      throw TimeoutException('Download metadata request expired.');
+      throw TimeoutException('Video metadata request expired.');
     });
     check();
     final video = _decodeVideoMetadata(response);
@@ -1716,8 +1735,9 @@ class Service {
     // A logout or newer sign-in can finish while native access is being read.
     // Reject it before a browser launch, not only when its token comes back.
     if (isCurrent?.call() == false) return null;
-    if (access?.retryAt?.isAfter(_now().toUtc()) == true) {
-      throw const NerdVpnAccessRequired('unavailable');
+    final retryAt = access?.retryAt;
+    if (retryAt != null && retryAt.isAfter(_now())) {
+      throw NerdVpnSignInFailed(NerdVpnSignInProblem.cooldown, retryAt);
     }
     if (kIsWeb ||
         defaultTargetPlatform != TargetPlatform.android ||

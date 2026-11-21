@@ -13,13 +13,16 @@ import com.github.dvbeckwitt.videre.proxy.NerdVpnPkce
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
 import io.flutter.plugin.common.MethodChannel
 import java.io.IOException
+import java.io.InterruptedIOException
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.RequestBody
 import okhttp3.Response
+import okio.BufferedSink
+import okio.ByteString.Companion.encodeUtf8
 import org.json.JSONObject
 
 /** Explicit default-browser sign-in. This path never creates a WebView profile. */
@@ -92,7 +95,7 @@ internal class NerdVpnBrowserAuth(
             request.exchange = call
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, error: IOException) {
-                    handler.post { finish(request, error = "GATEWAY_TOKEN_UNAVAILABLE") }
+                    handler.post { finish(request, error = NerdVpnTokenExchange.transportError(error)) }
                 }
 
                 override fun onResponse(call: Call, response: Response) {
@@ -167,11 +170,25 @@ internal class NerdVpnBrowserAuth(
 internal object NerdVpnTokenExchange {
     class Result(val token: String?, val error: String, val details: Map<String, Any>?, val cookies: List<String>)
 
+    fun transportError(error: IOException): String =
+        if (error is InterruptedIOException) "GATEWAY_TOKEN_TIMEOUT" else "GATEWAY_TOKEN_UNAVAILABLE"
+
+    fun exchangeBody(json: String): RequestBody {
+        val bytes = json.encodeUtf8()
+        return object : RequestBody() {
+            override fun contentType() = "application/json; charset=utf-8".toMediaType()
+            override fun contentLength() = bytes.size.toLong()
+            // A 503 with Retry-After: 0 can otherwise make OkHttp resend a single-use code.
+            override fun isOneShot() = true
+            override fun writeTo(sink: BufferedSink) { sink.write(bytes) }
+        }
+    }
+
     fun request(origin: HttpUrl, pkce: NerdVpnPkce, code: String, cookie: String? = null): Request {
         val json = JSONObject().put("code", code).put("code_verifier", pkce.verifier)
             .put("callback_url", pkce.callbackUrl)
         return Request.Builder().url(origin.newBuilder().encodedPath("/api/v1/token").build())
-            .post(json.toString().toRequestBody("application/json".toMediaType()))
+            .post(exchangeBody(json.toString()))
             .header("Accept", "application/json")
             .apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
     }
@@ -179,13 +196,12 @@ internal object NerdVpnTokenExchange {
     fun read(response: Response): Result {
         var token: String? = null
         var error = "GATEWAY_TOKEN_EXCHANGE_FAILED"
-        var details: Map<String, Any>? = null
         var cookies: List<String> = emptyList()
         try {
             response.use {
                 if (it.code == 429 || it.code == 503) {
-                    error = "GATEWAY_TOKEN_UNAVAILABLE"
-                    details = mapOf("statusCode" to it.code, "retryAfter" to (it.header("Retry-After") ?: ""))
+                    return Result(null, "GATEWAY_TOKEN_UNAVAILABLE",
+                        mapOf("statusCode" to it.code, "retryAfter" to (it.header("Retry-After") ?: "")), emptyList())
                 }
                 val bytes = it.peekBody(65537).bytes()
                 val json = if (bytes.size <= 65536) JSONObject(String(bytes, Charsets.UTF_8)) else null
@@ -197,7 +213,9 @@ internal object NerdVpnTokenExchange {
                     error = "GATEWAY_TOKEN_EXPIRED"
                 }
             }
+        } catch (failure: IOException) {
+            return Result(null, transportError(failure), null, emptyList())
         } catch (_: Exception) { token = null /* Response bodies can contain credentials. */ }
-        return Result(token, error, details, cookies)
+        return Result(token, error, null, cookies)
     }
 }

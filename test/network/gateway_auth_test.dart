@@ -463,11 +463,12 @@ void main() {
     });
   }
 
-  test('protected sign-in observes the persisted Retry-After before opening',
+  test('protected sign-in reports service outage and the persisted retry time',
       () async {
     const account = Server(
-        url: 'https://invidious.nerdvpn.de', id: 'rate-limited-pkce-exchange');
+        url: 'https://invidious.nerdvpn.de', id: 'unavailable-pkce-exchange');
     final accessCalls = <MethodCall>[];
+    final retryAt = DateTime.now().toUtc().add(const Duration(hours: 1));
     Map<String, dynamic> status = {'state': 'missing', 'revision': 7};
     messenger.setMockMethodCallHandler(access, (call) async {
       accessCalls.add(call);
@@ -475,10 +476,7 @@ void main() {
         status = {
           'state': 'unavailable',
           'revision': 8,
-          'retryAt': DateTime.now()
-              .add(const Duration(hours: 1))
-              .toUtc()
-              .toIso8601String(),
+          'retryAt': retryAt.toIso8601String(),
         };
       }
       return status;
@@ -488,22 +486,54 @@ void main() {
       if (call.method == 'signIn') {
         opened++;
         throw PlatformException(code: 'GATEWAY_TOKEN_UNAVAILABLE', details: {
-          'statusCode': 429,
+          'statusCode': 503,
           'retryAfter': '3600',
         });
       }
       return null;
     });
     await expectLater(
-        GatewayAuth.signIn(account), throwsA(isA<GatewaySignInFailed>()));
+        GatewayAuth.signIn(account),
+        throwsA(isA<NerdVpnSignInFailed>()
+            .having((e) => e.problem, 'reason',
+                NerdVpnSignInProblem.serviceUnavailable)
+            .having((e) => e.retryAt, 'retry time', retryAt)));
     expect(accessCalls.map((call) => call.method), ['status', 'recover']);
     expect((accessCalls.last.arguments as Map)['retryAfter'], '3600');
+    expect((accessCalls.last.arguments as Map)['error'], 'unavailable');
     expect((accessCalls.last.arguments as Map)['revision'], 7);
     expect((accessCalls.last.arguments as Map)['retry'], isFalse);
     await expectLater(
-        GatewayAuth.signIn(account), throwsA(isA<GatewaySignInFailed>()));
+        GatewayAuth.signIn(account),
+        throwsA(isA<NerdVpnSignInFailed>()
+            .having((e) => e.problem, 'reason', NerdVpnSignInProblem.cooldown)
+            .having((e) => e.retryAt, 'retry time', retryAt)));
     expect(opened, 1);
   });
+
+  for (final failure in {
+    'GATEWAY_TOKEN_UNAVAILABLE': NerdVpnSignInProblem.connection,
+    'GATEWAY_TOKEN_TIMEOUT': NerdVpnSignInProblem.timeout,
+  }.entries) {
+    test('token exchange reports ${failure.value.name} without a cooldown',
+        () async {
+      const account =
+          Server(url: 'https://invidious.nerdvpn.de', id: 'connection');
+      messenger.setMockMethodCallHandler(access, (call) async {
+        expect(call.method, 'status');
+        return {'state': 'ready'};
+      });
+      messenger.setMockMethodCallHandler(browser, (call) async {
+        if (call.method == 'signIn') throw PlatformException(code: failure.key);
+        return null;
+      });
+      await expectLater(
+          GatewayAuth.signIn(account),
+          throwsA(isA<NerdVpnSignInFailed>()
+              .having((e) => e.problem, 'reason', failure.value)
+              .having((e) => e.retryAt, 'retry time', isNull)));
+    });
+  }
 
   test('late onion token cooldown cannot block a newer credential', () async {
     const account = Server(url: onionOrigin, id: 'onion-late-cooldown');

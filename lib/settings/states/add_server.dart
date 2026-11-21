@@ -14,6 +14,7 @@ import '../../network/youtube_privacy.dart';
 import '../../utils/invidious_image.dart';
 import '../models/db/server.dart';
 import '../models/errors/invidious_service_error.dart';
+import '../services/media_companion_probe.dart';
 
 part 'add_server.freezed.dart';
 
@@ -254,7 +255,7 @@ class AddServerCubit extends Cubit<AddServerState> {
 
       if (advancedTest) {
         final video = await service
-            .getVideo('dQw4w9WgXcQ', serverOverride: server)
+            .getVideo(setupSampleVideoId, serverOverride: server)
             .timeout(const Duration(seconds: 15));
 
         final thumbnails = video.videoThumbnails

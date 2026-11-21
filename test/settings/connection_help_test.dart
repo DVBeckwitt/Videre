@@ -8,6 +8,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/settings/services/gateway_auth.dart';
+import 'package:clipious/settings/views/components/server_account_dialogs.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/material.dart';
@@ -89,18 +90,42 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> pumpError(WidgetTester tester, Object error) async {
+  Future<void> pumpError(WidgetTester tester, Object error,
+      {Locale? locale, bool savedAccount = false}) async {
     await tester.pumpWidget(MaterialApp(
+      locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(body: Builder(builder: (context) {
         return TextButton(
-            onPressed: () => AddServerScreen.handleError(context, error),
+            onPressed: () {
+              if (savedAccount) {
+                runServerAccountAction(context, () async => throw error);
+              } else {
+                AddServerScreen.handleError(context, error);
+              }
+            },
             child: const Text('Show error'));
       })),
     ));
     await tester.tap(find.text('Show error'));
     await tester.pumpAndSettle();
+  }
+
+  for (final savedAccount in [true, false]) {
+    testWidgets(
+        'NerdVPN shows the outage and retry time in French (saved: $savedAccount)',
+        (tester) async {
+      final error = NerdVpnSignInFailed(NerdVpnSignInProblem.serviceUnavailable,
+          DateTime(2027, 3, 21, 18, 42, 8));
+      await pumpError(tester, error,
+          locale: const Locale('fr'), savedAccount: savedAccount);
+      expect(find.textContaining('temporairement indisponible (HTTP 503)'),
+          findsOneWidget);
+      expect(find.textContaining('21 mars 2027'), findsOneWidget);
+      expect(find.textContaining('18:42:08'), findsOneWidget);
+      expect(find.text(error.toString()), findsNothing);
+    });
   }
 
   for (final error in [

@@ -16,6 +16,7 @@ import 'package:clipious/utils.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 import '../../models/db/server.dart';
+import '../../services/media_companion_probe.dart';
 import 'settings.dart';
 
 @RoutePage()
@@ -152,7 +153,18 @@ class ManageSingleServerScreen extends StatelessWidget {
                                   onSaveKey: cubit.setApiKey,
                                 ),
                               ),
-                            if (!(NerdVpnAccess.supports(server) &&
+                            if (state.usesNerdVpnAccountSignIn)
+                              SettingsTile.navigation(
+                                leading: const Icon(Icons.login),
+                                enabled: !state.authenticating,
+                                title: Text(locals.nerdVpnAccountSignIn),
+                                description: Text(isLoggedIn
+                                    ? locals.loggedIn
+                                    : locals.nerdVpnAccountSignInHelp),
+                                onPressed: (context) => runServerAccountAction(
+                                    context, cubit.logInWithToken),
+                              )
+                            else if (!(NerdVpnAccess.supports(server) &&
                                 isNerdVpnOnionUrl(server.url))) ...[
                               SettingsTile.navigation(
                                 leading: const Icon(Icons.shield_outlined),
@@ -272,6 +284,22 @@ class ManageSingleServerScreen extends StatelessWidget {
                                           server, origin,
                                           enabled: false)),
                                 ),
+                              ),
+                            SettingsTile.navigation(
+                              title: Text(locals.mediaCompanionHelpTitle),
+                              leading: const Icon(Icons.help_outline),
+                              onPressed: showMediaCompanionHelp,
+                            ),
+                            if (supportsMediaCompanionDiscovery)
+                              SettingsTile.navigation(
+                                title: Text(locals.mediaCompanionFind),
+                                leading: const Icon(Icons.search),
+                                enabled: companions.length <
+                                    maxMediaCompanionOrigins,
+                                onPressed: (context) => runServerAccountAction(
+                                    context,
+                                    () => findMediaCompanionHosts(
+                                        context, server)),
                               ),
                             SettingsTile.navigation(
                               title: Text(locals.mediaCompanionAdd),

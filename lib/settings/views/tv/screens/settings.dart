@@ -24,6 +24,7 @@ import '../../../states/settings.dart';
 import '../../../models/theme_palette.dart';
 import '../../screens/community_filter_settings.dart';
 import '../../screens/network_proxy.dart';
+import '../../screens/release_notes.dart';
 import '../../../../utils/motion.dart';
 import '../../../../recommendations/views/recommendation_settings.dart';
 import '../../components/playback_cache_settings.dart';
@@ -443,6 +444,12 @@ class TVSettingsScreen extends StatelessWidget {
                 SettingsTitle(title: locals.ytMusicSettings),
                 const MusicProviderSettings(),
                 SettingsTitle(title: locals.about),
+                SettingsTile(
+                  title: locals.releaseNotes,
+                  onSelected: (context) => openReleaseNotes(
+                      context, state.packageInfo.version,
+                      television: true),
+                ),
                 SettingsTile(
                   title: MaterialLocalizations.of(context).licensesPageTitle,
                   onSelected: (context) => showLicensePage(

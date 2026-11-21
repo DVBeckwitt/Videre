@@ -43,6 +43,7 @@ dependencies:
   package_info_plus: 8.3.1
   path: any
   path_provider: any
+  pub_semver: 2.2.0
   receive_sharing_intent:
     # see https://github.com/KasemJaffer/receive_sharing_intent/issues/344
     git:
@@ -91,6 +92,7 @@ dev_dependencies:
 flutter: 
   assets: 
     - assets/icon.svg
+    - docs/releases/
     - assets/licenses/upstream-ui.txt
     - assets/licenses/GPL-3.0.txt
   uses-material-design: true

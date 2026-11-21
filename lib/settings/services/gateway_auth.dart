@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 
+import '../../l10n/generated/app_localizations.dart';
 import '../../network/gateway_context.dart';
 import '../../network/network_proxy.dart';
 import '../../network/gateway_session_bridge.dart';
@@ -89,9 +91,9 @@ class GatewayAuth {
       if (NerdVpnAccess.supports(server)) {
         access = await NerdVpnAccess.instance.status(server);
         if (!isCurrent()) return null;
-        if (access.retryAt?.isAfter(DateTime.now()) ?? false) {
-          throw const GatewaySignInFailed(
-              'NerdVPN has asked Videre to wait. Try signing in again later.');
+        final retryAt = access.retryAt;
+        if (retryAt != null && retryAt.isAfter(DateTime.now())) {
+          throw NerdVpnSignInFailed(NerdVpnSignInProblem.cooldown, retryAt);
         }
       }
       await _browser.invokeMethod<void>('close', {'context': context.encoded});
@@ -130,22 +132,31 @@ class GatewayAuth {
         throw const GatewaySignInFailed(
             'The sign-in code expired or was already used. Sign in again.');
       }
+      if (error.code == 'GATEWAY_TOKEN_TIMEOUT') {
+        throw const NerdVpnSignInFailed(NerdVpnSignInProblem.timeout);
+      }
       if (error.code == 'GATEWAY_TOKEN_UNAVAILABLE') {
         final details = error.details;
         if (NerdVpnAccess.supports(server) &&
             details is Map &&
             (details['statusCode'] == 429 || details['statusCode'] == 503)) {
           final code = details['statusCode'] as int;
-          await NerdVpnAccess.instance.recover(context.encoded,
+          final recovered = await NerdVpnAccess.instance.recover(
+              context.encoded,
               error: code == 429 ? 'rate_limited' : 'unavailable',
               statusCode: code,
               retryAfter: details['retryAfter'] as String?,
               failedIntent: access?.apiKeyIntent,
               revision: access?.revision,
               retry: false);
+          if (!isCurrent()) return null;
+          throw NerdVpnSignInFailed(
+              code == 429
+                  ? NerdVpnSignInProblem.rateLimited
+                  : NerdVpnSignInProblem.serviceUnavailable,
+              recovered.retryAt);
         }
-        throw const GatewaySignInFailed(
-            'The server could not complete sign-in. Try again later.');
+        throw const NerdVpnSignInFailed(NerdVpnSignInProblem.connection);
       }
       if (error.code == 'GATEWAY_TOKEN_EXCHANGE_FAILED') {
         throw const GatewaySignInFailed(
@@ -215,8 +226,49 @@ class GatewaySignInFailed implements Exception {
 
   const GatewaySignInFailed(this.message);
 
+  String localizedMessage(AppLocalizations locals) => message;
+
   @override
   String toString() => message;
+}
+
+enum NerdVpnSignInProblem {
+  connection,
+  timeout,
+  rateLimited,
+  serviceUnavailable,
+  cooldown,
+}
+
+class NerdVpnSignInFailed extends GatewaySignInFailed {
+  final NerdVpnSignInProblem problem;
+  final DateTime? retryAt;
+
+  const NerdVpnSignInFailed(this.problem, [this.retryAt])
+      : super('NerdVPN sign-in could not finish.');
+
+  @override
+  String localizedMessage(AppLocalizations locals) {
+    final reason = switch (problem) {
+      NerdVpnSignInProblem.connection => locals.nerdVpnSignInConnection,
+      NerdVpnSignInProblem.timeout => locals.nerdVpnSignInTimeout,
+      NerdVpnSignInProblem.rateLimited => locals.nerdVpnSignInRateLimited,
+      NerdVpnSignInProblem.serviceUnavailable =>
+        locals.nerdVpnSignInUnavailable,
+      NerdVpnSignInProblem.cooldown => locals.nerdVpnSignInCooldown,
+    };
+    if (problem == NerdVpnSignInProblem.connection ||
+        problem == NerdVpnSignInProblem.timeout) {
+      return reason;
+    }
+    final date = retryAt;
+    final retry = date == null
+        ? locals.nerdVpnSignInRetryLater
+        : locals.nerdVpnSignInRetryAt(DateFormat.yMMMd(locals.localeName)
+            .add_jms()
+            .format(date.toLocal()));
+    return '$reason $retry';
+  }
 }
 
 class GatewayUnsupported implements Exception {

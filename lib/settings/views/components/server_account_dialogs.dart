@@ -161,11 +161,11 @@ Future<void> runServerAccountAction(
         approvalPending ? locals.nerdVpnApprovalPending : locals.error;
     final message = Text(approvalPending
         ? locals.nerdVpnAccessPending
-        : error is GatewayUnsupported ||
-                error is GatewaySignInFailed ||
-                error is NerdVpnAccessRequired
-            ? error.toString()
-            : locals.accountActionFailed);
+        : error is GatewaySignInFailed
+            ? error.localizedMessage(locals)
+            : error is GatewayUnsupported || error is NerdVpnAccessRequired
+                ? error.toString()
+                : locals.accountActionFailed);
     if (television) {
       showTvAlertdialog(context, title, [message]);
     } else {

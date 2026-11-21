@@ -30,6 +30,7 @@ import 'package:clipious/utils/views/components/external_link.dart';
 
 import '../../../network/nerdvpn_access.dart';
 import '../../services/gateway_auth.dart';
+import '../../services/media_companion_probe.dart';
 
 @RoutePage()
 class AddServerScreen extends StatelessWidget {
@@ -62,9 +63,8 @@ class AddServerScreen extends StatelessWidget {
     if (error is NerdVpnAccessRequired && error.state == 'waiting') {
       return locals.nerdVpnAccessPending;
     }
-    if (error is GatewayUnsupported ||
-        error is GatewaySignInFailed ||
-        error is NerdVpnAccessRequired) {
+    if (error is GatewaySignInFailed) return error.localizedMessage(locals);
+    if (error is GatewayUnsupported || error is NerdVpnAccessRequired) {
       return error.toString();
     }
     if (error is InvidiousServiceError) {
@@ -162,7 +162,7 @@ class AddServerScreen extends StatelessWidget {
                                     await service
                                         .getVideo(
                                             videoId == null || videoId.isEmpty
-                                                ? 'dQw4w9WgXcQ'
+                                                ? setupSampleVideoId
                                                 : videoId,
                                             serverOverride: server)
                                         .timeout(const Duration(seconds: 15));
@@ -288,14 +288,14 @@ class AddServerScreen extends StatelessWidget {
     var locals = AppLocalizations.of(context)!;
     const wikiUrl =
         'https://github.com/lamarios/clipious/wiki/Common-Issues#video-thumbnails-not-working';
-    final errorMessage = e is WrongThumbnailUrl && isTv
-        ? '${e.getLabel(locals)}\n\n$wikiUrl'
-        : e is CannotAddServerError
-            ? e.getLabel(locals)
-            : e is NerdVpnApiKeyException
-                ? e.message
-                : e.toString();
     final advice = connectionAdvice(e, locals);
+    final errorMessage = switch (e) {
+      GatewaySignInFailed() => advice,
+      WrongThumbnailUrl() when isTv => '${e.getLabel(locals)}\n\n$wikiUrl',
+      CannotAddServerError() => e.getLabel(locals),
+      NerdVpnApiKeyException() => e.message,
+      _ => e.toString(),
+    };
     final approvalPending = e is NerdVpnAccessRequired && e.state == 'waiting';
     List<Widget> actions = [
       if (e is WrongThumbnailUrl && !isTv)

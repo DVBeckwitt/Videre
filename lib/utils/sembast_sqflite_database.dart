@@ -1264,7 +1264,7 @@ class SembastSqfDb extends IDbClient {
   }
 
   @override
-  Future<Server> setMediaCompanionOrigin(Server expected, String origin,
+  Future<Server> setMediaCompanionOrigins(Server expected, Set<String> changes,
       {required bool enabled}) {
     _checkServerOwner(expected);
     return _writeProfile((owner, txn) async {
@@ -1276,23 +1276,25 @@ class SembastSqfDb extends IDbClient {
           saved.profileId != expected.profileId) {
         throw StateError('Instance changed');
       }
-      final normalized = parseMediaCompanionOrigin(origin);
+      final normalized =
+          changes.map(parseMediaCompanionOrigin).nonNulls.toSet();
       final address = mediaCompanionInstanceAddress(saved);
       if (address == null ||
-          normalized == null ||
-          normalized == Uri.parse(saved.url).origin) {
+          changes.isEmpty ||
+          normalized.length != changes.length ||
+          normalized.contains(Uri.parse(saved.url).origin)) {
         throw const FormatException('Invalid media companion origin');
       }
       final origins = {
         ...(owner._decision(saved, txn) ?? trustedMediaCompanionOrigins(saved))
       };
       if (enabled) {
-        origins.add(normalized);
+        origins.addAll(normalized);
         if (origins.length > maxMediaCompanionOrigins) {
           throw const FormatException('Too many media companion origins');
         }
       } else {
-        origins.remove(normalized);
+        origins.removeAll(normalized);
       }
       final accounts = await owner._storeDecision(txn, address, origins);
       await setNativeMediaCompanionAccounts(

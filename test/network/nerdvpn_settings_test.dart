@@ -166,6 +166,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  test('existing HTTP authorization keeps the configured gateway sign-in', () {
+    final state = ServerSettingsState(
+        server: _account
+            .copyWith(customHeaders: {'authorization': 'Basic fixture'}));
+    expect(state.hasBasicAuth, isTrue);
+    expect(state.usesNerdVpnAccountSignIn, isFalse);
+  });
+
   testWidgets(
       'waiting state displays the server date and offers an explicit eligibility check',
       (tester) async {
@@ -420,6 +428,7 @@ void main() {
       final locals = AppLocalizations.of(
           tester.element(find.byType(NerdVpnAccessSettings)))!;
       expect(find.text(locals.protectedServerSignIn), findsNothing);
+      expect(find.text(locals.nerdVpnAccountSignIn), findsNothing);
       expect(find.text(locals.logout), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
@@ -612,6 +621,12 @@ void main() {
       expect(find.text(locals.instanceAddressDescription), findsNothing);
       expect(find.text(locals.accountName), findsNothing);
       expect(find.text(locals.nerdVpnKeyFallback), findsOneWidget);
+      expect(find.text(locals.protectedServer), findsNothing);
+      cubit.setShowAdvanced(true);
+      await tester.pumpAndSettle();
+      expect(find.text(locals.protectedServer), findsOneWidget);
+      cubit.setShowAdvanced(false);
+      await tester.pumpAndSettle();
 
       cubit.apiKeyController.text = _manualKey;
       await tester.pumpAndSettle();
@@ -654,54 +669,51 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets(
-        '${television ? 'TV' : 'phone'} NerdVPN settings disable cookies and mask legacy key headers',
-        (tester) async {
-      tester.view.physicalSize = const Size(1280, 1800);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      db = (await tester.runAsync(() => SembastSqfDb.createInMemory()))!;
-      final account = _account.copyWith(
-        authToken: 'existing-account-token',
-        customHeaders: {'X-Invidious-Token': _manualKey},
-      );
-      await tester.runAsync(() => db.upsertServer(account));
-      final app = _SettingsApp();
-      addTearDown(() async {
-        await app.close();
-        await db.close();
+    for (final gateway in [false, true]) {
+      testWidgets(
+          '${television ? 'TV' : 'phone'} NerdVPN sign-in honors saved gateway mode $gateway and masks legacy keys',
+          (tester) async {
+        final account = _account.copyWith(
+          authToken: 'existing-account-token',
+          gatewayEnabled: gateway,
+          customHeaders: {'X-Invidious-Token': _manualKey},
+        );
+        const browser = MethodChannel('videre/gateway_auth');
+        final signIns = <MethodCall>[];
+        nativeStatus['intent'] = 1;
+        messenger.setMockMethodCallHandler(browser, (call) async {
+          if (call.method == 'signIn') signIns.add(call);
+          return null; // Cancel without submitting an account grant.
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(browser, null));
+        await showManager(tester, television: television, account: account);
+        final locals = AppLocalizations.of(
+            tester.element(find.byType(NerdVpnAccessSettings)))!;
+        final label = gateway
+            ? locals.protectedServerSignIn
+            : locals.nerdVpnAccountSignIn;
+        final tile = find.ancestor(
+            of: find.text(label),
+            matching:
+                find.byType(television ? tv.SettingsTile : phone.SettingsTile));
+        expect(
+            find.text(gateway
+                ? locals.nerdVpnAccountSignIn
+                : locals.protectedServerSignIn),
+            findsNothing);
+        if (!gateway) expect(find.text(locals.cookieLogin), findsNothing);
+        expect(find.text(_manualKey), findsNothing);
+        expect(find.text('········'), findsOneWidget);
+        final action = television
+            ? tester.widget<tv.SettingsTile>(tile).onSelected!
+            : tester.widget<phone.SettingsTile>(tile).onPressed!;
+        await tester.runAsync(() async => await action(tester.element(tile)));
+        await tester.pumpAndSettle();
+        expect(signIns.single.arguments['persistSession'], gateway);
+        expect(signIns.single.arguments['serverUrl'], account.url);
+        expect(db.getAccount(account.accountId)?.authToken, account.authToken);
+        expect(tester.takeException(), isNull);
       });
-      await tester.pumpWidget(BlocProvider<AppCubit>.value(
-        value: app,
-        child: MaterialApp(
-          locale: const Locale('en'),
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: television
-              ? TvManageSingleServerScreen(server: account)
-              : ManageSingleServerScreen(server: account),
-        ),
-      ));
-      await tester.pumpAndSettle();
-
-      final cookie = find.text('Log in with cookie');
-      if (television) {
-        final tile = tester.widget<tv.SettingsTile>(
-            find.ancestor(of: cookie, matching: find.byType(tv.SettingsTile)));
-        expect(tile.enabled, isFalse);
-      } else {
-        final tile = tester.widget<phone.SettingsTile>(find.ancestor(
-            of: cookie, matching: find.byType(phone.SettingsTile)));
-        expect(tile.enabled, isFalse);
-        final token = tester.widget<phone.SettingsTile>(find.ancestor(
-            of: find.text('Log in with token'),
-            matching: find.byType(phone.SettingsTile)));
-        expect(token.enabled, isTrue);
-      }
-      expect(find.text(_manualKey), findsNothing);
-      expect(find.text('········'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
+    }
   }
 }

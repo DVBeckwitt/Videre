@@ -53,10 +53,6 @@ To run your own instance, follow the [Invidious installation guide](https://docs
 
 ## Your connection and privacy
 
-By default, video and audio play through the selected Invidious instance. Some operators serve streams from separate HTTPS hosts. On Android, if the advanced setup check finds that the sample stream uses one of these hosts, Videre shows its exact address and asks whether to allow it. You can finish setup with no hosts approved. Videre remembers either choice once per instance in the current profile. Adding another account with the same instance address reuses that choice. A custom port or a different installation path identifies a separate instance. A different instance or Videre profile has its own setting.
-
-Each approved host can see the media it serves and the IP address used to reach it. Instance credentials stay on the selected server. Operators can use different hosts for different videos. To review your choices or allow another address the operator gives you, open **Settings → Manage servers**, select any account on that instance, and open **Media companion hosts**. Enter the full HTTPS address, including any custom port. Downloads, artwork, and browsing use the selected instance.
-
 Sharing offers your selected instance link or a YouTube link, with an optional playback timestamp. Choosing a YouTube share link only constructs the address; Videre does not connect to YouTube.
 
 SponsorBlock, Return YouTube Dislike, and DeArrow contact their own services. Podcast feeds and audio come from publishers through your configured proxy. Local and server libraries remain separate. [Privacy policy](./docs/privacy.html)
@@ -64,6 +60,16 @@ SponsorBlock, Return YouTube Dislike, and DeArrow contact their own services. Po
 For Orbot, open **Settings → Network proxy → Use Orbot preset** and start Orbot’s SOCKS listener. The editable preset is `127.0.0.1:9050`. Applying a connection change stops playback and pauses downloads. An enabled proxy must be available for internet requests to work. [SOCKS5 setup](./docs/socks-proxy.md)
 
 Protected HTTPS servers support gateway sign-in with Android WebView isolated-profile support. NerdVPN offers external browser sign-in when Videre’s proxy is off, plus in-app sign-in and manual API keys. Settings shows API eligibility. The external browser uses its own network settings. Onion access requires SOCKS/Orbot setup and a key for that exact server address. [Sign-in and API-key guide](./docs/profiles-and-authentication.md)
+
+### Media companion hosts
+
+Some Invidious instances use a separate HTTPS server, called a *media companion*, to send video or audio to your device. If playback works, you can leave the list empty.
+
+1. Open **Settings → Manage servers**, select an account, and find **Media companion hosts**.
+2. Choose **Find media hosts** to check one sample video on Android. Videre shows the addresses it finds and lets you choose which to allow. The advanced check when adding a server can also suggest hosts. Other videos on the same instance may use a different host.
+3. If the sample misses a host, ask the instance operator for its public HTTPS address. For example, if they give you `https://media.example.org:8443/companion`, enter `https://media.example.org:8443`. If you run the instance, look up `invidious_companion.public_url` in your configuration. A companion served at the instance’s own origin needs no separate approval. [Invidious Companion configuration](https://docs.invidious.io/installation/#advanced-improve-performance)
+
+An approved host can see the media it serves and the IP address used to reach it. Instance credentials, downloads, artwork, and browsing stay with the selected instance. Accounts on the same instance share their approvals within a Videre profile. Another profile, instance port, or instance path has its own approvals.
 
 ## Useful tips
 
@@ -80,7 +86,7 @@ Protected HTTPS servers support gateway sign-in with Android WebView isolated-pr
 
 ## Updates and contributing
 
-Update through GitHub Releases or add this repository to Obtainium. APK updates require the same signing key. This README describes current source, so check release notes for your APK’s features. [Release notes](https://github.com/DVBeckwitt/Videre/releases)
+Open **Settings → About → Release notes** to read what changed in your installed version or browse older releases offline. Update through GitHub Releases or add this repository to Obtainium. APK updates require the same signing key. [GitHub releases](https://github.com/DVBeckwitt/Videre/releases)
 
 Videre and Clipious install separately. Set up Videre before removing Clipious, since Android does not transfer their data and Videre cannot directly import Clipious app storage.
 

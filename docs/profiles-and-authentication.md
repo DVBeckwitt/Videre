@@ -154,8 +154,9 @@ address support managed API keys. Clearnet browser sign-in uses PKCE and the
 Existing clearnet accounts can sign in again to grant this scope, or enter a
 manual key in account settings.
 
-For ordinary HTTPS NerdVPN accounts with Videre's network proxy off, sign-in
-offers **Sign in with browser**. This opens Android's default browser, or its
+For an ordinary HTTPS NerdVPN account, open **Settings → Manage servers**,
+select the account, and choose **Sign in to NerdVPN**. With Videre's network
+proxy off, the sign-in dialog offers **Sign in with browser**. This opens Android's default browser, or its
 browser chooser when no default is set, so NerdVPN's JavaScript check can run.
 The browser uses its own cookies, network settings, and destination policy;
 Videre does not apply its SOCKS proxy to that browser. The choice is explicit
@@ -177,6 +178,10 @@ same-origin cookies, which are cleared afterward. Cancelled, expired, duplicate,
 or unrelated callbacks cannot
 replace the saved login. If Android closes the app during sign-in, start again;
 the app does not restore a verifier from an incoming link.
+
+If the final token exchange fails, the message identifies a connection failure,
+a timeout, a rate limit (HTTP 429), or an unavailable service (HTTP 503).
+When a retry time is shown, wait until then and start a fresh sign-in.
 
 The HTTPS add-server screen also offers manual API-key setup. Copy the
 preferences address and open it yourself in a browser, sign in, enable API

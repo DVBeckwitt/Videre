@@ -8,10 +8,12 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/settings/services/media_companion_probe.dart';
 import 'package:clipious/settings/states/server_settings.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -147,6 +149,63 @@ void main() {
       expect((await fileDb.getCurrentlySelectedServer()).url, other.url);
       expect(app.state.server!.url, other.url);
     });
+
+    for (final change in ['none', 'credentials', 'session', 'cancel']) {
+      test('sample host lookup on an inactive account with $change change',
+          () async {
+        final platform = debugDefaultTargetPlatformOverride;
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(() => debugDefaultTargetPlatformOverride = platform);
+        await db.useServer(other);
+        app.setServer(await db.getCurrentlySelectedServer());
+        final started = Completer<void>();
+        final released = Completer<void>();
+        final visited = <String>[];
+        final previous = service;
+        final client = MockClient((request) async {
+          visited.add(request.url.origin);
+          expect(request.url.origin, instance.url);
+          if (request.url.path == '/api/v1/videos/$setupSampleVideoId') {
+            started.complete();
+            await released.future;
+            return http.Response(
+                '{"videoId":"$setupSampleVideoId","title":"sample","dashUrl":"${instance.url}/api/manifest/dash/sample","adaptiveFormats":[],"formatStreams":[],"captions":[]}',
+                200,
+                headers: {'content-type': 'application/json'});
+          }
+          expect(request.followRedirects, isFalse);
+          return http.Response('', 307,
+              headers: {'location': 'https://media.example:8443/stream.mpd'});
+        });
+        service = Service(httpClient: client);
+        addTearDown(() {
+          client.close();
+          service = previous;
+        });
+        var current = true;
+        final check =
+            settings.findMediaCompanions(instance, isCurrent: () => current);
+        await started.future.timeout(const Duration(seconds: 3));
+        if (change == 'credentials') {
+          await db.upsertServer(instance.copyWith(authToken: 'changed'));
+        } else if (change == 'session') {
+          service.clearSessionCaches();
+        } else if (change == 'cancel') {
+          current = false;
+        }
+        released.complete();
+        if (change == 'none') {
+          expect(await check, {'https://media.example:8443'});
+          expect(visited.length, 2);
+        } else {
+          await expectLater(check, throwsStateError);
+          expect(visited.length, 1);
+        }
+        expect(
+            db.getAccount(instance.accountId)!.mediaCompanionOrigins, isEmpty);
+        expect(app.state.server!.url, other.url);
+      });
+    }
 
     test('a previous profile’s open editor cannot grant a playback host',
         () async {

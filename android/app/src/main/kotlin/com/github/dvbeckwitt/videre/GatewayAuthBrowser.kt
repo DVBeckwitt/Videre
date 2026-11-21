@@ -312,7 +312,7 @@ class GatewayAuthBrowser(private val activity: Activity) {
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, error: IOException) {
                     handler.post {
-                        if (current === request && !request.finishing) finish(error = "GATEWAY_TOKEN_UNAVAILABLE")
+                        if (current === request && !request.finishing) finish(error = NerdVpnTokenExchange.transportError(error))
                     }
                 }
 

@@ -12,13 +12,17 @@ import '../../videos/models/adaptive_format.dart';
 import '../../videos/models/video.dart';
 import '../models/db/server.dart';
 
+const setupSampleVideoId = 'dQw4w9WgXcQ';
+
+bool get supportsMediaCompanionDiscovery =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
 // Check one primary video route and one primary audio route from the sample.
 // Uncertain results leave setup usable. Only an origin is presented for consent.
 Future<Set<String>> discoverSetupMediaCompanions(
     Server server, Video video, http.Client client,
     {required bool Function() isCurrent}) async {
-  if (kIsWeb ||
-      defaultTargetPlatform != TargetPlatform.android ||
+  if (!supportsMediaCompanionDiscovery ||
       !isMediaCompanionEligibleServer(server) ||
       !isCurrent()) {
     return {};

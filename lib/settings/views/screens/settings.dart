@@ -15,6 +15,7 @@ import '../../../downloads/views/components/download_folder.dart';
 import '../../states/settings.dart';
 import '../components/music_provider_settings.dart';
 import 'network_proxy.dart';
+import 'release_notes.dart';
 
 settingsTheme(ColorScheme colorScheme) => SettingsThemeData(
     settingsSectionBackground: colorScheme.surface,
@@ -213,6 +214,12 @@ class SettingsScreen extends StatelessWidget {
                         Text('${locals.version}: ${state.packageInfo.version}'),
                     description: Text(
                         '${locals.build}: ${state.packageInfo.buildNumber}'),
+                  ),
+                  SettingsTile.navigation(
+                    leading: const Icon(Icons.history),
+                    title: Text(locals.releaseNotes),
+                    onPressed: (context) =>
+                        openReleaseNotes(context, state.packageInfo.version),
                   ),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.description_outlined),

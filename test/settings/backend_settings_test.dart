@@ -4,6 +4,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/services/backend_discovery.dart';
@@ -19,6 +20,19 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../support/media_companion_transport.dart';
 import '../test_app_cubit.dart';
+
+class _CompanionCheck extends Service {
+  final requests = <Server>[];
+  final hosts = <String>{};
+
+  @override
+  Future<Set<String>> findMediaCompanions(Server server,
+      {required bool Function() isCurrent}) async {
+    expect(isCurrent(), isTrue);
+    requests.add(server);
+    return hosts;
+  }
+}
 
 void main() {
   late TestAppCubit app;
@@ -104,6 +118,13 @@ void main() {
         '${tv ? 'TV' : 'phone'} explicitly allows and removes a companion on one account',
         (tester) async {
       mockMediaCompanionTransport();
+      final previous = service;
+      final check = _CompanionCheck();
+      service = check;
+      addTearDown(() {
+        service = previous;
+        check.httpClient.close();
+      });
       await tester.binding.setSurfaceSize(const Size(820, 2200));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       const account = Server(url: 'https://invidious.example');
@@ -130,6 +151,22 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      await selectTile('How do I find this address?');
+      expect(find.textContaining('leave this list empty'), findsOneWidget);
+      expect(find.textContaining('https://media.example.org:8443/companion'),
+          findsOneWidget);
+      expect(find.text('Invidious Companion configuration'), findsOneWidget);
+      await tester.tap(find.text('Videre’s media host guide'));
+      await tester.pumpAndSettle();
+      expect(
+          find.text(
+              'https://github.com/DVBeckwitt/Videre/blob/master/README.md#media-companion-hosts'),
+          findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(check.requests, isEmpty);
       await selectTile('Allow a media host');
       final allow = find.widgetWithText(FilledButton, 'Allow a media host');
       Future<void> confirm() async {
@@ -165,6 +202,24 @@ void main() {
       expect(db.getServer(account.accountId)!.mediaCompanionOrigins, [origin]);
       expect(db.getServer('https://other.example')!.mediaCompanionOrigins,
           isEmpty);
+
+      const suggested = 'https://sample-media.example.org:8443';
+      check.hosts.addAll({origin, suggested});
+      await selectTile('Find media hosts');
+      expect(check.requests.single.url, account.url);
+      expect(find.text('Allow $suggested'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(db.getServer(account.accountId)!.mediaCompanionOrigins, [origin]);
+      await selectTile('Find media hosts');
+      await tester.tap(find.widgetWithText(FilledButton, 'Allow $suggested'));
+      await tester.pumpAndSettle();
+      expect(db.getServer(account.accountId)!.mediaCompanionOrigins,
+          unorderedEquals([origin, suggested]));
+      await selectTile('Find media hosts');
+      expect(find.textContaining('This sample did not reveal'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
       if (tv) {
         await selectTile(origin);
       } else {
@@ -172,7 +227,8 @@ void main() {
             .tap(find.byTooltip('Remove $origin from allowed media hosts'));
         await tester.pumpAndSettle();
       }
-      expect(db.getServer(account.accountId)!.mediaCompanionOrigins, isEmpty);
+      expect(
+          db.getServer(account.accountId)!.mediaCompanionOrigins, [suggested]);
       expect(tester.takeException(), isNull);
     });
 

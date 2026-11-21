@@ -88,6 +88,10 @@ abstract class IDbClient {
   /// User-approved playback origins are updated separately from general
   /// account writes so a stale settings or login snapshot cannot restore trust.
   Future<Server> setMediaCompanionOrigin(Server expected, String origin,
+          {required bool enabled}) =>
+      setMediaCompanionOrigins(expected, {origin}, enabled: enabled);
+
+  Future<Server> setMediaCompanionOrigins(Server expected, Set<String> changes,
           {required bool enabled}) async =>
       throw UnsupportedError('Companion settings require the app database');
 

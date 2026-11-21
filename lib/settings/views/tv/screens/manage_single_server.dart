@@ -19,6 +19,7 @@ import '../../../../app/states/app.dart';
 import '../../../../utils.dart';
 import '../../../../utils/views/tv/components/tv_text_field.dart';
 import '../../../models/db/server.dart';
+import '../../../services/media_companion_probe.dart';
 import '../../../states/server_settings.dart';
 
 @RoutePage()
@@ -212,7 +213,18 @@ class TvManageSingleServerScreen extends StatelessWidget {
                     onCheck: cubit.checkApiAccess,
                     onSaveKey: cubit.setApiKey,
                   ),
-                if (!(NerdVpnAccess.supports(server) &&
+                if (state.usesNerdVpnAccountSignIn)
+                  SettingsTile(
+                    title: locals.nerdVpnAccountSignIn,
+                    enabled: !state.authenticating,
+                    description: isLoggedIn
+                        ? locals.loggedIn
+                        : locals.nerdVpnAccountSignInHelp,
+                    leading: const Icon(Icons.login),
+                    onSelected: (context) =>
+                        _accountAction(context, cubit.logInWithToken),
+                  )
+                else if (!(NerdVpnAccess.supports(server) &&
                     isNerdVpnOnionUrl(server.url))) ...[
                   SettingsTile(
                     title: locals.protectedServerSignIn,
@@ -278,6 +290,19 @@ class TvManageSingleServerScreen extends StatelessWidget {
                           context,
                           () => cubit.setMediaCompanionOrigin(server, origin,
                               enabled: false)),
+                    ),
+                  SettingsTile(
+                    title: locals.mediaCompanionHelpTitle,
+                    leading: const Icon(Icons.help_outline),
+                    onSelected: showMediaCompanionHelp,
+                  ),
+                  if (supportsMediaCompanionDiscovery)
+                    SettingsTile(
+                      title: locals.mediaCompanionFind,
+                      leading: const Icon(Icons.search),
+                      enabled: companions.length < maxMediaCompanionOrigins,
+                      onSelected: (context) => _accountAction(context,
+                          () => findMediaCompanionHosts(context, server)),
                     ),
                   SettingsTile(
                     title: locals.mediaCompanionAdd,

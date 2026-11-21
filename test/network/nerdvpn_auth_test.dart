@@ -163,6 +163,7 @@ void main() {
     'GATEWAY_TOKEN_EXPIRED',
     'GATEWAY_TOKEN_EXCHANGE_FAILED',
     'GATEWAY_TOKEN_UNAVAILABLE',
+    'GATEWAY_TOKEN_TIMEOUT',
   ]) {
     test('$code preserves the previous login and redacts native details',
         () async {
@@ -241,10 +242,17 @@ void main() {
       return accessStatus;
     });
 
-    await expectLater(
-        api.logIn(_account.accountId), throwsA(isA<GatewaySignInFailed>()));
-    await expectLater(
-        api.logIn(_account.accountId), throwsA(isA<NerdVpnAccessRequired>()));
+    final retryAt = now.add(const Duration(seconds: 17));
+    for (final expected in [
+      NerdVpnSignInProblem.rateLimited,
+      NerdVpnSignInProblem.cooldown,
+    ]) {
+      await expectLater(
+          api.logIn(_account.accountId),
+          throwsA(isA<NerdVpnSignInFailed>()
+              .having((e) => e.problem, 'reason', expected)
+              .having((e) => e.retryAt, 'retry time', retryAt)));
+    }
     expect(recoveries.single['error'], 'rate_limited');
     expect(recoveries.single['retryAfter'], '17');
     expect(recoveries.single['revision'], 0);

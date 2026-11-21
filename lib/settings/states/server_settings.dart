@@ -4,6 +4,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import '../../app/states/app.dart';
 import '../../globals.dart';
 import '../../player/states/player.dart';
+import '../../player/models/backend_playback.dart';
 import '../../recommendations/subscription_recommendations.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../network/media_companion.dart';
@@ -90,16 +91,40 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
     await _refreshServer(updated);
   }
 
-  Future<void> setMediaCompanionOrigin(Server expected, String origin,
-      {required bool enabled}) async {
-    if (isClosed ||
-        !isActiveProfile ||
-        expected.profileId != state.server.profileId ||
-        expected.accountId != state.server.accountId ||
-        expected.url != state.server.url) {
+  bool _matchesAccount(Server expected) =>
+      !isClosed &&
+      isActiveProfile &&
+      expected.profileId == state.server.profileId &&
+      expected.accountId == state.server.accountId &&
+      expected.url == state.server.url &&
+      _profileDb.getAccount(expected.accountId)?.url == expected.url;
+
+  Future<Set<String>> findMediaCompanions(Server expected,
+      {required bool Function() isCurrent}) async {
+    if (!_matchesAccount(expected)) {
       throw StateError('Server selection changed');
     }
-    final saved = await _profileDb.setMediaCompanionOrigin(expected, origin,
+    final saved = _savedServer();
+    final connection = BackendPlayback(saved);
+    final activeAccount = app.state.server?.accountId;
+    return service.findMediaCompanions(saved,
+        isCurrent: () =>
+            isCurrent() &&
+            _matchesAccount(saved) &&
+            app.state.server?.accountId == activeAccount &&
+            connection.matchesConnection(_savedServer()));
+  }
+
+  Future<void> setMediaCompanionOrigin(Server expected, String origin,
+          {required bool enabled}) =>
+      setMediaCompanionOrigins(expected, {origin}, enabled: enabled);
+
+  Future<void> setMediaCompanionOrigins(Server expected, Set<String> origins,
+      {required bool enabled}) async {
+    if (!_matchesAccount(expected)) {
+      throw StateError('Server selection changed');
+    }
+    final saved = await _profileDb.setMediaCompanionOrigins(expected, origins,
         enabled: enabled);
     final selected = await _profileDb.getCurrentlySelectedServer();
     final sameInstance = mediaCompanionInstanceAddress(selected) ==
@@ -289,5 +314,12 @@ sealed class ServerSettingsState with _$ServerSettingsState {
 
   const ServerSettingsState._();
 
-  bool get hasBasicAuth => server.customHeaders.containsKey("Authorization");
+  bool get hasBasicAuth => server.customHeaders.keys
+      .any((name) => name.toLowerCase() == 'authorization');
+
+  bool get usesNerdVpnAccountSignIn =>
+      NerdVpnAccess.supports(server) &&
+      !isNerdVpnOnionUrl(server.url) &&
+      !server.gatewayEnabled &&
+      !hasBasicAuth;
 }
