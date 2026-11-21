@@ -309,8 +309,9 @@ class BetterPlayerController {
     }
 
     final isAdaptive = _isDataSourceAsms(betterPlayerDataSource);
-    final waitForEmbeddedSubtitles =
-        isAdaptive && betterPlayerDataSource.useAsmsSubtitles == true;
+    final waitForEmbeddedSubtitles = isAdaptive &&
+        betterPlayerDataSource.useAsmsSubtitles == true &&
+        betterPlayerDataSource.mediaCompanions == null;
     if (isAdaptive) {
       final generation = _subtitleLoadGeneration;
       unawaited(_setupAsmsDataSource(betterPlayerDataSource).then<void>((_) {
@@ -368,12 +369,28 @@ class BetterPlayerController {
   Future _setupAsmsDataSource(BetterPlayerDataSource source) async {
     final sourceGeneration = _sourceGeneration;
     final manifest = source.inlineDashManifest;
+    final companionPolicy = source.mediaCompanions;
+    // Native Media3 owns companion routing. Dart discovery may inspect the
+    // selected frontend's manifest, but cannot contact companion addresses.
+    if (companionPolicy != null) {
+      final uri = Uri.tryParse(source.url);
+      if (uri == null ||
+          uri.scheme != 'https' ||
+          uri.host.isEmpty ||
+          uri.userInfo.isNotEmpty ||
+          uri.origin != companionPolicy['origin']) return;
+    }
     final data = manifest ??
-        await BetterPlayerAsmsUtils.getDataFromUrl(source.url, _getHeaders());
+        (companionPolicy == null
+            ? await BetterPlayerAsmsUtils.getDataFromUrl(
+                source.url, _getHeaders())
+            : await source.trackManifestLoader?.call(source.url));
     if (data != null) {
       final response = manifest != null
           ? await BetterPlayerDashUtils.parse(data, source.url)
-          : await BetterPlayerAsmsUtils.parse(data, source.url);
+          : await BetterPlayerAsmsUtils.parse(data, source.url,
+              loadSubtitles:
+                  source.useAsmsSubtitles == true && companionPolicy == null);
       if (_disposed ||
           sourceGeneration != _sourceGeneration ||
           !identical(_betterPlayerDataSource, source)) return;
@@ -384,7 +401,7 @@ class BetterPlayerController {
       }
 
       /// Load subtitles
-      if (betterPlayerDataSource?.useAsmsSubtitles == true) {
+      if (source.useAsmsSubtitles == true && companionPolicy == null) {
         final List<BetterPlayerAsmsSubtitle> asmsSubtitles =
             response.subtitles ?? [];
         asmsSubtitles.forEach((BetterPlayerAsmsSubtitle asmsSubtitle) {
@@ -556,6 +573,7 @@ class BetterPlayerController {
                   0,
           cacheKey: _betterPlayerDataSource?.cacheConfiguration?.key,
           playbackCache: betterPlayerDataSource.playbackCache,
+          mediaCompanions: betterPlayerDataSource.mediaCompanions,
           showNotification: _betterPlayerDataSource
               ?.notificationConfiguration?.showNotification,
           title: _betterPlayerDataSource?.notificationConfiguration?.title,
@@ -910,6 +928,7 @@ class BetterPlayerController {
           parameters: <String, dynamic>{
             "exception": currentVideoPlayerValue.errorDescription,
             "backendRetryable": currentVideoPlayerValue.backendRetryable,
+            "mediaOriginBlocked": currentVideoPlayerValue.mediaOriginBlocked,
           },
         ),
       );
@@ -1414,6 +1433,7 @@ class BetterPlayerController {
       uri: betterPlayerDataSource.url,
       useCache: true,
       headers: betterPlayerDataSource.headers,
+      mediaCompanions: betterPlayerDataSource.mediaCompanions,
       maxCacheSize: cacheConfig.maxCacheSize,
       maxCacheFileSize: cacheConfig.maxCacheFileSize,
       cacheKey: cacheConfig.key,

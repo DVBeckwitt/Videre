@@ -16,6 +16,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../globals.dart';
 import '../../downloads/services/download_playback_source.dart';
 import '../../main.dart';
+import '../../network/media_companion.dart';
 import '../../network/nerdvpn_access.dart';
 import '../../network/network_proxy.dart';
 import '../../network/tor_browser.dart';
@@ -85,8 +86,13 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   required bool preferProgressiveStartup,
   int? preferredQuality,
   String? lastSubtitle,
+  void Function()? onBlockedMediaOrigin,
 }) {
   final sources = <BetterPlayerDataSource>[];
+  final mediaCompanions =
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+          ? mediaCompanionContext(server)
+          : null;
   final cacheSession =
       '${DateTime.now().microsecondsSinceEpoch}:${identityHashCode(video)}';
   final seen = <String>{};
@@ -117,28 +123,30 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
       subtitles: subtitles,
       resolutions: _compatibleResolutions(server, resolutions, headers),
       headers: headers,
+      mediaCompanions: mediaCompanions,
+      trackManifestLoader: mediaCompanions == null
+          ? null
+          : (url) =>
+              service.dashManifestResolver.loadTrackManifest(url, server),
       playbackCache: playbackCacheIdentity(
           video: video,
           server: server,
           sourceUrl: url,
+          mediaCompanions: mediaCompanions != null,
           sessionId: cacheSession),
       useAsmsSubtitles: false,
     ));
   }
 
-  String? adaptiveUrl(String? value) {
-    final url = parseMediaUrl(value);
-    return url == null
-        ? null
-        : validatedMediaUrl(proxyMediaUrl(url, server, adaptive: true), server);
-  }
-
-  final hls = adaptiveUrl(video.hlsUrl);
+  String? admit(String? value, {bool adaptive = false}) =>
+      proxiedPlaybackMediaUrl(value, server,
+          adaptive: adaptive, onBlockedMediaOrigin: onBlockedMediaOrigin);
+  final hls = admit(video.hlsUrl, adaptive: true);
   if (hls != null) {
     add(hls, BetterPlayerVideoFormat.hls);
   }
 
-  final dash = adaptiveUrl(video.dashUrl);
+  final dash = admit(video.dashUrl, adaptive: true);
   void addDash() {
     if (dash != null) {
       add(dash, BetterPlayerVideoFormat.dash);
@@ -149,9 +157,7 @@ List<BetterPlayerDataSource> _buildPlaybackDataSources(
   final streamUrls = <String>{};
   for (final stream in (video.formatStreams ?? []).reversed) {
     if (stream.isLegacyHd720) continue;
-    final url = parseMediaUrl(stream.url);
-    if (url == null) continue;
-    final safeUrl = validatedMediaUrl(proxyMediaUrl(url, server), server);
+    final safeUrl = admit(stream.url);
     if (safeUrl == null || !streamUrls.add(_sourceKey(safeUrl))) continue;
     final resolution = _streamLabel([
       stream.resolution,
@@ -231,7 +237,9 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   final SettingsCubit settings;
   List<BetterPlayerDataSource> _playbackSources = const [];
   bool _downloadReuseFailed = false;
-  Server? _playbackServer;
+  ({BackendPlayback route, String? queueId})? _playbackOwner;
+  Server? get _playbackServer => _playbackOwner?.route.server;
+  bool Function()? _sourceContinuationIsCurrent;
   String? _playbackVideoId;
   int _playbackSourceIndex = 0;
   bool _playbackInitialized = false;
@@ -250,6 +258,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
   int _seekRevision = 0;
   bool _waitingForInitialSeek = false;
   bool _sourceBackendRetryable = false;
+  bool _sourceMediaOriginBlocked = false;
   bool _backendRecoveryPending = false;
   bool _recoveringInitializedPlayback = false;
   bool _playbackOffline = false;
@@ -312,7 +321,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackGeneration++;
     _clearQualityPreparation();
     _playbackSources = const [];
-    _playbackServer = null;
+    _playbackOwner = null;
+    _sourceContinuationIsCurrent = null;
     _playbackVideoId = null;
     _backendRecoveryPending = false;
     _requestedPlaying = false;
@@ -477,6 +487,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (event.betterPlayerEventType == BetterPlayerEventType.exception) {
       if (_backendRecoveryPending || _terminalErrorSent) return;
       final retryable = event.parameters?['backendRetryable'] == true;
+      _sourceMediaOriginBlocked |=
+          event.parameters?['mediaOriginBlocked'] == true;
       if (_playbackSourceIndex < _playbackSources.length &&
           _playbackSources[_playbackSourceIndex].playbackCache?['download']
               is Map) {
@@ -495,6 +507,14 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           !_downloadReuseFailed) {
         unawaited(_restoreSavedQualitySource(
             _playbackGeneration, _playbackSourceIndex));
+        return;
+      }
+      if (_playbackInitialized &&
+          !_playbackOffline &&
+          _sourceMediaOriginBlocked &&
+          !retryable &&
+          _playbackSourceIndex + 1 < _playbackSources.length) {
+        _continueAfterBlockedMedia();
         return;
       }
       if (_playbackInitialized && (_playbackOffline || !retryable)) {
@@ -523,6 +543,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       _playbackInitialized = true;
       _sourceFailurePending = false;
       _sourceBackendRetryable = false;
+      _sourceMediaOriginBlocked = false;
       // Loading a source resets river_player's Dart value to 1 without resetting
       // the native rate. Apply our rate for every source, including resolution
       // changes, while keeping it unchanged for the current video.
@@ -656,7 +677,11 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     // Publish it explicitly so transport controls do not claim playback.
     player.setEvent(const MediaEvent(
         state: MediaState.playing, type: MediaEventType.pause));
-    player.setEvent(const MediaEvent(state: MediaState.error));
+    player.setEvent(MediaEvent(
+        state: MediaState.error,
+        value: _sourceMediaOriginBlocked
+            ? PlaybackFailureReason.separateMediaHost
+            : null));
     final generation = _playbackGeneration;
     void pauseAfterSetup() {
       if (!isClosed &&
@@ -685,11 +710,39 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     Future<void>(() => _handleSourceFailure(generation, sourceIndex));
   }
 
+  void _continueAfterBlockedMedia() {
+    final owner = _playbackOwner;
+    if (owner == null) return;
+    final route = owner.route;
+    final database = db;
+    _sourceContinuationIsCurrent = () {
+      if (player.state.isAudio ||
+          player.state.currentQueueId != owner.queueId ||
+          !identical(db, database) ||
+          database.profileId != route.preferredServer.profileId ||
+          NetworkProxy.instance.isChanging) {
+        return false;
+      }
+      final selected = database.getAccount(route.preferredServer.accountId);
+      return selected != null && selected.inUse && route.matches(selected);
+    };
+    // Retire callbacks and in-flight seeks from the failed decoder. The
+    // existing source list advances once and retains the latest user intent.
+    _playbackGeneration++;
+    _playbackStartAt = _pendingSeek ??
+        (_waitingForInitialSeek ? _playbackStartAt : position());
+    _waitingForInitialSeek = _playbackStartAt > Duration.zero;
+    _playbackInitialized = false;
+    _sourceBackendRetryable = false;
+    _requestSourceFailure();
+  }
+
   bool _isCurrentAttempt(int generation, int sourceIndex) =>
       !isClosed &&
       _parentPlaybackGeneration == player.backendPlaybackGeneration &&
       generation == _playbackGeneration &&
-      sourceIndex == _playbackSourceIndex;
+      sourceIndex == _playbackSourceIndex &&
+      (_sourceContinuationIsCurrent?.call() ?? true);
 
   void _cancelSetup() {
     if (!_setupCancellation.isCompleted) {
@@ -833,6 +886,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _nativePositionSubscription = null;
     if (!_isCurrentAttempt(_playbackGeneration, _playbackSourceIndex)) return;
     _sourceBackendRetryable = false;
+    _sourceMediaOriginBlocked = false;
     final generation = _playbackGeneration;
     final sourceIndex = _playbackSourceIndex;
     var source = _playbackSources[sourceIndex];
@@ -850,12 +904,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     if (source.videoFormat == BetterPlayerVideoFormat.dash &&
         source.inlineDashManifest == null &&
         server != null &&
-        videoId != null) {
+        videoId != null &&
+        !allowsMediaCompanion(server, Uri.parse(source.url))) {
       String? resolved;
       String? downloadedManifest;
-      final canUseInlineManifest = !kIsWeb &&
-          defaultTargetPlatform == TargetPlatform.android &&
-          state.video?.liveNow != true;
+      final androidMedia =
+          !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+      final canUseInlineManifest = androidMedia && state.video?.liveNow != true;
       String? generateManifest() {
         final video = _qualityMetadata ?? state.video;
         if (!canUseInlineManifest || video == null) return null;
@@ -884,6 +939,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           isNerdVpnOnionUrl(server.url) ? generateManifest() : null;
       var generatedManifest = inlineManifest != null;
       var missingCheck = false;
+      var blockedRedirect = false;
       if (!generatedManifest) {
         try {
           resolved = await Future.any([
@@ -891,6 +947,8 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
                 throwRetryable: state.video?.backendPlayback != null ||
                     _recoveringInitializedPlayback,
                 onMissingCheck: () => missingCheck = true,
+                onMediaOriginBlocked:
+                    androidMedia ? () => blockedRedirect = true : null,
                 onManifest: canUseInlineManifest
                     ? (content) => downloadedManifest = content
                     : null),
@@ -924,24 +982,30 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
       if (!_isCurrentAttempt(generation, sourceIndex)) return;
       if (resolved == null &&
           inlineManifest == null &&
-          missingCheck &&
+          (missingCheck || blockedRedirect) &&
           !_sourceBackendRetryable) {
         inlineManifest = generateManifest();
         generatedManifest = inlineManifest != null;
       }
       if (resolved == null && inlineManifest == null) {
+        _sourceMediaOriginBlocked = blockedRedirect;
         _sourceFailurePending = true;
         await _handleSourceFailure(generation, sourceIndex);
         return;
       }
       source = source.copyWith(
         url: resolved,
+        headers: resolved != null &&
+                allowsMediaCompanion(server, Uri.parse(resolved))
+            ? const {}
+            : source.headers,
         playbackCache: (_qualityMetadata ?? state.video) == null
             ? null
             : playbackCacheIdentity(
                 video: (_qualityMetadata ?? state.video)!,
                 server: server,
                 sourceUrl: resolved ?? source.url,
+                mediaCompanions: source.mediaCompanions != null,
                 sessionId: source.playbackCache?['sessionId'] as String? ??
                     '$generation',
               ),
@@ -1004,9 +1068,13 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     } catch (error) {
       setupFailed = true;
       if (_isCurrentAttempt(generation, sourceIndex)) {
-        _sourceBackendRetryable |= (error is PlatformException &&
-                error.details is Map &&
-                (error.details as Map)['backendRetryable'] == true) ||
+        final details = error is PlatformException ? error.details : null;
+        _sourceMediaOriginBlocked |= (details is Map &&
+                details['mediaOriginBlocked'] == true) ||
+            (videoController?.videoPlayerController?.value.mediaOriginBlocked ??
+                false);
+        _sourceBackendRetryable |= (details is Map &&
+                details['backendRetryable'] == true) ||
             (videoController?.videoPlayerController?.value.backendRetryable ??
                 false);
       }
@@ -1083,6 +1151,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
               playing: _shouldPlay);
           player.reportPlaybackRecoveryReady(state.video!,
               playing: _shouldPlay);
+          _sourceContinuationIsCurrent = null;
         }
       } catch (_) {
         if (_isCurrentAttempt(generation, sourceIndex)) {
@@ -1181,10 +1250,12 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
     _playbackSourceIndex = 0;
     _playbackInitialized = false;
     _terminalErrorSent = false;
+    _sourceMediaOriginBlocked = false;
     _sourceFailurePending = false;
     _failedSubtitle = null;
     var newState = state.copyWith(startAt: startAt, subtitleFailed: false);
-    _playbackServer = null;
+    _playbackOwner = null;
+    _sourceContinuationIsCurrent = null;
     _playbackVideoId = null;
     if (newState.video != null || newState.offlineVideo != null) {
       final idedVideo = offline ? newState.offlineVideo! : newState.video!;
@@ -1254,14 +1325,19 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
         }
         final server = connection?.server ?? selectedServer;
         player.setRequestedBackend(newState.video!.videoId, playback);
-        _playbackServer = server;
+        _playbackOwner = (
+          route: connection ?? BackendPlayback(selectedServer),
+          queueId: player.state.currentQueueId,
+        );
         _playbackVideoId = newState.video!.videoId;
+        var blockedMediaOrigin = false;
         final sources = _buildPlaybackDataSources(
           newState.video!,
           server,
           preferDash: settings.state.useDash,
           preferProgressiveStartup: _canStartNerdVpnProgressive,
           preferredQuality: _videoQuality,
+          onBlockedMediaOrigin: () => blockedMediaOrigin = true,
           lastSubtitle: settings.state.rememberSubtitles
               ? settings.state.lastSubtitles
               : null,
@@ -1320,6 +1396,7 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
             _sourceBackendRetryable = true;
             if (await _recoverPlayback(generation, 0)) return;
           }
+          _sourceMediaOriginBlocked = blockedMediaOrigin;
           _emitTerminalPlaybackError();
           return;
         }
@@ -1605,14 +1682,10 @@ class VideoPlayerCubit extends MediaPlayerCubit<VideoPlayerState> {
           for (final format in refreshed.adaptiveFormats ?? const []) {
             final height = videoQualityHeight(
                 format.qualityLabel ?? format.resolution ?? '');
-            final url = parseMediaUrl(format.url);
             if (format.type.toLowerCase().startsWith('video/') &&
                 height != null &&
                 height > 0 &&
-                url != null &&
-                validatedMediaUrl(proxyMediaUrl(url, _playbackServer!),
-                        _playbackServer!) !=
-                    null) {
+                proxiedPlaybackMediaUrl(format.url, _playbackServer!) != null) {
               choices.putIfAbsent('${height}p', () => dash);
             }
           }

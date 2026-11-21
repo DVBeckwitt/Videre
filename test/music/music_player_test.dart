@@ -314,6 +314,26 @@ void main() {
     expect(progress.color, ThemePalette.classicDark.onPrimaryContainer);
   });
 
+  testWidgets(
+      'the song player distinguishes a blocked media host from other failures',
+      (tester) async {
+    await pump(tester);
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(MusicPlayer)))!;
+    player.setEvent(const MediaEvent(
+        state: MediaState.error,
+        value: PlaybackFailureReason.separateMediaHost));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(locals.playbackSeparateMediaHost), findsOneWidget);
+    expect(find.text(locals.retry), findsOneWidget);
+    player.setEvent(const MediaEvent(state: MediaState.error));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text(locals.playbackSeparateMediaHost), findsNothing);
+    expect(find.text(locals.musicPlaybackError), findsOneWidget);
+  });
+
   testWidgets('a failed song selection reports above the visible player route',
       (tester) async {
     var actions = 0;

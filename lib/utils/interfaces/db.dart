@@ -70,6 +70,27 @@ abstract class IDbClient {
 
   Future<List<Server>> getServers();
 
+  /// Null is undecided. An empty decision remembers an explicit decline.
+  Set<String>? mediaCompanionDecision(Server server) => null;
+
+  /// A setup decision is committed with the new account. An earlier choice
+  /// made for this profile and instance takes precedence.
+  Future<Server?> addAccountWithMediaCompanions(Server server,
+      {required bool Function() isCurrent, Set<String>? setupDecision}) async {
+    if (setupDecision != null) {
+      throw UnsupportedError('Companion settings require the app database');
+    }
+    if (!isCurrent()) return null;
+    await upsertServer(server.copyWith(mediaCompanionOrigins: []));
+    return getAccount(server.accountId);
+  }
+
+  /// User-approved playback origins are updated separately from general
+  /// account writes so a stale settings or login snapshot cannot restore trust.
+  Future<Server> setMediaCompanionOrigin(Server expected, String origin,
+          {required bool enabled}) async =>
+      throw UnsupportedError('Companion settings require the app database');
+
   deleteServerById(Server server);
 
   deleteServer(Server server) async {

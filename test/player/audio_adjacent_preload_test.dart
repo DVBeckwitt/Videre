@@ -182,6 +182,7 @@ void main() {
   String? heldTrack;
   String? failingTrack;
   late Set<String> retryableTracks;
+  late Set<String> blockedTracks;
 
   Iterable<_Decoder> loaded(String id) =>
       decoders.where((d) => d.loads.contains(id));
@@ -194,6 +195,7 @@ void main() {
     heldTrack = null;
     failingTrack = null;
     retryableTracks = {};
+    blockedTracks = {};
     messenger.setMockMethodCallHandler(mainChannel, (call) async {
       if (call.method == 'init') {
         final configuration = call.arguments['audioLoadConfiguration'] as Map?;
@@ -212,11 +214,15 @@ void main() {
                 microseconds: method.arguments['initialPosition'] as int? ?? 0);
             decoder.loadPositions.add(start);
             if (id == heldTrack) await loadGate?.future;
-            if (retryableTracks.contains(id)) {
+            if (retryableTracks.contains(id) || blockedTracks.contains(id)) {
               throw PlatformException(
                   code: '2002',
                   message: 'Stream unavailable: $id',
-                  details: {'backendRetryable': true, 'index': 0});
+                  details: {
+                    'backendRetryable': retryableTracks.contains(id),
+                    'mediaOriginBlocked': blockedTracks.contains(id),
+                    'index': 0
+                  });
             }
             if (id == failingTrack) {
               throw PlatformException(code: '400', message: 'Warm load failed');
@@ -458,6 +464,25 @@ void main() {
       expect(audio.state.error, isNull);
     });
   }
+
+  test(
+      'a blocked manual selection tries remaining formats without rotating the playing song',
+      () async {
+    final original = loaded('current').single;
+    final selected = next.copyWith(adaptiveFormats: [
+      ...next.adaptiveFormats!,
+      AdaptiveFormat(null, '64000', null, '${_server.url}/last', '139',
+          'audio/mp4', '100', '1', 'RECTANGULAR', 'mp4', 'mp4a', null, null),
+    ]);
+    blockedTracks.addAll(['next', 'last']);
+    expect(
+        await audio.prepareMusicSelection(selected, Duration.zero, () => true),
+        isFalse);
+    expect(loaded('last'), hasLength(1));
+    expectOriginalPlaying(original);
+    expect(player.events.where((event) => event.state == MediaState.error),
+        isEmpty);
+  });
 
   test(
       'exhausting retryable native sources releases the manual slot and reports the final cause',

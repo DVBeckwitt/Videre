@@ -217,13 +217,17 @@ void main() {
   late bool nativePlaying;
   late int nativePosition;
 
-  Future<void> error({required bool retryable}) =>
+  Future<void> error(
+          {required bool retryable, bool mediaOriginBlocked = false}) =>
       messenger.handlePlatformMessage(
           events.name,
           const StandardMethodCodec().encodeErrorEnvelope(
               code: 'VideoError',
               message: 'Playback failed',
-              details: {'backendRetryable': retryable}),
+              details: {
+                'backendRetryable': retryable,
+                'mediaOriginBlocked': mediaOriginBlocked,
+              }),
           (_) {});
 
   setUp(() async {
@@ -1983,6 +1987,127 @@ void main() {
       expect(retryService.retriedVideos, isEmpty);
       expect(nativePlaying, isFalse);
       expect(playCalls, 0);
+    } finally {
+      await video.close();
+    }
+  });
+
+  for (final pauseDuringSwitch in [false, true]) {
+    test(
+        'DASH child origin block advances once and resumes, pause=$pauseDuringSwitch',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      await settings.setUseDash(true);
+      retryService.httpClient.close();
+      service = retryService = _RetryService(
+          httpClient: MockClient((request) async =>
+              http.Response(_staticDashManifest, 200, request: request)));
+      final video = cubit();
+      final original = video.state.video!
+          .copyWith(dashUrl: 'https://instance.example/manifest.mpd');
+      final held = heldSources['https://instance.example/video-a-1.mp4'] =
+          Completer<void>();
+      final heldSeek = heldSeeks[18000] = Completer<void>();
+      Future<void>? seeking;
+      try {
+        video.switchVideo(original);
+        await _flush();
+        expect(sources.single['formatHint'], 'dash');
+        await video.seek(const Duration(seconds: 12));
+        if (pauseDuringSwitch) {
+          seeking = video.seek(const Duration(seconds: 18));
+          await _flush();
+        }
+        final previousPlayCalls = playCalls;
+        await error(retryable: false, mediaOriginBlocked: true);
+        await _flush();
+        expect(sources.last['initialPositionMs'],
+            pauseDuringSwitch ? 18000 : 12000);
+        if (pauseDuringSwitch) {
+          video.pause();
+          await video.seek(const Duration(seconds: 25));
+        }
+        held.complete();
+        heldSeek.complete();
+        await seeking;
+        await _flush();
+        expect(
+            video.position(), Duration(seconds: pauseDuringSwitch ? 25 : 12));
+        expect(nativePlaying, !pauseDuringSwitch);
+        if (pauseDuringSwitch) expect(playCalls, previousPlayCalls);
+        await error(retryable: false, mediaOriginBlocked: true);
+        await _flush();
+        expect(sources.map((source) => source['uri']), [
+          'https://instance.example/manifest.mpd?local=true',
+          'https://instance.example/video-a-1.mp4',
+        ]);
+        expect(player.state.mediaEvent.value,
+            PlaybackFailureReason.separateMediaHost);
+        expect(player.refreshRequests, isEmpty);
+        expect(retryService.retriedVideos, isEmpty);
+      } finally {
+        if (!held.isCompleted) held.complete();
+        if (!heldSeek.isCompleted) heldSeek.complete();
+        await seeking;
+        await video.close();
+      }
+    });
+  }
+
+  for (final change in ['mode', 'credentials', 'queue']) {
+    test('late media-source fallback cannot autoplay after $change changes',
+        () async {
+      final video = cubit(count: 2);
+      final held = heldSources['https://instance.example/video-a-2.mp4'] =
+          Completer<void>();
+      try {
+        await video.playVideo(false);
+        await error(retryable: false, mediaOriginBlocked: true);
+        await _flush();
+        expect(sources, hasLength(2));
+        final previousPlayCalls = playCalls;
+        switch (change) {
+          case 'mode':
+            player.switchAudio(true);
+          case 'credentials':
+            await db.upsertServer((await db.getCurrentlySelectedServer())
+                .copyWith(authToken: 'replacement'));
+          case 'queue':
+            player.emit(player.state.copyWith(
+                currentlyPlaying: _video('next', BackendPlayback(preferred))));
+        }
+        held.complete();
+        await _flush();
+        expect(playCalls, previousPlayCalls);
+        expect(player.refreshRequests, isEmpty);
+        expect(retryService.retriedVideos, isEmpty);
+      } finally {
+        if (!held.isCompleted) held.complete();
+        await video.close();
+      }
+    });
+  }
+
+  test('a refused replacement manifest keeps its own terminal reason',
+      () async {
+    retryService.httpClient.close();
+    service = retryService = _RetryService(
+        httpClient: MockClient((request) async =>
+            http.Response('Refused', 429, headers: {'retry-after': '60'})));
+    final video = cubit();
+    try {
+      video.switchVideo(video.state.video!
+          .copyWith(dashUrl: 'https://instance.example/manifest.mpd'));
+      await _flush();
+      expect(sources.single['uri'], 'https://instance.example/video-a-1.mp4');
+      await error(retryable: false, mediaOriginBlocked: true);
+      await _flush();
+      expect(sources, hasLength(1));
+      expect(player.state.mediaEvent.state, MediaState.error);
+      expect(player.state.mediaEvent.value, isNull);
+      expect(player.refreshRequests, isEmpty);
+      expect(retryService.retriedVideos, isEmpty);
     } finally {
       await video.close();
     }

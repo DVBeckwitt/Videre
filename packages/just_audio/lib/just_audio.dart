@@ -350,6 +350,7 @@ class AudioPlayer {
               message: event.errorMessage,
               index: event.currentIndex,
               backendRetryable: event.backendRetryable,
+              mediaOriginBlocked: event.mediaOriginBlocked,
             ))
         .distinct()
         .where((error) => error.code != null)
@@ -358,6 +359,7 @@ class AudioPlayer {
               error.message,
               error.index,
               backendRetryable: error.backendRetryable,
+              mediaOriginBlocked: error.mediaOriginBlocked,
             )));
     _playerStateSubject.addStream(playerEventStream
         .map((event) =>
@@ -1701,6 +1703,12 @@ class AudioPlayer {
             message.processingState != ProcessingStateMessage.idle) {
           _platformLoading = false;
         }
+        final nativeError = _nativePlaybackError;
+        final matchingError = nativeError?.code == message.errorCode &&
+                nativeError?.message == message.errorMessage &&
+                nativeError?.index == index
+            ? nativeError
+            : null;
         final newPlaybackEvent = PlaybackEvent(
           // The platform may emit an idle state while it's starting up which we
           // override here.
@@ -1718,10 +1726,8 @@ class AudioPlayer {
           androidAudioSessionId: message.androidAudioSessionId,
           errorCode: message.errorCode,
           errorMessage: message.errorMessage,
-          backendRetryable: _nativePlaybackError?.code == message.errorCode &&
-              _nativePlaybackError?.message == message.errorMessage &&
-              _nativePlaybackError?.index == index &&
-              (_nativePlaybackError?.backendRetryable ?? false),
+          backendRetryable: matchingError?.backendRetryable ?? false,
+          mediaOriginBlocked: matchingError?.mediaOriginBlocked ?? false,
         );
         _loadFuture = Future.value(newPlaybackEvent.duration);
         if (newPlaybackEvent == playbackEvent) {
@@ -1958,7 +1964,8 @@ class AudioPlayer {
       return PlayerInterruptedException(e.message);
     } else {
       return PlayerException(code, e.message, index,
-          backendRetryable: details?['backendRetryable'] == true);
+          backendRetryable: details?['backendRetryable'] == true,
+          mediaOriginBlocked: details?['mediaOriginBlocked'] == true);
     }
   }
 }
@@ -1983,8 +1990,11 @@ class PlayerException implements Exception {
   /// transport or gateway failure. Other errors default to false.
   final bool backendRetryable;
 
+  /// True when the instance's media request crossed its allowed origin.
+  final bool mediaOriginBlocked;
+
   PlayerException(this.code, this.message, this.index,
-      {this.backendRetryable = false});
+      {this.backendRetryable = false, this.mediaOriginBlocked = false});
 
   @override
   String toString() => "($code) $message";
@@ -2158,6 +2168,9 @@ class PlaybackEvent {
   /// Whether this error was identified as a transient backend failure.
   final bool backendRetryable;
 
+  /// Whether the native transport blocked a different media origin.
+  final bool mediaOriginBlocked;
+
   PlaybackEvent({
     this.processingState = ProcessingState.idle,
     DateTime? updateTime,
@@ -2170,6 +2183,7 @@ class PlaybackEvent {
     this.errorCode,
     this.errorMessage,
     this.backendRetryable = false,
+    this.mediaOriginBlocked = false,
   }) : updateTime = updateTime ?? DateTime.now();
 
   /// Returns a copy of this event with given properties replaced.
@@ -2185,6 +2199,7 @@ class PlaybackEvent {
     int? errorCode,
     String? errorMessage,
     bool? backendRetryable,
+    bool? mediaOriginBlocked,
   }) =>
       PlaybackEvent(
         processingState: processingState ?? this.processingState,
@@ -2199,6 +2214,7 @@ class PlaybackEvent {
         errorCode: errorCode ?? this.errorCode,
         errorMessage: errorMessage ?? this.errorMessage,
         backendRetryable: backendRetryable ?? this.backendRetryable,
+        mediaOriginBlocked: mediaOriginBlocked ?? this.mediaOriginBlocked,
       );
 
   @override
@@ -2214,6 +2230,7 @@ class PlaybackEvent {
         errorCode,
         errorMessage,
         backendRetryable,
+        mediaOriginBlocked,
       );
 
   @override
@@ -2230,7 +2247,8 @@ class PlaybackEvent {
       androidAudioSessionId == other.androidAudioSessionId &&
       errorCode == other.errorCode &&
       errorMessage == other.errorMessage &&
-      backendRetryable == other.backendRetryable;
+      backendRetryable == other.backendRetryable &&
+      mediaOriginBlocked == other.mediaOriginBlocked;
 
   @override
   String toString() =>
@@ -2860,19 +2878,29 @@ abstract class AudioSource {
   static UriAudioSource uri(Uri uri,
       {Map<String, String>? headers,
       dynamic tag,
-      Map<String, Object?>? playbackCache}) {
+      Map<String, Object?>? playbackCache,
+      Map<String, Object?>? mediaCompanions}) {
     bool hasExtension(Uri uri, String extension) =>
         uri.path.toLowerCase().endsWith('.$extension') ||
         uri.fragment.toLowerCase().endsWith('.$extension');
     if (hasExtension(uri, 'mpd')) {
       return DashAudioSource(uri,
-          headers: headers, tag: tag, playbackCache: playbackCache);
+          headers: headers,
+          tag: tag,
+          playbackCache: playbackCache,
+          mediaCompanions: mediaCompanions);
     } else if (hasExtension(uri, 'm3u8')) {
       return HlsAudioSource(uri,
-          headers: headers, tag: tag, playbackCache: playbackCache);
+          headers: headers,
+          tag: tag,
+          playbackCache: playbackCache,
+          mediaCompanions: mediaCompanions);
     } else {
       return ProgressiveAudioSource(uri,
-          headers: headers, tag: tag, playbackCache: playbackCache);
+          headers: headers,
+          tag: tag,
+          playbackCache: playbackCache,
+          mediaCompanions: mediaCompanions);
     }
   }
 
@@ -2962,9 +2990,13 @@ abstract class IndexedAudioSource extends AudioSource {
 abstract class UriAudioSource extends IndexedAudioSource {
   final Uri uri;
   final Map<String, String>? headers;
+
+  /// Per-source Android media origins. Passed only to the native transport.
+  final Map<String, Object?>? mediaCompanions;
   Uri? _overrideUri;
 
-  UriAudioSource(this.uri, {this.headers, dynamic tag, Duration? duration})
+  UriAudioSource(this.uri,
+      {this.headers, this.mediaCompanions, dynamic tag, Duration? duration})
       : super(tag: tag, duration: duration);
 
   /// If [uri] points to an asset, this gives us [_overrideUri] which is the URI
@@ -2989,6 +3021,8 @@ abstract class UriAudioSource extends IndexedAudioSource {
     } else if (uri.scheme != 'file' &&
         !kIsWeb &&
         _player!._useProxyForRequestHeaders &&
+        !(mediaCompanions != null &&
+            defaultTargetPlatform == TargetPlatform.android) &&
         (headers != null || _player!._userAgent != null)) {
       await _player!._proxy.ensureRunning();
       _overrideUri = _player!._proxy.addUriAudioSource(this);
@@ -3065,6 +3099,7 @@ class ProgressiveAudioSource extends UriAudioSource {
   ProgressiveAudioSource(
     super.uri, {
     super.headers,
+    super.mediaCompanions,
     super.tag,
     super.duration,
     this.options,
@@ -3079,22 +3114,28 @@ class ProgressiveAudioSource extends UriAudioSource {
         tag: tag,
         options: options?._toMessage(),
         playbackCache: playbackCache,
+        mediaCompanions: mediaCompanions,
       );
 }
 
 class _CachedProgressiveAudioSourceMessage
     extends ProgressiveAudioSourceMessage {
   final Map<String, Object?>? playbackCache;
+  final Map<String, Object?>? mediaCompanions;
   _CachedProgressiveAudioSourceMessage(
       {required super.id,
       required super.uri,
       super.headers,
       super.tag,
       super.options,
-      this.playbackCache});
+      this.playbackCache,
+      this.mediaCompanions});
   @override
   Map<dynamic, dynamic> toMap() => super.toMap()
-    ..addAll({if (playbackCache != null) 'playbackCache': playbackCache});
+    ..addAll({
+      if (playbackCache != null) 'playbackCache': playbackCache,
+      if (mediaCompanions != null) 'mediaCompanions': mediaCompanions
+    });
 }
 
 /// A publisher-hosted podcast file. Android permits publisher/CDN redirects
@@ -3135,12 +3176,12 @@ class _PodcastAudioSourceMessage extends ProgressiveAudioSourceMessage {
 /// your device to forward HTTP requests with headers included.
 class DashAudioSource extends UriAudioSource {
   final Map<String, Object?>? playbackCache;
-  DashAudioSource(Uri uri,
-      {Map<String, String>? headers,
-      dynamic tag,
-      Duration? duration,
-      this.playbackCache})
-      : super(uri, headers: headers, tag: tag, duration: duration);
+  DashAudioSource(super.uri,
+      {super.headers,
+      super.tag,
+      super.duration,
+      super.mediaCompanions,
+      this.playbackCache});
 
   @override
   AudioSourceMessage _toMessage() => _CachedDashAudioSourceMessage(
@@ -3149,20 +3190,26 @@ class DashAudioSource extends UriAudioSource {
         headers: _mergedHeaders,
         tag: tag,
         playbackCache: playbackCache,
+        mediaCompanions: mediaCompanions,
       );
 }
 
 class _CachedDashAudioSourceMessage extends DashAudioSourceMessage {
   final Map<String, Object?>? playbackCache;
+  final Map<String, Object?>? mediaCompanions;
   _CachedDashAudioSourceMessage(
       {required super.id,
       required super.uri,
       super.headers,
       super.tag,
-      this.playbackCache});
+      this.playbackCache,
+      this.mediaCompanions});
   @override
   Map<dynamic, dynamic> toMap() => super.toMap()
-    ..addAll({if (playbackCache != null) 'playbackCache': playbackCache});
+    ..addAll({
+      if (playbackCache != null) 'playbackCache': playbackCache,
+      if (mediaCompanions != null) 'mediaCompanions': mediaCompanions
+    });
 }
 
 /// An [AudioSource] representing an HLS stream. The following URI schemes are
@@ -3180,12 +3227,12 @@ class _CachedDashAudioSourceMessage extends DashAudioSourceMessage {
 /// your device to forward HTTP requests with headers included.
 class HlsAudioSource extends UriAudioSource {
   final Map<String, Object?>? playbackCache;
-  HlsAudioSource(Uri uri,
-      {Map<String, String>? headers,
-      dynamic tag,
-      Duration? duration,
-      this.playbackCache})
-      : super(uri, headers: headers, tag: tag, duration: duration);
+  HlsAudioSource(super.uri,
+      {super.headers,
+      super.tag,
+      super.duration,
+      super.mediaCompanions,
+      this.playbackCache});
 
   @override
   AudioSourceMessage _toMessage() => _CachedHlsAudioSourceMessage(
@@ -3194,20 +3241,26 @@ class HlsAudioSource extends UriAudioSource {
         headers: _mergedHeaders,
         tag: tag,
         playbackCache: playbackCache,
+        mediaCompanions: mediaCompanions,
       );
 }
 
 class _CachedHlsAudioSourceMessage extends HlsAudioSourceMessage {
   final Map<String, Object?>? playbackCache;
+  final Map<String, Object?>? mediaCompanions;
   _CachedHlsAudioSourceMessage(
       {required super.id,
       required super.uri,
       super.headers,
       super.tag,
-      this.playbackCache});
+      this.playbackCache,
+      this.mediaCompanions});
   @override
   Map<dynamic, dynamic> toMap() => super.toMap()
-    ..addAll({if (playbackCache != null) 'playbackCache': playbackCache});
+    ..addAll({
+      if (playbackCache != null) 'playbackCache': playbackCache,
+      if (mediaCompanions != null) 'mediaCompanions': mediaCompanions
+    });
 }
 
 /// An [AudioSource] for a period of silence.

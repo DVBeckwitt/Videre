@@ -9,7 +9,10 @@ import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:http/testing.dart';
+
+class _LoopbackHttpOverrides extends HttpOverrides {}
 
 const server = Server(
   url: 'https://inv.example',
@@ -31,6 +34,49 @@ src="$src"></video></body></html>
 ''';
 
 void main() {
+  test(
+      'track discovery follows a local redirect and stops before another origin',
+      () async {
+    final instance = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final companion = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => instance.close(force: true));
+    addTearDown(() => companion.close(force: true));
+    var companionRequests = 0;
+    companion.listen((request) async {
+      companionRequests++;
+      await request.response.close();
+    });
+    final receivedHeaders = <String?>[];
+    instance.listen((request) async {
+      final response = request.response;
+      receivedHeaders.add(request.headers.value('x-instance-only'));
+      switch (request.uri.path) {
+        case '/start':
+          response.statusCode = 302;
+          response.headers.set('location', '/local');
+        case '/external':
+          response.statusCode = 302;
+          response.headers
+              .set('location', 'http://127.0.0.1:${companion.port}/manifest');
+        default:
+          response.write('manifest');
+      }
+      await response.close();
+    });
+    final origin = 'http://127.0.0.1:${instance.port}';
+    final client = IOClient(_LoopbackHttpOverrides().createHttpClient(null));
+    addTearDown(client.close);
+    final resolver = DashManifestResolver(client);
+    final selected =
+        Server(url: origin, customHeaders: const {'x-instance-only': 'test'});
+    expect(await resolver.loadTrackManifest('$origin/start', selected),
+        'manifest');
+    expect(
+        await resolver.loadTrackManifest('$origin/external', selected), isNull);
+    expect(receivedHeaders, ['test', 'test', 'test']);
+    expect(companionRequests, 0);
+  });
+
   for (final scheme in ['http', 'https']) {
     testWidgets('slow $scheme onion manifests retain adaptive playback',
         (tester) async {
@@ -997,6 +1043,184 @@ void main() {
         original);
     expect(calls, 1);
     expect(bodies, isEmpty);
+  });
+
+  for (final trusted in [false, true]) {
+    for (final recoverSignature in [false, true]) {
+      test(
+          'media redirect trusted=$trusted after signature recovery=$recoverSignature',
+          () async {
+        final instance = server.copyWith(
+            mediaCompanionOrigins: trusted ? ['https://media.example'] : []);
+        final seen = <Uri>[];
+        final resolver = DashManifestResolver(MockClient((request) async {
+          seen.add(request.url);
+          expect(request.url.origin, instance.url);
+          expect(request.followRedirects, isFalse);
+          if (recoverSignature && request.url.toString() == original) {
+            return http.Response('No check ID.', 400);
+          }
+          if (request.url.path == '/watch') {
+            return http.Response(watchPage(recovered), 200);
+          }
+          return http.Response('', 307,
+              headers: {'location': 'https://media.example/video.mpd'});
+        }));
+        var blocked = 0;
+        expect(
+            await resolver.resolve(original, videoId, instance,
+                onMediaOriginBlocked: () => blocked++),
+            trusted ? (recoverSignature ? recovered : original) : isNull);
+        expect(blocked, trusted ? 0 : 1);
+        expect(seen, hasLength(recoverSignature ? 3 : 1));
+      });
+    }
+  }
+
+  const signedCompanion =
+      'https://media.example:8443/companion/api/manifest/dash/id/$videoId'
+      '?local=true&check=sig%2bABC%3d&part=1&part=2';
+  final companionAccount =
+      server.copyWith(mediaCompanionOrigins: ['https://media.example:8443']);
+
+  for (final relative in [false, true]) {
+    test('signed watch-page companion is handed to native, relative=$relative',
+        () async {
+      final requests = <Uri>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        requests.add(request.url);
+        expect(request.url.origin, server.url);
+        expect(request.headers['X-Instance-Auth'], 'test-only');
+        if (request.url.toString() == original) {
+          return http.Response('No check ID.', 400);
+        }
+        final src = relative ? signedCompanion.substring(6) : signedCompanion;
+        return http.Response(watchPage(src.replaceAll('&', '&amp;')), 200);
+      }));
+      expect(
+          await resolver.resolve(original, videoId, companionAccount,
+              onMediaOriginBlocked: () => fail('Host is approved'),
+              onManifest: (_) => fail('Native owns the companion request')),
+          signedCompanion);
+      expect(requests.map((uri) => uri.path),
+          [Uri.parse(original).path, '/watch']);
+    });
+  }
+
+  for (final (label, src, expectedBlocked) in [
+    ('wrong port', signedCompanion.replaceFirst(':8443', ''), true),
+    ('wrong ID', signedCompanion.replaceFirst(videoId, 'other'), false),
+    ('missing check', signedCompanion.replaceFirst('check=', 'other='), false),
+    (
+      'local disabled',
+      signedCompanion.replaceFirst('local=true', 'local=false'),
+      false
+    ),
+    ('conflicting local flags', '$signedCompanion&local=true', false),
+    ('duplicate check', '$signedCompanion&check=other', false),
+    ('username', signedCompanion.replaceFirst('media.', 'user@media.'), false),
+    ('HTTP', signedCompanion.replaceFirst('https:', 'http:'), false),
+    (
+      'upstream',
+      signedCompanion.replaceFirst('media.example:8443', 'r1.googlevideo.com'),
+      false
+    ),
+  ]) {
+    test('signed watch-page companion rejected for $label', () async {
+      var calls = 0;
+      var blocked = false;
+      final resolver = DashManifestResolver(MockClient((request) async {
+        calls++;
+        expect(request.url.origin, server.url);
+        return calls == 1
+            ? http.Response('No check ID.', 400)
+            : http.Response(watchPage(src), 200);
+      }));
+      expect(
+          await resolver.resolve(original, videoId, companionAccount,
+              onMediaOriginBlocked: () => blocked = true),
+          isNull);
+      expect(blocked, expectedBlocked);
+      expect(calls, 2);
+    });
+  }
+
+  for (final download in [false, true]) {
+    test('signed watch-page companion stays native-only for download=$download',
+        () async {
+      final requests = <Uri>[];
+      final resolver = DashManifestResolver(MockClient((request) async {
+        requests.add(request.url);
+        expect(request.url.origin, server.url);
+        return requests.length == 1
+            ? http.Response('No check ID.', 400)
+            : http.Response(watchPage(signedCompanion), 200);
+      }));
+      expect(
+          await resolver.resolve(original, videoId, companionAccount,
+              requireManifest: download,
+              onMediaOriginBlocked: download
+                  ? () => fail('Download cannot follow a companion')
+                  : null),
+          isNull);
+      expect(requests, hasLength(2));
+    });
+  }
+
+  test(
+      'a later valid signed watch-page source clears earlier blocked candidates',
+      () async {
+    final resolver = DashManifestResolver(MockClient((request) async {
+      expect(request.url.origin, server.url);
+      if (request.url.toString() == original) {
+        return http.Response('No check ID.', 400);
+      }
+      final unapproved =
+          signedCompanion.replaceFirst('media.example', 'other.example');
+      return http.Response('''<video id="player">
+        <source type="application/dash+xml" src="https://[invalid">
+        <source type="application/dash+xml" src="$unapproved">
+        <source type="application/dash+xml" src="$signedCompanion">
+      </video>''', 200);
+    }));
+    expect(
+        await resolver.resolve(original, videoId, companionAccount,
+            onMediaOriginBlocked: () => fail('A later source is approved')),
+        signedCompanion);
+  });
+
+  test('a watch-page refusal never hands a signed companion to native',
+      () async {
+    var requests = 0;
+    final resolver = DashManifestResolver(MockClient((request) async {
+      requests++;
+      expect(request.url.origin, server.url);
+      return requests == 1
+          ? http.Response('No check ID.', 400)
+          : http.Response(watchPage(signedCompanion), 403);
+    }));
+    await expectLater(
+        resolver.resolve(original, videoId, companionAccount,
+            onMediaOriginBlocked: () => fail('Access refusal is terminal')),
+        throwsA(isA<InvidiousServiceError>()
+            .having((error) => error.statusCode, 'status', 403)));
+    expect(requests, 2);
+  });
+
+  test('an external manifest redirect with a cooldown stays terminal',
+      () async {
+    final resolver = DashManifestResolver(MockClient((request) async {
+      expect(request.url.toString(), original);
+      return http.Response('', 307, headers: {
+        'location': 'https://media.example/manifest',
+        'retry-after': '60',
+      });
+    }));
+    await expectLater(
+        resolver.resolve(original, videoId, server,
+            onMediaOriginBlocked: () => fail('Cooldown cannot start fallback')),
+        throwsA(isA<InvidiousServiceError>().having(
+            (e) => e.retryAfter, 'retryAfter', const Duration(minutes: 1))));
   });
 
   for (final scheme in ['http', 'https']) {

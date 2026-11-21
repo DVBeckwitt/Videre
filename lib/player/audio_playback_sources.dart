@@ -1,10 +1,13 @@
-import 'package:flutter/foundation.dart' show mapEquals;
+import 'package:flutter/foundation.dart';
+import 'package:freezed_annotation/freezed_annotation.dart'
+    show DeepCollectionEquality;
 import 'package:just_audio/just_audio.dart';
 
 import '../downloads/models/downloaded_video.dart';
 import '../downloads/services/download_playback_source.dart';
 import '../extensions.dart';
 import '../globals.dart';
+import '../network/media_companion.dart';
 import '../videos/models/adaptive_format.dart';
 import '../videos/models/video.dart';
 import 'media_source.dart';
@@ -31,7 +34,9 @@ bool samePreparedAudioSource(
       next is! UriAudioSource ||
       first.runtimeType != next.runtimeType ||
       first.uri != next.uri ||
-      !mapEquals(first.headers, next.headers)) {
+      !mapEquals(first.headers, next.headers) ||
+      !const DeepCollectionEquality()
+          .equals(first.mediaCompanions, next.mediaCompanions)) {
     return false;
   }
   if (first is ProgressiveAudioSource && next is ProgressiveAudioSource) {
@@ -51,6 +56,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   MusicStreamingQuality? streamingQualityOverride,
   BackendPlayback? qualityRoute,
   bool skipDownload = false,
+  void Function()? onBlockedMediaOrigin,
 }) async {
   final sources = <AudioSource>[];
   final qualities = <MusicAudioQuality>{};
@@ -96,6 +102,10 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
       throw StateError('Playback context changed');
     }
     final server = playback?.server ?? selectedServer;
+    final companions =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+            ? mediaCompanionContext(selectedServer)
+            : null;
     if (video == null) return null;
     final music = video.musicMetadata != null;
     if (music) {
@@ -122,12 +132,10 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
         .toList()
         .reversed
         .map((stream) => stream.url);
-    String? admit(String candidate) {
-      final parsed = parseMediaUrl(candidate);
-      return parsed == null
-          ? null
-          : validatedMediaUrl(proxyMediaUrl(parsed, server), server);
-    }
+    var blockedMediaOrigin = false;
+    String? admit(String candidate) =>
+        proxiedPlaybackMediaUrl(candidate, selectedServer,
+            onBlockedMediaOrigin: () => blockedMediaOrigin = true);
 
     final audioByUrl = <String, AdaptiveFormat>{};
     final adaptive = (video.adaptiveFormats ?? <AdaptiveFormat>[])
@@ -173,17 +181,20 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     for (final url in candidates) {
       final source = AudioSource.uri(Uri.parse(url),
           headers: mediaHeaders(server, url),
+          mediaCompanions: companions,
           playbackCache: playbackCacheIdentity(
             video: video,
             server: server,
             sourceUrl: url,
             sessionId: sessionId,
+            mediaCompanions: companions != null,
           ));
       sources.add(source);
       final quality = qualityByUrl[url];
       if (quality != null) sourceQualities[source] = quality;
       if (sources.length >= 10) break;
     }
+    if (sources.isEmpty && blockedMediaOrigin) onBlockedMediaOrigin?.call();
   }
   return (
     sources: sources,

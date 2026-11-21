@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../utils/request_cookies.dart';
+import '../settings/models/db/server.dart';
 import 'gateway_context.dart';
 import 'gateway_session_bridge.dart';
+import 'media_companion.dart';
 import 'nerdvpn_access.dart';
 
 typedef GatewaySessionResolver = Future<GatewayResolvedSession> Function(
@@ -28,6 +30,62 @@ typedef NerdVpnRecovery = Future<NerdVpnAccessStatus> Function(String context,
 /// and streaming downloads that use dart:io rather than the API client.
 /// The internal account marker is removed before any request can be written.
 class GatewayHttpClient implements HttpClient {
+  static final _manifestProbeKey = Object();
+  static final _discoveryKey = Object();
+
+  /// Setup may inspect a media redirect without following it. The optional
+  /// probe uses the current account without applying its response to the jar
+  /// or the managed API key, just like the unsaved-proxy connection test.
+  static Future<T> withCompanionDiscovery<T>(
+      Server server, Uri uri, Future<T> Function() send) {
+    final context = GatewayRequestContext.forAccount(
+        server.profileId, server.accountId, server.url);
+    if (context == null ||
+        !isMediaCompanionEligibleServer(server) ||
+        !context.allows(uri)) {
+      throw ArgumentError('Expected a media URL on the selected HTTPS server.');
+    }
+    return runZoned(send, zoneValues: {_discoveryKey: (context.key, uri)});
+  }
+
+  /// Carry playback intent across package:http and dart:io without adding a
+  /// header. Only the exact frontend GET and account may use this scope.
+  static Future<T> withManifestProbe<T>(
+      Server server, Uri uri, Future<T> Function() send) {
+    if (!server.gatewayEnabled || server.mediaCompanionOrigins.isEmpty) {
+      return send();
+    }
+    final context = GatewayRequestContext.forAccount(
+        server.profileId, server.accountId, server.url);
+    final origins = trustedMediaCompanionOrigins(server);
+    if (context == null || !context.allows(uri) || origins.isEmpty) {
+      return send();
+    }
+    return runZoned(send, zoneValues: {
+      _manifestProbeKey: (account: context.key, uri: uri, origins: origins)
+    });
+  }
+
+  static bool _isManifestHandoff(GatewayRequestContext context, Uri uri,
+      String method, HttpClientResponse response, String? location) {
+    final scope = Zone.current[_manifestProbeKey];
+    if (scope is! ({String account, Uri uri, Set<String> origins}) ||
+        scope.account != context.key ||
+        scope.uri != uri ||
+        method != 'GET' ||
+        !response.isRedirect ||
+        location == null) {
+      return false;
+    }
+    final relative = Uri.tryParse(location);
+    if (relative == null) return false;
+    final target = uri.resolveUri(relative);
+    return target.scheme == 'https' &&
+        target.host.isNotEmpty &&
+        target.userInfo.isEmpty &&
+        scope.origins.contains(target.origin);
+  }
+
   final HttpClient _delegate;
   final GatewaySessionResolver _resolve;
   final GatewaySessionIngest _ingest;
@@ -441,15 +499,25 @@ class _GatewayExchange {
       {bool? follow, int? revision}) async {
     visited.add(uri);
     final context = this.context;
-    if (client._updateSessionFromResponse &&
-        context != null &&
-        context.allows(uri)) {
+    final discovery = context != null &&
+        method == 'GET' &&
+        !(follow ?? followRedirects) &&
+        Zone.current[GatewayHttpClient._discoveryKey] == (context.key, uri);
+    final updateSession = client._updateSessionFromResponse && !discovery;
+    if (updateSession && context != null && context.allows(uri)) {
       try {
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        // An HTML redirect body describes the handoff, not a login page.
+        // Native ingestion still checks Location and applies every Set-Cookie.
+        final handoff = GatewayHttpClient._isManifestHandoff(
+            context, uri, method, response, location);
         await client._ingest(context.encoded, uri,
             response.headers[HttpHeaders.setCookieHeader] ?? const [],
             statusCode: response.statusCode,
-            contentType: response.headers.value(HttpHeaders.contentTypeHeader),
-            location: response.headers.value(HttpHeaders.locationHeader),
+            contentType: handoff
+                ? null
+                : response.headers.value(HttpHeaders.contentTypeHeader),
+            location: location,
             revision: revision);
       } catch (_) {
         await response.listen(null).cancel();
@@ -457,7 +525,7 @@ class _GatewayExchange {
       }
     }
     final status = response.statusCode;
-    if (client._updateSessionFromResponse &&
+    if (updateSession &&
         context != null &&
         _isNerdVpn &&
         context.allows(uri) &&

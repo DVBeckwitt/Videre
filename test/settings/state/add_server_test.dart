@@ -14,21 +14,26 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
+import 'package:clipious/settings/views/components/media_companion_dialog.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/tv/components/tv_text_field.dart';
 import 'package:clipious/videos/models/video.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import '../../support/media_companion_transport.dart';
+
 class _ValidationService extends Service {
-  _ValidationService({this.thumbnails = const []});
+  _ValidationService({this.thumbnails = const [], this.dashUrl});
 
   final List<ImageObject> thumbnails;
+  final String? dashUrl;
   final checked = <Server>[];
   final response = Completer<void>();
 
@@ -44,7 +49,8 @@ class _ValidationService extends Service {
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver}) async {
     checked.add(serverOverride!);
-    return Video(videoId: videoId, videoThumbnails: thumbnails);
+    return Video(
+        videoId: videoId, videoThumbnails: thumbnails, dashUrl: dashUrl);
   }
 }
 
@@ -224,15 +230,244 @@ void main() {
       service = Service();
     });
 
-    for (final (tv, leaveDuringValidation) in [
-      (false, false),
-      (true, false),
-      (false, true),
+    for (final allowFirst in [false, true]) {
+      testWidgets(
+          'a remembered setup choice (allowed=$allowFirst) is scoped to one instance and profile',
+          (tester) async {
+        const host = 'https://media.example:8443';
+        const frontend = 'https://frontend.example';
+        const address = '$frontend/a';
+        final decision = {if (allowFirst) host};
+        mockMediaCompanionTransport();
+        await tester.runAsync(() => db.addAccountWithMediaCompanions(
+            Server(
+                id: 'first',
+                url: address,
+                mediaCompanionOrigins: decision.toList()),
+            isCurrent: () => true,
+            setupDecision: decision));
+        final validation = _ValidationService(dashUrl: '$host/test.mpd')
+          ..response.complete();
+        service = validation;
+        final router = RootStackRouter.build(routes: [
+          NamedRouteDef(
+              name: 'FixtureRoute',
+              path: '/',
+              builder: (_, __) => const Scaffold()),
+          AutoRoute(page: AddServerRoute.page),
+        ]);
+        addTearDown(router.dispose);
+        await tester.pumpWidget(MaterialApp.router(
+          routerConfig: router.config(),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+        ));
+        await tester.pumpAndSettle();
+
+        Future<void> settleSetup() async {
+          for (var attempt = 0; attempt < 8; attempt++) {
+            await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+        }
+
+        Future<void> add(String url, {required bool offersHost}) async {
+          ValidatedSetupAccount? result;
+          unawaited(router
+              .push<ValidatedSetupAccount>(const AddServerRoute())
+              .then((value) => result = value));
+          await tester.pumpAndSettle();
+          tester
+              .widget<TextField>(find.byType(TextField).first)
+              .controller!
+              .text = url;
+          await tester.pumpAndSettle();
+          final submit = find.text('Test and add server');
+          await tester.ensureVisible(submit);
+          await tester.tap(submit);
+          await settleSetup();
+          final title = find.text('Allow a separate playback host?');
+          if (offersHost) {
+            expect(title, findsOneWidget);
+            expect(find.textContaining('To play the test stream, $url asked'),
+                findsOneWidget);
+            expect(find.textContaining('once per instance in this profile'),
+                findsOneWidget);
+            expect(find.text(host), findsOneWidget);
+            await tester.tap(find.text('Continue without allowing'));
+            await settleSetup();
+          } else {
+            expect(title, findsNothing);
+          }
+          expect(result?.server.url, url);
+          expect(result?.server.profileId, db.profileId);
+          expect(result?.mediaCompanionDecision, offersHost ? isEmpty : isNull);
+          final returned = result!;
+          final saved = await tester.runAsync(() =>
+              db.addAccountWithMediaCompanions(returned.server,
+                  isCurrent: () => true,
+                  setupDecision: returned.mediaCompanionDecision));
+          expect(saved!.mediaCompanionOrigins,
+              allowFirst && !offersHost ? [host] : isEmpty);
+        }
+
+        await add(address, offersHost: false); // Another account at /a.
+        await add('$frontend/b', offersHost: true);
+        await tester.runAsync(() async {
+          final other = await db.createProfile('Other');
+          await db.useProfile(other.id);
+          await db.upsertServer(
+              Server(profileId: other.id, url: 'https://existing.example'));
+        });
+        await add(address, offersHost: true);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('setup names each host and only approves the checked subset',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(320, 568);
+      addTearDown(tester.view.reset);
+      const server = Server(url: 'https://inv.example');
+      const audio = 'https://audio.example:7443';
+      const media = 'https://media.example:8443';
+      Set<String>? result;
+      var completed = false;
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: Builder(builder: (context) {
+          return TextButton(
+            onPressed: () async {
+              result = await chooseSetupMediaCompanions(context, server, {
+                media,
+                audio,
+                server.url,
+                'https://media.example/signed?token=secret',
+              });
+              completed = true;
+            },
+            child: const Text('Set up instance'),
+          );
+        })),
+      ));
+      await tester.tap(find.text('Set up instance'));
+      await tester.pumpAndSettle();
+      expect(find.text('Allow separate playback hosts?'), findsOneWidget);
+      expect(find.textContaining('token=secret'), findsNothing);
+      final checkboxes = find.byType(CheckboxListTile);
+      expect(checkboxes, findsNWidgets(2));
+      expect(
+          tester
+              .widgetList<CheckboxListTile>(checkboxes)
+              .every((box) => box.value == false),
+          isTrue);
+      expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed,
+          isNull);
+      await tester.ensureVisible(find.text(audio));
+      await tester.tap(find.text(audio));
+      await tester.pumpAndSettle();
+      expect(completed, isFalse);
+      await tester.tap(find.text('Allow selected hosts'));
+      await tester.pumpAndSettle();
+      expect(result, {audio});
+      expect(tester.takeException(), isNull);
+
+      completed = false;
+      await tester.tap(find.text('Set up instance'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text(media));
+      await tester.tap(find.text(media));
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(completed, isTrue);
+      expect(result, isNull);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        'a narrow screen keeps a long host and the decline action accessible',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(320, 320);
+      addTearDown(tester.view.reset);
+      final origin = 'https://${List.filled(3, 'a' * 60).join('.')}.example';
+      Set<String>? result;
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: Builder(builder: (context) {
+          return TextButton(
+            onPressed: () async {
+              result = await chooseSetupMediaCompanions(
+                  context, const Server(url: 'https://inv.example'), {origin});
+            },
+            child: const Text('Set up instance'),
+          );
+        })),
+      ));
+      await tester.tap(find.text('Set up instance'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(find.text(origin));
+      expect(find.text(origin), findsOneWidget);
+      final skip = find.text('Continue without allowing');
+      await tester.ensureVisible(skip);
+      await tester.tap(skip);
+      await tester.pumpAndSettle();
+      expect(result, isEmpty);
+    });
+
+    testWidgets('TV remote can move from continue to the named approval',
+        (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(960, 540);
+      addTearDown(tester.view.reset);
+      const origin = 'https://video.example:444';
+      Set<String>? result;
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: Builder(builder: (context) {
+          return TextButton(
+            onPressed: () async {
+              result = await chooseSetupMediaCompanions(
+                  context, const Server(url: 'https://inv.example'), {origin});
+            },
+            child: const Text('Set up instance'),
+          );
+        })),
+      ));
+      await tester.tap(find.text('Set up instance'));
+      await tester.pumpAndSettle();
+      final skip = tester.getCenter(find.text('Continue without allowing'));
+      final allow = tester.getCenter(find.text('Allow $origin'));
+      await tester.sendKeyEvent((allow.dy - skip.dy).abs() < 16
+          ? LogicalKeyboardKey.arrowRight
+          : allow.dy > skip.dy
+              ? LogicalKeyboardKey.arrowDown
+              : LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pumpAndSettle();
+      expect(result, {origin});
+    });
+
+    for (final (tv, leaveDuringValidation, mediaHost) in [
+      (false, false, false),
+      (true, false, false),
+      (false, true, false),
+      (false, false, true),
+      (true, false, true),
     ]) {
       testWidgets(
           leaveDuringValidation
               ? 'leaving during first instance validation discards choices'
-              : 'first instance offers AiSList choices before connecting (TV=$tv)',
+              : mediaHost
+                  ? 'first instance offers the tested media host before saving (TV=$tv)'
+                  : 'first instance offers AiSList choices before connecting (TV=$tv)',
           (tester) async {
         final original = communityFilters;
         communityFilters = CommunityFilters(
@@ -245,7 +480,9 @@ void main() {
           communityFilters = original;
           app.isTv = false;
         });
-        final validator = _ValidationService();
+        const origin = 'https://media.example:9443';
+        final validator = _ValidationService(
+            dashUrl: mediaHost ? '$origin/manifest.mpd?check=signed' : null);
         service = validator;
         final router = RootStackRouter.build(routes: [
           NamedRouteDef(
@@ -271,10 +508,14 @@ void main() {
         ));
         await tester.pumpAndSettle();
         Server? addedServer;
+        Set<String>? mediaDecision;
         unawaited(router
-            .push<Server>(
+            .push<ValidatedSetupAccount>(
                 tv ? const TvAddServerRoute() : const AddServerRoute())
-            .then((server) => addedServer = server));
+            .then((result) {
+          addedServer = result?.server;
+          mediaDecision = result?.mediaCompanionDecision;
+        }));
         await tester.pumpAndSettle();
         final url = tv
             ? tester
@@ -358,6 +599,28 @@ void main() {
 
         validator.response.complete();
         await settle();
+        if (mediaHost) {
+          expect(find.text('Allow a separate playback host?'), findsOneWidget);
+          expect(find.text(origin), findsOneWidget);
+          expect(find.textContaining('https://test.example'), findsWidgets);
+          expect(find.textContaining('the IP address you connect from'),
+              findsOneWidget);
+          expect(
+              find.textContaining(
+                  'Your account credentials stay on https://test.example.'),
+              findsOneWidget);
+          expect(find.textContaining('check=signed'), findsNothing);
+          expect(addedServer, isNull);
+          if (tv) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.select);
+          } else {
+            await tester.tap(find.text('Allow $origin'));
+          }
+          await settle();
+        }
+        expect(addedServer?.mediaCompanionOrigins,
+            mediaHost && !tv ? [origin] : isEmpty);
+        expect(mediaDecision, mediaHost ? (tv ? isEmpty : {origin}) : isNull);
         expect(communityFilters.needsYoutubeSetup, isFalse);
         expect(addedServer?.url, 'https://test.example');
         expect(communityFilters.action(CommunityRule.youtubeBlock),
@@ -718,6 +981,143 @@ void main() {
       expect(protected.signedOut?.accountId, protected.signedIn?.accountId);
       expect(cubit.state.loading, isFalse);
       expect(await db.getServers(), isEmpty);
+    });
+
+    group('media companion setup', () {
+      const instance = 'https://setup.example';
+      const media = 'https://stream.example';
+      const audio = 'https://audio.example';
+      const sample = 'dQw4w9WgXcQ';
+      final requests = <Uri>[];
+
+      setUp(() {
+        final previousPlatform = debugDefaultTargetPlatformOverride;
+        debugDefaultTargetPlatformOverride = TargetPlatform.android;
+        addTearDown(
+            () => debugDefaultTargetPlatformOverride = previousPlatform);
+        requests.clear();
+        service = Service(httpClient: MockClient((request) async {
+          requests.add(request.url);
+          if (request.url.origin != instance) return http.Response('', 404);
+          final Map<String, Object> data;
+          switch (request.url.path) {
+            case '/api/v1/stats':
+              data = {
+                'software': {'name': 'invidious'}
+              };
+            case '/api/v1/videos/$sample':
+              data = {
+                'videoId': sample,
+                'dashUrl': '$media/manifest.mpd?signed=private',
+                'adaptiveFormats': [
+                  {
+                    'url': '$audio/videoplayback?itag=140&token=private',
+                    'type': 'audio/mp4; codecs="mp4a.40.2"',
+                    'itag': '140',
+                    'clen': '300000',
+                    'lmt': '1',
+                    'projectionType': 'RECTANGULAR',
+                  },
+                ],
+              };
+            default:
+              return http.Response('', 404);
+          }
+          return http.Response(jsonEncode(data), 200,
+              headers: {'content-type': 'application/json'});
+        }));
+        cubit.urlController.text = instance;
+        cubit.setAdvancedTest(true);
+      });
+
+      for (final decision in ['allow selected', 'skip', 'cancel']) {
+        test('$decision preserves only the approved setup choices', () async {
+          final events = <String>[];
+          final candidate = await cubit.validateServer(
+            prepareFirstInstance: () async {
+              events.add('prepare');
+              return () async {
+                events.add('save');
+                return true;
+              };
+            },
+            chooseMediaCompanions: (account, offered) async {
+              events.add('choose');
+              expect(account.url, instance);
+              expect(account.mediaCompanionOrigins, isEmpty);
+              expect(offered, {media, audio});
+              expect(() => offered.add('https://unobserved.example'),
+                  throwsUnsupportedError);
+              return switch (decision) {
+                'allow selected' => {media, 'https://unobserved.example'},
+                'skip' => <String>{},
+                _ => null,
+              };
+            },
+          );
+          if (decision == 'cancel') {
+            expect(candidate, isNull);
+            expect(events, ['prepare', 'choose']);
+          } else {
+            expect(candidate?.url, instance);
+            expect(candidate?.mediaCompanionOrigins,
+                decision == 'skip' ? isEmpty : [media]);
+            expect(events, ['prepare', 'choose', 'save']);
+          }
+          expect(requests.map((uri) => uri.path),
+              ['/api/v1/stats', '/api/v1/videos/$sample']);
+          expect(await db.getServers(), isEmpty);
+          expect(cubit.state.loading, isFalse);
+        });
+      }
+
+      for (final change in ['url', 'profile', 'route']) {
+        test('a $change change while choosing discards approval', () async {
+          final asked = Completer<void>();
+          final answer = Completer<Set<String>?>();
+          var current = true;
+          var preferenceSaves = 0;
+          final pending = cubit.validateServer(
+            isRouteCurrent: () => current,
+            prepareFirstInstance: () async => () async {
+              preferenceSaves++;
+              return true;
+            },
+            chooseMediaCompanions: (_, origins) {
+              expect(origins, contains(media));
+              asked.complete();
+              return answer.future;
+            },
+          );
+          await asked.future.timeout(const Duration(seconds: 2));
+          switch (change) {
+            case 'url':
+              cubit.urlController.text = 'https://new.example';
+            case 'profile':
+              final other = await db.createProfile('Other');
+              await db.useProfile(other.id);
+            case 'route':
+              current = false;
+          }
+          answer.complete({media});
+          expect(await pending, isNull);
+          expect(preferenceSaves, 0);
+          expect(await db.forProfile('default').getServers(), isEmpty);
+          expect(await db.getServers(), isEmpty);
+          expect(cubit.state.loading, isFalse);
+        });
+      }
+
+      test('the basic test makes no video or companion request', () async {
+        cubit.setAdvancedTest(false);
+        final candidate = await cubit.validateServer(
+          chooseMediaCompanions: (_, __) async =>
+              fail('Basic setup offered companion access'),
+        );
+        expect(candidate?.url, instance);
+        expect(candidate?.mediaCompanionOrigins, isEmpty);
+        expect(requests, [Uri.parse('$instance/api/v1/stats')]);
+      });
     });
   });
 }

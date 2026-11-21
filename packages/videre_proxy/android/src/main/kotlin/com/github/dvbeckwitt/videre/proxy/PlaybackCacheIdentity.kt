@@ -20,17 +20,17 @@ internal class PlaybackCacheIdentity private constructor(
 
     fun knownMediaResource(value: String): Boolean = resources[value]?.manifest == false
 
-    fun requireDestination(value: String): HttpUrl {
+    private fun requireDestination(value: String, mediaRequest: Boolean = false): HttpUrl {
         val target = value.toHttpUrlOrNull() ?: throw IOException("Invalid cached media destination.")
         if (target.username.isNotEmpty() || target.password.isNotEmpty() ||
-            isOfficialYoutubeUrl(target) || target.scheme != origin.scheme ||
-            target.host != origin.host || target.port != origin.port) throw SelectedOriginBlocked()
+            isOfficialYoutubeUrl(target)) throw SelectedOriginBlocked()
+        requireSelectedOrigin(origin, target, media = mediaRequest)
         return target
     }
 
     /** Unknown adaptive children remain distinct and cannot survive their source session. */
     fun key(value: String): String? {
-        val target = requireDestination(value)
+        val target = requireDestination(value, mediaRequest = true)
         val resource = resources[value]
         val path = target.encodedPath.lowercase()
         if (resource?.manifest == true || path.endsWith(".mpd") || path.endsWith(".m3u8") || path.endsWith(".m3u") ||
@@ -46,7 +46,7 @@ internal class PlaybackCacheIdentity private constructor(
         internal fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
-        fun parse(values: Map<*, *>, sourceUri: String?): PlaybackCacheIdentity {
+        fun parse(values: Map<*, *>, sourceUri: String?, companions: MediaCompanions? = null): PlaybackCacheIdentity {
             require((values["version"] as? Number)?.toDouble() == 1.0) { "Unsupported playback cache identity." }
             fun text(name: String): String = (values[name] as? String)
                 ?.takeIf { it.isNotEmpty() && it.length <= 4096 }
@@ -71,9 +71,16 @@ internal class PlaybackCacheIdentity private constructor(
             val gateway = (values["gatewayContext"] as? String)?.let(GatewayContext::parse)
             require(gateway == null || gateway.allows(origin))
             require(!isNerdVpnOrigin(origin) || gateway != null)
+            require(companions == null || companions.gateway == gateway) { "Media account context does not match." }
             return PlaybackCacheIdentity(origin, text("profileId"), text("contentId"), digest(text("profileId")), gateway, digest(scope), text("sessionId"), resources).also {
-                sourceUri?.let(it::requireDestination)
-                resources.keys.forEach(it::requireDestination)
+                if (companions == null) {
+                    sourceUri?.let(it::requireDestination)
+                    resources.keys.forEach(it::requireDestination)
+                } else {
+                    for (value in listOfNotNull(sourceUri) + resources.keys) {
+                        companions.requireDestination(value.toHttpUrlOrNull() ?: throw SelectedOriginBlocked(), mediaRequest = false)
+                    }
+                }
             }
         }
     }

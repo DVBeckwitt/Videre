@@ -43,3 +43,37 @@ dependencies {
     androidTestImplementation 'androidx.media3:media3-exoplayer-dash:1.4.1'
     androidTestImplementation 'androidx.media3:media3-exoplayer-hls:1.4.1'
 }
+
+// Only the instrumentation package trusts these two synthetic TLS endpoints.
+// Its server key is generated under build/ and never enters app assets.
+abstract class GenerateCompanionFixtureTls extends DefaultTask {
+    @OutputDirectory abstract DirectoryProperty getAssetsDir()
+    @OutputDirectory abstract DirectoryProperty getResourcesDir()
+
+    @TaskAction
+    void generate() {
+        def store = assetsDir.file('companion_fixture.p12').get().asFile
+        def cert = resourcesDir.file('raw/companion_fixture_cert.der').get().asFile
+        store.parentFile.mkdirs()
+        cert.parentFile.mkdirs()
+        if (store.exists() && !store.delete()) throw new GradleException('Cannot refresh the test TLS fixture')
+        def jdkBin = new File(System.getProperty('java.home'), 'bin')
+        def keytool = new File(jdkBin, 'keytool.exe')
+        if (!keytool.exists()) keytool = new File(jdkBin, 'keytool')
+        def common = ['-keystore', store, '-storetype', 'PKCS12', '-storepass', 'fixture', '-alias', 'fixture']
+        project.exec {
+            commandLine([keytool, '-J-Dkeystore.pkcs12.legacy', '-genkeypair', '-keyalg', 'RSA',
+                         '-validity', '3650', '-dname', 'CN=videre-playback.invalid',
+                         '-ext', 'SAN=dns:videre-playback.invalid,dns:videre-segments.invalid'] + common)
+        }
+        project.exec { commandLine([keytool, '-exportcert', '-file', cert] + common) }
+    }
+}
+
+androidComponents.onVariants(androidComponents.selector().withBuildType('debug')) { variant ->
+    if (variant.androidTest != null) {
+        def tls = tasks.register("generate${variant.name.capitalize()}CompanionFixtureTls", GenerateCompanionFixtureTls)
+        variant.androidTest.sources.assets.addGeneratedSourceDirectory(tls) { it.assetsDir }
+        variant.androidTest.sources.res.addGeneratedSourceDirectory(tls) { it.resourcesDir }
+    }
+}

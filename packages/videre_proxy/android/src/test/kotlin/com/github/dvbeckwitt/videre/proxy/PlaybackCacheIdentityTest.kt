@@ -104,18 +104,23 @@ class PlaybackCacheIdentityTest {
             "https://instance.example:8443/video", "https://user:secret@instance.example/video",
             "https://rr1.googlevideo.com/videoplayback", "https://i.ytimg.com/cover.jpg",
             "https://www.youtube.com/watch?v=song", "file:///tmp/song", "not a URI")) {
-            assertThrows(IOException::class.java) { cache.key(url) }
+            val error = assertThrows(IOException::class.java) { cache.key(url) }
+            val expectedMediaMismatch = url in setOf("https://elsewhere.example/video",
+                "http://instance.example/video", "https://instance.example:8443/video")
+            assertEquals(expectedMediaMismatch, MediaOriginFailure.isBlocked(error))
         }
     }
 
     @Test
     fun `invalid source or any foreign resource rejects the whole descriptor`() {
-        assertThrows(SelectedOriginBlocked::class.java) {
+        val sourceError = assertThrows(SelectedOriginBlocked::class.java) {
             identity(source = "https://elsewhere.example/video")
         }
-        assertThrows(SelectedOriginBlocked::class.java) {
+        val resourceError = assertThrows(SelectedOriginBlocked::class.java) {
             identity(values(resources = listOf(resource(), resource("https://elsewhere.example/video"))))
         }
+        assertEquals(false, MediaOriginFailure.isBlocked(sourceError))
+        assertEquals(false, MediaOriginFailure.isBlocked(resourceError))
         assertThrows(IllegalArgumentException::class.java) {
             identity(values(instance = "https://www.youtube.com", resources = emptyList()),
                 "https://www.youtube.com/watch?v=song")

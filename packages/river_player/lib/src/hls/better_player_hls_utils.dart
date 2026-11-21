@@ -15,14 +15,18 @@ import 'package:river_player/src/hls/hls_parser/util.dart';
 ///HLS helper class
 class BetterPlayerHlsUtils {
   static Future<BetterPlayerAsmsDataHolder> parse(
-      String data, String masterPlaylistUrl) async {
+      String data, String masterPlaylistUrl,
+      {bool loadSubtitles = true}) async {
     List<BetterPlayerAsmsTrack> tracks = [];
     List<BetterPlayerAsmsSubtitle> subtitles = [];
     List<BetterPlayerAsmsAudioTrack> audios = [];
     try {
       final List<List<dynamic>> list = await Future.wait([
         parseTracks(data, masterPlaylistUrl),
-        parseSubtitles(data, masterPlaylistUrl),
+        if (loadSubtitles)
+          parseSubtitles(data, masterPlaylistUrl)
+        else
+          Future.value(<BetterPlayerAsmsSubtitle>[]),
         parseLanguages(data, masterPlaylistUrl)
       ]);
       tracks = list[0] as List<BetterPlayerAsmsTrack>;

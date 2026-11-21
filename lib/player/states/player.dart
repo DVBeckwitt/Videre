@@ -255,19 +255,31 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   DateTime? _sleepDeadline;
   Duration? _backendProgressPosition;
   (int, String?, String, bool)? _playbackStatusOwner;
-  MediaState _playbackStatus = MediaState.idle;
+  MediaEvent _lastPlaybackEvent = const MediaEvent(state: MediaState.idle);
 
   /// Decoder status survives presentation events such as minimizing the player.
   /// It belongs only to this queue occurrence, source generation and person.
-  MediaState get playbackStatus {
+  MediaEvent get _currentPlaybackEvent {
     if (isClosed || _switchingProfile || state.isClosing || !state.hasVideo) {
-      return MediaState.idle;
+      return const MediaEvent(state: MediaState.idle);
     }
-    if (_backendSwitchPending) return MediaState.loading;
-    if (_playbackStatusOwner == null) return state.mediaEvent.state;
+    if (_backendSwitchPending) {
+      return const MediaEvent(state: MediaState.loading);
+    }
+    if (_playbackStatusOwner == null) return state.mediaEvent;
     return _playbackStatusOwner == _statusOwner(state)
-        ? _playbackStatus
-        : MediaState.idle;
+        ? _lastPlaybackEvent
+        : const MediaEvent(state: MediaState.idle);
+  }
+
+  MediaState get playbackStatus => _currentPlaybackEvent.state;
+
+  PlaybackFailureReason? get playbackFailureReason {
+    final event = _currentPlaybackEvent;
+    final value = event.value;
+    return event.state == MediaState.error && value is PlaybackFailureReason
+        ? value
+        : null;
   }
 
   (int, String?, String, bool) _statusOwner(PlayerState snapshot) => (
@@ -282,7 +294,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final owner = _statusOwner(next);
     final changedOwner = _playbackStatusOwner != owner;
     if (changedOwner || !next.hasVideo || next.isClosing || _switchingProfile) {
-      _playbackStatus = MediaState.idle;
+      _lastPlaybackEvent = const MediaEvent(state: MediaState.idle);
       _playbackStatusOwner = owner;
     }
     final event = next.mediaEvent;
@@ -298,11 +310,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           event.state == MediaState.buffering ||
           event.state == MediaState.error ||
           event.state == MediaState.completed) {
-        _playbackStatus = event.state;
+        _lastPlaybackEvent = event;
       } else if (event.type == MediaEventType.progress &&
-          _playbackStatus != MediaState.error &&
-          _playbackStatus != MediaState.completed) {
-        _playbackStatus = MediaState.playing;
+          _lastPlaybackEvent.state != MediaState.error &&
+          _lastPlaybackEvent.state != MediaState.completed) {
+        _lastPlaybackEvent = const MediaEvent(state: MediaState.playing);
       }
     }
   }

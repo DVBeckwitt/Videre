@@ -11,6 +11,7 @@ import 'package:settings_ui/settings_ui.dart';
 import '../../models/db/server.dart';
 import '../../../network/nerdvpn_access.dart';
 import '../screens/settings.dart';
+import '../screens/add_server.dart';
 
 class ManagerServersView extends StatelessWidget {
   final bool showAdvanced;
@@ -24,13 +25,9 @@ class ManagerServersView extends StatelessWidget {
   }
 
   Future<void> addServer(BuildContext context) async {
-    var cubit = context.read<ServerListSettingsCubit>();
-    final server = await AutoRouter.of(context).push(const AddServerRoute());
-    if (server != null && server is Server && context.mounted) {
-      await cubit.saveServer(server);
-      if (context.mounted && NerdVpnAccess.supports(server)) {
-        await openServer(context, server);
-      }
+    final server = await AddServerScreen.openSetup(context, television: false);
+    if (server != null && context.mounted && NerdVpnAccess.supports(server)) {
+      await openServer(context, server);
     }
   }
 

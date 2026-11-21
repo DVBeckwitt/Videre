@@ -71,7 +71,7 @@ class DownloadRecovery {
         db.profileId != _owner.profileId ||
         NetworkProxy.instance.isChanging ||
         saved == null ||
-        !_route.matches(saved)) {
+        !_route.matchesConnection(saved)) {
       throw StateError('The download connection changed.');
     }
   }

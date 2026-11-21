@@ -6,6 +6,7 @@ import androidx.media3.exoplayer.ExoPlaybackException;
 import com.github.dvbeckwitt.videre.proxy.NerdVpnAccessRequired;
 import com.github.dvbeckwitt.videre.proxy.NativeHttpRetryPolicy;
 import com.github.dvbeckwitt.videre.proxy.LocalDownloadUnavailable;
+import com.github.dvbeckwitt.videre.proxy.SelectedOriginBlocked;
 import java.io.InterruptedIOException;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -43,7 +44,8 @@ final class BackendRetryability {
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         for (Throwable cause = error; cause != null && seen.add(cause); cause = cause.getCause()) {
             // Inspect the full chain before accepting an outer network wrapper.
-            if (cause instanceof NerdVpnAccessRequired
+            if (cause instanceof SelectedOriginBlocked
+                    || cause instanceof NerdVpnAccessRequired
                     || cause instanceof SSLException
                     || cause instanceof GeneralSecurityException
                     || cause instanceof CancellationException

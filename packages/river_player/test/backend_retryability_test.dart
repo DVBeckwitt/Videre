@@ -171,6 +171,7 @@ void main() {
       () {
     final initial = VideoPlayerValue(duration: null);
     expect(initial.backendRetryable, isFalse);
+    expect(initial.mediaOriginBlocked, isFalse);
     final retryable = initial.copyWith(
       errorDescription: 'Source error',
       backendRetryable: true,
@@ -179,6 +180,11 @@ void main() {
         retryable.copyWith(position: Duration.zero).backendRetryable, isTrue);
     expect(
         retryable.copyWith(backendRetryable: false).backendRetryable, isFalse);
+    final blocked = initial.copyWith(mediaOriginBlocked: true);
+    expect(
+        blocked.copyWith(position: Duration.zero).mediaOriginBlocked, isTrue);
+    expect(blocked.copyWith(mediaOriginBlocked: false).mediaOriginBlocked,
+        isFalse);
   });
 
   test('native error detail reaches BetterPlayer exception events', () async {
@@ -196,7 +202,12 @@ void main() {
     ));
     final native = controller.videoPlayerController!;
 
-    for (final detail in [true, false, 'true', null]) {
+    for (final (retryable, blocked) in [
+      (true, false),
+      (false, true),
+      ('true', 'true'),
+      (null, null),
+    ]) {
       final changed = Completer<void>();
       void listener() {
         if (native.value.hasError && !changed.isCompleted) changed.complete();
@@ -206,15 +217,17 @@ void main() {
       platform.streams[native.textureId]!.addError(PlatformException(
         code: 'VideoError',
         message: 'Source error',
-        details: {'backendRetryable': detail},
+        details: {'backendRetryable': retryable, 'mediaOriginBlocked': blocked},
       ));
       await changed.future;
       native.removeListener(listener);
-      expect(native.value.backendRetryable, detail == true);
+      expect(native.value.backendRetryable, retryable == true);
+      expect(native.value.mediaOriginBlocked, blocked == true);
       final error = events.lastWhere((event) =>
           event.betterPlayerEventType == BetterPlayerEventType.exception);
       expect(error.parameters?['exception'], 'Source error');
-      expect(error.parameters?['backendRetryable'], detail == true);
+      expect(error.parameters?['backendRetryable'], retryable == true);
+      expect(error.parameters?['mediaOriginBlocked'], blocked == true);
     }
 
     await controller.setupDataSource(BetterPlayerDataSource(
@@ -223,6 +236,7 @@ void main() {
       videoFormat: BetterPlayerVideoFormat.other,
     ));
     expect(native.value.backendRetryable, isFalse);
+    expect(native.value.mediaOriginBlocked, isFalse);
     expect(native.value.hasError, isFalse);
     controller.dispose();
     await Future<void>.delayed(Duration.zero);

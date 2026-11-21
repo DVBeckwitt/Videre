@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
+import 'package:clipious/media_handler.dart';
 import 'package:clipious/network/nerdvpn_origin.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/video_quality.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/states/tv_player_settings.dart';
@@ -16,6 +20,7 @@ import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/states/server_settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
@@ -30,6 +35,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:river_player/river_player.dart';
 
+import '../support/media_companion_transport.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
@@ -76,6 +82,7 @@ void main() {
   late TestSettingsCubit settings;
   late TestPlayerCubit player;
   late List<String> sources;
+  late List<Map<dynamic, dynamic>> nativeSources;
   late List<int?> initialDashHeights;
   late List<int> trackHeights;
   late Set<String> failedSources;
@@ -97,6 +104,7 @@ void main() {
     await settings.setUseDash(false);
     player = TestPlayerCubit(PlayerState.init(null), settings);
     sources = [];
+    nativeSources = [];
     initialDashHeights = [];
     trackHeights = [];
     failedSources = {};
@@ -113,6 +121,7 @@ void main() {
       }
       if (call.method == 'setDataSource') {
         final source = call.arguments['dataSource'] as Map;
+        nativeSources.add(source);
         final uri = source['uri'] as String;
         sources.add(uri);
         initialDashHeights.add(source['initialDashHeight'] as int?);
@@ -156,6 +165,70 @@ void main() {
       player,
       settings);
 
+  test('Retry on the same video uses the newly approved companion', () async {
+    mockMediaCompanionTransport();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const companion = 'https://media.example';
+    const signed = '$companion/watch.mpd?sig=a%2Fb&part=1&part=2';
+    const metadata = Video(videoId: 'song', dashUrl: signed, lengthSeconds: 60);
+    final requests = <Uri>[];
+    service.httpClient.close();
+    service = Service(httpClient: MockClient((request) async {
+      requests.add(request.url);
+      return request.url.path == '/api/v1/videos/song'
+          ? http.Response(jsonEncode(metadata.toJson()), 200,
+              headers: {'content-type': 'application/json'})
+          : http.Response('[]', 200,
+              headers: {'content-type': 'application/json'});
+    }));
+    const pathProvider = MethodChannel('plugins.flutter.io/path_provider');
+    final directory =
+        await Directory.systemTemp.createTemp('videre-companion-retry-');
+    messenger.setMockMethodCallHandler(
+        pathProvider, (_) async => directory.path);
+    final selected = await db.getCurrentlySelectedServer();
+    await fileDb.useServer(selected);
+    final accountSettings =
+        ServerSettingsCubit(ServerSettingsState(server: selected), app);
+    final original = (await service.getVideo(metadata.videoId))
+        .copyWith(queueEntryId: 'entry-1');
+    await player.close();
+    player = TestPlayerCubit(
+        PlayerState.init([original]).copyWith(
+            currentlyPlaying: original,
+            position: const Duration(seconds: 12),
+            isHidden: false,
+            isMini: false),
+        settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = MediaHandler(player);
+    final video = create(original);
+    try {
+      await video.playVideo(false);
+      expect(player.playbackFailureReason,
+          PlaybackFailureReason.separateMediaHost);
+      expect(nativeSources, isEmpty);
+      await accountSettings.setMediaCompanionOrigin(selected, companion,
+          enabled: true);
+      await player.retryCurrentVideo();
+      expect(player.state.currentQueueId, 'entry-1');
+      expect(player.playbackFailureReason, isNull);
+      video.handleCommand(player.state.mediaCommand!);
+      await _flush();
+      expect(nativeSources.single['uri'], signed);
+      expect(nativeSources.single['mediaCompanions']['origins'], [companion]);
+      expect(nativeSources.single['initialPositionMs'], 12000);
+      expect(requests.where((uri) => uri.path == '/api/v1/videos/song'),
+          hasLength(2));
+    } finally {
+      await video.close();
+      await accountSettings.close();
+      messenger.setMockMethodCallHandler(pathProvider, null);
+      await directory.delete(recursive: true);
+    }
+  });
+
   test('resolution matching ignores Auto, stream IDs, and bitrate labels', () {
     expect(videoQualityHeight('1080p60'), 1080);
     expect(videoQualityHeight('720p - 2 MB/s'), 720);
@@ -166,6 +239,28 @@ void main() {
     expect(preferredVideoQualityIndex([1080, 480], 1080), 0);
     expect(preferredVideoQualityIndex([0, null], 720), isNull);
     expect(preferredVideoQualityIndex([360, 1080], 0), isNull);
+  });
+
+  test('only a classified native failure reports a separate media host',
+      () async {
+    final video = create(_video('first', heights: [360]));
+    addTearDown(video.close);
+    await video.playVideo(false);
+    await _flush();
+    video.onVideoListener(BetterPlayerEvent(BetterPlayerEventType.exception,
+        parameters: {'mediaOriginBlocked': true}));
+    expect(
+        player.state.mediaEvent.value, PlaybackFailureReason.separateMediaHost);
+
+    video.switchVideo(_video('second', heights: [360]));
+    await _flush();
+    video.onVideoListener(BetterPlayerEvent(BetterPlayerEventType.exception));
+    expect(sources, [
+      'https://instance.example/first-360.mp4',
+      'https://instance.example/second-360.mp4',
+    ]);
+    expect(player.state.mediaEvent.state, MediaState.error);
+    expect(player.state.mediaEvent.value, isNull);
   });
 
   test('selecting captions lazily uses the playing backend snapshot', () async {
@@ -215,6 +310,128 @@ void main() {
     } finally {
       await video.close();
     }
+  });
+
+  for (final trusted in [false, true]) {
+    test('direct companion DASH preserves consent and signed URL: $trusted',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      const origin = 'https://instance.example';
+      const companion = 'https://media.example';
+      const signed = '$companion/stream.mpd?sig=a%2Fb&part=1&part=2';
+      final selected = (await db.getCurrentlySelectedServer())
+          .copyWith(customHeaders: {'X-Private-Header': 'instance-only'});
+      await db.upsertServer(selected);
+      if (trusted) {
+        mockMediaCompanionTransport();
+        await db.setMediaCompanionOrigin(selected, companion, enabled: true);
+      }
+      await settings.setUseDash(true);
+      final requests = <Uri>[];
+      service.httpClient.close();
+      service = Service(httpClient: MockClient((request) async {
+        requests.add(request.url);
+        return http.Response('', 500);
+      }));
+      final video = create(
+          const Video(videoId: 'video', dashUrl: signed, lengthSeconds: 60));
+      addTearDown(video.close);
+      await video.playVideo(false);
+      await _flush();
+      expect(requests, isEmpty);
+      if (trusted) {
+        final source = nativeSources.single;
+        expect(source['uri'], signed);
+        expect(source['headers'], isEmpty);
+        expect(source['mediaCompanions']['origin'], origin);
+        expect(source['mediaCompanions']['origins'], [companion]);
+        expect(source['mediaCompanions']['gatewayContext'], isA<String>());
+        expect(source['playbackCache']['origin'], origin);
+        expect(source['playbackCache']['resources'].first['url'], signed);
+      } else {
+        expect(sources, isEmpty);
+        expect(player.state.mediaEvent.value,
+            PlaybackFailureReason.separateMediaHost);
+      }
+    });
+  }
+
+  test(
+      'protected companion accounts use the guarded loader for HLS track discovery',
+      () async {
+    mockMediaCompanionTransport();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final selected = (await db.getCurrentlySelectedServer()).copyWith(
+        gatewayEnabled: true, customHeaders: {'X-Test-Instance': 'frontend'});
+    await db.upsertServer(selected);
+    await db.setMediaCompanionOrigin(selected, 'https://media.example',
+        enabled: true);
+    final requests = <http.Request>[];
+    service.httpClient.close();
+    service = Service(httpClient: MockClient((request) async {
+      requests.add(request);
+      return http.Response(
+          '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360\nvariant.m3u8\n',
+          200);
+    }));
+    final video = create(const Video(
+        videoId: 'video', hlsUrl: 'https://instance.example/manifest.m3u8'));
+    addTearDown(video.close);
+    await video.playVideo(false);
+    await _flush();
+    expect(requests.single.url.toString(),
+        'https://instance.example/manifest.m3u8?local=true');
+    expect(requests.single.followRedirects, isFalse);
+    expect(requests.single.headers['X-Test-Instance'], 'frontend');
+    expect(video.videoController?.betterPlayerAsmsTracks.last.height, 360);
+  });
+
+  test('signed companion handoff clears frontend headers before native setup',
+      () async {
+    mockMediaCompanionTransport();
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const companion = 'https://media.example';
+    const signed =
+        '$companion/api/manifest/dash/id/video?local=true&check=a%2Fb&x=1&x=2';
+    final selected = (await db.getCurrentlySelectedServer()).copyWith(
+        gatewayEnabled: true, customHeaders: {'X-Test-Instance': 'frontend'});
+    await db.upsertServer(selected);
+    await db.setMediaCompanionOrigin(selected, companion, enabled: true);
+    final requests = <http.Request>[];
+    service.httpClient.close();
+    service = Service(httpClient: MockClient((request) async {
+      requests.add(request);
+      if (request.url.path == '/watch') {
+        return http.Response(
+            '<video id="player"><source type="application/dash+xml" src="${signed.replaceAll('&', '&amp;')}"></video>',
+            200);
+      }
+      return http.Response('No check ID.', 400);
+    }));
+    final video = create(const Video(
+        videoId: 'video',
+        lengthSeconds: 60,
+        dashUrl: 'https://instance.example/api/manifest/dash/id/video'));
+    addTearDown(video.close);
+    await video.playVideo(false);
+    await _flush();
+    final source = nativeSources.single;
+    expect(source['uri'], signed);
+    expect(source['headers'], isEmpty);
+    expect(source['mediaCompanions']['origin'], selected.url);
+    expect(source['mediaCompanions']['origins'], [companion]);
+    expect(source['playbackCache']['origin'], selected.url);
+    expect(source['playbackCache']['resources'].first['url'], signed);
+    expect(requests.map((request) => request.url.path),
+        ['/api/manifest/dash/id/video', '/watch']);
+    expect(
+        requests.every((request) =>
+            request.url.origin == selected.url &&
+            request.headers['X-Test-Instance'] == 'frontend'),
+        isTrue);
   });
 
   test('offline document URIs reach the native player without file conversion',
@@ -527,7 +744,7 @@ void main() {
     expect(settings.state.lastVideoQuality, 480);
   });
 
-  group('NerdVPN automatic startup', () {
+  group('Android playback startup', () {
     const nerdVpn = 'https://invidious.nerdvpn.de';
     const dashPath = '/api/manifest/dash/id/startup';
     const dashQuery = '$dashPath?local=true';
@@ -556,12 +773,13 @@ void main() {
     Future<_VideoPlayer> createStartupVideo({
       String serverUrl = nerdVpn,
       bool liveNow = false,
+      List<int> heights = const [480, 360],
       List<AdaptiveFormat>? adaptiveFormats,
     }) async {
       final server = Server(url: serverUrl);
       await db.upsertServer(server);
       await db.useServer(server);
-      return create(_video('startup', heights: [480, 360], serverUrl: serverUrl)
+      return create(_video('startup', heights: heights, serverUrl: serverUrl)
           .copyWith(
               dashUrl: '$serverUrl$dashPath',
               liveNow: liveNow,
@@ -598,6 +816,54 @@ void main() {
               '140'),
           adaptive('https://unrelated.example/video', '137', height: 1080),
         ];
+
+    for (final (hasAudio, hasProgressive) in [
+      (true, false),
+      (false, true),
+      (false, false),
+    ]) {
+      test(
+          'blocked public DASH redirect with audio=$hasAudio and combined=$hasProgressive',
+          () async {
+        const origin = 'https://instance.example';
+        service.httpClient.close();
+        service = Service(httpClient: MockClient((request) async {
+          manifestRequests.add(request.url);
+          return http.Response('', 302,
+              headers: {'location': 'https://media.example/manifest'});
+        }));
+        final video = await createStartupVideo(
+            serverUrl: origin,
+            heights: hasProgressive ? [360] : [],
+            adaptiveFormats: [
+              adaptive('$origin/videoplayback?itag=134', '134', height: 360),
+              if (hasAudio) adaptive('$origin/videoplayback?itag=140', '140'),
+              adaptive('https://media.example/audio', '251'),
+            ]);
+        addTearDown(video.close);
+
+        await video.playVideo(false);
+        await _flush();
+
+        expect(manifestRequests, [Uri.parse('$origin$dashQuery')]);
+        if (hasAudio) {
+          expect(sources, ['$origin$dashQuery']);
+          final manifest =
+              video.videoController!.betterPlayerDataSource!.inlineDashManifest;
+          expect(manifest, contains('$origin/videoplayback?itag=134'));
+          expect(manifest, contains('$origin/videoplayback?itag=140'));
+          expect(manifest, isNot(contains('media.example')));
+        } else if (hasProgressive) {
+          expect(sources, ['$origin/startup-360.mp4']);
+          expect(player.state.mediaEvent.state, isNot(MediaState.error));
+        } else {
+          expect(sources, isEmpty);
+          expect(player.state.mediaEvent.state, MediaState.error);
+          expect(player.state.mediaEvent.value,
+              PlaybackFailureReason.separateMediaHost);
+        }
+      });
+    }
 
     test('onion API tracks provide HD without the protected browser manifest',
         () async {

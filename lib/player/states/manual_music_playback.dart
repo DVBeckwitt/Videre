@@ -67,8 +67,12 @@ class _ManualMusicDecoder {
             await decoder.seek(startAt);
           }
         } on PlayerException catch (error) {
-          if (!active() || !error.backendRetryable) return false;
-          if (index == plan.sources.length - 1) {
+          if (!active() ||
+              (!error.backendRetryable && !error.mediaOriginBlocked)) {
+            return false;
+          }
+          // Only a transient failure can rotate the selected song's backend.
+          if (index == plan.sources.length - 1 && error.backendRetryable) {
             exhaustedSourceError = error;
           }
           continue;

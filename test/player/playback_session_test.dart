@@ -349,27 +349,36 @@ void main() {
     test('playback status survives presentation events until decoder recovery',
         () async {
       player.seedVideo(const Video(videoId: 'status'));
-      player.setEvent(const MediaEvent(state: MediaState.error));
+      player.setEvent(const MediaEvent(
+          state: MediaState.error,
+          value: PlaybackFailureReason.separateMediaHost));
       player.showMiniPlayer();
       player.setEvent(const MediaEvent(
           state: MediaState.ready,
           type: MediaEventType.speedChanged,
           value: 1.5));
       expect(player.playbackStatus, MediaState.error);
+      expect(player.playbackFailureReason,
+          PlaybackFailureReason.separateMediaHost);
       player.setEvent(const MediaEvent(state: MediaState.loading));
       player.showBigPlayer();
       expect(player.playbackStatus, MediaState.loading);
+      expect(player.playbackFailureReason, isNull);
       player.setEvent(const MediaEvent(state: MediaState.ready));
       expect(player.playbackStatus, MediaState.ready);
+      expect(player.playbackFailureReason, isNull);
     });
 
     test('playback status cannot leak to replacement queue or profile',
         () async {
       const song = Video(videoId: 'status', queueEntryId: 'first');
       player.seedVideo(song);
-      player.setEvent(const MediaEvent(state: MediaState.error));
+      player.setEvent(const MediaEvent(
+          state: MediaState.error,
+          value: PlaybackFailureReason.separateMediaHost));
       player.seedVideo(song.copyWith(queueEntryId: 'second'));
       expect(player.playbackStatus, MediaState.idle);
+      expect(player.playbackFailureReason, isNull);
       player.setEvent(const MediaEvent(state: MediaState.error));
       await player.prepareForProfileSwitch();
       expect(player.playbackStatus, MediaState.idle);

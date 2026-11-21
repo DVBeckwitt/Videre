@@ -51,6 +51,14 @@ class BetterPlayerDataSource {
   /// Videre's transient source identity for the shared guarded native cache.
   final Map<String, Object?>? playbackCache;
 
+  /// Optional Android media-only origins for this selected-instance stream.
+  /// Transferred as source metadata, never HTTP headers.
+  final Map<String, Object?>? mediaCompanions;
+
+  /// Loads a frontend manifest for optional track discovery under the
+  /// account's request policy. This callback stays on the Dart side.
+  final Future<String?> Function(String url)? trackManifestLoader;
+
   ///List of bytes, used only in memory player
   final List<int>? bytes;
 
@@ -97,6 +105,8 @@ class BetterPlayerDataSource {
     this.resolutions,
     this.cacheConfiguration,
     this.playbackCache,
+    this.mediaCompanions,
+    this.trackManifestLoader,
     this.notificationConfiguration =
         const BetterPlayerNotificationConfiguration(
       showNotification: false,
@@ -131,6 +141,8 @@ class BetterPlayerDataSource {
     Map<String, String>? qualities,
     BetterPlayerCacheConfiguration? cacheConfiguration,
     Map<String, Object?>? playbackCache,
+    Map<String, Object?>? mediaCompanions,
+    Future<String?> Function(String url)? trackManifestLoader,
     BetterPlayerNotificationConfiguration notificationConfiguration =
         const BetterPlayerNotificationConfiguration(showNotification: false),
     Duration? overriddenDuration,
@@ -153,6 +165,8 @@ class BetterPlayerDataSource {
       resolutions: qualities,
       cacheConfiguration: cacheConfiguration,
       playbackCache: playbackCache,
+      mediaCompanions: mediaCompanions,
+      trackManifestLoader: trackManifestLoader,
       notificationConfiguration: notificationConfiguration,
       overriddenDuration: overriddenDuration,
       videoFormat: videoFormat,
@@ -235,6 +249,8 @@ class BetterPlayerDataSource {
     Map<String, String>? resolutions,
     BetterPlayerCacheConfiguration? cacheConfiguration,
     Map<String, Object?>? playbackCache,
+    Map<String, Object?>? mediaCompanions,
+    Future<String?> Function(String url)? trackManifestLoader,
     BetterPlayerNotificationConfiguration? notificationConfiguration =
         const BetterPlayerNotificationConfiguration(showNotification: false),
     Duration? overriddenDuration,
@@ -259,6 +275,8 @@ class BetterPlayerDataSource {
       resolutions: resolutions ?? this.resolutions,
       cacheConfiguration: cacheConfiguration ?? this.cacheConfiguration,
       playbackCache: playbackCache ?? this.playbackCache,
+      mediaCompanions: mediaCompanions ?? this.mediaCompanions,
+      trackManifestLoader: trackManifestLoader ?? this.trackManifestLoader,
       notificationConfiguration:
           notificationConfiguration ?? this.notificationConfiguration,
       overriddenDuration: overriddenDuration ?? this.overriddenDuration,

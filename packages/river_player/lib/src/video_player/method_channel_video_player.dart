@@ -98,6 +98,8 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
           'cacheKey': dataSource.cacheKey,
           if (dataSource.playbackCache != null)
             'playbackCache': dataSource.playbackCache,
+          if (dataSource.mediaCompanions != null)
+            'mediaCompanions': dataSource.mediaCompanions,
           'showNotification': dataSource.showNotification,
           'title': dataSource.title,
           'author': dataSource.author,
@@ -316,6 +318,10 @@ class MethodChannelVideoPlayer extends VideoPlayerPlatform {
 
   @override
   Future<void> preCache(DataSource dataSource, int preCacheSize) {
+    if (dataSource.mediaCompanions != null) {
+      return Future.error(
+          UnsupportedError('Companion access is limited to active playback.'));
+    }
     final Map<String, dynamic> dataSourceDescription = <String, dynamic>{
       'key': dataSource.key,
       'uri': dataSource.uri,

@@ -115,8 +115,10 @@ void main() {
     debugDefaultTargetPlatformOverride = originalTargetPlatform;
   });
 
-  test('existing exception constructor defaults to no backend retry', () {
-    expect(PlayerException(0, 'Source error', 0).backendRetryable, isFalse);
+  test('existing exception constructor defaults to an unclassified error', () {
+    final error = PlayerException(0, 'Source error', 0);
+    expect(error.backendRetryable, isFalse);
+    expect(error.mediaOriginBlocked, isFalse);
   });
 
   for (final extension in ['webm', 'mpd', 'm3u8']) {
@@ -134,11 +136,60 @@ void main() {
       final children = platform.player!.loadPayload!['children'] as List;
       expect(children.single['playbackCache'], identity);
       expect(children.single['headers'], isNull);
+      expect(children.single.containsKey('mediaCompanions'), isFalse);
       expect(children.single.containsKey('podcast'), isFalse);
+    });
+
+    test('Android $extension receives companion scope outside HTTP headers',
+        () async {
+      const companions = {
+        'origin': 'https://instance.example',
+        'origins': ['https://media.example'],
+      };
+      const headers = {'Authorization': 'fixture'};
+      final uri = Uri.parse('https://instance.example/media.$extension');
+      await player.setAudioSource(
+          AudioSource.uri(uri, headers: headers, mediaCompanions: companions));
+      final source = (platform.player!.loadPayload!['children'] as List).single;
+      expect(source['uri'], uri.toString());
+      expect(source['headers'], headers);
+      expect(source['mediaCompanions'], companions);
     });
   }
 
+  test('publisher podcast never inherits the previous media companion policy',
+      () async {
+    await player.setAudioSource(AudioSource.uri(
+        Uri.parse('https://instance.example/previous.mp4'),
+        mediaCompanions: const {
+          'origin': 'https://instance.example',
+          'origins': ['https://media.example'],
+        }));
+    await player.setAudioSource(
+        PodcastAudioSource(Uri.parse('https://publisher.example/podcast.mp3')));
+    final source = (platform.player!.loadPayload!['children'] as List).single;
+    expect(source['podcast'], isTrue);
+    expect(source.containsKey('mediaCompanions'), isFalse);
+    expect(source['headers'], isNull);
+  });
+
   for (final detail in [true, false, 'true', null]) {
+    test(
+        'media origin block is typed and does not request a backend retry: $detail',
+        () async {
+      platform.loadError = PlatformException(
+        code: '0',
+        message: 'Source error',
+        details: {'index': 0, 'mediaOriginBlocked': detail},
+      );
+      await expectLater(
+        player.setAudioSource(
+            AudioSource.uri(Uri.parse('https://example.com/audio.webm'))),
+        throwsA(isA<PlayerException>()
+            .having((e) => e.backendRetryable, 'retryable', isFalse)
+            .having((e) => e.mediaOriginBlocked, 'blocked', detail == true)),
+      );
+    });
     test('load exception preserves retry detail $detail', () async {
       platform.loadError = PlatformException(
         code: '0',
@@ -188,6 +239,28 @@ void main() {
     expect((await unknown).backendRetryable, isFalse);
     expect(errors, hasLength(2));
     await subscription.cancel();
+  });
+
+  test('runtime media origin classification follows only its matching event',
+      () async {
+    await player.setAudioSource(
+        AudioSource.uri(Uri.parse('https://example.com/audio.webm')));
+    final native = platform.player!;
+    final result = player.errorStream.first;
+    native.events.addError(PlatformException(
+        code: '0',
+        message: 'Source error',
+        details: {'index': 0, 'mediaOriginBlocked': true}));
+    native.events.add(native.event(errorCode: 0, errorMessage: 'Source error'));
+    final error = await result;
+    expect(error.mediaOriginBlocked, isTrue);
+    expect(error.backendRetryable, isFalse);
+    await player.setAudioSource(
+        AudioSource.uri(Uri.parse('https://example.com/other.webm')));
+    final unrelated = player.errorStream.first;
+    platform.player!.events.add(
+        platform.player!.event(errorCode: 0, errorMessage: 'Source error'));
+    expect((await unrelated).mediaOriginBlocked, isFalse);
   });
 
   group('lazy Android equalizer', () {

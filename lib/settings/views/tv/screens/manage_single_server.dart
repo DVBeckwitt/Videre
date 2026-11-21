@@ -1,4 +1,6 @@
 import 'package:clipious/settings/views/components/server_account_dialogs.dart';
+import 'package:clipious/settings/views/components/media_companion_dialog.dart';
+import 'package:clipious/network/media_companion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -150,6 +152,7 @@ class TvManageSingleServerScreen extends StatelessWidget {
               builder: (context, state) {
             var server = state.server;
             var cubit = context.read<ServerSettingsCubit>();
+            final companions = trustedMediaCompanionOrigins(server);
             AppLocalizations locals = AppLocalizations.of(context)!;
             bool isLoggedIn =
                 (server.authToken != null && server.authToken!.isNotEmpty) ||
@@ -259,6 +262,32 @@ class TvManageSingleServerScreen extends StatelessWidget {
                   leading: const Icon(Icons.add),
                   onSelected: showAddHeaderDialog,
                 ),
+                if (mediaCompanionInstanceAddress(server)
+                    case final String instance) ...[
+                  SettingsTitle(title: locals.mediaCompanionHosts),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(locals.mediaCompanionSettingsScope(instance)),
+                  ),
+                  for (final origin in companions)
+                    SettingsTile(
+                      title: origin,
+                      description: locals.mediaCompanionRemove(origin),
+                      trailing: const Icon(Icons.delete_outline),
+                      onSelected: (context) => _accountAction(
+                          context,
+                          () => cubit.setMediaCompanionOrigin(server, origin,
+                              enabled: false)),
+                    ),
+                  SettingsTile(
+                    title: locals.mediaCompanionAdd,
+                    leading: const Icon(Icons.add_link),
+                    enabled: companions.length < maxMediaCompanionOrigins,
+                    onSelected: (context) => showMediaCompanionDialog(
+                        context, server,
+                        television: true),
+                  ),
+                ],
                 const Gap(20),
                 SettingsTile(
                   title: locals.delete,

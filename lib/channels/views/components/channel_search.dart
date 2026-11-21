@@ -190,7 +190,7 @@ class _ChannelSearchPaneState extends State<_ChannelSearchPane> {
       Future<void> check() async {
         if (!sameConnection()) throw const _ChannelSearchRetired();
         final current = await _owner.getCurrentlySelectedServer();
-        if (!sameConnection() || !route.matches(current)) {
+        if (!sameConnection() || !route.matchesConnection(current)) {
           throw const _ChannelSearchRetired();
         }
       }

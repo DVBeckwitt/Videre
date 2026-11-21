@@ -133,6 +133,41 @@ class PlaybackCacheDeviceTest {
     }
 
     @Test(timeout = 15000)
+    fun companionSourcesBypassExistingAndNewBytesAndFollowAccountRevocation() {
+        val (gateway, marker) = gatewayFixture(origin)
+        val extraOrigin = "https://media.example"
+        val child = "$extraOrigin/videoplayback"
+        val policy = mapOf("origin" to origin, "origins" to listOf(extraOrigin), "gatewayContext" to marker)
+        val upstream = CountingFactory(mapOf("/videoplayback" to payload))
+        val cache = descriptor() + ("gatewayContext" to marker)
+        // An earlier strict source has populated this selected-host URL.
+        read(factory(upstream, cache))
+        val delegated = PlaybackMediaCache.factory(context, upstream, media, cache,
+            PlaybackCacheRequest.PROGRESSIVE, policy)
+        val directLive = PlaybackMediaCache.factory(context, upstream, child, null,
+            PlaybackCacheRequest.ADAPTIVE_MEDIA, policy)
+        assertArrayEquals(payload, read(delegated).bytes)
+        assertArrayEquals(payload, read(delegated, child).bytes)
+        assertArrayEquals(payload, read(directLive, child).bytes)
+        assertEquals(4, upstream.opens.get())
+        assertEquals(payload.size.toLong(), PlaybackMediaCache.status()["usedBytes"])
+        assertThrows(IOException::class.java) { read(directLive, "file:///fixture") }
+        assertThrows(IOException::class.java) { read(delegated, "https://other.example/videoplayback") }
+        PlaybackMediaCache.revokeAccount(gateway.key)
+        assertThrows(IOException::class.java) { read(directLive, child) }
+        assertThrows(IOException::class.java) { read(delegated, media) }
+        assertEquals(4, upstream.opens.get())
+        // A stale source map delivered *after* the account-epoch change must
+        // not create a new companion factory once the grant has been removed.
+        ProxyDataSource.setMediaCompanionOrigins(policy + ("origins" to emptyList<String>()))
+        assertThrows(IOException::class.java) {
+            PlaybackMediaCache.factory(context, upstream, child, null, PlaybackCacheRequest.ADAPTIVE_MEDIA, policy)
+        }
+        assertThrows(IOException::class.java) { ProxyDataSource.factory(null, null, child, policy) }
+        assertArrayEquals(payload, read(factory(upstream, cache)).bytes)
+    }
+
+    @Test(timeout = 15000)
     fun refreshedSignedUrlReusesBytesWithoutRestoringOldRedirect() {
         val staleRedirect = "$origin/redirected-media?signature=expired"
         val upstream = CountingFactory(mapOf("/videoplayback" to payload), staleRedirect)

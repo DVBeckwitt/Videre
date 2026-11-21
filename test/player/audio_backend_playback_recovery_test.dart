@@ -1393,6 +1393,85 @@ void main() {
     expect(audio.state.error, isNull);
   });
 
+  for (final duringPlayback in [false, true]) {
+    test(
+        'an origin block tries only remaining admitted formats, during playback=$duringPlayback',
+        () async {
+      final blocked =
+          PlayerException(0, 'Source error', 0, mediaOriginBlocked: true);
+      final native = _NativeAudio();
+      if (!duringPlayback) native.errors.add(blocked);
+      final audio = create(native,
+          video: _video('song', preferred).copyWith(
+              adaptiveFormats: [_adaptive('${preferred.url}/audio')]));
+      await audio.playVideo(false, startAt: const Duration(seconds: 21));
+      if (duringPlayback) {
+        audio.onPlaybackError(blocked);
+        await _flush();
+      }
+      expect(
+          native.sources
+              .cast<UriAudioSource>()
+              .map((source) => source.uri.path),
+          ['/audio', '/song.mp4']);
+      expect(native.sourcePositions, everyElement(const Duration(seconds: 21)));
+      expect(player.events.where((event) => event.state == MediaState.error),
+          isEmpty);
+      audio.onPlaybackError(blocked);
+      await _flush();
+      expect(native.sources, hasLength(2));
+      expect(
+          player.events
+              .where((event) => event.state == MediaState.error)
+              .single
+              .value,
+          PlaybackFailureReason.separateMediaHost);
+      expect(player.refreshCalls, 0);
+      expect(retryService.retryCalls, 0);
+    });
+  }
+
+  test('direct audio metadata on an unapproved media host reports its cause',
+      () async {
+    final native = _NativeAudio();
+    final audio = create(native,
+        video: _video('song', preferred).copyWith(
+          formatStreams: [],
+          adaptiveFormats: [_adaptive('https://media.instance.example/audio')],
+        ));
+    await audio.playVideo(false);
+    expect(native.sources, isEmpty);
+    expect(
+        player.events
+            .where((event) => event.state == MediaState.error)
+            .single
+            .value,
+        PlaybackFailureReason.separateMediaHost);
+    expect(player.refreshCalls, 0);
+    expect(retryService.retryCalls, 0);
+  });
+
+  test('a final unrelated decoder error supersedes an earlier origin block',
+      () async {
+    final native = _NativeAudio()
+      ..errors.addAll([
+        PlayerException(0, 'Source error', 0, mediaOriginBlocked: true),
+        PlayerException(4001, 'Unsupported codec', 0)
+      ]);
+    final audio = create(native,
+        video: _video('song', preferred)
+            .copyWith(adaptiveFormats: [_adaptive('${preferred.url}/audio')]));
+    await audio.playVideo(false);
+    expect(native.sources, hasLength(2));
+    expect(
+        player.events
+            .where((event) => event.state == MediaState.error)
+            .single
+            .value,
+        isNull);
+    expect(retryService.retryCalls, 0);
+  });
+
   for (final (advertised, selected) in [
     ('https://invidious.nerdvpn.de', 'http://$nerdVpnOnionHost'),
     ('http://$nerdVpnOnionHost', 'https://invidious.nerdvpn.de'),

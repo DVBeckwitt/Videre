@@ -11,11 +11,13 @@ import 'package:clipious/settings/views/components/backend_picker.dart';
 import 'package:clipious/settings/views/screens/manage_single_server.dart';
 import 'package:clipious/settings/views/tv/screens/manage_single_server.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/utils/views/tv/components/tv_text_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/media_companion_transport.dart';
 import '../test_app_cubit.dart';
 
 void main() {
@@ -98,6 +100,82 @@ void main() {
   }
 
   for (final tv in [false, true]) {
+    testWidgets(
+        '${tv ? 'TV' : 'phone'} explicitly allows and removes a companion on one account',
+        (tester) async {
+      mockMediaCompanionTransport();
+      await tester.binding.setSurfaceSize(const Size(820, 2200));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const account = Server(url: 'https://invidious.example');
+      const origin = 'https://media.example.org';
+      await tester.runAsync(() => db.upsertServer(account));
+      await tester.pumpWidget(testApp(tv
+          ? const TvManageSingleServerScreen(server: account)
+          : const ManageSingleServerScreen(server: account)));
+      await tester.pumpAndSettle();
+
+      Future<void> selectTile(String label) async {
+        final tile = find.text(label);
+        await tester.ensureVisible(tile);
+        await tester.pumpAndSettle();
+        if (tv) {
+          final listTile =
+              find.ancestor(of: tile, matching: find.byType(ListTile)).first;
+          Focus.of(tester.element(listTile)).requestFocus();
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        } else {
+          await tester.tap(tile);
+        }
+        await tester.pumpAndSettle();
+      }
+
+      await selectTile('Allow a media host');
+      final allow = find.widgetWithText(FilledButton, 'Allow a media host');
+      Future<void> confirm() async {
+        if (tv) {
+          final label = find.descendant(of: allow, matching: find.byType(Text));
+          Focus.of(tester.element(label)).requestFocus();
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        } else {
+          await tester.tap(allow);
+        }
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> enter(String address) async {
+        if (tv) {
+          tester.widget<TvTextField>(find.byType(TvTextField)).controller.text =
+              address;
+        } else {
+          await tester.enterText(find.byType(TextField), address);
+        }
+      }
+
+      await enter('https://*.example.org');
+      await confirm();
+      expect(find.textContaining('Enter a separate public HTTPS host'),
+          findsOneWidget);
+      expect(db.getServer(account.accountId)!.mediaCompanionOrigins, isEmpty);
+
+      await enter(origin);
+      await confirm();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(db.getServer(account.accountId)!.mediaCompanionOrigins, [origin]);
+      expect(db.getServer('https://other.example')!.mediaCompanionOrigins,
+          isEmpty);
+      if (tv) {
+        await selectTile(origin);
+      } else {
+        await tester
+            .tap(find.byTooltip('Remove $origin from allowed media hosts'));
+        await tester.pumpAndSettle();
+      }
+      expect(db.getServer(account.accountId)!.mediaCompanionOrigins, isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
         '${tv ? 'TV' : 'phone'} backend setting saves and reopens selection',
         (tester) async {

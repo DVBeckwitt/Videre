@@ -11,6 +11,7 @@ import 'package:clipious/downloads/services/download_storage.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
+import 'package:clipious/network/gateway_http_client.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
@@ -38,6 +39,8 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import '../support/media_companion_transport.dart';
+
 class _Player extends Fake implements PlayerCubit {}
 
 class _Settings extends Fake implements SettingsCubit {
@@ -54,6 +57,23 @@ class _DownloadTestBinding extends AutomatedTestWidgetsFlutterBinding {
 }
 
 class _DirectHttpOverrides extends HttpOverrides {}
+
+/// Route this test's one public HTTPS media origin to its loopback fixture.
+class _FixtureMediaClient extends GatewayHttpClient {
+  final HttpClient client;
+  final int port;
+
+  _FixtureMediaClient(this.client, this.port) : super(client);
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) {
+    if (url.origin != 'https://watch.example') {
+      throw StateError('Unexpected download destination');
+    }
+    return client.openUrl(
+        method, url.replace(scheme: 'http', host: '127.0.0.1', port: port));
+  }
+}
 
 class _DownloadService extends Service {
   final Future<Video> Function(String) fetch;
@@ -2386,6 +2406,50 @@ void main() {
           'audio/webm', '8', revision, '', 'webm', 'opus', null, null),
     ]);
   }
+
+  test('a playback grant edit preserves an active same-origin download',
+      () async {
+    mockMediaCompanionTransport();
+    const owner = Server(url: 'https://watch.example', id: 'download-owner');
+    await db.upsertServer(owner);
+    final job = video.copyWith(accountId: owner.accountId, audioOnly: true);
+    await db.upsertDownload(job);
+    manager.setVideos();
+    service = _DownloadService((id) async => downloadRendition(id, owner));
+    final started = Completer<void>();
+    final finish = Completer<void>();
+    const bytes = [0, 1, 2, 3, 4, 5, 6, 7];
+    var requests = 0;
+    mediaServer!.listen((request) async {
+      requests++;
+      expect(request.uri.path, '/audio');
+      if (!started.isCompleted) started.complete();
+      await finish.future;
+      request.response.add(bytes);
+      await request.response.close();
+    });
+
+    await HttpOverrides.runZoned(() async {
+      await manager.setWifiOnly(false);
+      try {
+        await started.future.timeout(const Duration(seconds: 5));
+        await db.setMediaCompanionOrigin(owner, 'https://media.example',
+            enabled: true);
+      } finally {
+        finish.complete();
+      }
+      await waitFor((state) =>
+          state.videos.single.downloadComplete ||
+          state.videos.single.downloadFailed);
+    },
+        createHttpClient: (context) => _FixtureMediaClient(
+            _DirectHttpOverrides().createHttpClient(context),
+            mediaServer!.port));
+
+    expect(requests, 1);
+    expect(db.getDownloadByVideoId(job.videoId)!.downloadComplete, isTrue);
+    expect(await File(await job.downloadPath).readAsBytes(), bytes);
+  });
 
   test(
       'failed transfer changes backend on the saved account and restarts a changed rendition',

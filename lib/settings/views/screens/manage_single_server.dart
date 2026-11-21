@@ -1,4 +1,6 @@
 import 'package:clipious/settings/views/components/server_account_dialogs.dart';
+import 'package:clipious/settings/views/components/media_companion_dialog.dart';
+import 'package:clipious/network/media_companion.dart';
 import 'package:auto_route/annotations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -76,6 +78,7 @@ class ManageSingleServerScreen extends StatelessWidget {
         builder: (context, state) {
           var server = state.server;
           var cubit = context.read<ServerSettingsCubit>();
+          final companions = trustedMediaCompanionOrigins(server);
           bool isLoggedIn =
               (server.authToken != null && server.authToken!.isNotEmpty) ||
                   (server.sidCookie != null && server.sidCookie!.isNotEmpty);
@@ -242,6 +245,44 @@ class ManageSingleServerScreen extends StatelessWidget {
                               onPressed: showAddHeaderDialog,
                             )
                           ]),
+                      if (mediaCompanionInstanceAddress(server)
+                          case final String instance)
+                        SettingsSection(
+                          title: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(locals.mediaCompanionHosts),
+                              Text(
+                                locals.mediaCompanionSettingsScope(instance),
+                                style: TextStyle(
+                                    color: theme.tileDescriptionTextColor),
+                              ),
+                            ],
+                          ),
+                          tiles: [
+                            for (final origin in companions)
+                              SettingsTile(
+                                title: Text(origin),
+                                trailing: IconButton(
+                                  tooltip: locals.mediaCompanionRemove(origin),
+                                  icon: const Icon(Icons.delete_outline),
+                                  onPressed: () => runServerAccountAction(
+                                      context,
+                                      () => cubit.setMediaCompanionOrigin(
+                                          server, origin,
+                                          enabled: false)),
+                                ),
+                              ),
+                            SettingsTile.navigation(
+                              title: Text(locals.mediaCompanionAdd),
+                              leading: const Icon(Icons.add_link),
+                              enabled:
+                                  companions.length < maxMediaCompanionOrigins,
+                              onPressed: (context) =>
+                                  showMediaCompanionDialog(context, server),
+                            ),
+                          ],
+                        ),
                       SettingsSection(title: const Text(''), tiles: [
                         SettingsTile(
                           enabled: state.canDelete,

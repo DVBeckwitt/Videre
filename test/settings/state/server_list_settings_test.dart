@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 
 import '../../test_app_cubit.dart';
+import '../../support/media_companion_transport.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -70,6 +71,77 @@ void main() {
       expect(servers.state.dbServers.where((s) => s.inUse).length, 1);
       expect(app.state.server?.url, server.url);
       expect((await fileDb.getCurrentlySelectedServer()).url, server.url);
+    }
+  });
+
+  test(
+      'first setup activates its approved account; settings can add another without switching',
+      () async {
+    mockMediaCompanionTransport();
+    final servers =
+        ServerListSettingsCubit(ServerListSettingsState(dbServers: []), app);
+    addTearDown(servers.close);
+    const first = Server(
+        id: 'setup-a',
+        url: 'https://first.example',
+        mediaCompanionOrigins: ['https://media.first.example']);
+    const second = Server(
+        id: 'setup-b',
+        url: 'https://second.example',
+        mediaCompanionOrigins: ['https://media.second.example']);
+    final selected = await servers.saveServer(first,
+        isRouteCurrent: () => true,
+        setupDecision: first.mediaCompanionOrigins.toSet());
+    expect(selected!.inUse, isTrue);
+    expect(app.state.server?.accountId, first.accountId);
+    expect((await fileDb.getCurrentlySelectedServer()).mediaCompanionOrigins,
+        isEmpty);
+    expect(
+        await servers.saveServer(second, isRouteCurrent: () => false), isNull);
+    expect(db.getAccount(second.accountId), isNull);
+    final added = await servers.saveServer(second,
+        isRouteCurrent: () => true,
+        setupDecision: second.mediaCompanionOrigins.toSet());
+    expect(added!.inUse, isFalse);
+    expect(db.getAccount(second.accountId)?.mediaCompanionOrigins,
+        second.mediaCompanionOrigins);
+    expect(app.state.server?.accountId, first.accountId);
+    expect(
+        (await fileDb.getCurrentlySelectedServer()).accountId, first.accountId);
+  });
+
+  test('editing a sibling refreshes the selected account without switching',
+      () async {
+    mockMediaCompanionTransport();
+    const first = Server(
+        url: 'https://watch.example',
+        id: 'active',
+        customHeaders: {'X-Instance-Header': 'active-only'});
+    const sibling = Server(
+        url: 'https://watch.example/',
+        id: 'editing',
+        customHeaders: {'X-Instance-Header': 'sibling-only'});
+    const origin = 'https://media.example';
+    final servers =
+        ServerListSettingsCubit(ServerListSettingsState(dbServers: []), app);
+    addTearDown(servers.close);
+    await servers.saveServer(first);
+    await servers.saveServer(sibling);
+    final editor =
+        ServerSettingsCubit(ServerSettingsState(server: sibling), app);
+    addTearDown(editor.close);
+    for (final enabled in [true, false]) {
+      await editor.setMediaCompanionOrigin(sibling, origin, enabled: enabled);
+      final expected = enabled ? [origin] : <String>[];
+      expect(app.state.server?.accountId, first.accountId);
+      expect(app.state.server?.customHeaders, first.customHeaders);
+      expect(app.state.server?.mediaCompanionOrigins, expected);
+      expect(editor.state.server.accountId, sibling.accountId);
+      expect(editor.state.server.customHeaders, sibling.customHeaders);
+      expect(editor.state.server.mediaCompanionOrigins, expected);
+      final background = await fileDb.getCurrentlySelectedServer();
+      expect(background.accountId, first.accountId);
+      expect(background.mediaCompanionOrigins, isEmpty);
     }
   });
 

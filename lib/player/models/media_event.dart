@@ -6,6 +6,8 @@ class MediaEvent<T> {
   const MediaEvent({this.type, required this.state, this.value});
 }
 
+enum PlaybackFailureReason { separateMediaHost }
+
 enum MediaEventType {
   aspectRatioChanged,
   play,

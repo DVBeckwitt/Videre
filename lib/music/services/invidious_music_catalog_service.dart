@@ -68,7 +68,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
             'The music connection changed. Retry the request.');
       }
       final selected = await owner.getCurrentlySelectedServer();
-      if (!current() || !route.matches(selected)) {
+      if (!current() || !route.matchesConnection(selected)) {
         throw const MusicCatalogException(
             'The music connection changed. Retry the request.');
       }
@@ -739,7 +739,7 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
     final cooldown = _artistReleaseCooldown;
     return cooldown != null &&
             identical(cooldown.owner, db) &&
-            cooldown.route.matches(server)
+            cooldown.route.matchesConnection(server)
         ? cooldown.until
         : null;
   }

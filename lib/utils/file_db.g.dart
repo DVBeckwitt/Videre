@@ -12,9 +12,8 @@ FileDbGenericSettings _$FileDbGenericSettingsFromJson(
       ..profileId = json['profileId'] as String? ?? 'default'
       ..legacyNotificationAccountId =
           json['legacyNotificationAccountId'] as String?
-      ..server = json['server'] == null
-          ? null
-          : Server.fromJson(json['server'] as Map<String, dynamic>)
+      ..server =
+          _notificationServerFromJson(json['server'] as Map<String, dynamic>?)
       ..subscriptionNotifications = json['subscriptionNotifications'] as bool
       ..locale = json['locale'] as String?;
 
@@ -23,7 +22,7 @@ Map<String, dynamic> _$FileDbGenericSettingsToJson(
     <String, dynamic>{
       'profileId': instance.profileId,
       'legacyNotificationAccountId': instance.legacyNotificationAccountId,
-      'server': instance.server,
+      'server': _notificationServerToJson(instance.server),
       'subscriptionNotifications': instance.subscriptionNotifications,
       'locale': instance.locale,
     };

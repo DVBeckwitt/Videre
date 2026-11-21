@@ -8,6 +8,7 @@ import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/states/audio_player.dart';
@@ -29,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
 import 'package:just_audio_platform_interface/just_audio_platform_interface.dart';
 
+import '../support/media_companion_transport.dart';
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
 import '../test_settings_cubit.dart';
@@ -200,6 +202,68 @@ Video _playableVideo(String id, Server server, {bool music = false}) => Video(
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+      'audio companion approval applies only to the current account and preload',
+      () async {
+    mockMediaCompanionTransport();
+    final originalTarget = debugDefaultTargetPlatformOverride;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = originalTarget);
+    db = await SembastSqfDb.createInMemory();
+    addTearDown(db.close);
+    const server = Server(
+        url: 'https://instance.example',
+        id: 'listener',
+        customHeaders: {'X-Private-Test': 'account-only'});
+    await db.upsertServer(server);
+    await db.useServer(server);
+    final base = _playableVideo('scoped', server);
+    final local = base.adaptiveFormats!.first;
+    const direct = 'https://media.example/videoplayback?q=%2B&itag=140';
+    final video = base.copyWith(
+      playbackConnection: null,
+      adaptiveFormats: [
+        AdaptiveFormat.fromJson({...local.toJson(), 'url': direct}),
+        local,
+        AdaptiveFormat.fromJson(
+            {...local.toJson(), 'url': 'https://unselected.example/audio'}),
+      ],
+    );
+    Future<AudioPlaybackSources> resolve([Video? item]) async =>
+        (await resolveAudioPlaybackSources(
+            video: item ?? video,
+            offlineVideo: null,
+            sessionId: 'fixture',
+            isCurrent: () => true,
+            skipDownload: true))!;
+    final before = await resolve();
+    expect((before.sources.single as UriAudioSource).uri.toString(), local.url);
+    await db.setMediaCompanionOrigin(server, 'https://media.example',
+        enabled: true);
+    final allowed = await resolve();
+    final sources = allowed.sources.cast<UriAudioSource>();
+    expect(sources.map((s) => s.uri.toString()),
+        unorderedEquals([local.url, direct]));
+    final foreign = sources.singleWhere((s) => s.uri.host == 'media.example');
+    expect(foreign.headers, isNull);
+    expect(foreign.mediaCompanions?['origin'], server.url);
+    expect(foreign.mediaCompanions?['origins'], ['https://media.example']);
+    expect(foreign.mediaCompanions?['gatewayContext'], isA<String>());
+    expect((foreign as ProgressiveAudioSource).playbackCache?['origin'],
+        server.url);
+    final sameHost = sources.singleWhere((s) => s.uri.toString() == local.url);
+    expect(sameHost.headers?['X-Private-Test'], 'account-only');
+
+    final prepared = await resolve(video.copyWith(adaptiveFormats: [local]));
+    expect(samePreparedAudioSource(prepared, before), isFalse);
+    expect(samePreparedAudioSource(allowed, await resolve()), isTrue);
+    await db.setMediaCompanionOrigin(server, 'https://media.example',
+        enabled: false);
+    final revoked = await resolve();
+    expect((revoked.sources.single as UriAudioSource).mediaCompanions, isNull);
+    expect(samePreparedAudioSource(prepared, revoked), isFalse);
+  });
 
   for (final completed in [true, false]) {
     test(

@@ -17,7 +17,9 @@ import 'package:clipious/settings/models/errors/missing_software_key.dart';
 import 'package:clipious/settings/models/errors/server_already_exists.dart';
 import 'package:clipious/settings/models/errors/wrong_thumbnail_url.dart';
 import 'package:clipious/settings/states/add_server.dart';
+import 'package:clipious/settings/states/server_list_settings.dart';
 import 'package:clipious/settings/views/components/community_filter_choice.dart';
+import 'package:clipious/settings/views/components/media_companion_dialog.dart';
 import 'package:clipious/settings/views/components/public_instances.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/components/add_server_options.dart';
@@ -196,18 +198,47 @@ class AddServerScreen extends StatelessWidget {
     }
   }
 
+  /// Both Settings and first-instance onboarding save the validated account
+  /// on the route that opened setup, after the form returns successfully.
+  static Future<Server?> openSetup(BuildContext context,
+      {required bool television}) async {
+    final cubit = context.read<ServerListSettingsCubit>();
+    final route = ModalRoute.of(context);
+    bool current() => context.mounted && (route?.isCurrent ?? true);
+    final result = await AutoRouter.of(context).push<ValidatedSetupAccount>(
+        television ? const TvAddServerRoute() : const AddServerRoute());
+    if (result == null || !current()) return null;
+    try {
+      return await cubit.saveServer(result.server,
+          isRouteCurrent: current,
+          setupDecision: result.mediaCompanionDecision);
+    } catch (error) {
+      if (context.mounted && (route?.isCurrent ?? true)) {
+        handleError(context, error);
+      }
+      return null;
+    }
+  }
+
   static Future<void> validateAndClose(BuildContext context) async {
     final route = ModalRoute.of(context);
     // A popped form can remain mounted through its reverse transition.
     bool isCurrentRoute() => route?.isCurrent ?? true;
 
     try {
+      Set<String>? decision;
       final server = await context.read<AddServerCubit>().validateServer(
+          onMediaCompanionDecision: (value) => decision = value,
           isRouteCurrent: () => context.mounted && isCurrentRoute(),
+          chooseMediaCompanions: (server, origins) async =>
+              context.mounted && isCurrentRoute()
+                  ? chooseSetupMediaCompanions(context, server, origins)
+                  : null,
           prepareFirstInstance: () =>
               _prepareAiSListSetup(context, isCurrentRoute));
       if (server != null && context.mounted && isCurrentRoute()) {
-        AutoRouter.of(context).maybePop(server);
+        AutoRouter.of(context).maybePop<ValidatedSetupAccount>(
+            (server: server, mediaCompanionDecision: decision));
       }
     } catch (error) {
       if (context.mounted && isCurrentRoute()) handleError(context, error);

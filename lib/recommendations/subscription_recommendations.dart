@@ -106,7 +106,7 @@ class SubscriptionRecommendationSource {
     Future<void> check() async {
       if (!current() || route == null) throw const _SubscriptionReadCancelled();
       final selected = await _database.getCurrentlySelectedServer();
-      if (!current() || !route.matches(selected)) {
+      if (!current() || !route.matchesConnection(selected)) {
         throw const _SubscriptionReadCancelled();
       }
     }

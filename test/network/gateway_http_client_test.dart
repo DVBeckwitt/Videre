@@ -6,8 +6,10 @@ import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/network/gateway_http_client.dart';
 import 'package:clipious/network/gateway_session_bridge.dart';
 import 'package:clipious/network/nerdvpn_access.dart';
+import 'package:clipious/player/dash_manifest_resolver.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/io_client.dart';
 
 class _DirectOverrides extends HttpOverrides {}
 
@@ -207,6 +209,260 @@ void main() {
     request.headers.set(gatewayContextHeader, context.encoded);
     return request;
   }
+
+  group('read-only companion discovery', () {
+    const account = Server(
+        url: 'https://invidious.nerdvpn.de',
+        profileId: 'person',
+        id: 'account',
+        gatewayEnabled: true);
+    final sample = Uri.parse('${account.url}/videoplayback');
+    final owner = GatewayRequestContext.forAccount(
+        account.profileId, account.accountId, account.url)!;
+
+    test(
+        'only the selected host receives a request and no response changes credentials',
+        () async {
+      for (final (status, location) in [
+        (307, 'https://media.example/stream'),
+        (302, 'https://sso.example/login'),
+        (401, null),
+        (429, null),
+      ]) {
+        final raw = _Client([
+          _Response(status,
+              headers: {
+                'content-type':
+                    location != null ? 'text/html' : 'application/json',
+                'set-cookie': 'sample-cookie=discard',
+                if (location != null) 'location': location,
+                if (status == 429) 'retry-after': '30',
+              },
+              body: '{"error":"rate_limited"}')
+        ]);
+        final client = GatewayHttpClient(raw,
+            resolve: resolve,
+            ingest: (_, __, ___,
+                    {required statusCode, contentType, location, revision}) =>
+                fail('An optional probe updated the gateway session'),
+            recover: (_,
+                    {required error,
+                    required statusCode,
+                    failedKey,
+                    failedIntent,
+                    retryAfter,
+                    revision,
+                    retry = true}) =>
+                fail('An optional probe recovered or replayed a credential'));
+        final response = await GatewayHttpClient.withCompanionDiscovery(
+            account, sample, () async {
+          final req = await client.getUrl(sample);
+          req.followRedirects = false;
+          req.headers.set(gatewayContextHeader, owner.encoded);
+          req.headers.set('Range', 'bytes=0-0');
+          return req.close();
+        });
+        expect(response.statusCode, status);
+        expect(response.headers.value('location'), location);
+        if (status == 429) expect(response.headers.value('retry-after'), '30');
+        expect(raw.requests.single.uri, sample);
+        expect(raw.requests.single.headers.value('Cookie'),
+            contains('gateway=session'));
+        await response.drain<void>();
+      }
+    });
+
+    test(
+        'other accounts, endpoints, methods, and ordinary requests keep normal response handling',
+        () async {
+      final other = GatewayRequestContext.forAccount(
+          account.profileId, 'another-account', account.url)!;
+      for (final (scoped, uri, marker, method, follow) in [
+        (false, sample, owner, 'GET', false),
+        (true, sample, other, 'GET', false),
+        (true, sample.resolve('/api/v1/videos/fixture'), owner, 'GET', false),
+        (true, sample, owner, 'POST', false),
+        (true, sample, owner, 'GET', true),
+      ]) {
+        final raw = _Client([_Response(403)]);
+        final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+            (_, __, ___,
+                {required statusCode, contentType, location, revision}) async {
+          throw const GatewayAuthenticationRequired();
+        });
+        Future<HttpClientResponse> send() async {
+          final req = await client.openUrl(method, uri);
+          req.followRedirects = follow;
+          req.headers.set(gatewayContextHeader, marker.encoded);
+          return req.close();
+        }
+
+        await expectLater(
+            scoped
+                ? GatewayHttpClient.withCompanionDiscovery(
+                    account, sample, send)
+                : send(),
+            throwsA(isA<GatewayAuthenticationRequired>()));
+      }
+      expect(
+          () => GatewayHttpClient.withCompanionDiscovery(
+              account,
+              Uri.parse('https://media.example/sample'),
+              () => fail('cross-origin probe')),
+          throwsArgumentError);
+    });
+  });
+
+  group('protected playback manifest probes', () {
+    const server = Server(
+        url: 'https://instance.example',
+        id: 'account-a',
+        profileId: 'person-a',
+        gatewayEnabled: true,
+        mediaCompanionOrigins: ['https://media.example']);
+    const path = '/api/manifest/dash/id/video';
+    const companion = 'https://media.example/stream';
+    final manifest = origin.resolve('$path?local=true');
+
+    test(
+        'HLS track discovery leaves an approved HTML handoff to native playback',
+        () async {
+      final playlist = origin.resolve('/api/manifest/hls_playlist/video');
+      final raw = _Client([
+        _Response(307, headers: {
+          'location': companion,
+          'content-type': 'text/html',
+          'set-cookie': 'gateway=renewed'
+        }),
+        _Response(200, body: '#EXTM3U')
+      ]);
+      final ingested = <int>[];
+      final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+          (key, uri, cookies,
+              {required statusCode, contentType, location, revision}) async {
+        ingested.add(statusCode);
+        if (statusCode == 307) {
+          expect(key, context.encoded);
+          expect(uri, playlist);
+          expect(contentType, isNull);
+          expect(location, companion);
+          expect(cookies, ['gateway=renewed']);
+          expect(revision, 17);
+        }
+      });
+      final resolver = DashManifestResolver(IOClient(client));
+      expect(await resolver.loadTrackManifest(playlist.toString(), server),
+          isNull);
+      expect(await resolver.loadTrackManifest(companion, server), isNull);
+      expect(await resolver.loadTrackManifest(playlist.toString(), server),
+          '#EXTM3U');
+      expect(ingested, [307, 200]);
+      expect(raw.requests.map((r) => r.uri), [playlist, playlist]);
+    });
+
+    for (final signed in [false, true]) {
+      test('approved HTML redirect keeps the session (signed=$signed)',
+          () async {
+        final recovered = origin.resolve('$path?local=true&check=signature');
+        final raw = _Client([
+          if (signed) ...[
+            _Response(400, body: 'No check ID.'),
+            _Response(200,
+                body: '<video id="player"><source '
+                    'type="application/dash+xml" src="$recovered"></video>'),
+          ],
+          _Response(302, headers: {
+            'location': companion,
+            'content-type': 'text/html',
+            'set-cookie': 'gateway=renewed'
+          }),
+        ]);
+        var handoffs = 0;
+        final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+            (key, uri, cookies,
+                {required statusCode, contentType, location, revision}) async {
+          if (statusCode == 302) {
+            handoffs++;
+            expect(key, context.encoded);
+            expect(uri, signed ? recovered : manifest);
+            expect(cookies, ['gateway=renewed']);
+            expect(revision, 17);
+            expect(location, companion);
+            expect(contentType, isNull);
+          }
+        });
+        final resolver = DashManifestResolver(IOClient(client));
+        final result = await resolver.resolve(
+            manifest.toString(), 'video', server,
+            onMediaOriginBlocked: () => fail('Approved host blocked'));
+        expect(result, (signed ? recovered : manifest).toString());
+        expect(handoffs, 1);
+        expect(
+            raw.requests.every((r) => r.uri.origin == origin.origin), isTrue);
+      });
+    }
+
+    test('foreign login Location is retained for the native sign-in check',
+        () async {
+      const location = 'https://media.example/login';
+      final raw = _Client([
+        _Response(307,
+            headers: {'location': location, 'content-type': 'text/html'})
+      ]);
+      var signInRequired = false;
+      final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+          (_, __, ___,
+              {required statusCode, contentType, location, revision}) async {
+        if (statusCode == 307 && Uri.parse(location!).path == '/login') {
+          signInRequired = true;
+          throw const GatewayAuthenticationRequired();
+        }
+      });
+      final result = await DashManifestResolver(IOClient(client)).resolve(
+          manifest.toString(), 'video', server,
+          onMediaOriginBlocked: () {});
+      expect(signInRequired, isTrue);
+      expect(result, isNull);
+      expect(raw.requests.single.uri, manifest);
+    });
+
+    test('unapproved hosts and other callers retain HTML authentication checks',
+        () async {
+      final otherAccount = GatewayRequestContext.forAccount(
+          'person-a', 'another-account', server.url)!;
+      for (final (scoped, target, url, owner, status) in [
+        (false, companion, manifest, context, 302),
+        (true, 'https://unapproved.example/stream', manifest, context, 302),
+        (true, companion, origin.resolve('/api/v1/videos/video'), context, 302),
+        (true, companion, manifest, otherAccount, 302),
+        (true, companion, manifest, context, 403),
+      ]) {
+        final raw = _Client([
+          _Response(status,
+              headers: {'location': target, 'content-type': 'text/html'})
+        ]);
+        final client = GatewayHttpClient(raw, resolve: resolve, ingest:
+            (_, __, ___,
+                {required statusCode, contentType, location, revision}) async {
+          expect(contentType, 'text/html');
+          throw const GatewayAuthenticationRequired();
+        });
+        Future<HttpClientResponse> send() async {
+          final req = await client.getUrl(url);
+          req.followRedirects = false;
+          req.headers.set(gatewayContextHeader, owner.encoded);
+          return req.close();
+        }
+
+        await expectLater(
+            scoped
+                ? GatewayHttpClient.withManifestProbe(server, manifest, send)
+                : send(),
+            throwsA(isA<GatewayAuthenticationRequired>()));
+        expect(raw.requests.single.uri, url);
+      }
+    });
+  });
 
   test(
       'request body waits for its account cookies and marker never reaches wire',

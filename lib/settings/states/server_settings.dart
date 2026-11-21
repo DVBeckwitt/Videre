@@ -6,6 +6,7 @@ import '../../globals.dart';
 import '../../player/states/player.dart';
 import '../../recommendations/subscription_recommendations.dart';
 import '../../network/nerdvpn_access.dart';
+import '../../network/media_companion.dart';
 import '../../utils/interfaces/db.dart';
 import '../models/db/server.dart';
 import '../models/backend_selector.dart';
@@ -86,21 +87,55 @@ class ServerSettingsCubit extends Cubit<ServerSettingsState> {
 
   Future<void> _saveServer(Server updated) async {
     await _profileDb.upsertServer(updated);
+    await _refreshServer(updated);
+  }
 
-    // Editing an inactive server must not switch background jobs to it.
-    if (db.profileId != updated.profileId) {
-      if (!isClosed) emit(state.copyWith(server: updated));
-      return;
+  Future<void> setMediaCompanionOrigin(Server expected, String origin,
+      {required bool enabled}) async {
+    if (isClosed ||
+        expected.profileId != state.server.profileId ||
+        expected.accountId != state.server.accountId ||
+        expected.url != state.server.url) {
+      throw StateError('Server selection changed');
     }
-    final selected = await db.getCurrentlySelectedServer();
-    if (selected.accountId == updated.accountId &&
-        selected.profileId == updated.profileId) {
-      await fileDb.refreshAccount(selected);
-      if (!app.isClosed && _isActive(selected)) {
-        app.setServer(selected);
+    final saved = await _profileDb.setMediaCompanionOrigin(expected, origin,
+        enabled: enabled);
+    final selected = await _profileDb.getCurrentlySelectedServer();
+    final sameInstance = mediaCompanionInstanceAddress(selected) ==
+        mediaCompanionInstanceAddress(saved);
+    try {
+      await _refreshServer(saved);
+      if (sameInstance &&
+          selected.accountId != saved.accountId &&
+          _isActive(selected)) {
+        final latest = _profileDb.getAccount(selected.accountId);
+        if (latest != null && !app.isClosed && latest.inUse) {
+          app.setServer(latest);
+        }
+      }
+    } finally {
+      if (!enabled && sameInstance) {
+        await PlayerCubit.stopForAccountChange(selected);
       }
     }
-    if (!isClosed) emit(state.copyWith(server: updated));
+  }
+
+  Future<void> _refreshServer(Server updated) async {
+    // Editing an inactive server must not switch background jobs to it.
+    if (db.profileId == updated.profileId) {
+      final selected = await db.getCurrentlySelectedServer();
+      if (selected.accountId == updated.accountId &&
+          selected.profileId == updated.profileId) {
+        await fileDb.refreshAccount(selected);
+      }
+    }
+    // Another edit or revocation may finish while the file mirror is written.
+    final latest = _profileDb.getAccount(updated.accountId);
+    if (latest == null) return;
+    if (!app.isClosed && latest.inUse && _isActive(latest)) {
+      app.setServer(latest);
+    }
+    if (!isClosed) emit(state.copyWith(server: latest));
   }
 
   Future<void> addHeader(String key, String value) async {

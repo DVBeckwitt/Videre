@@ -15,6 +15,11 @@ Truncated or disconnected local forwarding responses observe completion errors
 and promptly close their upstream client instead of leaving a detached failing
 future or waiting indefinitely for another origin chunk.
 
+Videre's online Android audio sources can carry an account's approved HTTPS
+media origins to the native transport. A distinct source error identifies a
+blocked media destination when Videre chooses the next audio track or shows a
+playback error. Podcast and local audio sources use their existing transports.
+
 Music's optional Android equalizer uses lazy `AudioPlayer` helpers to read real
 band parameters, enable/disable the effect, and set band gains. These reuse the
 existing per-player effect method names with `lazyAndroidEqualizer` and an

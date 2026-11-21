@@ -114,7 +114,7 @@ private data class SourceHeaderScope(val origin: HttpUrl?, val names: Set<String
 /** Cancellation ownership is independent of the credential scope shared with API calls. */
 private object MediaCallScope
 
-private fun sameOrigin(left: HttpUrl, right: HttpUrl): Boolean =
+internal fun sameOrigin(left: HttpUrl, right: HttpUrl): Boolean =
     left.scheme == right.scheme && left.host == right.host && left.port == right.port
 
 private class ReadHeaderAttempt(var started: Boolean = false, var responseReceived: Boolean = false)
@@ -165,7 +165,10 @@ internal class PolicyCallFactory : Call.Factory {
                 val scope = outgoing.tag(SourceHeaderScope::class.java)
                 val initial = scope?.origin ?: chain.call().request().url
                 val destination = outgoing.url
-                if ((scope != null && scope.origin == null) || !sameOrigin(destination, initial)) {
+                val companions = outgoing.tag(SelectedOriginScope::class.java)?.companions
+                if (companions != null && !sameOrigin(destination, companions.origin)) {
+                    outgoing = companions.prepareRequest(outgoing, scope?.names.orEmpty())
+                } else if ((scope != null && scope.origin == null) || !sameOrigin(destination, initial)) {
                     // Scope instance credentials to their original origin for
                     // media segments and API requests, including redirects.
                     outgoing = outgoing.newBuilder().apply {
@@ -227,20 +230,30 @@ internal class PolicyCallFactory : Call.Factory {
             .toList().forEach(Call::cancel)
     }
 
+    fun cancelRevokedCompanionCalls(accounts: Set<MediaCompanionAccount>) = synchronized(lock) {
+        calls.filter { call ->
+            val policy = call.request().tag(SelectedOriginScope::class.java)?.companions
+            policy != null && policy.account in accounts && !MediaCompanionGrants.isCurrent(policy)
+        }.toList().forEach(Call::cancel)
+    }
+
     override fun newCall(request: Request): Call = synchronized(lock) {
         val active = client ?: throw IOException("SOCKS5 transport settings have not been loaded or are invalid.")
         trackCall(active.newCall(prepareSelectedOriginRequest(prepareGatewayRequest(request))))
     }
 
-    fun forSource(sourceUri: String?, headerNames: Set<String>, gateway: GatewayContext? = null): Call.Factory {
-        val scope = SourceHeaderScope(sourceUri?.toHttpUrlOrNull(), headerNames.toSet())
+    fun forSource(sourceUri: String?, headerNames: Set<String>, gateway: GatewayContext? = null,
+                  companions: MediaCompanions? = null): Call.Factory {
+        companions?.let(MediaCompanionGrants::requireCurrent)
+        require(companions == null || gateway == null || companions.gateway == gateway) { "Media account context does not match." }
+        val scope = SourceHeaderScope(companions?.origin ?: sourceUri?.toHttpUrlOrNull(), headerNames.toSet())
         return object : Call.Factory {
             override fun newCall(request: Request): Call = this@PolicyCallFactory.newCall(
                 prepareGatewayRequest(request.newBuilder()
                     .tag(MediaCallScope::class.java, MediaCallScope)
                     .tag(SourceHeaderScope::class.java, scope)
-                    .tag(SelectedOriginScope::class.java, scope.origin?.let(::SelectedOriginScope))
-                    .build(), gateway),
+                    .tag(SelectedOriginScope::class.java, scope.origin?.let { SelectedOriginScope(it, media = true, companions = companions) })
+                    .build(), companions?.gateway ?: gateway),
             )
         }
     }
@@ -263,7 +276,11 @@ internal class PolicyCallFactory : Call.Factory {
         // Instance access controls can use arbitrary header names, not only
         // Authorization or Cookie. Anchor all caller-provided headers before
         // OkHttp adds transport headers such as Host and Accept-Encoding.
-        val preparedRequest = prepareSelectedOriginRequest(prepareGatewayRequest(request), options.followRedirects)
+        // A source call reused as an API request loses its media-only grants.
+        val mediaScope = request.tag(SelectedOriginScope::class.java)
+        val apiRequest = if (mediaScope?.companions != null) request.newBuilder()
+            .tag(SelectedOriginScope::class.java, SelectedOriginScope(mediaScope.origin)).build() else request
+        val preparedRequest = prepareSelectedOriginRequest(prepareGatewayRequest(apiRequest), options.followRedirects)
         val scopedRequest = preparedRequest.newBuilder().tag(
             SourceHeaderScope::class.java,
             SourceHeaderScope(request.url, request.headers.names().toSet()),

@@ -263,7 +263,7 @@ class RecommendationCandidates {
           if (cached != null &&
               cached.expires.isAfter(now) &&
               identical(cached.proxy, proxy) &&
-              cached.route.matches(server)) {
+              cached.route.matchesConnection(server)) {
             candidates.addAll(cached.videos.take(perSearch));
             continue;
           }
@@ -381,7 +381,7 @@ class RecommendationCandidates {
       checkRequest();
       if (!identical(proxy, NetworkProxy.instance.config) ||
           _database.getSettings(browsingCountry)?.value != region ||
-          !route.matches(selected)) {
+          !route.matchesConnection(selected)) {
         throw const RecommendationCandidatesCancelled();
       }
     }

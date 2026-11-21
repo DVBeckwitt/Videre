@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../network/media_companion.dart';
 import '../../network/network_proxy.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/errors/invidious_service_error.dart';
@@ -261,6 +262,12 @@ class BackendPlayback {
   void releaseRecovery() => _budget.busy = false;
 
   bool matches(Server current) =>
+      matchesConnection(current) &&
+      setEquals(trustedMediaCompanionOrigins(preferredServer),
+          trustedMediaCompanionOrigins(current));
+
+  /// Frontend-only requests never use the player's media companion grants.
+  bool matchesConnection(Server current) =>
       identical(NetworkProxy.instance.config, _proxyConfiguration) &&
       preferredServer.url == current.url &&
       preferredServer.profileId == current.profileId &&

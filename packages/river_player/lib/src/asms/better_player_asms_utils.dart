@@ -27,10 +27,12 @@ class BetterPlayerAsmsUtils {
 
   ///Parse playlist based on type of stream.
   static Future<BetterPlayerAsmsDataHolder> parse(
-      String data, String masterPlaylistUrl) async {
+      String data, String masterPlaylistUrl,
+      {bool loadSubtitles = true}) async {
     return isDataSourceDash(masterPlaylistUrl)
         ? BetterPlayerDashUtils.parse(data, masterPlaylistUrl)
-        : BetterPlayerHlsUtils.parse(data, masterPlaylistUrl);
+        : BetterPlayerHlsUtils.parse(data, masterPlaylistUrl,
+            loadSubtitles: loadSubtitles);
   }
 
   ///Request data from given uri along with headers. May return null if resource
@@ -41,19 +43,11 @@ class BetterPlayerAsmsUtils {
   ]) async {
     try {
       final request = await _httpClient.getUrl(Uri.parse(url));
-      if (headers != null) {
-        headers.forEach((name, value) => request.headers.add(name, value!));
-      }
-
+      headers?.forEach((name, value) => request.headers.add(name, value!));
       final response = await request.close();
-      var data = "";
-      await response.transform(const Utf8Decoder()).listen((content) {
-        data += content.toString();
-      }).asFuture<String?>();
-
-      return data;
+      return await response.transform(const Utf8Decoder()).join();
     } catch (exception) {
-      BetterPlayerUtils.log("GetDataFromUrl failed: $exception");
+      BetterPlayerUtils.log("GetDataFromUrl failed: ${exception.runtimeType}");
       return null;
     }
   }

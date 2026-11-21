@@ -24,6 +24,7 @@ import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:uuid/uuid.dart';
 
 import '../settings/states/settings.dart';
+import '../network/media_companion.dart';
 import '../playlists/services/playlist_progress.dart';
 import '../playlists/services/playlist_library_service.dart';
 import '../playlists/models/playlist_reference.dart';
@@ -33,6 +34,8 @@ import 'backup.dart';
 
 const maxLogs = 1000;
 const singleId = 1;
+
+class _AbandonedAccountSetup implements Exception {}
 
 class SembastSqfDb extends IDbClient {
   final log = Logger('SembastSqfLDB');
@@ -64,6 +67,8 @@ class SembastSqfDb extends IDbClient {
   final appLogsStore = stringMapStoreFactory.store('appLogs');
   StoreRef<String, Map<String, Object?>> get serversStore =>
       stringMapStoreFactory.store(_storeName('serviers'));
+  StoreRef<String, Map<String, Object?>> get _companionDecisions =>
+      stringMapStoreFactory.store(_storeName('mediaCompanionDecisions'));
   StoreRef<String, Map<String, Object?>> get videoFiltersStore =>
       stringMapStoreFactory.store(_storeName('videoFilters'));
   StoreRef<String, Map<String, Object?>> get settingsStore =>
@@ -232,13 +237,19 @@ class SembastSqfDb extends IDbClient {
           throw StateError(
               'Switch to another profile before deleting this one');
         }
-        forProfile(id)._cancelPendingHistory();
+        final owner = forProfile(id);
+        owner._cancelPendingHistory();
+        for (final row in await owner.serversStore.find(txn)) {
+          final account = _mediaAccount(row.value);
+          if (account != null) await _revokeMediaCompanions(account);
+        }
         String storeName(String name) =>
             id == PersonProfile.defaultId ? name : 'profile:$id:$name';
         for (final name in [
           'downloadedVideo',
           'searchHistory',
           'serviers',
+          'mediaCompanionDecisions',
           'videoFilters',
           'historyVideoCache',
           for (final origin in PlaybackHistoryOrigin.values)
@@ -376,8 +387,13 @@ class SembastSqfDb extends IDbClient {
   @override
   deleteServerById(Server server) async {
     _checkServerOwner(server);
-    await _writeProfile((owner, txn) =>
-        owner.serversStore.record(server.accountId).delete(txn));
+    await _writeProfile((owner, txn) async {
+      final record = owner.serversStore.record(server.accountId);
+      final row = await record.get(txn);
+      final account = _mediaAccount(row);
+      if (account != null) await _revokeMediaCompanions(account);
+      await record.delete(txn);
+    });
   }
 
   @override
@@ -521,6 +537,7 @@ class SembastSqfDb extends IDbClient {
         .findSync(db)
         .map((record) => Server.fromJson(record.value))
         .where((server) => server.profileId == profileId)
+        .map((server) => _withInstanceDecision(server, db))
         .toList();
   }
 
@@ -581,7 +598,9 @@ class SembastSqfDb extends IDbClient {
     final saved = serversStore.record(key).getSync(db);
     if (saved != null) {
       final server = Server.fromJson(saved);
-      if (server.profileId == profileId) return server;
+      if (server.profileId == profileId) {
+        return _withInstanceDecision(server, db);
+      }
     }
     // Exact account keys (including legacy URL keys) win. A URL that is not
     // itself an account key resolves only within this person, preferring the
@@ -1083,9 +1102,194 @@ class SembastSqfDb extends IDbClient {
       return forProfile(profileId).upsertServer(server);
     }
     _checkServerOwner(server);
-    await _writeProfile((owner, txn) =>
-        owner.serversStore.record(server.accountId).put(txn, server.toJson()));
+    await _writeProfile((owner, txn) async {
+      final record = owner.serversStore.record(server.accountId);
+      final previous = _mediaAccount(await record.get(txn));
+      final address = mediaCompanionInstanceAddress(server);
+      final same = previous != null &&
+          previous.profileId == server.profileId &&
+          previous.accountId == server.accountId &&
+          mediaCompanionInstanceAddress(previous) == address;
+      // Incoming account data cannot grant access. Before the first shared
+      // decision, preserve any local legacy permission on its original account.
+      final origins = owner._decision(server, txn) ??
+          (same ? trustedMediaCompanionOrigins(previous) : <String>{});
+      final saved =
+          server.copyWith(mediaCompanionOrigins: origins.toList()..sort());
+      final fences = <Server, Set<String>>{};
+      if (!same) {
+        if (previous != null &&
+            trustedMediaCompanionOrigins(previous).isNotEmpty) {
+          fences[previous] = {};
+        }
+        if (origins.isNotEmpty) fences[saved] = origins;
+      }
+      await record.put(txn, saved.toJson());
+      await setNativeMediaCompanionAccounts(fences);
+    });
     await super.upsertServer(server);
+  }
+
+  // Legacy databases can contain incomplete rows. Resolving a playback scope
+  // needs only the account identity, instance address and local permission.
+  static Server? _mediaAccount(Map<String, Object?>? row) {
+    final url = row?['url'];
+    if (url is! String) return null;
+    final profile = row!['profileId'] ?? PersonProfile.defaultId;
+    final id = row['id'];
+    if (profile is! String || (id != null && id is! String)) return null;
+    final origins = row['mediaCompanionOrigins'];
+    return Server(
+        url: url,
+        profileId: profile,
+        id: id as String?,
+        mediaCompanionOrigins:
+            origins is List ? origins.whereType<String>().toList() : []);
+  }
+
+  static Future<void> _revokeMediaCompanions(Server account) async {
+    if (trustedMediaCompanionOrigins(account).isNotEmpty) {
+      await setNativeMediaCompanionOrigins(account, const {});
+    }
+  }
+
+  Set<String>? _decision(Server server, DatabaseClient client) {
+    final address = mediaCompanionInstanceAddress(server);
+    if (address == null) return null;
+    final row = _companionDecisions.record(address).getSync(client);
+    if (row == null) return null;
+    final origins = row['origins'];
+    return origins is List
+        ? trustedMediaCompanionOrigins(server.copyWith(
+            mediaCompanionOrigins: origins.whereType<String>().toList()))
+        : <String>{};
+  }
+
+  @override
+  Set<String>? mediaCompanionDecision(Server server) {
+    _checkServerOwner(server);
+    return _decision(server, db);
+  }
+
+  Server _withInstanceDecision(Server account, DatabaseClient client) {
+    final decision = _decision(account, client);
+    return decision == null
+        ? account
+        : account.copyWith(mediaCompanionOrigins: decision.toList()..sort());
+  }
+
+  /// Update only the playback permission field on matching account rows.
+  /// Their credentials, account keys and independent settings stay in place.
+  Future<List<Server>> _storeDecision(
+      Transaction txn, String address, Set<String> origins) async {
+    final sorted = origins.toList()..sort();
+    final accounts = <Server>[];
+    for (final row in await serversStore.find(txn)) {
+      final account = _mediaAccount(row.value);
+      if (account == null ||
+          row.key != account.accountId ||
+          account.profileId != profileId ||
+          mediaCompanionInstanceAddress(account) != address) {
+        continue;
+      }
+      accounts.add(account);
+      await serversStore
+          .record(row.key)
+          .update(txn, {'mediaCompanionOrigins': sorted});
+    }
+    await _companionDecisions.record(address).put(txn, {'origins': sorted});
+    return accounts;
+  }
+
+  @override
+  Future<Server?> addAccountWithMediaCompanions(Server server,
+      {required bool Function() isCurrent, Set<String>? setupDecision}) async {
+    _checkServerOwner(server);
+    final address = mediaCompanionInstanceAddress(server);
+    final proposed =
+        setupDecision == null ? null : Set<String>.unmodifiable(setupDecision);
+    if (proposed != null) {
+      final valid = trustedMediaCompanionOrigins(
+          server.copyWith(mediaCompanionOrigins: proposed.toList()));
+      if (address == null ||
+          proposed.length != valid.length ||
+          !valid.containsAll(proposed)) {
+        throw const FormatException(
+            'Invalid setup account or media companions');
+      }
+    }
+    try {
+      return await _writeProfile((owner, txn) async {
+        if (!isCurrent()) return null;
+        final record = owner.serversStore.record(server.accountId);
+        if (await record.exists(txn)) {
+          throw StateError('Account already exists');
+        }
+        final existing = owner._decision(server, txn);
+        final origins = existing ?? proposed ?? <String>{};
+        final first = await owner.serversStore.count(txn) == 0;
+        final saved = server.copyWith(
+            inUse: first, mediaCompanionOrigins: origins.toList()..sort());
+        final previous = <Server, Set<String>>{};
+        if (existing == null && proposed != null) {
+          // The transaction serializes competing first-time choices.
+          for (final account
+              in await owner._storeDecision(txn, address!, origins)) {
+            previous[account] = trustedMediaCompanionOrigins(account);
+          }
+        }
+        if (origins.isNotEmpty) previous[saved] = {};
+        await record.put(txn, saved.toJson());
+        if (!isCurrent()) throw _AbandonedAccountSetup();
+        await setNativeMediaCompanionAccounts(
+            {for (final account in previous.keys) account: origins});
+        if (!isCurrent()) {
+          await setNativeMediaCompanionAccounts(previous);
+          throw _AbandonedAccountSetup();
+        }
+        return saved;
+      });
+    } on _AbandonedAccountSetup {
+      return null;
+    }
+  }
+
+  @override
+  Future<Server> setMediaCompanionOrigin(Server expected, String origin,
+      {required bool enabled}) {
+    _checkServerOwner(expected);
+    return _writeProfile((owner, txn) async {
+      final row = await owner.serversStore.record(expected.accountId).get(txn);
+      if (row == null) throw StateError('Account no longer exists');
+      final saved = Server.fromJson(row);
+      if (saved.url != expected.url ||
+          saved.accountId != expected.accountId ||
+          saved.profileId != expected.profileId) {
+        throw StateError('Instance changed');
+      }
+      final normalized = parseMediaCompanionOrigin(origin);
+      final address = mediaCompanionInstanceAddress(saved);
+      if (address == null ||
+          normalized == null ||
+          normalized == Uri.parse(saved.url).origin) {
+        throw const FormatException('Invalid media companion origin');
+      }
+      final origins = {
+        ...(owner._decision(saved, txn) ?? trustedMediaCompanionOrigins(saved))
+      };
+      if (enabled) {
+        origins.add(normalized);
+        if (origins.length > maxMediaCompanionOrigins) {
+          throw const FormatException('Too many media companion origins');
+        }
+      } else {
+        origins.remove(normalized);
+      }
+      final accounts = await owner._storeDecision(txn, address, origins);
+      await setNativeMediaCompanionAccounts(
+          {for (final account in accounts) account: origins});
+      return saved.copyWith(mediaCompanionOrigins: origins.toList()..sort());
+    });
   }
 
   @override
@@ -1102,11 +1306,19 @@ class SembastSqfDb extends IDbClient {
       }
       // Selection changes only selection. A queued token refresh must not be
       // overwritten by the account snapshot captured before this transaction.
-      final latest = stored == null ? server : Server.fromJson(stored);
+      final latest = _withInstanceDecision(
+          stored == null
+              ? server.copyWith(mediaCompanionOrigins: [])
+              : Server.fromJson(stored),
+          txn);
       _checkServerOwner(latest);
       await serversStore.update(txn, {'inUse': false},
           finder: Finder(filter: Filter.equals('inUse', true)));
       await record.put(txn, latest.copyWith(inUse: true).toJson());
+      if (stored == null && trustedMediaCompanionOrigins(latest).isNotEmpty) {
+        await setNativeMediaCompanionOrigins(
+            latest, trustedMediaCompanionOrigins(latest));
+      }
     });
   }
 

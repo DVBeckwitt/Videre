@@ -53,7 +53,11 @@ To run your own instance, follow the [Invidious installation guide](https://docs
 
 ## Your connection and privacy
 
-Your instance operator affects privacy and reliability. YouTube video, audio, downloads, and artwork use the selected Invidious proxy. Music browsing uses that instance too. If it cannot proxy a stream, playback fails. Sharing offers your selected instance link or a YouTube link, with an optional playback timestamp. Choosing a YouTube share link only constructs the address; Videre does not connect to YouTube.
+By default, video and audio play through the selected Invidious instance. Some operators serve streams from separate HTTPS hosts. On Android, if the advanced setup check finds that the sample stream uses one of these hosts, Videre shows its exact address and asks whether to allow it. You can finish setup with no hosts approved. Videre remembers either choice once per instance in the current profile. Adding another account with the same instance address reuses that choice. A custom port or a different installation path identifies a separate instance. A different instance or Videre profile has its own setting.
+
+Each approved host can see the media it serves and the IP address used to reach it. Instance credentials stay on the selected server. Operators can use different hosts for different videos. To review your choices or allow another address the operator gives you, open **Settings → Manage servers**, select any account on that instance, and open **Media companion hosts**. Enter the full HTTPS address, including any custom port. Downloads, artwork, and browsing use the selected instance.
+
+Sharing offers your selected instance link or a YouTube link, with an optional playback timestamp. Choosing a YouTube share link only constructs the address; Videre does not connect to YouTube.
 
 SponsorBlock, Return YouTube Dislike, and DeArrow contact their own services. Podcast feeds and audio come from publishers through your configured proxy. Local and server libraries remain separate. [Privacy policy](./docs/privacy.html)
 

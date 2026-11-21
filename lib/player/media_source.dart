@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+
+import '../network/media_companion.dart';
 import '../network/nerdvpn_origin.dart';
 import '../settings/models/db/server.dart';
 
@@ -26,6 +29,40 @@ String? validatedMediaUrl(String? value, Server server) {
   if (uri == null || serverUri == null) return null;
   if (sameMediaOrigin(uri, serverUri)) return url;
   return null;
+}
+
+/// Only Android's native playback transport enforces media companion consent.
+String? validatedPlaybackMediaUrl(String? value, Server server) {
+  final selected = validatedMediaUrl(value, server);
+  if (selected != null) return selected;
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return null;
+  final url = parseMediaUrl(value);
+  return url != null && allowsMediaCompanion(server, Uri.parse(url))
+      ? url
+      : null;
+}
+
+String? proxiedPlaybackMediaUrl(String? value, Server server,
+    {bool adaptive = false, void Function()? onBlockedMediaOrigin}) {
+  final url = parseMediaUrl(value);
+  if (url == null) return null;
+  final native = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  final target = Uri.parse(url);
+  if (native && allowsMediaCompanion(server, target)) {
+    // The companion supplied the signed address. Instance proxy query
+    // parameters belong only to the selected frontend.
+    return url;
+  }
+  final proxied =
+      validatedMediaUrl(proxyMediaUrl(url, server, adaptive: adaptive), server);
+  if (proxied == null &&
+      native &&
+      onBlockedMediaOrigin != null &&
+      isMediaCompanionEligibleServer(server) &&
+      parseMediaCompanionOrigin(target.origin) != null) {
+    onBlockedMediaOrigin();
+  }
+  return proxied;
 }
 
 Map<String, String>? mediaHeaders(Server server, String url) {

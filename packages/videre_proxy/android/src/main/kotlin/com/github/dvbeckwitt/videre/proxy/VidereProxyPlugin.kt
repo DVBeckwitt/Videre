@@ -77,6 +77,12 @@ object ProxyDataSource {
 
     internal fun cancelMediaCalls(accountKey: String? = null) = calls.cancelMediaCalls(accountKey)
 
+    internal fun setMediaCompanionOrigins(values: Map<*, *>) {
+        val accounts = MediaCompanionGrants.update(values)
+        calls.cancelRevokedCompanionCalls(accounts)
+        PlaybackMediaCache.closeRevokedCompanions(accounts)
+    }
+
     /** PKCE requests use the same persisted proxy policy and never follow a redirect. */
     fun newTokenExchangeCall(request: Request): Call =
         calls.newApiCall(request, ApiRedirectOptions(followRedirects = false, maxRedirects = 0)).also {
@@ -98,13 +104,16 @@ object ProxyDataSource {
     }
 
     @JvmStatic
-    fun factory(userAgent: String?, headers: Map<String, String>?, sourceUri: String?): HttpDataSource.Factory {
+    @JvmOverloads
+    fun factory(userAgent: String?, headers: Map<String, String>?, sourceUri: String?,
+                mediaCompanions: Map<*, *>? = null): HttpDataSource.Factory {
         // Plugin registration loads persisted policy before player creation.
         // If a caller beats registration, calls remain blocked until it finishes.
         val gateway = headers?.entries?.firstOrNull { it.key.equals(GATEWAY_CONTEXT_HEADER, true) }
             ?.value?.let(GatewayContext::parse)
         val outgoing = headers?.filterKeys { !it.equals(GATEWAY_CONTEXT_HEADER, true) }
-        return OkHttpDataSource.Factory(calls.forSource(sourceUri, outgoing?.keys ?: emptySet(), gateway)).apply {
+        val companions = mediaCompanions?.let { MediaCompanions.parse(it, sourceUri) }
+        return OkHttpDataSource.Factory(calls.forSource(sourceUri, outgoing?.keys ?: emptySet(), gateway, companions)).apply {
             setUserAgent(userAgent)
             if (outgoing != null) setDefaultRequestProperties(outgoing)
         }
@@ -233,6 +242,10 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     result.success(null)
                 }
                 "getConfiguration" -> result.success(ProxyDataSource.configuration())
+                "setMediaCompanionOrigins" -> {
+                    ProxyDataSource.setMediaCompanionOrigins(call.arguments as? Map<*, *> ?: throw IllegalArgumentException())
+                    result.success(null)
+                }
                 "playbackCacheStatus" -> result.success(PlaybackMediaCache.status())
                 "configurePlaybackCache" -> {
                     PlaybackMediaCache.configure(call.arguments as? Map<*, *> ?: throw IllegalArgumentException())

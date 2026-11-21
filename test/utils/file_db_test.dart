@@ -100,6 +100,33 @@ void main() {
     expect(FileDB().getSettings(useProxySettingName)?.value, 'true');
   });
 
+  test('notification account mirrors preserve login without playback grants',
+      () async {
+    final fileDb = FileDB();
+    const account = Server(
+        url: 'https://frontend.example',
+        id: 'notifications',
+        authToken: 'fixture-token',
+        customHeaders: {'X-Instance': 'fixture'},
+        mediaCompanionOrigins: ['https://companion.example']);
+    final notificationAccount = account.copyWith(mediaCompanionOrigins: []);
+    await fileDb.useServer(account);
+    expect(await fileDb.getCurrentlySelectedServer(), notificationAccount);
+    expect(await fileDb.forAccount(account).getCurrentlySelectedServer(),
+        notificationAccount);
+    final mirror = File(
+        p.join(documentsDirectory.path, 'fileDb', 'generic_settings.json'));
+    final json =
+        jsonDecode(await mirror.readAsString()) as Map<String, dynamic>;
+    final saved = json['server'] as Map<String, dynamic>;
+    expect(saved.containsKey('mediaCompanionOrigins'), isFalse);
+
+    // Older or malformed snapshots cannot grant playback or break checks for new uploads.
+    saved['mediaCompanionOrigins'] = [1, 'https://old.example'];
+    await mirror.writeAsString(jsonEncode(json));
+    expect(await fileDb.getCurrentlySelectedServer(), notificationAccount);
+  });
+
   test('test playlist notifications file db', () async {
     FileDB db = FileDB();
 

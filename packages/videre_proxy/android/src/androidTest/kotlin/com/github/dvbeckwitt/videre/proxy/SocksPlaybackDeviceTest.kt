@@ -14,6 +14,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -27,6 +28,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.net.UnknownHostException
+import java.security.KeyStore
 import java.util.Collections
 import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -36,7 +38,11 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -47,6 +53,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import okio.ByteString.Companion.encodeUtf8
 
 /** Native decoding tests, separate from Videre's installed application/data. */
 @RunWith(AndroidJUnit4::class)
@@ -256,6 +263,86 @@ class SocksPlaybackDeviceTest {
     @Test(timeout = 30000)
     fun hlsForeignChildrenFailBeforeSocksConnection() = blockedAdaptiveChild("hls", "manifest.m3u8")
 
+    @Test(timeout = 45000)
+    fun approvedHttpsCompanionDecodesWithoutInstanceCredentials() = companionRedirect(approved = true)
+
+    @Test(timeout = 30000)
+    fun unapprovedHttpsCompanionReceivesNoConnection() = companionRedirect(approved = false)
+
+    private fun companionRedirect(approved: Boolean) {
+        val instance = "https://videre-playback.invalid:8123"
+        val companion = "https://videre-segments.invalid:8123"
+        val media = instrumentation.context.assets.open("socks_fixture.mp4").use { it.readBytes() }
+        val resources = mapOf(
+            "/start.mp4" to FixtureResource(byteArrayOf(), "video/mp4", redirect = "$companion/fixture.mp4"),
+            "/fixture.mp4" to FixtureResource(media, "video/mp4"),
+        )
+        val store = KeyStore.getInstance("PKCS12").apply {
+            instrumentation.context.assets.open("companion_fixture.p12").use { load(it, "fixture".toCharArray()) }
+        }
+        val keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply {
+            init(store, "fixture".toCharArray())
+        }
+        val tls = SSLContext.getInstance("TLS").apply { init(keys.keyManagers, null, null) }
+        val gatewayContext = "v1.11111111-1111-5111-8111-111111111111." + instance.encodeUtf8().base64Url()
+        val policy = mapOf("origin" to instance, "gatewayContext" to gatewayContext, "origins" to listOf(
+            if (approved) companion else "https://other-companion.invalid:8123"
+        ))
+        val credentials = mapOf("Authorization" to "Bearer fixture", "Cookie" to "sid=fixture",
+            "X-Instance-Key" to "fixture", "User-Agent" to "Private fixture header")
+        FixtureSocks(resources, serverTls = tls.socketFactory).use { proxy ->
+            ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", proxy.port).toMap())
+            PlayerProbe("$instance/start.mp4", credentials, policy).use { probe ->
+                if (approved) {
+                    probe.await("companion video frames and audio") {
+                        probe.videoFrames.get() >= 3 && probe.position() >= 700 && probe.audioBuffers() > 0
+                    }
+                    val frames = probe.videoFrames.get()
+                    main { probe.player.seekTo(4500) }
+                    probe.await("companion seek") {
+                        probe.seekPosition.get() >= 4450 && probe.videoPresentationUs.get() >= 4500000 &&
+                            probe.videoFrames.get() > frames + 1
+                    }
+                } else {
+                    assertTrue(MediaOriginFailure.isBlocked(probe.awaitFailure("unapproved companion")))
+                    assertEquals(0, probe.videoFrames.get())
+                }
+            }
+            val root = proxy.requests.filter { it.path == "/start.mp4" }
+            assertTrue(root.isNotEmpty() && root.all { it.headers["x-instance-key"] == "fixture" })
+            val forwarded = proxy.requests.filter { it.destination.first == "videre-segments.invalid" }
+            if (approved) {
+                assertTrue(forwarded.isNotEmpty() && forwarded.all { request ->
+                    request.path == "/fixture.mp4" &&
+                        listOf("authorization", "cookie", "x-instance-key", GATEWAY_CONTEXT_HEADER.lowercase(Locale.ROOT))
+                            .none { it in request.headers } &&
+                        request.headers["user-agent"] != credentials["User-Agent"]
+                })
+            } else {
+                assertTrue(forwarded.isEmpty())
+                assertTrue(proxy.destinations.all { it.first == "videre-playback.invalid" })
+            }
+            proxy.failure.get()?.let { throw AssertionError("Companion TLS fixture failed", it) }
+        }
+    }
+
+    @Test(timeout = 45000)
+    fun sameOriginHttpRefusalIsNotAMediaOriginMismatch() {
+        val path = "/refused.mp4"
+        FixtureSocks(mapOf(path to FixtureResource(byteArrayOf(), "video/mp4", forbidden = true))).use { proxy ->
+            ProxyDataSource.configure(ProxyPolicy(true, "127.0.0.1", proxy.port).toMap())
+            PlayerProbe("http://videre-playback.invalid:8123$path").use { probe ->
+                val error = probe.awaitFailure("same-origin HTTP refusal")
+                assertTrue(generateSequence<Throwable>(error) { it.cause }.any {
+                    it is HttpDataSource.InvalidResponseCodeException && it.responseCode == 403
+                })
+                assertFalse(MediaOriginFailure.isBlocked(error))
+            }
+            assertTrue(proxy.requests.isNotEmpty() && proxy.requests.all { it.path == path })
+            proxy.failure.get()?.let { throw AssertionError("HTTP refusal fixture failed", it) }
+        }
+    }
+
     private fun adaptivePlayback(format: String, manifest: String) {
         val resources = adaptiveAssets(format)
         FixtureSocks(resources).use { proxy ->
@@ -303,7 +390,7 @@ class SocksPlaybackDeviceTest {
             PlayerProbe(source, mapOf("X-Instance-Key" to "fixture")).use { probe ->
                 val error = probe.awaitFailure("$format foreign child refusal")
                 assertTrue("Foreign child failed for an unrelated reason",
-                    generateSequence<Throwable>(error) { it.cause }.any { it is SelectedOriginBlocked })
+                    MediaOriginFailure.isBlocked(error))
                 assertEquals("A foreign child must not render video", 0, probe.videoFrames.get())
                 assertEquals("A foreign child must not render audio", 0, probe.audioBuffers())
             }
@@ -442,7 +529,8 @@ class SocksPlaybackDeviceTest {
 
     private fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
 
-    private inner class PlayerProbe(source: String, headers: Map<String, String>? = null) : AutoCloseable {
+    private inner class PlayerProbe(source: String, headers: Map<String, String>? = null,
+        companions: Map<String, Any>? = null) : AutoCloseable {
         val videoFrames = AtomicInteger()
         val videoPresentationUs = AtomicLong(-1)
         val seekPosition = AtomicLong(-1)
@@ -453,7 +541,7 @@ class SocksPlaybackDeviceTest {
         init {
             main {
                 val media = DefaultMediaSourceFactory(context).setDataSourceFactory(
-                    ProxyDataSource.factory("Videre device acceptance", headers, source),
+                    ProxyDataSource.factory("Videre device acceptance", headers, source, companions),
                 )
                 player = ExoPlayer.Builder(context).setMediaSourceFactory(media).build()
                 player.volume = 0f
@@ -592,7 +680,8 @@ class SocksPlaybackDeviceTest {
         }
     }
 
-    private data class FixtureResource(val bytes: ByteArray, val mime: String)
+    private data class FixtureResource(val bytes: ByteArray, val mime: String, val forbidden: Boolean = false,
+        val redirect: String? = null)
     private data class FixtureRequest(val destination: Pair<String, Int>, val path: String, val headers: Map<String, String>)
 
     private class FixtureSocks(
@@ -602,6 +691,7 @@ class SocksPlaybackDeviceTest {
             "videre-playback.invalid" to 8123, "videre-segments.invalid" to 8123,
         ),
         private val captureTlsHello: Boolean = false,
+        private val serverTls: SSLSocketFactory? = null,
     ) : AutoCloseable {
         constructor(bytes: ByteArray) : this(mapOf("/fixture.mp4" to FixtureResource(bytes, "video/mp4")))
 
@@ -635,11 +725,11 @@ class SocksPlaybackDeviceTest {
                 var holding = false
                 try {
                     socket.soTimeout = 10000
-                    val input = DataInputStream(socket.getInputStream())
+                    var input = DataInputStream(socket.getInputStream())
                     check(input.readUnsignedByte() == 5)
                     val methods = ByteArray(input.readUnsignedByte()).also(input::readFully)
                     check(methods.contains(0.toByte()))
-                    val output = socket.getOutputStream()
+                    var output = socket.getOutputStream()
                     output.write(byteArrayOf(5, 0))
                     output.flush()
                     check(input.readUnsignedByte() == 5 && input.readUnsignedByte() == 1 && input.readUnsignedByte() == 0)
@@ -664,6 +754,13 @@ class SocksPlaybackDeviceTest {
                         tlsHellos.incrementAndGet()
                         return
                     }
+                    if (serverTls != null) {
+                        val tunnel = serverTls.createSocket(socket, host, destination.second, false) as SSLSocket
+                        tunnel.useClientMode = false
+                        tunnel.startHandshake()
+                        input = DataInputStream(tunnel.inputStream)
+                        output = tunnel.outputStream
+                    }
                     val headers = readHeader(input)
                     val target = headers.lineSequence().first().split(' ')[1]
                     val path = android.net.Uri.parse(target).path ?: throw IOException("Missing fixture path")
@@ -672,6 +769,17 @@ class SocksPlaybackDeviceTest {
                     }
                     requests.add(FixtureRequest(destination, path, requestHeaders))
                     val resource = resources[path] ?: throw IOException("Unknown fixture path")
+                    if (resource.redirect != null) {
+                        output.write(("HTTP/1.1 307 Temporary Redirect\r\nLocation: ${resource.redirect}\r\n" +
+                            "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
+                        output.flush()
+                        return
+                    }
+                    if (resource.forbidden) {
+                        output.write("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                        output.flush()
+                        return
+                    }
                     val bytes = resource.bytes
                     val range = headers.lineSequence().firstOrNull { it.startsWith("Range:", ignoreCase = true) }
                     val match = range?.let { Regex("bytes=(\\d+)-(\\d*)", RegexOption.IGNORE_CASE).find(it) }

@@ -321,7 +321,10 @@ class _MusicPlayerState extends State<MusicPlayer> {
                           BackendRecoveryNotice(recovery: recovery),
                         if (pending == null &&
                             player.playbackStatus == MediaState.error) ...[
-                          Text(locals.musicPlaybackError,
+                          Text(
+                              playbackFailureText(
+                                  locals, player.playbackFailureReason,
+                                  music: true),
                               textAlign: TextAlign.center),
                           TextButton.icon(
                             onPressed: state.hasVideo

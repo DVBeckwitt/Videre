@@ -19,9 +19,12 @@ Map<String, Object?>? playbackCacheIdentity({
   required Server server,
   required String sourceUrl,
   required String sessionId,
+  bool mediaCompanions = false,
 }) {
   final serverUrl = parseMediaUrl(server.url);
-  final admittedSource = validatedMediaUrl(sourceUrl, server);
+  final admittedSource = mediaCompanions
+      ? validatedPlaybackMediaUrl(sourceUrl, server)
+      : validatedMediaUrl(sourceUrl, server);
   if (video.liveNow == true ||
       video.videoId.isEmpty ||
       video.videoId.length > 4096 ||

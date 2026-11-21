@@ -15,6 +15,7 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 import java.io.IOException
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Request roles are supplied by Media3's source factories, never inferred from an opaque child URL. */
 enum class PlaybackCacheRequest {
@@ -81,22 +82,27 @@ object PlaybackMediaCache {
 
     @JvmStatic
     @JvmOverloads
-    fun factory(context: Context, upstream: DataSource.Factory, sourceUri: String, values: Map<*, *>?, request: PlaybackCacheRequest = PlaybackCacheRequest.PROGRESSIVE): DataSource.Factory {
-        if (values == null) return upstream
+    fun factory(context: Context, upstream: DataSource.Factory, sourceUri: String, values: Map<*, *>?,
+                request: PlaybackCacheRequest = PlaybackCacheRequest.PROGRESSIVE,
+                mediaCompanions: Map<*, *>? = null): DataSource.Factory {
+        if (values == null && mediaCompanions == null) return upstream
         initialize(context)
-        val downloaded = DownloadedRenditionDescriptor.parse(values["download"], sourceUri)
-        val identity = PlaybackCacheIdentity.parse(values, if (downloaded == null) sourceUri else downloaded.remoteUri)
-        val rendition = downloaded?.let { DownloadedRendition(context.applicationContext, identity, it) }
-        val admittedRequest = admittedRequest(request, values["adaptiveVod"])
-        val gatewayRevision = identity.gateway?.let(GatewaySessions::cacheAdmissionRevision)
-        requireLocalAuthorization(identity.gateway)
+        val companions = mediaCompanions?.let { MediaCompanions.parse(it, sourceUri) }
+        val downloaded = DownloadedRenditionDescriptor.parse(values?.get("download"), sourceUri)
+        require(companions == null || downloaded == null) { "Companion streaming requires a network source." }
+        val identity = values?.let { PlaybackCacheIdentity.parse(it, downloaded?.remoteUri ?: sourceUri, companions) }
+        val rendition = downloaded?.let { DownloadedRendition(context.applicationContext, checkNotNull(identity), it) }
+        val admittedRequest = admittedRequest(request, values?.get("adaptiveVod"))
+        val gateway = companions?.gateway ?: identity?.gateway
+        val gatewayRevision = gateway?.let(GatewaySessions::cacheAdmissionRevision)
+        requireLocalAuthorization(gateway)
         val (admittedGeneration, profileGeneration) = synchronized(lock) {
             if (transitioning) throw IOException("Playback cache is changing.")
-            generation to (profileGenerations[identity.profileKey] ?: 0L)
+            generation to (profileGenerations[identity?.profileKey] ?: 0L)
         }
-        val accountGeneration = synchronized(lock) { accountGenerations[identity.gateway?.key] ?: 0L }
+        val accountGeneration = synchronized(lock) { accountGenerations[gateway?.key] ?: 0L }
         return DataSource.Factory { GuardedSource(upstream, identity, admittedGeneration, profileGeneration,
-            accountGeneration, gatewayRevision, sourceUri, admittedRequest, rendition) }
+            accountGeneration, gatewayRevision, sourceUri, admittedRequest, rendition, companions) }
     }
 
     /** Compatibility for callers without a typed adaptive request boundary. */
@@ -132,6 +138,11 @@ object PlaybackMediaCache {
             readers.filter { it.accountKey == key }
         }
         if (active.isNotEmpty()) ProxyDataSource.cancelMediaCalls(key)
+        active.forEach { try { it.close() } catch (_: IOException) {} }
+    }
+
+    internal fun closeRevokedCompanions(accounts: Set<MediaCompanionAccount>) {
+        val active = synchronized(lock) { readers.filter { it.usesRevokedCompanion(accounts) } }
         active.forEach { try { it.close() } catch (_: IOException) {} }
     }
 
@@ -197,7 +208,7 @@ object PlaybackMediaCache {
 
     private class GuardedSource(
         private val upstream: DataSource.Factory,
-        private val identity: PlaybackCacheIdentity,
+        private val identity: PlaybackCacheIdentity?,
         private val epoch: Long,
         private val profileEpoch: Long,
         private val accountEpoch: Long,
@@ -205,16 +216,22 @@ object PlaybackMediaCache {
         private val sourceUri: String,
         private val request: PlaybackCacheRequest,
         private val downloaded: DownloadedRendition?,
+        private val companions: MediaCompanions?,
     ) : DataSource {
-        val profileKey: String get() = identity.profileKey
-        val accountKey: String? get() = identity.gateway?.key
+        val profileKey: String? get() = identity?.profileKey
+        private val gateway = companions?.gateway ?: identity?.gateway
+        val accountKey: String? get() = gateway?.key
         @Volatile private var delegate: DataSource? = null
         private val listeners = mutableListOf<TransferListener>()
 
+        fun usesRevokedCompanion(accounts: Set<MediaCompanionAccount>): Boolean = companions != null &&
+            companions.account in accounts && !MediaCompanionGrants.isCurrent(companions)
+
         private fun admit() {
+            companions?.let(MediaCompanionGrants::requireCurrent)
             // A cache hit must not evade failed startup/configuration admission.
             ProxyDataSource.configuration()
-            identity.gateway?.let {
+            gateway?.let {
                 if (GatewaySessions.cacheAdmissionRevision(it) != gatewayRevision)
                     throw GatewayAuthenticationRequired()
             }
@@ -227,16 +244,20 @@ object PlaybackMediaCache {
 
         @Synchronized override fun open(dataSpec: DataSpec): Long {
             admit()
-            requireLocalAuthorization(identity.gateway)
+            requireLocalAuthorization(gateway)
             val uri = dataSpec.uri.toString()
             if (downloaded != null && uri != sourceUri) throw LocalDownloadUnavailable()
-            val admittedKey = if (downloaded == null) identity.key(uri) else null
+            // An in-origin URL may redirect to a companion. Bypass byte storage
+            // for the entire opted-in source, including manifests and local URL
+            // cache hits, but retain session admission on every open and read.
+            companions?.requireDestination(uri.toHttpUrlOrNull() ?: throw SelectedOriginBlocked())
+            val admittedKey = if (downloaded == null && companions == null) identity?.key(uri) else null
             // Typed chunk/media requests can safely use session-scoped unknown
             // child keys. Untyped adaptive requests may still be manifests or
             // keys, so preserve their conservative exact-resource admission.
             val key = when (request) {
                 PlaybackCacheRequest.BYPASS -> null
-                PlaybackCacheRequest.ADAPTIVE_UNTYPED -> if (uri == sourceUri || !identity.knownMediaResource(uri)) null else admittedKey
+                PlaybackCacheRequest.ADAPTIVE_UNTYPED -> if (uri == sourceUri || identity?.knownMediaResource(uri) != true) null else admittedKey
                 PlaybackCacheRequest.PROGRESSIVE, PlaybackCacheRequest.ADAPTIVE_MEDIA -> admittedKey
             }
             val selected = try { synchronized(lock) {

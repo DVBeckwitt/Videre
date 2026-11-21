@@ -20,6 +20,7 @@ sealed class Server with _$Server {
       @Default(false) bool gatewayEnabled,
       String? authToken,
       String? sidCookie,
+      @Default([]) List<String> mediaCompanionOrigins,
       @Default({}) Map<String, String> customHeaders,
       // Freezed copies this parameter annotation to the generated field.
       // ignore: invalid_annotation_target

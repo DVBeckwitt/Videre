@@ -9,6 +9,7 @@ import java.net.SocketAddress
 import java.net.URI
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -33,8 +34,19 @@ class MediaOriginTest {
                 val source = factory.forSource("https://instance.example/manifest.mpd", emptySet())
                 for (url in listOf("https://other.example/segment", "http://instance.example/segment",
                     "https://instance.example:8443/segment", "http://127.0.0.1/segment")) {
-                    val request = Request.Builder().url(url).build()
-                    assertThrows(SelectedOriginBlocked::class.java) { source.newCall(request).execute() }
+                    for (marked in listOf(false, true)) {
+                        val request = Request.Builder().url(url).apply {
+                            if (marked) header(INSTANCE_ORIGIN_HEADER, "https://instance.example")
+                        }.build()
+                        val error = assertThrows(SelectedOriginBlocked::class.java) { source.newCall(request).execute() }
+                        assertEquals(true, MediaOriginFailure.isBlocked(IOException("Source error", error)))
+                    }
+                }
+                for (url in listOf("https://user:password@other.example/segment", "https://rr1.googlevideo.com/segment")) {
+                    val error = assertThrows(IOException::class.java) {
+                        source.newCall(Request.Builder().url(url).build()).execute()
+                    }
+                    assertEquals(false, MediaOriginFailure.isBlocked(error))
                 }
             }
             assertEquals(0, routes)
@@ -86,7 +98,10 @@ class MediaOriginTest {
                     } else factory.newApiCall(request, ApiRedirectOptions(
                         followRedirects = !mode.endsWith("no-follow"), sameOriginOnly = !mode.startsWith("marked")))
                     if (mode.endsWith("no-follow")) call.execute().use { assertEquals(302, it.code) }
-                    else assertThrows(SelectedOriginBlocked::class.java) { call.execute() }
+                    else {
+                        val error = assertThrows(SelectedOriginBlocked::class.java) { call.execute() }
+                        assertEquals(mode == "media", MediaOriginFailure.isBlocked(error))
+                    }
                     served.get(10, TimeUnit.SECONDS)
                     assertEquals(0, foreignRoutes)
                 }
@@ -95,6 +110,29 @@ class MediaOriginTest {
             factory.block()
             worker.shutdownNow()
             ProxySelector.setDefault(previous)
+        }
+    }
+
+    @Test
+    fun `malformed markers and access failures cannot trigger a media fallback`() {
+        val factory = PolicyCallFactory()
+        try {
+            factory.configure(ProxyPolicy())
+            val source = factory.forSource("https://instance.example/manifest.mpd", emptySet())
+            for (marker in listOf("invalid", "https://other.example", "https://instance.example/path")) {
+                val request = Request.Builder().url("https://other.example/segment")
+                    .header(INSTANCE_ORIGIN_HEADER, marker).build()
+                val error = assertThrows(SelectedOriginBlocked::class.java) { source.newCall(request).execute() }
+                assertEquals(false, MediaOriginFailure.isBlocked(error))
+            }
+            for (refusal in listOf(GatewayAuthenticationRequired(), NerdVpnAccessRequired("missing"),
+                SSLException("TLS failure"), IOException("Source error"))) {
+                assertEquals(false, MediaOriginFailure.isBlocked(refusal))
+            }
+            val wrapped = SSLException("TLS failure").apply { initCause(SelectedOriginBlocked(mediaDestination = true)) }
+            assertEquals(false, MediaOriginFailure.isBlocked(wrapped))
+        } finally {
+            factory.block()
         }
     }
 

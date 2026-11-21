@@ -36,6 +36,10 @@ class _AudioPlaybackStall implements Exception {
   const _AudioPlaybackStall();
 }
 
+class _NoAdmittedAudioOrigin implements Exception {
+  const _NoAdmittedAudioOrigin();
+}
+
 bool _retryableAudioFailure(Object error) =>
     error is _AudioPlaybackStall ||
     (error is PlayerException && error.backendRetryable);
@@ -94,6 +98,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   bool _terminalErrorSent = false;
   int? _manualRetryGeneration;
   bool _sourceAdmitted = false;
+  Set<Uri> _remainingFormats = {};
   bool _downloadReuseFailed = false;
   bool _usingDownloadedSource = false;
   MusicAudioQuality? _qualityPreference;
@@ -175,6 +180,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _pendingSeek = null;
     _wantsToPlay = false;
     _sourceAdmitted = false;
+    _remainingFormats = {};
     _resumeAfterFocus = false;
     _deferredFocusResume = false;
     _focusInterrupted = false;
@@ -793,9 +799,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       // source loop owns those failures, so a native event cannot retry twice.
       return;
     }
+    final hasRemainingFormat = error is PlayerException &&
+        error.mediaOriginBlocked &&
+        _remainingFormats.isNotEmpty;
     if (_playbackOffline ||
         !_sourceAdmitted ||
-        !_retryableAudioFailure(error) ||
+        (!hasRemainingFormat && !_retryableAudioFailure(error)) ||
         state.video == null) {
       _failPlayback(error);
       return;
@@ -846,6 +855,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   void _failPlayback(Object error) {
     if (isClosed || _terminalErrorSent) return;
     _terminalErrorSent = true;
+    _remainingFormats = {};
     _clearMusicQuality();
     _stopStallWatch();
     // A failed source is not playing. Publish pause before the error so the
@@ -853,7 +863,13 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     pause();
     // Native and metadata exceptions may contain signed URLs or request data.
     log.warning('Audio playback failed (${error.runtimeType})');
-    player.setEvent(const MediaEvent(state: MediaState.error));
+    player.setEvent(MediaEvent(
+        state: MediaState.error,
+        value: !_playbackOffline &&
+                (error is _NoAdmittedAudioOrigin ||
+                    (error is PlayerException && error.mediaOriginBlocked))
+            ? PlaybackFailureReason.separateMediaHost
+            : null));
     emit(state.copyWith(error: 'Audio playback failed', loading: false));
   }
 
@@ -944,7 +960,13 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         (offline
             ? identical(state.offlineVideo, offlineVideo)
             : identical(state.video, video));
-    Object? failure = firstError;
+    // A blocked segment can surface after the decoder was ready. Re-admit only
+    // the still-untried renditions before reporting that failure.
+    Set<Uri>? remainingAfterBlock =
+        firstError is PlayerException && firstError.mediaOriginBlocked
+            ? _remainingFormats
+            : null;
+    Object? failure = remainingAfterBlock == null ? firstError : null;
     try {
       while (active()) {
         if (failure != null) {
@@ -1007,6 +1029,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           // A manual selection rechecked its source after reaching native ready,
           // immediately before the parent committed it. An adjacent preload
           // can be much older and needs fresh admission at this point.
+          var blockedMediaOrigin = false;
           final plan = manual?.admittedPlan ??
               await resolveAudioPlaybackSources(
                 video: video,
@@ -1022,6 +1045,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                 streamingQualityOverride:
                     continueOverlap ? warmPlan?.streamingQuality : null,
                 skipDownload: _downloadReuseFailed,
+                onBlockedMediaOrigin: () => blockedMediaOrigin = true,
               );
           if (!active() || plan == null) return false;
           final preparedIndex = manual?.sourceIndex ?? 0;
@@ -1034,17 +1058,27 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             player.setRequestedBackend(video.videoId, video.backendPlayback);
           }
           final (
-            :sources,
+            sources: admitted,
             :menuRoute,
             :qualities,
             :sourceQualities,
             :streamingQuality
           ) = plan;
+          final remaining = remainingAfterBlock;
+          remainingAfterBlock = null;
+          final sources = remaining == null
+              ? admitted
+              : admitted
+                  .whereType<UriAudioSource>()
+                  .where((source) => remaining.contains(source.uri))
+                  .toList();
           MusicAudioQuality? effective;
           if (sources.isEmpty) {
+            if (remaining != null) throw firstError!;
             if (video?.downloadPlaybackOnly == true) {
               throw const _AudioPlaybackStall();
             }
+            if (blockedMediaOrigin) throw const _NoAdmittedAudioOrigin();
             throw StateError('No supported audio source');
           }
           for (var index = firstIndex; index < sources.length; index++) {
@@ -1085,6 +1119,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                       (sources[index] as ProgressiveAudioSource)
                           .playbackCache?['download'] is Map;
               effective = sourceQualities[sources[index]];
+              _remainingFormats = sources
+                  .skip(index + 1)
+                  .whereType<UriAudioSource>()
+                  .map((source) => source.uri)
+                  .toSet();
               break;
             } catch (error) {
               if (!active()) return false;
@@ -1095,10 +1134,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
               }
               // An unavailable audio track need not make the whole backend
               // unusable. Try its remaining admitted formats first. Access
-              // refusals and non-retryable failures retain their terminal path.
+              // refusals and other terminal errors stop this attempt.
               if (index == sources.length - 1 ||
                   error is! PlayerException ||
-                  !error.backendRetryable) {
+                  (!error.backendRetryable && !error.mediaOriginBlocked)) {
                 rethrow;
               }
             }
@@ -1190,6 +1229,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _backendMetadataGeneration = null;
     _pendingSeek = null;
     _sourceAdmitted = false;
+    _remainingFormats = {};
     _downloadReuseFailed = false;
     _usingDownloadedSource = false;
     _resumeAfterFocus = false;

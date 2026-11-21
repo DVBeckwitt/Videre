@@ -6,11 +6,16 @@ import 'dart:typed_data';
 import 'package:html/parser.dart' as html;
 import 'package:http/http.dart' as http;
 
+import '../network/gateway_http_client.dart';
+import '../network/media_companion.dart';
 import '../network/nerdvpn_access.dart';
 import '../network/tor_browser.dart';
+import '../network/youtube_privacy.dart';
 import '../settings/models/db/server.dart';
 import '../settings/models/errors/invidious_service_error.dart';
 import 'models/backend_playback.dart';
+
+enum _MediaRedirect { trustedCompanion, blockedOrigin }
 
 /// Checks instance DASH manifests before the native player can retry a known
 /// failure. Signed URLs are kept only for this playback attempt.
@@ -137,7 +142,7 @@ class DashManifestResolver {
   }
 
   Future<({http.Response response, Uri target})> _get(Uri uri, Server server,
-      {Duration? budget}) async {
+      {Duration? budget, bool playbackManifest = false}) async {
     // Do not forward custom instance credentials through an untrusted redirect.
     var expired = false;
     // A cold Tor circuit can outlast the ordinary five-second probe. Allow the
@@ -195,7 +200,11 @@ class DashManifestResolver {
         beforeRequest?.call();
         final request = http.Request('GET', target)..followRedirects = false;
         request.headers.addAll(server.headersForUrl(target.toString()) ?? {});
-        final response = await read(await client.send(request));
+        final stream = playbackManifest
+            ? await GatewayHttpClient.withManifestProbe(
+                server, target, () => client.send(request))
+            : await client.send(request);
+        final response = await read(stream);
         final location = response.headers['location'];
         if (expired ||
             response.statusCode < 300 ||
@@ -219,8 +228,26 @@ class DashManifestResolver {
     });
   }
 
+  /// Track discovery reads only the selected frontend. A companion handoff is
+  /// left to Android; failure to list tracks does not interrupt the decoder.
+  Future<String?> loadTrackManifest(String url, Server server) async {
+    final target = Uri.tryParse(url);
+    if (target == null || !_sameOrigin(target, Uri.parse(server.url))) {
+      return null;
+    }
+    try {
+      final result = await _get(target, server, playbackManifest: true);
+      if (result.response.statusCode != 200) return null;
+      return utf8.decode(result.response.bodyBytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Null means this source failed; the caller should use its normal fallback.
   /// [onMissingCheck] signals that this route requires a signed manifest.
+  /// [onMediaOriginBlocked] lets native playback handle approved media
+  /// redirects and signed watch-page sources. The signal carries no address.
   /// [onManifest] receives a bounded static UTF-8 response for this attempt.
   /// The returned URL is the body’s base, including any validated same-origin
   /// redirect. Neither the body nor its signature is cached.
@@ -229,6 +256,7 @@ class DashManifestResolver {
       {bool throwRetryable = false,
       bool requireManifest = false,
       void Function()? onMissingCheck,
+      void Function()? onMediaOriginBlocked,
       void Function(String content)? onManifest}) async {
     bool? provideManifest(http.Response response, Uri requested) {
       if (onManifest == null) return null;
@@ -268,6 +296,38 @@ class DashManifestResolver {
     }
 
     final instance = Uri.parse(server.url);
+    _MediaRedirect? classifyMediaRedirect(http.Response response, Uri target) {
+      if (onMediaOriginBlocked == null ||
+          !const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
+        return null;
+      }
+      final location = response.headers['location'];
+      if (location == null) return null;
+      final destination = target.resolve(location);
+      if (!const {'http', 'https'}.contains(destination.scheme) ||
+          destination.host.isEmpty ||
+          destination.userInfo.isNotEmpty ||
+          isOfficialYoutubeUrl(destination) ||
+          destination.origin == instance.origin) {
+        return null;
+      }
+      // A redirect may ask the client to wait before making another request.
+      if (response.headers.containsKey('retry-after')) {
+        final delay = _retryAfter(response);
+        if (delay == null || delay > Duration.zero) {
+          throw InvidiousServiceError('DASH redirect requested a cooldown',
+              statusCode: response.statusCode,
+              retryAfter: delay,
+              retryAfterIsInvalid: delay == null);
+        }
+      }
+      if (allowsMediaCompanion(server, destination)) {
+        return _MediaRedirect.trustedCompanion;
+      }
+      onMediaOriginBlocked();
+      return _MediaRedirect.blockedOrigin;
+    }
+
     final manifest = Uri.parse(url);
     if (!_sameOrigin(manifest, instance)) return null;
     if (!requireManifest &&
@@ -307,7 +367,8 @@ class DashManifestResolver {
     try {
       if (cached?.needsCheck != true) {
         final (:response, :target) = await _get(manifest, server,
-            budget: probingWarmUnsigned ? _warmFetchBudget : null);
+            budget: probingWarmUnsigned ? _warmFetchBudget : null,
+            playbackManifest: onMediaOriginBlocked != null);
         checkRetryable(response);
         if (response.statusCode == 200) {
           final reused = provideManifest(response, target);
@@ -318,6 +379,11 @@ class DashManifestResolver {
         // Keep onion playback on its selected origin even when the browser
         // manifest advertises a public companion. Try a same-origin source.
         if (response.statusCode >= 300 && response.statusCode < 400) {
+          // The native media client owns companion access. Always give it the
+          // original source URL and never fetch the companion in this client.
+          final redirect = classifyMediaRedirect(response, target);
+          if (redirect == _MediaRedirect.trustedCompanion) return url;
+          if (redirect == _MediaRedirect.blockedOrigin) return null;
           final location = response.headers['location'];
           if (TorBrowser.isOnionAddress(instance) &&
               (location == null ||
@@ -349,31 +415,58 @@ class DashManifestResolver {
       checkRetryable(page);
       if (page.statusCode != 200) return null;
       final document = html.parse(page.body);
+      var blockedWatchSource = false;
       for (final source in document.querySelectorAll('video#player source')) {
         if (source.attributes['type']?.toLowerCase() !=
             'application/dash+xml') {
           continue;
         }
-        final src = source.attributes['src'];
-        if (src == null || src.trim().isEmpty) continue;
-        final recovered = watch.resolve(src);
-        if (!_sameOrigin(recovered, instance) ||
-            !recovered.path.endsWith('/api/manifest/dash/id/$videoId') ||
+        final src = source.attributes['src']?.trim();
+        if (src == null || src.isEmpty) continue;
+        final candidate = Uri.tryParse(src);
+        if (candidate == null) continue;
+        final recovered = watch.resolveUri(candidate);
+        if (!recovered.path.endsWith('/api/manifest/dash/id/$videoId') ||
             (recovered.queryParameters['check']?.isEmpty ?? true) ||
             (manifest.queryParameters['local'] == 'true' &&
                 recovered.queryParameters['local'] != 'true')) {
           continue;
         }
+        if (!_sameOrigin(recovered, instance)) {
+          if (requireManifest ||
+              onMediaOriginBlocked == null ||
+              recovered.scheme != 'https' ||
+              recovered.host.isEmpty ||
+              recovered.userInfo.isNotEmpty ||
+              parseMediaCompanionOrigin(recovered.origin) == null ||
+              recovered.queryParametersAll['check']!.length != 1 ||
+              (recovered.queryParametersAll['local']?.length ?? 0) > 1) {
+            continue;
+          }
+          if (allowsMediaCompanion(server, recovered)) {
+            // Only the native media transport may request the companion. Keep
+            // the signed query's exact spelling, order and repeated fields.
+            return src.startsWith('//') ? '${watch.scheme}:$src' : src;
+          }
+          blockedWatchSource = true;
+          continue;
+        }
         // Use the URL exactly as supplied by the player, including its signature
         // and proxy parameters. Retry once; never loop on a rejected signature.
-        final (response: retry, :target) = await _get(recovered, server);
+        final (response: retry, :target) = await _get(recovered, server,
+            playbackManifest: onMediaOriginBlocked != null);
         checkRetryable(retry);
         if (retry.statusCode == 200) {
           final reused = provideManifest(retry, target);
           return (reused == true ? target : recovered).toString();
         }
+        if (classifyMediaRedirect(retry, target) ==
+            _MediaRedirect.trustedCompanion) {
+          return recovered.toString();
+        }
         return null;
       }
+      if (blockedWatchSource) onMediaOriginBlocked!();
     } catch (error) {
       if (error is NerdVpnAccessRequired ||
           error is InvidiousServiceError ||

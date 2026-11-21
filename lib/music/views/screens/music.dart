@@ -1514,15 +1514,17 @@ class _MusicTvPlayer extends StatelessWidget {
 
 class _MusicPlaybackFailure extends StatelessWidget {
   final VoidCallback onRetry;
+  final PlaybackFailureReason? reason;
 
-  const _MusicPlaybackFailure({required this.onRetry});
+  const _MusicPlaybackFailure({required this.onRetry, this.reason});
 
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     return Center(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Text(locals.musicPlaybackError, textAlign: TextAlign.center),
+        Text(playbackFailureText(locals, reason, music: true),
+            textAlign: TextAlign.center),
         const SizedBox(height: 12),
         FilledButton.icon(
             autofocus: true,
@@ -1566,6 +1568,7 @@ class _MusicTvAudio extends StatelessWidget {
             if (audio.error != null ||
                 state.mediaEvent.state == MediaState.error) {
               return _MusicPlaybackFailure(
+                  reason: player.playbackFailureReason,
                   onRetry: current == null && offline == null
                       ? player.resumeSession
                       : player.retryCurrentVideo);

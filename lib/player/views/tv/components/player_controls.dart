@@ -50,8 +50,11 @@ class TvPlayerControls extends StatelessWidget {
               context.select((PlayerCubit value) => value.state.isPlaying);
           var position =
               context.select((PlayerCubit value) => value.state.position);
+          final failureReason = context
+              .select((PlayerCubit value) => value.playbackFailureReason);
           final errored = context.select((PlayerCubit value) =>
-              value.state.mediaEvent.state == MediaState.error);
+                  value.state.mediaEvent.state == MediaState.error) ||
+              failureReason != null;
           final recovery = context
               .select((PlayerCubit cubit) => cubit.state.backendRecovery);
           final failedRecovery = recovery?.phase == BackendRecoveryPhase.failed;
@@ -465,10 +468,8 @@ class TvPlayerControls extends StatelessWidget {
                                   Semantics(
                                     liveRegion: true,
                                     child: Text(
-                                      failedRecovery
-                                          ? backendRecoveryFailureText(
-                                              locals, recovery!)
-                                          : locals.couldntLoadVideo,
+                                      playbackFailureText(locals, failureReason,
+                                          recovery: recovery),
                                       style:
                                           const TextStyle(color: Colors.white),
                                       textAlign: TextAlign.center,

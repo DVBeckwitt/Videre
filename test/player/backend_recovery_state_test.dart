@@ -222,6 +222,19 @@ void main() {
     expect(player.setRequestedBackend('video', request), isFalse);
   });
 
+  test('companion permission changes invalidate queued backend snapshots', () {
+    const a = 'https://a.example';
+    const b = 'https://b.example';
+    final permitted = preferred.copyWith(mediaCompanionOrigins: [a, b]);
+    final old = BackendPlayback(permitted);
+    expect(
+        old.matches(permitted.copyWith(mediaCompanionOrigins: [b, a])), isTrue);
+    expect(
+        old.matches(permitted.copyWith(mediaCompanionOrigins: [a])), isFalse);
+    expect(old.matches(preferred), isFalse);
+    expect(initial.matches(permitted), isFalse);
+  });
+
   test('manual routing preserves the saved baseline and bounded alternatives',
       () {
     final manual = BackendPlayback.manual(preferred, 'b');

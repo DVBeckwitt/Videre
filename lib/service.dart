@@ -55,6 +55,7 @@ import 'network/nerdvpn_access.dart';
 import 'network/youtube_privacy.dart';
 import 'recommendations/subscription_revision.dart';
 import 'settings/services/gateway_auth.dart';
+import 'settings/services/media_companion_probe.dart';
 import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
 import 'subscription_management/models/subscription.dart';
@@ -127,6 +128,7 @@ class _InteractiveVideoRequest {
 class Service {
   final log = Logger('Service');
   final Client httpClient;
+  final bool _usesDefaultTransport;
   late final Client _instanceHttpClient =
       OriginScopedHttpClient(httpClient, sameOriginOnly: true);
   Client _instanceReader(Future<void> Function()? beforeRedirect) =>
@@ -211,11 +213,30 @@ class Service {
       Future<void> Function(Duration)? wait})
       // Android's worker transport already scopes redirects natively, with a
       // single timeout for the entire chain rather than one timeout per hop.
-      : httpClient = httpClient is NativeProxyHttpClient
-            ? httpClient
-            : OriginScopedHttpClient(httpClient ?? http.Client()),
+      : httpClient = _scopedClient(httpClient),
+        _usesDefaultTransport = httpClient == null,
         _now = now ?? DateTime.now,
         _wait = wait ?? Future<void>.delayed;
+
+  static Client _scopedClient([Client? client]) =>
+      client is NativeProxyHttpClient
+          ? client
+          : OriginScopedHttpClient(client ?? http.Client());
+
+  Future<Set<String>> discoverMediaCompanionsForSetup(
+      Server server, Video video,
+      {required bool Function() isCurrent}) async {
+    // The foreground transport can own and abort its optional request without
+    // closing the main service's pool. Preserve injected and worker routing.
+    final owned = _usesDefaultTransport ? _scopedClient() : null;
+    try {
+      return await discoverSetupMediaCompanions(
+          server, video, owned ?? httpClient,
+          isCurrent: isCurrent);
+    } finally {
+      owned?.close();
+    }
+  }
 
   Duration? _retryAfter(http.BaseResponse response) =>
       retryAfterDelay(response.headers['retry-after']);
@@ -591,7 +612,8 @@ class Service {
     if (!current()) throw StateError('The playback connection changed.');
     if (serverOverride == null) {
       final selectedNow = await owner.getCurrentlySelectedServer();
-      if (!current() || !BackendPlayback(server).matches(selectedNow)) {
+      if (!current() ||
+          !BackendPlayback(server).matchesConnection(selectedNow)) {
         throw StateError('The playback connection changed.');
       }
     }
@@ -618,7 +640,7 @@ class Service {
     Future<void> check() async {
       if (!current()) throw StateError('The discovery connection changed.');
       final selected = await owner.getCurrentlySelectedServer();
-      if (!current() || !route.matches(selected)) {
+      if (!current() || !route.matchesConnection(selected)) {
         throw StateError('The discovery connection changed.');
       }
     }
@@ -727,7 +749,9 @@ class Service {
       final route = BackendPlayback(server);
       beforeRequest = () async {
         final saved = owner.getAccount(server.accountId);
-        if (!connectionCurrent() || saved == null || !route.matches(saved)) {
+        if (!connectionCurrent() ||
+            saved == null ||
+            !route.matchesConnection(saved)) {
           throw StateError('The download connection changed.');
         }
       };

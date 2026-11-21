@@ -166,6 +166,10 @@
   "@couldntLoadVideo": {
     "description": "Message to display when a video can't be loaded"
   },
+  "playbackSeparateMediaHost": "This stream requested a different media host. Videre blocked that connection.",
+  "@playbackSeparateMediaHost": {
+    "description": "Shown when the player's media host restriction prevents playback."
+  },
   "comments": "Comments",
   "@comments": {
     "description": "Comments label"
@@ -1347,6 +1351,57 @@
   "advancedConfiguration": "Advanced Configuration",
   "customHeaders": "Custom headers",
   "customHeadersExplanation": "Set custom headers to be sent to the invidious server",
+  "mediaCompanionHosts": "Media companion hosts",
+  "mediaCompanionSetupTitle": "{count, plural, =1{Allow a separate playback host?} other{Allow separate playback hosts?}}",
+  "@mediaCompanionSetupTitle": {
+    "placeholders": {
+      "count": {"type": "int"}
+    }
+  },
+  "mediaCompanionSetupHelp": "To play the test stream, {instance} asked Videre to connect to {count, plural, =1{the host below} other{the hosts below}}.",
+  "@mediaCompanionSetupHelp": {
+    "placeholders": {
+      "instance": {"type": "String"},
+      "count": {"type": "int"}
+    }
+  },
+  "mediaCompanionSetupPrivacy": "A host you allow can see your playback requests and the IP address you connect from. Your account credentials stay on {instance}.",
+  "@mediaCompanionSetupPrivacy": {
+    "placeholders": {
+      "instance": {"type": "String"}
+    }
+  },
+  "mediaCompanionSetupScope": "Videre asks once per instance in this profile. Every account on this instance shares the hosts you allow. If you allow none, Videre remembers that choice too. You can change the allowed hosts in settings.",
+  "mediaCompanionSettingsScope": "Every account on {instance} in this profile can use the media hosts listed here. Removing a host revokes its permission for all of them.",
+  "@mediaCompanionSettingsScope": {
+    "placeholders": {
+      "instance": {"type": "String"}
+    }
+  },
+  "mediaCompanionSetupSkip": "Continue without allowing",
+  "mediaCompanionSetupAllow": "Allow {origin}",
+  "@mediaCompanionSetupAllow": {
+    "placeholders": {
+      "origin": {"type": "String"}
+    }
+  },
+  "mediaCompanionSetupAllowSelected": "Allow selected hosts",
+  "mediaCompanionAdd": "Allow a media host",
+  "mediaCompanionAddress": "HTTPS host address",
+  "mediaCompanionHelp": "Enter the HTTPS address supplied by the operator of {instance}. Allowing this host lets every account on this instance in this profile use it for playback. The host can see playback requests and the IP address you connect from. Your instance credentials stay on {instance}.",
+  "@mediaCompanionHelp": {
+    "placeholders": {
+      "instance": {"type": "String"}
+    }
+  },
+  "mediaCompanionInvalid": "Enter a separate public HTTPS host, such as https://media.example.org.",
+  "mediaCompanionAlreadyAllowed": "This host is already allowed.",
+  "mediaCompanionRemove": "Remove {origin} from allowed media hosts",
+  "@mediaCompanionRemove": {
+    "placeholders": {
+      "origin": {"type": "String"}
+    }
+  },
   "value": "Value",
   "testAndAddServer": "Test and add server",
   "alsoTestServerConfig": "Also test server configuration, like if thumbnails would display properly",

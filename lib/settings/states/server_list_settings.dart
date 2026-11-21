@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../app/states/app.dart';
 import '../../globals.dart';
+import '../../network/media_companion.dart';
 import '../../utils/interfaces/db.dart';
 import '../models/db/server.dart';
 
@@ -27,14 +28,36 @@ class ServerListSettingsCubit extends Cubit<ServerListSettingsState> {
         (server.sidCookie?.isNotEmpty ?? false);
   }
 
-  Future<void> saveServer(Server server) async {
-    if (server.profileId != _profileDb.profileId) return;
-    await _profileDb.upsertServer(server);
-    if (state.dbServers.isEmpty && db.profileId == _profileDb.profileId) {
-      await switchServer(server);
+  Future<Server?> saveServer(Server server,
+      {bool Function()? isRouteCurrent, Set<String>? setupDecision}) async {
+    bool current() =>
+        !isClosed &&
+        db.profileId == server.profileId &&
+        server.profileId == _profileDb.profileId &&
+        (isRouteCurrent?.call() ?? true);
+    if (!current()) return null;
+    final saved = await _profileDb.addAccountWithMediaCompanions(server,
+        isCurrent: current, setupDecision: setupDecision);
+    if (saved == null || !current()) return null;
+    // The database knows whether this was the first account. The on-screen
+    // list may still be refreshing when setup is opened.
+    if (saved.inUse) {
+      await switchServer(saved);
     } else {
       await refreshServers();
+      final active = appCubit.state.server;
+      if (current() &&
+          !appCubit.isClosed &&
+          setupDecision != null &&
+          active != null &&
+          active.profileId == saved.profileId &&
+          mediaCompanionInstanceAddress(active) ==
+              mediaCompanionInstanceAddress(saved)) {
+        final latest = _profileDb.getAccount(active.accountId);
+        if (latest != null && latest.inUse) appCubit.setServer(latest);
+      }
     }
+    return saved;
   }
 
   Future<void> switchServer(Server s) async {

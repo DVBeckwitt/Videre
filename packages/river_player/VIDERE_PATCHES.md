@@ -17,6 +17,11 @@ DRM license requests use it with custom headers scoped to the license origin.
 These optional paths cannot bypass SOCKS or fall back to direct HTTP, even though
 Videre currently uses audio_service notifications and does not configure DRM.
 
+Android video sources can carry the instance account's approved HTTPS media
+origins to the native transport. Redirects and stream segments use that
+permission only during playback. The player reports a blocked media origin
+separately from a backend failure so Videre can explain it in the controls.
+
 Android uses Media3's AudioTrack playback-parameter path so temporary speed
 changes take effect at the mixer without waiting for previously queued PCM.
 Speed and pitch remain independent. Media3 keeps software adjustment on Android

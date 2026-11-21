@@ -52,9 +52,8 @@ class MusicMiniPlayer extends StatelessWidget {
                 player.playbackStatus == MediaState.buffering ||
                 recovery?.phase == BackendRecoveryPhase.trying);
     final statusLabel = failed
-        ? recovery == null
-            ? locals.musicPlaybackError
-            : backendRecoveryFailureText(locals, recovery)
+        ? playbackFailureText(locals, player.playbackFailureReason,
+            recovery: recovery, music: true)
         : recovery?.phase == BackendRecoveryPhase.trying
             ? locals.backendTryingNamed(recovery!.label.isEmpty
                 ? locals.backendDefault

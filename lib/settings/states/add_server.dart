@@ -19,6 +19,10 @@ part 'add_server.freezed.dart';
 
 typedef PublicInstance = ({String url, bool api});
 typedef SaveFirstInstancePreferences = Future<bool> Function();
+typedef ValidatedSetupAccount = ({
+  Server server,
+  Set<String>? mediaCompanionDecision
+});
 
 class NerdVpnApiKeyException extends FormatException {
   const NerdVpnApiKeyException(super.message);
@@ -40,12 +44,18 @@ class AddServerCubit extends Cubit<AddServerState> {
   final TextEditingController apiKeyController = TextEditingController();
   final String _profileId = db.profileId;
   String? _apiKeyOrigin;
+  String? _lastSetupAddress;
+  int _addressRevision = 0;
 
   AddServerCubit(super.initialState) {
     urlController.addListener(
       () {
         if (!isClosed) {
           final normalizedUrl = normalizeUrl(urlController.text);
+          if (normalizedUrl != _lastSetupAddress) {
+            _lastSetupAddress = normalizedUrl;
+            _addressRevision++;
+          }
           final origin =
               normalizedUrl == null ? null : Uri.parse(normalizedUrl).origin;
           if (origin != _apiKeyOrigin) {
@@ -75,9 +85,13 @@ class AddServerCubit extends Cubit<AddServerState> {
   Future<Server?> validateServer({
     Future<SaveFirstInstancePreferences?> Function()? prepareFirstInstance,
     bool Function()? isRouteCurrent,
+    Future<Set<String>?> Function(Server server, Set<String> origins)?
+        chooseMediaCompanions,
+    void Function(Set<String> decision)? onMediaCompanionDecision,
   }) async {
     if (isClosed || state.loading) return null;
     final serverUrl = normalizeUrl(urlController.text);
+    final addressRevision = _addressRevision;
     final headers = Map<String, String>.from(state.headers);
     final onionManualSetup = usesNerdVpnOnion;
     final enteredApiKey = apiKeyController.text.trim();
@@ -94,6 +108,8 @@ class AddServerCubit extends Cubit<AddServerState> {
     bool current() =>
         !isClosed &&
         db.profileId == _profileId &&
+        (chooseMediaCompanions == null ||
+            addressRevision == _addressRevision) &&
         (isRouteCurrent?.call() ?? true);
 
     Future<void> discardProtectedSession() async {
@@ -104,7 +120,11 @@ class AddServerCubit extends Cubit<AddServerState> {
 
     Future<Server?> accept(Server server) async {
       final save = saveFirstInstancePreferences;
-      if (save == null && isRouteCurrent == null) return server;
+      if (save == null &&
+          isRouteCurrent == null &&
+          chooseMediaCompanions == null) {
+        return server;
+      }
       var accepted = false;
       try {
         accepted = current() && (save == null || await save()) && current();
@@ -265,6 +285,27 @@ class AddServerCubit extends Cubit<AddServerState> {
                   url.host.isNotEmpty;
             })) {
           throw WrongThumbnailUrl();
+        }
+
+        bool undecided() =>
+            current() &&
+            db.forProfile(_profileId).mediaCompanionDecision(server) == null;
+        if (chooseMediaCompanions != null && undecided()) {
+          final offered = Set<String>.unmodifiable(
+              await service.discoverMediaCompanionsForSetup(server, video,
+                  isCurrent: undecided));
+          if (offered.isNotEmpty && undecided()) {
+            final selected = await chooseMediaCompanions(server, offered);
+            if (selected == null || !current()) {
+              await discardProtectedSession();
+              return null;
+            }
+            final decision =
+                Set<String>.unmodifiable(offered.intersection(selected));
+            server = server.copyWith(
+                mediaCompanionOrigins: decision.toList()..sort());
+            onMediaCompanionDecision?.call(decision);
+          }
         }
       }
 

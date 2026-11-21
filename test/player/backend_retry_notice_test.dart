@@ -42,6 +42,14 @@ class _MotionTestBinding extends AutomatedTestWidgetsFlutterBinding
 class _BackendPlayerCubit extends TestPlayerCubit {
   _BackendPlayerCubit(super.initialState, super.settings);
 
+  int retryCalls = 0;
+
+  @override
+  Future<void> retryCurrentVideo() async {
+    retryCalls++;
+    setEvent(const MediaEvent(state: MediaState.loading));
+  }
+
   void requestBackend(BackendPlayback? playback) =>
       emit(state.copyWith(requestedBackend: playback));
 
@@ -295,6 +303,35 @@ void main() {
   }
 
   for (final mode in ['video', 'audio', 'TV']) {
+    testWidgets(
+        '$mode shows the blocked media host only for a classified error',
+        (tester) async {
+      if (mode == 'audio') player.setAudio(true);
+      await tester.pumpWidget(host(
+          mode == 'TV' ? const TvPlayerControls() : const PlayerControls()));
+      final locals =
+          AppLocalizations.of(tester.element(find.byType(Scaffold)))!;
+      player.setEvent(const MediaEvent(
+          state: MediaState.error,
+          value: PlaybackFailureReason.separateMediaHost));
+      await pumpRecoveryFrame(tester);
+      expect(find.text(locals.playbackSeparateMediaHost), findsOneWidget);
+      expect(find.text(locals.retry), findsOneWidget);
+      await tester.tap(find.text(locals.retry));
+      await pumpRecoveryFrame(tester);
+      expect(player.retryCalls, 1);
+      expect(find.text(locals.playbackSeparateMediaHost), findsNothing);
+
+      player.setEvent(const MediaEvent(state: MediaState.error));
+      await pumpRecoveryFrame(tester);
+      expect(find.text(locals.playbackSeparateMediaHost), findsNothing);
+      expect(find.text(locals.couldntLoadVideo), findsOneWidget);
+      expect(find.text(locals.retry), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 5));
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('$mode recovery survives decoder events and reports outcomes',
         (tester) async {
       if (mode == 'audio') player.setAudio(true);

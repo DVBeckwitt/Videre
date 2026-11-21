@@ -8,18 +8,30 @@ import okhttp3.Request
 import okhttp3.Response
 
 /** Selected-instance requests keep their origin through redirects and children. */
-internal data class SelectedOriginScope(val origin: HttpUrl)
+internal data class SelectedOriginScope(val origin: HttpUrl, val media: Boolean = false, val companions: MediaCompanions? = null)
 
 internal const val INSTANCE_ORIGIN_HEADER = "X-Videre-Instance-Origin"
 
-internal class SelectedOriginBlocked : IOException(
+internal class SelectedOriginBlocked(val mediaDestination: Boolean = false) : IOException(
     "Content requests must stay on the selected Invidious instance.",
 )
 
+internal fun requireSelectedOrigin(origin: HttpUrl, target: HttpUrl, media: Boolean) {
+    if (!sameOrigin(origin, target)) {
+        throw SelectedOriginBlocked(mediaDestination = media && target.username.isEmpty() &&
+            target.password.isEmpty() && !isOfficialYoutubeUrl(target))
+    }
+}
+
 private fun requireSelectedOrigin(request: Request, target: HttpUrl) {
-    val origin = request.tag(SelectedOriginScope::class.java)?.origin ?: return
-    if (target.scheme != origin.scheme || target.host != origin.host || target.port != origin.port) {
-        throw SelectedOriginBlocked()
+    val scope = request.tag(SelectedOriginScope::class.java) ?: return
+    if (scope.companions == null) {
+        requireSelectedOrigin(scope.origin, target, scope.media)
+    } else {
+        scope.companions.requireDestination(target)
+        if (!sameOrigin(scope.origin, target) && (request.method !in setOf("GET", "HEAD") || request.body != null)) {
+            throw SelectedOriginBlocked()
+        }
     }
 }
 
@@ -33,12 +45,15 @@ internal fun prepareSelectedOriginRequest(request: Request, followRedirects: Boo
     val authority = value.removePrefix(prefix)
     if (!value.startsWith(prefix) || authority.isEmpty() ||
         authority.any { it in "/\\?#" || it.isWhitespace() } ||
-        origin.username.isNotEmpty() || origin.password.isNotEmpty() ||
-        request.url.scheme != origin.scheme || request.url.host != origin.host || request.url.port != origin.port) {
+        origin.username.isNotEmpty() || origin.password.isNotEmpty()) {
         throw SelectedOriginBlocked()
     }
-    // An explicit media anchor cannot be replaced by a later child request.
-    requireSelectedOrigin(request, origin)
+    // A mismatched marker is an invalid routing context. A valid marker can
+    // also accompany an independently requested child of an anchored source.
+    val scope = request.tag(SelectedOriginScope::class.java)
+    if (scope != null && !sameOrigin(scope.origin, origin)) throw SelectedOriginBlocked()
+    if (scope == null) requireSelectedOrigin(origin, request.url, media = false)
+    else requireSelectedOrigin(request, request.url)
     return request.newBuilder().removeHeader(INSTANCE_ORIGIN_HEADER).apply {
         if (followRedirects && request.tag(SelectedOriginScope::class.java) == null) {
             tag(SelectedOriginScope::class.java, SelectedOriginScope(origin))

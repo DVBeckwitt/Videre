@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config>
+        <domain>videre-playback.invalid</domain>
+        <domain>videre-segments.invalid</domain>
+        <trust-anchors>
+            <certificates src="@raw/companion_fixture_cert" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

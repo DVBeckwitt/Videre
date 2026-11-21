@@ -82,8 +82,8 @@ class FileDB extends IDbClient {
   FileDB forProfile(String id) => FileDB._forProfile(id);
 
   /// Freeze both ownership and credentials for a background operation.
-  FileDB forAccount(Server server) =>
-      FileDB._forProfile(server.profileId, account: server);
+  FileDB forAccount(Server server) => FileDB._forProfile(server.profileId,
+      account: server.copyWith(mediaCompanionOrigins: const []));
 
   String _profilePath(String name, String id) => id == 'default'
       ? name
@@ -887,8 +887,11 @@ class FileDbGenericSettings {
   @JsonKey(defaultValue: 'default')
   String profileId = 'default';
   String? legacyNotificationAccountId;
-  Server?
-      server; // we only store the currently used server because that's what we're interested in
+  // The notification worker needs account credentials for its instance API.
+  // Playback permissions are read from the profile database by the player.
+  @JsonKey(
+      fromJson: _notificationServerFromJson, toJson: _notificationServerToJson)
+  Server? server;
   bool subscriptionNotifications = false;
   String? locale;
 
@@ -899,6 +902,14 @@ class FileDbGenericSettings {
 
   Map<String, dynamic> toJson() => _$FileDbGenericSettingsToJson(this);
 }
+
+Server? _notificationServerFromJson(Map<String, dynamic>? value) =>
+    value == null
+        ? null
+        : Server.fromJson(Map.of(value)..remove('mediaCompanionOrigins'));
+
+Map<String, dynamic>? _notificationServerToJson(Server? value) =>
+    value?.toJson()?..remove('mediaCompanionOrigins');
 
 class _NotificationContext {
   final String profileId;

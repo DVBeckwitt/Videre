@@ -21,6 +21,7 @@ mixin _$Server {
   bool get gatewayEnabled;
   String? get authToken;
   String? get sidCookie;
+  List<String> get mediaCompanionOrigins;
   Map<String, String>
       get customHeaders; // Freezed copies this parameter annotation to the generated field.
 // ignore: invalid_annotation_target
@@ -57,6 +58,8 @@ mixin _$Server {
             (identical(other.sidCookie, sidCookie) ||
                 other.sidCookie == sidCookie) &&
             const DeepCollectionEquality()
+                .equals(other.mediaCompanionOrigins, mediaCompanionOrigins) &&
+            const DeepCollectionEquality()
                 .equals(other.customHeaders, customHeaders) &&
             (identical(other.backendSelector, backendSelector) ||
                 other.backendSelector == backendSelector) &&
@@ -74,13 +77,14 @@ mixin _$Server {
       gatewayEnabled,
       authToken,
       sidCookie,
+      const DeepCollectionEquality().hash(mediaCompanionOrigins),
       const DeepCollectionEquality().hash(customHeaders),
       backendSelector,
       inUse);
 
   @override
   String toString() {
-    return 'Server(url: $url, profileId: $profileId, id: $id, name: $name, gatewayEnabled: $gatewayEnabled, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
+    return 'Server(url: $url, profileId: $profileId, id: $id, name: $name, gatewayEnabled: $gatewayEnabled, authToken: $authToken, sidCookie: $sidCookie, mediaCompanionOrigins: $mediaCompanionOrigins, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
   }
 }
 
@@ -97,6 +101,7 @@ abstract mixin class $ServerCopyWith<$Res> {
       bool gatewayEnabled,
       String? authToken,
       String? sidCookie,
+      List<String> mediaCompanionOrigins,
       Map<String, String> customHeaders,
       @JsonKey(
           fromJson: BackendSelector.tryFromJson,
@@ -124,6 +129,7 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
     Object? gatewayEnabled = null,
     Object? authToken = freezed,
     Object? sidCookie = freezed,
+    Object? mediaCompanionOrigins = null,
     Object? customHeaders = null,
     Object? backendSelector = freezed,
     Object? inUse = null,
@@ -157,6 +163,10 @@ class _$ServerCopyWithImpl<$Res> implements $ServerCopyWith<$Res> {
           ? _self.sidCookie
           : sidCookie // ignore: cast_nullable_to_non_nullable
               as String?,
+      mediaCompanionOrigins: null == mediaCompanionOrigins
+          ? _self.mediaCompanionOrigins
+          : mediaCompanionOrigins // ignore: cast_nullable_to_non_nullable
+              as List<String>,
       customHeaders: null == customHeaders
           ? _self.customHeaders
           : customHeaders // ignore: cast_nullable_to_non_nullable
@@ -184,13 +194,15 @@ class _Server extends Server {
       this.gatewayEnabled = false,
       this.authToken,
       this.sidCookie,
+      final List<String> mediaCompanionOrigins = const [],
       final Map<String, String> customHeaders = const {},
       @JsonKey(
           fromJson: BackendSelector.tryFromJson,
           toJson: BackendSelector.optionalToJson)
       this.backendSelector,
       this.inUse = false})
-      : _customHeaders = customHeaders,
+      : _mediaCompanionOrigins = mediaCompanionOrigins,
+        _customHeaders = customHeaders,
         super._();
   factory _Server.fromJson(Map<String, dynamic> json) => _$ServerFromJson(json);
 
@@ -211,6 +223,16 @@ class _Server extends Server {
   final String? authToken;
   @override
   final String? sidCookie;
+  final List<String> _mediaCompanionOrigins;
+  @override
+  @JsonKey()
+  List<String> get mediaCompanionOrigins {
+    if (_mediaCompanionOrigins is EqualUnmodifiableListView)
+      return _mediaCompanionOrigins;
+    // ignore: implicit_dynamic_type
+    return EqualUnmodifiableListView(_mediaCompanionOrigins);
+  }
+
   final Map<String, String> _customHeaders;
   @override
   @JsonKey()
@@ -263,6 +285,8 @@ class _Server extends Server {
             (identical(other.sidCookie, sidCookie) ||
                 other.sidCookie == sidCookie) &&
             const DeepCollectionEquality()
+                .equals(other._mediaCompanionOrigins, _mediaCompanionOrigins) &&
+            const DeepCollectionEquality()
                 .equals(other._customHeaders, _customHeaders) &&
             (identical(other.backendSelector, backendSelector) ||
                 other.backendSelector == backendSelector) &&
@@ -280,13 +304,14 @@ class _Server extends Server {
       gatewayEnabled,
       authToken,
       sidCookie,
+      const DeepCollectionEquality().hash(_mediaCompanionOrigins),
       const DeepCollectionEquality().hash(_customHeaders),
       backendSelector,
       inUse);
 
   @override
   String toString() {
-    return 'Server(url: $url, profileId: $profileId, id: $id, name: $name, gatewayEnabled: $gatewayEnabled, authToken: $authToken, sidCookie: $sidCookie, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
+    return 'Server(url: $url, profileId: $profileId, id: $id, name: $name, gatewayEnabled: $gatewayEnabled, authToken: $authToken, sidCookie: $sidCookie, mediaCompanionOrigins: $mediaCompanionOrigins, customHeaders: $customHeaders, backendSelector: $backendSelector, inUse: $inUse)';
   }
 }
 
@@ -304,6 +329,7 @@ abstract mixin class _$ServerCopyWith<$Res> implements $ServerCopyWith<$Res> {
       bool gatewayEnabled,
       String? authToken,
       String? sidCookie,
+      List<String> mediaCompanionOrigins,
       Map<String, String> customHeaders,
       @JsonKey(
           fromJson: BackendSelector.tryFromJson,
@@ -331,6 +357,7 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
     Object? gatewayEnabled = null,
     Object? authToken = freezed,
     Object? sidCookie = freezed,
+    Object? mediaCompanionOrigins = null,
     Object? customHeaders = null,
     Object? backendSelector = freezed,
     Object? inUse = null,
@@ -364,6 +391,10 @@ class __$ServerCopyWithImpl<$Res> implements _$ServerCopyWith<$Res> {
           ? _self.sidCookie
           : sidCookie // ignore: cast_nullable_to_non_nullable
               as String?,
+      mediaCompanionOrigins: null == mediaCompanionOrigins
+          ? _self._mediaCompanionOrigins
+          : mediaCompanionOrigins // ignore: cast_nullable_to_non_nullable
+              as List<String>,
       customHeaders: null == customHeaders
           ? _self._customHeaders
           : customHeaders // ignore: cast_nullable_to_non_nullable

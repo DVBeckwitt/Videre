@@ -46,8 +46,15 @@ internal class GatewayTransportInterceptor : Interceptor {
         val response = chain.proceed(outgoing)
         if (session.enabled) {
             try {
+                val location = response.header("Location")
+                val companions = request.tag(SelectedOriginScope::class.java)?.companions
+                // Some instances use an HTML body on a 302/307 media handoff.
+                // Its MIME type describes the redirect page, not a login page
+                // served instead of the stream. Login Locations remain checked.
+                val mediaHandoff = companions != null && response.isRedirect &&
+                    location?.let(request.url::resolve)?.let(companions::permitsCompanion) == true
                 val required = sessions.ingest(context, request.url, response.headers("Set-Cookie"),
-                    response.code, response.header("Content-Type"), response.header("Location"), session.revision)
+                    response.code, if (mediaHandoff) null else response.header("Content-Type"), location, session.revision)
                 if (required) throw GatewayAuthenticationRequired()
             } catch (error: Exception) {
                 response.close()

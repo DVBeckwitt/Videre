@@ -39,6 +39,7 @@ class VideoPlayerValue {
     this.pitch = 1.0,
     this.errorDescription,
     this.backendRetryable = false,
+    this.mediaOriginBlocked = false,
     this.isPip = false,
     this.isLiveStream = false,
   });
@@ -94,6 +95,9 @@ class VideoPlayerValue {
   /// failure. Unknown errors and unsupported platforms default to false.
   final bool backendRetryable;
 
+  /// Whether a media redirect or child request left the selected origin.
+  final bool mediaOriginBlocked;
+
   /// The [size] of the currently loaded video.
   ///
   /// Is null when [initialized] is false.
@@ -139,6 +143,7 @@ class VideoPlayerValue {
     double? volume,
     String? errorDescription,
     bool? backendRetryable,
+    bool? mediaOriginBlocked,
     double? speed,
     double? pitch,
     bool? isPip,
@@ -158,6 +163,7 @@ class VideoPlayerValue {
       pitch: pitch ?? this.pitch,
       errorDescription: errorDescription ?? this.errorDescription,
       backendRetryable: backendRetryable ?? this.backendRetryable,
+      mediaOriginBlocked: mediaOriginBlocked ?? this.mediaOriginBlocked,
       isPip: isPip ?? this.isPip,
       isLiveStream: isLiveStream ?? this.isLiveStream,
     );
@@ -310,11 +316,14 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
           errorDescription: e.message,
           backendRetryable:
               details is Map && details['backendRetryable'] == true,
+          mediaOriginBlocked:
+              details is Map && details['mediaOriginBlocked'] == true,
         );
       } else {
         value = value.copyWith(
           errorDescription: object.toString(),
           backendRetryable: false,
+          mediaOriginBlocked: false,
         );
       }
       _timer?.cancel();
@@ -385,6 +394,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
     int? maxCacheFileSize,
     String? cacheKey,
     Map<String, Object?>? playbackCache,
+    Map<String, Object?>? mediaCompanions,
     bool? showNotification,
     String? title,
     String? author,
@@ -419,6 +429,7 @@ class VideoPlayerController extends ValueNotifier<VideoPlayerValue> {
         maxCacheFileSize: maxCacheFileSize,
         cacheKey: cacheKey,
         playbackCache: playbackCache,
+        mediaCompanions: mediaCompanions,
         showNotification: showNotification,
         title: title,
         author: author,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
 import '../../models/backend_recovery.dart';
+import '../../models/media_event.dart';
 import 'backend_retry_notice.dart';
 
 String backendRecoveryFailureText(
@@ -9,6 +10,16 @@ String backendRecoveryFailureText(
     recovery.alternativeIndex > 0
         ? locals.backendRecoveryFailedAfter(recovery.alternativeIndex)
         : locals.backendRecoveryFailed;
+
+String playbackFailureText(
+    AppLocalizations locals, PlaybackFailureReason? reason,
+    {BackendRecovery? recovery, bool music = false}) {
+  if (reason == PlaybackFailureReason.separateMediaHost) {
+    return locals.playbackSeparateMediaHost;
+  }
+  if (recovery != null) return backendRecoveryFailureText(locals, recovery);
+  return music ? locals.musicPlaybackError : locals.couldntLoadVideo;
+}
 
 class BackendRecoveryNotice extends StatelessWidget {
   final BackendRecovery recovery;

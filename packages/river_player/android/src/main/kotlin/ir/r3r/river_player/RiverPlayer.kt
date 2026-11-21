@@ -37,6 +37,7 @@ import androidx.work.WorkInfo
 import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 
 import com.github.dvbeckwitt.videre.proxy.ProxyDataSource
+import com.github.dvbeckwitt.videre.proxy.MediaOriginFailure
 import com.github.dvbeckwitt.videre.proxy.PlaybackMediaCache
 import com.github.dvbeckwitt.videre.proxy.PlaybackCacheRequest
 import androidx.media3.exoplayer.hls.HlsDataSourceFactory
@@ -226,7 +227,8 @@ internal class RiverPlayer(
         fastDashStartupFallback: Boolean = false,
         initialDashHeight: Int? = null,
         retryDashTrackFromLoadId: Long? = null,
-        playbackCache: Map<*, *>? = null
+        playbackCache: Map<*, *>? = null,
+        mediaCompanions: Map<*, *>? = null
     ) {
         val uri = Uri.parse(dataSource)
         var dataSourceFactory: DataSource.Factory?
@@ -277,9 +279,10 @@ internal class RiverPlayer(
         } else {
             drmSessionManager = null
         }
+        val companions = mediaCompanions?.takeIf { isHTTP(uri) }
         if (isHTTP(uri)) {
-            dataSourceFactory = getDataSourceFactory(userAgent, headers, dataSource)
-            if (playbackCache == null && useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
+            dataSourceFactory = ProxyDataSource.factory(userAgent, headers, dataSource, companions)
+            if (companions == null && playbackCache == null && useCache && maxCacheSize > 0 && maxCacheFileSize > 0) {
                 dataSourceFactory = CacheDataSourceFactory(
                     context,
                     maxCacheSize,
@@ -295,7 +298,7 @@ internal class RiverPlayer(
             DashStartupLoadErrorPolicy(uri)
         } else null
         val mediaSource = try {
-            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest, startupRetry, playbackCache)
+            buildMediaSource(uri, dataSourceFactory, formatHint, cacheKey, context, inlineDashManifest, startupRetry, playbackCache, companions)
         } catch (error: Exception) {
             if (inlineDashManifest == null) throw error
             // Parser errors can contain signed media URLs from the manifest.
@@ -509,7 +512,8 @@ internal class RiverPlayer(
         context: Context,
         inlineDashManifest: String?,
         startupRetry: DashStartupLoadErrorPolicy?,
-        playbackCache: Map<*, *>?
+        playbackCache: Map<*, *>?,
+        mediaCompanions: Map<*, *>?
     ): MediaSource {
         val type: Int
         if (formatHint == null) {
@@ -536,16 +540,20 @@ internal class RiverPlayer(
 
         val admittedCache = if (isHTTP(uri) || playbackCache?.get("download") is Map<*, *>) playbackCache else null
         fun sourceFactory(request: PlaybackCacheRequest): DataSource.Factory =
-            PlaybackMediaCache.factory(context, mediaDataSourceFactory, uri.toString(), admittedCache, request)
+            PlaybackMediaCache.factory(context, mediaDataSourceFactory, uri.toString(), admittedCache, request, mediaCompanions)
+        fun manifestFactory(): DataSource.Factory {
+            val factory = sourceFactory(PlaybackCacheRequest.BYPASS)
+            return if (mediaCompanions == null) ProxyDataSource.withLocalSources(context, factory) else factory
+        }
         val mediaFactory = when (type) {
             C.TYPE_SS -> SsMediaSource.Factory(
                 DefaultSsChunkSource.Factory(sourceFactory(PlaybackCacheRequest.ADAPTIVE_MEDIA)),
-                ProxyDataSource.withLocalSources(context, sourceFactory(PlaybackCacheRequest.BYPASS))
+                manifestFactory()
             )
 
             C.TYPE_DASH -> DashMediaSource.Factory(
                 DefaultDashChunkSource.Factory(sourceFactory(PlaybackCacheRequest.ADAPTIVE_MEDIA)),
-                ProxyDataSource.withLocalSources(context, sourceFactory(PlaybackCacheRequest.BYPASS))
+                manifestFactory()
             ).apply { startupRetry?.let { setLoadErrorHandlingPolicy(it) } }
 
             C.TYPE_HLS -> {
@@ -644,7 +652,10 @@ internal class RiverPlayer(
                 eventSink.error(
                     "VideoError",
                     "Video player had error $error",
-                    mapOf("backendRetryable" to BackendRetryability.isRetryable(error))
+                    mapOf(
+                        "backendRetryable" to BackendRetryability.isRetryable(error),
+                        "mediaOriginBlocked" to MediaOriginFailure.isBlocked(error),
+                    )
                 )
             }
         })

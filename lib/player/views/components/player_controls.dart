@@ -366,6 +366,8 @@ class PlayerControls extends StatelessWidget {
                 recovery?.phase == BackendRecoveryPhase.trying;
             final failedRecovery =
                 recovery?.phase == BackendRecoveryPhase.failed;
+            final failureReason = context
+                .select((PlayerCubit cubit) => cubit.playbackFailureReason);
             final canChooseBackend = context.select(
                 (PlayerCubit cubit) => canChoosePlayerBackend(cubit.state));
             final requestedBackend = context
@@ -1081,7 +1083,8 @@ class PlayerControls extends StatelessWidget {
                           ),
                         ),
                       if (failedRecovery ||
-                          (recovery == null && playerState.errored))
+                          (recovery == null &&
+                              (playerState.errored || failureReason != null)))
                         Positioned.fill(
                           child: ColoredBox(
                             color: Colors.black.withValues(alpha: 0.8),
@@ -1098,10 +1101,9 @@ class PlayerControls extends StatelessWidget {
                                           Semantics(
                                             liveRegion: true,
                                             child: Text(
-                                              failedRecovery
-                                                  ? backendRecoveryFailureText(
-                                                      locals, recovery!)
-                                                  : locals.couldntLoadVideo,
+                                              playbackFailureText(
+                                                  locals, failureReason,
+                                                  recovery: recovery),
                                               style: const TextStyle(
                                                   color: Colors.white),
                                               textAlign: TextAlign.center,

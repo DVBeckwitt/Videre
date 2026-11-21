@@ -14,6 +14,10 @@ _Server _$ServerFromJson(Map<String, dynamic> json) => _Server(
       gatewayEnabled: json['gatewayEnabled'] as bool? ?? false,
       authToken: json['authToken'] as String?,
       sidCookie: json['sidCookie'] as String?,
+      mediaCompanionOrigins: (json['mediaCompanionOrigins'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          const [],
       customHeaders: (json['customHeaders'] as Map<String, dynamic>?)?.map(
             (k, e) => MapEntry(k, e as String),
           ) ??
@@ -30,6 +34,7 @@ Map<String, dynamic> _$ServerToJson(_Server instance) => <String, dynamic>{
       'gatewayEnabled': instance.gatewayEnabled,
       'authToken': instance.authToken,
       'sidCookie': instance.sidCookie,
+      'mediaCompanionOrigins': instance.mediaCompanionOrigins,
       'customHeaders': instance.customHeaders,
       'backendSelector':
           BackendSelector.optionalToJson(instance.backendSelector),

@@ -11,8 +11,11 @@ import 'package:clipious/settings/models/errors/cannot_add_server_error.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/network/gateway_context.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:clipious/videos/models/video.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
@@ -103,6 +106,44 @@ void main() {
     });
   }
 
+  test(
+      'setup media discovery times out through SOCKS without closing an active API request',
+      () async {
+    final releaseApi = Completer<void>();
+    final socks =
+        await _FeatureSocks.start(body, beforeReply: releaseApi.future);
+    addTearDown(socks.close);
+    await proxy.apply(SocksProxyConfig(enabled: true, port: socks.server.port));
+    final previousPlatform = debugDefaultTargetPlatformOverride;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = previousPlatform);
+    const channel = MethodChannel('videre/gateway_sessions');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'resolve');
+      return {'enabled': false, 'needsSignIn': false};
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final client = Service();
+    addTearDown(client.httpClient.close);
+    final api = client.validateServer('http://active-api.invalid', null);
+    const origin = 'https://setup-probe.invalid';
+    try {
+      expect(
+          await client.discoverMediaCompanionsForSetup(
+              const Server(url: origin),
+              const Video(videoId: 'sample', dashUrl: '$origin/manifest.mpd'),
+              isCurrent: () => true),
+          isEmpty);
+      expect(socks.destinations,
+          unorderedEquals(['active-api.invalid', 'setup-probe.invalid']));
+    } finally {
+      releaseApi.complete();
+      await api;
+    }
+  });
+
   for (final cached in [false, true]) {
     for (final sameOrigin in [false, true]) {
       test('HTTP asset boundary cache=$cached sameOrigin=$sameOrigin',
@@ -172,16 +213,17 @@ void main() {
 class _FeatureSocks {
   final ServerSocket server;
   final String body;
+  final Future<void>? beforeReply;
   final destinations = <String>[];
   final _sockets = <Socket>[];
   bool _closed = false;
 
-  _FeatureSocks(this.server, this.body) {
+  _FeatureSocks(this.server, this.body, this.beforeReply) {
     server.listen((socket) {
       _sockets.add(socket);
       var phase = 0;
       var pending = <int>[];
-      socket.listen((chunk) {
+      socket.listen((chunk) async {
         pending.addAll(chunk);
         if (phase == 0) {
           if (pending.length < 3) return;
@@ -204,6 +246,7 @@ class _FeatureSocks {
         }
         if (phase == 2 && latin1.decode(pending).contains('\r\n\r\n')) {
           phase = 3;
+          await beforeReply;
           socket.add(utf8.encode('HTTP/1.1 200 OK\r\n'
               'Content-Type: application/json\r\n'
               'Content-Length: ${utf8.encode(body).length}\r\n'
@@ -214,8 +257,10 @@ class _FeatureSocks {
     });
   }
 
-  static Future<_FeatureSocks> start(String body) async => _FeatureSocks(
-      await ServerSocket.bind(InternetAddress.loopbackIPv4, 0), body);
+  static Future<_FeatureSocks> start(String body,
+          {Future<void>? beforeReply}) async =>
+      _FeatureSocks(await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
+          body, beforeReply);
 
   Future<void> close() async {
     if (_closed) return;

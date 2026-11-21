@@ -163,6 +163,29 @@ class GatewayTransportTest {
         assertFalse(gatewayRequiresSignIn(url, 302, null, "https://r1.googlevideo.com/videoplayback"))
     }
 
+    @Test fun `approved companion HTML redirect preserves a protected session but a login or HTML media response refuses`() {
+        val stream = "https://instance.example/videoplayback"
+        val destination = "https://media.example"
+        val grant = MediaCompanions.parse(mapOf("origin" to "https://instance.example", "origins" to listOf(destination),
+            "gatewayContext" to marker), stream)
+        val policy = PolicyCallFactory()
+        try {
+            policy.configure(ProxyPolicy())
+            val request = policy.forSource(stream, emptySet(), context, grant)
+                .newCall(Request.Builder().url(stream).build()).request()
+            GatewayCookieAccessRegistry.provider = FakeSessions()
+            GatewayTransportInterceptor().intercept(Chain(request, status = 307,
+                location = "$destination/companion/stream", mime = "text/html")).close()
+            for ((status, location) in listOf(302 to "$destination/login", 403 to null, 200 to null)) {
+                assertThrows(GatewayAuthenticationRequired::class.java) {
+                    GatewayTransportInterceptor().intercept(Chain(request, status = status, location = location, mime = "text/html"))
+                }
+            }
+        } finally {
+            policy.block()
+        }
+    }
+
     private class FakeSessions : GatewayCookieAccess {
         var expired = false
         val resolved = mutableListOf<String>()
@@ -176,17 +199,23 @@ class GatewayTransportTest {
             statusCode: Int, contentType: String?, location: String?, revision: Long?): Boolean {
             received = cookies
             ingestedRevision = revision
-            return false
+            return gatewayRequiresSignIn(url, statusCode, contentType, location)
         }
     }
 
-    private class Chain(private val original: Request, private val cookies: List<String> = emptyList()) : Interceptor.Chain {
+    private class Chain(private val original: Request, private val cookies: List<String> = emptyList(),
+                        private val status: Int = 200, private val location: String? = null,
+                        private val mime: String? = null) : Interceptor.Chain {
         var sent: Request? = null
         override fun request(): Request = original
         override fun proceed(request: Request): Response {
             sent = request
-            return Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
-                .apply { cookies.forEach { addHeader("Set-Cookie", it) } }.body("{}".toResponseBody()).build()
+            return Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(status).message("fixture")
+                .apply {
+                    cookies.forEach { addHeader("Set-Cookie", it) }
+                    location?.let { header("Location", it) }
+                    mime?.let { header("Content-Type", it) }
+                }.body("{}".toResponseBody()).build()
         }
         override fun connection(): Connection? = null
         override fun call(): Call = error("No socket is used by this boundary test.")
