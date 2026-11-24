@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="420" height="150" viewBox="0 0 420 150" role="img" aria-labelledby="title description">
 <title id="title">Videre star history — 46 stars</title>
-<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-11-23 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
+<desc id="description">Cumulative daily star counts for DVBeckwitt/Videre, from GitHub aggregate star history, fetched 2026-11-24 UTC. Daily buckets use GitHub boundaries. Historical totals before removed stars are not preserved.</desc>
 <style>
 .heading { fill: #242037; } .tick { fill: #5d586f; }
 @media (prefers-color-scheme: dark) { .heading { fill: #f4f1ff; } .tick { fill: #a9a4bc; } }
@@ -22,12 +22,12 @@
 <line x1="30" y1="33.00" x2="410" y2="33.00" stroke="#827a9c" stroke-opacity=".22"/>
 <text x="24" y="37.00" class="tick" font-size="11" text-anchor="end">50</text>
 <text x="30.00" y="142" class="tick" font-size="11" text-anchor="start">Jul 05</text>
-<text x="102.25" y="142" class="tick" font-size="11" text-anchor="middle">Aug 01</text>
-<text x="185.21" y="142" class="tick" font-size="11" text-anchor="middle">Sep 01</text>
-<text x="265.49" y="142" class="tick" font-size="11" text-anchor="middle">Oct 01</text>
-<text x="410.00" y="142" class="tick" font-size="11" text-anchor="end">Nov 23</text>
-<path d="M 30 124 H 59.44 V 120.36 H 131.69 V 118.54 H 134.37 V 116.72 H 155.77 V 114.90 H 193.24 V 113.08 H 198.59 V 111.26 H 209.30 V 109.44 H 241.41 V 107.62 H 244.08 V 105.80 H 284.23 V 103.98 H 300.28 V 102.16 H 302.96 V 100.34 H 308.31 V 96.70 H 321.69 V 94.88 H 324.37 V 85.78 H 329.72 V 80.32 H 332.39 V 76.68 H 335.07 V 67.58 H 340.42 V 63.94 H 343.10 V 60.30 H 345.77 V 56.66 H 348.45 V 53.02 H 353.80 V 51.20 H 364.51 V 49.38 H 385.92 V 47.56 H 391.27 V 45.74 H 399.30 V 43.92 H 401.97 V 42.10 H 404.65 V 40.28 H 410.00 V 40.28 L 410 124 Z" fill="#7c3aed" fill-opacity=".14"/>
-<path d="M 30 124 H 59.44 V 120.36 H 131.69 V 118.54 H 134.37 V 116.72 H 155.77 V 114.90 H 193.24 V 113.08 H 198.59 V 111.26 H 209.30 V 109.44 H 241.41 V 107.62 H 244.08 V 105.80 H 284.23 V 103.98 H 300.28 V 102.16 H 302.96 V 100.34 H 308.31 V 96.70 H 321.69 V 94.88 H 324.37 V 85.78 H 329.72 V 80.32 H 332.39 V 76.68 H 335.07 V 67.58 H 340.42 V 63.94 H 343.10 V 60.30 H 345.77 V 56.66 H 348.45 V 53.02 H 353.80 V 51.20 H 364.51 V 49.38 H 385.92 V 47.56 H 391.27 V 45.74 H 399.30 V 43.92 H 401.97 V 42.10 H 404.65 V 40.28 H 410.00 V 40.28" fill="none" stroke="#9b64f4" stroke-width="2" stroke-linejoin="round"/>
+<text x="101.75" y="142" class="tick" font-size="11" text-anchor="middle">Aug 01</text>
+<text x="184.13" y="142" class="tick" font-size="11" text-anchor="middle">Sep 01</text>
+<text x="263.85" y="142" class="tick" font-size="11" text-anchor="middle">Oct 01</text>
+<text x="410.00" y="142" class="tick" font-size="11" text-anchor="end">Nov 24</text>
+<path d="M 30 124 H 59.23 V 120.36 H 130.98 V 118.54 H 133.64 V 116.72 H 154.90 V 114.90 H 192.10 V 113.08 H 197.41 V 111.26 H 208.04 V 109.44 H 239.93 V 107.62 H 242.59 V 105.80 H 282.45 V 103.98 H 298.39 V 102.16 H 301.05 V 100.34 H 306.36 V 96.70 H 319.65 V 94.88 H 322.31 V 85.78 H 327.62 V 80.32 H 330.28 V 76.68 H 332.94 V 67.58 H 338.25 V 63.94 H 340.91 V 60.30 H 343.57 V 56.66 H 346.22 V 53.02 H 351.54 V 51.20 H 362.17 V 49.38 H 383.43 V 47.56 H 388.74 V 45.74 H 396.71 V 43.92 H 399.37 V 42.10 H 402.03 V 40.28 H 410.00 V 40.28 L 410 124 Z" fill="#7c3aed" fill-opacity=".14"/>
+<path d="M 30 124 H 59.23 V 120.36 H 130.98 V 118.54 H 133.64 V 116.72 H 154.90 V 114.90 H 192.10 V 113.08 H 197.41 V 111.26 H 208.04 V 109.44 H 239.93 V 107.62 H 242.59 V 105.80 H 282.45 V 103.98 H 298.39 V 102.16 H 301.05 V 100.34 H 306.36 V 96.70 H 319.65 V 94.88 H 322.31 V 85.78 H 327.62 V 80.32 H 330.28 V 76.68 H 332.94 V 67.58 H 338.25 V 63.94 H 340.91 V 60.30 H 343.57 V 56.66 H 346.22 V 53.02 H 351.54 V 51.20 H 362.17 V 49.38 H 383.43 V 47.56 H 388.74 V 45.74 H 396.71 V 43.92 H 399.37 V 42.10 H 402.03 V 40.28 H 410.00 V 40.28" fill="none" stroke="#9b64f4" stroke-width="2" stroke-linejoin="round"/>
 <circle cx="410" cy="40.28" r="3" fill="#9b64f4"/>
 </g>
 </svg>
