@@ -31,6 +31,7 @@ import 'package:clipious/music/views/components/music_status_title.dart';
 import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_history.dart';
+import 'package:clipious/music/views/screens/music_rule_playlists.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/podcasts/views/podcast_library.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -1154,6 +1155,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   alignment: AlignmentDirectional.centerStart, child: sortMenu),
         ),
         if (finding) sortMenu,
+        if (hasPlaylists) const MusicRulePlaylistsButton(),
         if (hasPlaylists)
           IconButton(
               tooltip: locals.createNewPlaylist,
