@@ -1,6 +1,8 @@
 import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
+import 'package:clipious/app/states/app.dart';
+import 'package:clipious/music/services/music_online_recents.dart';
 import 'package:clipious/recommendations/views/recommendation_settings.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
@@ -257,6 +259,7 @@ class BrowsingSettingsScreen extends StatelessWidget {
                         : locals.searchHistoryDescription),
                     onPressed: (context) => openSearchHistorySettings(context),
                   ),
+                  const CustomSettingsTile(child: _MusicOnlineRecentsTile()),
                   SettingsTile.navigation(
                     leading: const Icon(Icons.rule_sharp),
                     title: Text(locals.videoFilters),
@@ -311,6 +314,66 @@ class BrowsingSettingsScreen extends StatelessWidget {
           ),
         );
       })),
+    );
+  }
+}
+
+class _MusicOnlineRecentsTile extends StatelessWidget {
+  const _MusicOnlineRecentsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppCubit?>();
+    final session = app?.state;
+    final database = db;
+    final locals = AppLocalizations.of(context)!;
+
+    bool current() {
+      if (!context.mounted ||
+          app == null ||
+          session == null ||
+          app.isClosed ||
+          !identical(db, database)) {
+        return false;
+      }
+      final active = app.state;
+      return !active.globalLoading &&
+          !active.sessionRecoveryRequired &&
+          active.profileId == session.profileId &&
+          database.profileId == session.profileId &&
+          active.sessionRevision == session.sessionRevision;
+    }
+
+    SettingsTile tile(
+            {bool enabled = false, Future<void> Function(bool)? onToggle}) =>
+        SettingsTile.switchTile(
+          key: const ValueKey('music-online-recents-setting'),
+          leading: const Icon(Icons.history),
+          title: Text(locals.musicSearchRecentTitle),
+          description: Text(locals.musicSearchRecentDescription),
+          initialValue: enabled,
+          enabled: onToggle != null,
+          onToggle: onToggle,
+        );
+
+    if (session == null || !current()) return tile();
+    final recents = MusicOnlineRecents.forProfile(database, session.profileId);
+    return ListenableBuilder(
+      listenable: recents,
+      builder: (context, _) => tile(
+        enabled: recents.enabled,
+        onToggle: (enabled) async {
+          if (!current()) return;
+          try {
+            await recents.setEnabled(enabled, isCurrent: current);
+          } catch (_) {
+            if (context.mounted && current()) {
+              ScaffoldMessenger.maybeOf(context)
+                  ?.showSnackBar(SnackBar(content: Text(locals.error)));
+            }
+          }
+        },
+      ),
     );
   }
 }

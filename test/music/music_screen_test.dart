@@ -22,6 +22,7 @@ import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_online_recents.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
@@ -37,6 +38,7 @@ import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
+import 'package:clipious/settings/views/screens/browsing.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/utils/views/components/thumbnail.dart';
@@ -377,6 +379,106 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
   }
+
+  testWidgets('Music recents are opt-in, editable, removable, and clearable',
+      (tester) async {
+    final recents = MusicOnlineRecents.forProfile(db, db.profileId);
+    final history = find.byTooltip('Recent Music searches');
+    final field = find.byKey(const ValueKey('music-search'));
+
+    Future<void> waitForWrite(bool Function() done) async {
+      for (var attempt = 0; attempt < 20 && !done(); attempt++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(done(), isTrue);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> toggleRecents(bool enabled) async {
+      await show(tester, screen: const BrowsingSettingsScreen());
+      final tile = find.text('Remember Music searches');
+      final settingsList = find
+          .descendant(
+            of: find.byType(BrowsingSettingsScreen),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(tile, 200, scrollable: settingsList);
+      await tester.pumpAndSettle();
+      await tester.tap(tile);
+      await waitForWrite(() => recents.enabled == enabled);
+      await show(tester, screen: const MusicScreen(embedded: true));
+    }
+
+    await show(tester, screen: const MusicScreen(embedded: true));
+    expect(history, findsNothing);
+    await search(tester, 'Private query');
+    catalog.responses.last.complete([]);
+    await tester.pumpAndSettle();
+    expect(recents.queries, isEmpty);
+
+    await toggleRecents(true);
+    expect(history, findsOneWidget);
+    await tester.enterText(field, 'Unsubmitted draft');
+    expect(recents.queries, isEmpty);
+    await search(tester, 'First query');
+    catalog.responses.last.complete([]);
+    await waitForWrite(() => recents.queries.contains('First query'));
+    await search(tester, 'Second query');
+    catalog.responses.last.complete([]);
+    await waitForWrite(() => recents.queries.length == 2);
+
+    await tester.tap(history);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Edit saved search').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'Edited query');
+    await tester.tap(find.text('Save'));
+    await waitForWrite(() => recents.queries.first == 'Edited query');
+    final providerCalls = catalog.suggestionRequests.length;
+    await tester.tap(find.text('Edited query'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(tester.widget<TextField>(field).controller!.text, 'Edited query');
+    expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+    expect(catalog.searches, ['Private query', 'First query', 'Second query']);
+    expect(catalog.suggestionRequests, hasLength(providerCalls));
+
+    await tester.tap(history);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Remove saved search').last);
+    await waitForWrite(() => recents.queries.length == 1);
+    expect(recents.queries, ['Edited query']);
+    await tester.tap(find.text('Clear search history'));
+    await waitForWrite(() => recents.queries.isEmpty);
+    expect(find.text('No recent Music searches'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+
+    await toggleRecents(false);
+    expect(history, findsNothing);
+  });
+
+  testWidgets('leaving the profile session closes the Music recents dialog',
+      (tester) async {
+    final recents = MusicOnlineRecents.forProfile(db, db.profileId);
+    await tester.runAsync(() async {
+      await recents.setEnabled(true);
+      await recents.recordSubmission('Previous profile query',
+          isCurrent: () => true);
+    });
+    await show(tester, screen: const MusicScreen(embedded: true));
+    await tester.tap(find.byTooltip('Recent Music searches'));
+    await tester.pumpAndSettle();
+    expect(find.text('Previous profile query'), findsOneWidget);
+
+    app.setGlobalLoading(true);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Previous profile query'), findsNothing);
+    expect(recents.queries, ['Previous profile query']);
+  });
 
   group('online search suggestions', () {
     const debounce = Duration(milliseconds: 500);

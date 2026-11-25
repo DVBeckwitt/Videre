@@ -22,10 +22,12 @@ import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_search.dart';
+import 'package:clipious/music/services/music_online_recents.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_library_search_results.dart';
+import 'package:clipious/music/views/components/music_online_recents_button.dart';
 import 'package:clipious/music/views/components/music_player.dart';
 import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
@@ -453,6 +455,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   bool get _searchingLibrary =>
       _canSwitchSearchSource && _searchSource == _MusicSearchSource.library;
 
+  bool get _canUseOnlineRecents =>
+      _canSwitchSearchSource && !_searchingLibrary && !_hasBrowsePage;
+
   bool get _searched => _onlineListing != null;
 
   TextEditingController get _search =>
@@ -469,6 +474,19 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         _onlineListing?.pending = null;
       }
     });
+  }
+
+  Widget _withOnlineRecents(Widget field) {
+    if (!_canUseOnlineRecents) return field;
+    return Row(children: [
+      Expanded(child: field),
+      MusicOnlineRecentsButton(onUse: (query) {
+        if (!_canUseOnlineRecents) return;
+        _searchIntentRevision++;
+        _fillOnlineQuery(query);
+        _queryFocus.requestFocus();
+      }),
+    ]);
   }
 
   void _submitActiveSearch() {
@@ -842,7 +860,12 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
     // Only an explicit text-field/button submission is a preference signal.
     // Initial routes, filter changes and retries reuse the query without
     // treating it as another search by the person.
-    if (learn) unawaited(_learnSearch(query, session, intent));
+    if (learn) {
+      if (_canUseOnlineRecents && MusicOnlineRecents.canSaveQuery(query)) {
+        unawaited(_rememberOnlineSearch(query, session));
+      }
+      unawaited(_learnSearch(query, session, intent));
+    }
     final listing =
         _OnlineSearchListing(query, _type, paginated: _canSwitchSearchSource);
     setState(() {
@@ -968,6 +991,27 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       if (mounted && intent == _searchIntentRevision && _sameSession(session)) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(AppLocalizations.of(context)!.recommendationError)));
+      }
+    }
+  }
+
+  Future<void> _rememberOnlineSearch(String query, AppState session) async {
+    final database = db;
+    bool current() =>
+        identical(db, database) &&
+        _sameSession(session) &&
+        database.profileId == session.profileId;
+    if (!current()) return;
+    try {
+      final recents =
+          MusicOnlineRecents.forProfile(database, session.profileId);
+      if (recents.enabled) {
+        await recents.recordSubmission(query, isCurrent: current);
+      }
+    } catch (_) {
+      if (mounted && current() && isPastedLinkSourceActive(context)) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(AppLocalizations.of(context)!.error)));
       }
     }
   }
@@ -2147,7 +2191,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                     Column(mainAxisSize: MainAxisSize.min, children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                    child: TextField(
+                    child: _withOnlineRecents(TextField(
                       key: const ValueKey('music-search'),
                       controller: _search,
                       focusNode: _queryFocus,
@@ -2171,7 +2215,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
                               tooltip: locals.search,
                               onPressed: _submitActiveSearch,
                               icon: const Icon(Icons.search))),
-                    ),
+                    )),
                   ),
                   if (_canSwitchSearchSource &&
                       !_hasBrowsePage &&
