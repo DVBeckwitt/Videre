@@ -28,6 +28,7 @@ import 'local_music_albums.dart';
 import 'local_music_exclusions.dart';
 import 'local_music_locations.dart';
 import 'local_music_summary.dart';
+import 'music_fast_scroll.dart';
 
 bool get supportsLocalMusicFolders =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -636,6 +637,7 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
             catalogChanges: catalogChanges,
             currentEntries: _currentEntries,
             tracks: tracks,
+            sort: sort,
             canBrowse: canBrowse,
             filters: filters,
             saveFilters: savePreference == null
@@ -952,6 +954,7 @@ class _LocalTrackBrowser extends StatefulWidget {
     required this.catalogChanges,
     required this.currentEntries,
     required this.tracks,
+    required this.sort,
     required this.canBrowse,
     required this.filters,
     required this.saveFilters,
@@ -965,6 +968,7 @@ class _LocalTrackBrowser extends StatefulWidget {
   final Listenable catalogChanges;
   final List<OnDeviceMusicEntry> Function() currentEntries;
   final List<OnDeviceMusicEntry> tracks;
+  final LocalMusicTrackSort sort;
   final bool canBrowse;
   final _LocalMusicFilters filters;
   final Future<void> Function(_LocalMusicFilters)? saveFilters;
@@ -1174,7 +1178,7 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
                   : (artist: artist, album: null)),
           deleteButtonTooltipMessage: material.clearButtonTooltip,
         );
-    return CustomScrollView(
+    final view = CustomScrollView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         slivers: [
           SliverToBoxAdapter(child: widget.header),
@@ -1227,6 +1231,20 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
             itemBuilder: (context, index) => widget.row(visible, index),
           ),
         ]);
+    final sort = widget.sort;
+    return MusicFastScroll(
+      scope: (sort.value, _search.text, artist, album),
+      sections: musicFastScrollSectionsFor(context, visible, sortValue: (row) {
+        final value = sort.sortValueFor(row);
+        return switch ((sort.field, value)) {
+          (LocalMusicTrackSortField.duration, final int milliseconds) =>
+            Duration(milliseconds: milliseconds),
+          (LocalMusicTrackSortField.size, final int bytes) => (bytes: bytes),
+          _ => value,
+        };
+      }),
+      child: view,
+    );
   }
 }
 

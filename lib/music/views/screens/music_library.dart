@@ -26,6 +26,7 @@ import 'package:clipious/music/views/components/music_collection_sort_menu.dart'
 import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_download_storage_summary.dart';
 import 'package:clipious/music/views/components/music_duration_label.dart';
+import 'package:clipious/music/views/components/music_fast_scroll.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/music/views/components/music_playlist_edit_actions.dart';
@@ -989,7 +990,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               for (final (position, index) in visible.indexed)
                 keys[index]: position,
             };
-            return CustomScrollView(
+            final view = CustomScrollView(
               key: ValueKey((library.profileId, playlist.playlistId)),
               controller: _playlistScroll,
               slivers: [
@@ -1098,6 +1099,22 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                 : () => playSong(index));
                       }),
               ],
+            );
+            return MusicFastScroll(
+              scope: (
+                library.profileId,
+                playlist.playlistId,
+                displayOrder,
+                input.text
+              ),
+              sections: musicFastScrollSectionsFor<int>(context, visible,
+                  sortValue:
+                      displayOrder.field == MusicCollectionSortField.source
+                          ? null
+                          : (index) => MusicCollectionOrder.normalizeSortValue(
+                              musicPlaylistTrackSortValue(
+                                  songs[index], displayOrder.field))),
+              child: view,
             );
           },
         );
@@ -1348,7 +1365,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             for (final (index, item) in items.indexed)
               if (terms.every(searchable[index].contains)) item,
           ];
-          return _collection(matches, const [], library,
+          return _collection(matches, const [], library, order,
               playbackItems: items,
               searchToolbar: selection == null
                   ? toolbar
@@ -1385,7 +1402,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Expanded(
         child: items.isEmpty && shortcuts.isEmpty
             ? _empty()
-            : _collection(items, shortcuts, library, pinnedPlaylistIds: pins),
+            : _collection(items, shortcuts, library, order, pinnedPlaylistIds: pins),
       ),
     ]);
   }
@@ -1482,7 +1499,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       });
 
   Widget _collection(List<_LibraryItem> items, List<_LibraryFilter> shortcuts,
-      MusicLibraryService library,
+      MusicLibraryService library, MusicCollectionOrder order,
       {List<_LibraryItem>? playbackItems,
       Set<String> pinnedPlaylistIds = const {},
       Widget? searchToolbar,
@@ -1503,6 +1520,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final collectionKey = PageStorageKey(_filter == _LibraryFilter.songs
         ? 'music-library-$layout-songs-${library.profileId}'
         : 'music-library-$layout-${_filter.name}');
+    Widget fastScroll(Widget child) => MusicFastScroll(
+          scope: (library.profileId, _filter, order, _libraryQuery.text),
+          leadingItems: shortcuts.length,
+          sections: musicFastScrollSectionsFor<_LibraryItem>(context, items,
+              sortValue: order.field == MusicCollectionSortField.source
+                  ? null
+                  : (item) => MusicCollectionOrder.normalizeSortValue(
+                      _libraryItemSortValue(item, order.field))),
+          child: child,
+        );
     Widget searchResults(Widget toolbar, Widget results) => _libraryFindView(
           key: const ValueKey('music-saved-songs-results'),
           toolbar: toolbar,
@@ -1558,12 +1585,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             onLongPress: _itemLongPress(item, open),
             onTap: open);
       }, childCount: count, findChildIndexCallback: (key) => indices[key]);
-      return searchToolbar == null
+      return fastScroll(searchToolbar == null
           ? ListView.custom(
               key: collectionKey,
               childrenDelegate: rows,
               semanticChildCount: count)
-          : searchResults(searchToolbar, SliverList(delegate: rows));
+          : searchResults(searchToolbar, SliverList(delegate: rows)));
     }
     final savedCovers = library.coversBySongId;
     return LayoutBuilder(builder: (context, constraints) {
@@ -2278,10 +2305,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               Expanded(
                 child: videos.isEmpty
                     ? _empty()
-                    : ListView.custom(
-                        key: PageStorageKey(('music-downloads', profileId)),
-                        childrenDelegate: _downloadRows(state, videos),
-                        semanticChildCount: videos.length,
+                    : MusicFastScroll(
+                        scope: (profileId, order),
+                        sections: musicFastScrollSectionsFor(context, videos,
+                            sortValue: order.field ==
+                                    MusicDownloadSortField.defaultOrder
+                                ? null
+                                : order.sortValue),
+                        child: ListView.custom(
+                          key: PageStorageKey(('music-downloads', profileId)),
+                          childrenDelegate: _downloadRows(state, videos),
+                          semanticChildCount: videos.length,
+                        ),
                       ),
               ),
             ]);
@@ -2319,21 +2354,29 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                               '${music.title} ${music.artist}');
                       return terms.every(text.contains);
                     }).toList();
-              return _libraryFindView(
-                key: const ValueKey('music-downloads-results'),
-                toolbar: selection == null
-                    ? toolbar
-                    : _downloadsSelectionBar(matches, videos, selection),
-                count: matches.length,
-                pinned: selection != null,
-                results: matches.isEmpty
-                    ? SliverFillRemaining(
-                        hasScrollBody: false,
-                        child: terms.isEmpty
-                            ? _empty()
-                            : Center(child: Text(locals.musicNoResults)),
-                      )
-                    : SliverList(delegate: _downloadRows(state, matches)),
+              return MusicFastScroll(
+                scope: (profileId, order, input.text),
+                sections: musicFastScrollSectionsFor(context, matches,
+                    sortValue:
+                        order.field == MusicDownloadSortField.defaultOrder
+                            ? null
+                            : order.sortValue),
+                child: _libraryFindView(
+                  key: const ValueKey('music-downloads-results'),
+                  toolbar: selection == null
+                      ? toolbar
+                      : _downloadsSelectionBar(matches, videos, selection),
+                  count: matches.length,
+                  pinned: selection != null,
+                  results: matches.isEmpty
+                      ? SliverFillRemaining(
+                          hasScrollBody: false,
+                          child: terms.isEmpty
+                              ? _empty()
+                              : Center(child: Text(locals.musicNoResults)),
+                        )
+                      : SliverList(delegate: _downloadRows(state, matches)),
+                ),
               );
             },
           );

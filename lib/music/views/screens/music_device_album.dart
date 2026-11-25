@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../components/music_collection_panes.dart';
+import '../components/music_fast_scroll.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
 
@@ -313,7 +314,7 @@ class _AlbumTracksState extends State<_AlbumTracks> {
     final anchorIndex = anchorId == null
         ? -1
         : widget.tracks.indexWhere((track) => track.playbackId == anchorId);
-    return LayoutBuilder(builder: (context, size) {
+    final view = LayoutBuilder(builder: (context, size) {
       if (_scroll == null) {
         final maxOffset =
             math.max(0.0, extent * widget.tracks.length - size.maxHeight);
@@ -359,5 +360,10 @@ class _AlbumTracksState extends State<_AlbumTracks> {
         },
       );
     });
+    return MusicFastScroll(
+      scope: widget.anchorId,
+      sections: musicFastScrollSectionsFor(context, widget.tracks),
+      child: view,
+    );
   }
 }

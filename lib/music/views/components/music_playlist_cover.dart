@@ -1,6 +1,7 @@
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/services/music_playlist_covers.dart';
+import 'package:clipious/playlists/models/playlist.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';

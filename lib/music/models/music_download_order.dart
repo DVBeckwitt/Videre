@@ -27,42 +27,49 @@ class MusicDownloadOrder {
 
   String encode() => '${field.name}:${descending ? 'descending' : 'ascending'}';
 
+  /// Uses the same primary value as the visible download order.
+  Object? sortValue(DownloadedVideo video) => switch (field) {
+        MusicDownloadSortField.defaultOrder => null,
+        MusicDownloadSortField.duration => _duration(video),
+        _ => _normalizeText(_textValue(video)),
+      };
+
+  String? _textValue(DownloadedVideo video) => switch (field) {
+        MusicDownloadSortField.title => _title(video),
+        MusicDownloadSortField.artist =>
+          video.musicMetadata?.artist ?? video.author,
+        MusicDownloadSortField.album => video.musicMetadata?.album,
+        _ => null,
+      };
+
+  static String _title(DownloadedVideo video) =>
+      video.musicMetadata?.title ?? video.title;
+
+  static int? _duration(DownloadedVideo video) =>
+      video.lengthSeconds > 0 ? video.lengthSeconds : null;
+
+  static String? _normalizeText(String? value) {
+    final key = value == null ? '' : normalizeMusicSearchText(value.trim());
+    return key.isEmpty ? null : key;
+  }
+
   List<DownloadedVideo> sort(Iterable<DownloadedVideo> source) {
     final rows = source.toList();
     if (field == MusicDownloadSortField.defaultOrder) {
       return descending ? rows.reversed.toList() : rows;
     }
 
-    final normalized = <String, String>{};
-    String? text(String? value) {
-      if (value == null) return null;
-      final key = normalized.putIfAbsent(
-          value, () => normalizeMusicSearchText(value.trim()));
-      return key.isEmpty ? null : key;
-    }
+    final normalized = <String?, String?>{};
+    String? text(String? value) =>
+        normalized.putIfAbsent(value, () => _normalizeText(value));
 
     rows.sort((first, second) {
-      final firstTitle = text(first.musicMetadata?.title ?? first.title);
-      final secondTitle = text(second.musicMetadata?.title ?? second.title);
-      final primary = switch (field) {
-        MusicDownloadSortField.title =>
-          _compare(firstTitle, secondTitle, descending),
-        MusicDownloadSortField.artist => _compare(
-            text(first.musicMetadata?.artist ?? first.author),
-            text(second.musicMetadata?.artist ?? second.author),
-            descending),
-        MusicDownloadSortField.album => _compare(
-            text(first.musicMetadata?.album),
-            text(second.musicMetadata?.album),
-            descending),
-        MusicDownloadSortField.duration => _compare<num>(
-            first.lengthSeconds > 0 ? first.lengthSeconds : null,
-            second.lengthSeconds > 0 ? second.lengthSeconds : null,
-            descending),
-        MusicDownloadSortField.defaultOrder => 0,
-      };
+      final primary = field == MusicDownloadSortField.duration
+          ? _compare<num>(_duration(first), _duration(second), descending)
+          : _compare(
+              text(_textValue(first)), text(_textValue(second)), descending);
       if (primary != 0) return primary;
-      final title = _compare(firstTitle, secondTitle, false);
+      final title = _compare(text(_title(first)), text(_title(second)), false);
       return title != 0 ? title : first.videoId.compareTo(second.videoId);
     });
     return rows;
