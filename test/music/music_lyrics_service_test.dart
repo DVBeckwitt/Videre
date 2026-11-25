@@ -13,22 +13,26 @@ const _song = MusicMetadata(
   album: 'Example Album',
 );
 
-http.Response _record({Map<String, Object?> changes = const {}}) =>
-    http.Response(
-      jsonEncode({
-        'id': 21,
-        'trackName': 'Example Song',
-        'artistName': 'Example Artist',
-        'albumName': 'Example Album',
-        'duration': 180.25,
-        'plainLyrics': 'Example line',
-        'syncedLyrics': '[00:10.00]Example line\n[02:31.50]Example line',
-        'instrumental': false,
-        ...changes,
-      }),
+Map<String, Object?> _recordData([Map<String, Object?> changes = const {}]) => {
+      'id': 21,
+      'trackName': 'Example Song',
+      'artistName': 'Example Artist',
+      'albumName': 'Example Album',
+      'duration': 180.25,
+      'plainLyrics': 'Example line',
+      'syncedLyrics': '[00:10.00]Example line\n[02:31.50]Example line',
+      'instrumental': false,
+      ...changes,
+    };
+
+http.Response _json(Object payload) => http.Response(
+      jsonEncode(payload),
       200,
       headers: {'content-type': 'application/json; charset=utf-8'},
     );
+
+http.Response _record({Map<String, Object?> changes = const {}}) =>
+    _json(_recordData(changes));
 
 void main() {
   test('one exact lookup sends only public metadata and preserves synced lines',
@@ -196,6 +200,132 @@ void main() {
       await expectLater(service.load(_song, 180, isCurrent: () => true),
           throwsA(isA<MusicLyricsRequestException>()));
     }
+    expect(calls, 1);
+  });
+
+  test('manual search returns preview-ready alternatives with their metadata',
+      () async {
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              expect(request.url.origin, 'https://lrclib.net');
+              expect(request.url.path, '/api/search');
+              expect(request.followRedirects, isFalse);
+              expect(request.headers.keys,
+                  unorderedEquals(['accept', 'user-agent']));
+              expect(request.url.queryParameters, {
+                'track_name': 'Changed Title',
+                'artist_name': 'Changed Artist',
+              });
+              return _json([
+                _recordData(),
+                _recordData({
+                  'id': 22,
+                  'trackName': 'Example Song (Live)',
+                  'albumName': 'Live Album',
+                  'duration': 186.5,
+                  'plainLyrics': null,
+                }),
+                _recordData({'id': 23, 'instrumental': true}),
+              ]);
+            }));
+    final matches = await service.search(
+      trackName: ' Changed  Title ',
+      artistName: 'Changed Artist',
+      albumName: '',
+      durationSeconds: 180,
+      isCurrent: () => true,
+    );
+    expect(matches.map((match) => match.id), [21, 22, 23]);
+    expect(matches.first.lyrics.kind, MusicLyricsKind.synced);
+    final alternate = matches[1];
+    expect(alternate.trackName, 'Example Song (Live)');
+    expect(alternate.artistName, 'Example Artist');
+    expect(alternate.albumName, 'Live Album');
+    expect(alternate.duration, const Duration(milliseconds: 186500));
+    expect(alternate.lyrics.kind, MusicLyricsKind.plain);
+    expect(alternate.lyrics.text, 'Example line\nExample line');
+    expect(alternate.lyrics.source, 'LRCLIB');
+    expect(matches[2].lyrics.kind, MusicLyricsKind.instrumental);
+  });
+
+  test('manual search bounds and deduplicates usable records', () async {
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((request) async {
+              expect(request.url.queryParameters, {
+                'track_name': 'Example Song',
+                'album_name': 'Example Album',
+              });
+              return _json([
+                _recordData({'id': null}),
+                _recordData(
+                    {'id': 1, 'syncedLyrics': null, 'plainLyrics': null}),
+                _recordData({'id': 2, 'duration': 1e100}),
+                _recordData(),
+                _recordData(),
+                for (var id = 30; id < 60; id++) _recordData({'id': id}),
+              ]);
+            }));
+    final matches = await service.search(
+      trackName: 'Example Song',
+      artistName: '',
+      albumName: 'Example Album',
+      durationSeconds: null,
+      isCurrent: () => true,
+    );
+    expect(matches.map((match) => match.id),
+        [21, ...List.generate(15, (i) => i + 30)]);
+    expect(matches.every((match) => match.lyrics.kind == MusicLyricsKind.plain),
+        isTrue);
+  });
+
+  test('manual search suppresses stale responses and sends only valid queries',
+      () async {
+    var active = false;
+    var calls = 0;
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((_) async {
+              calls++;
+              active = false;
+              return _json([_recordData()]);
+            }));
+    Future<void> expectEmpty(String title) async {
+      expect(
+          await service.search(
+            trackName: title,
+            artistName: '',
+            albumName: '',
+            durationSeconds: 180,
+            isCurrent: () => active,
+          ),
+          isEmpty);
+    }
+
+    await expectEmpty('Example Song');
+    active = true;
+    await expectEmpty('a' * 321);
+    expect(calls, 0);
+    await expectEmpty('Example Song');
+    expect(calls, 1);
+  });
+
+  test('manual and automatic lookups share provider cooldown', () async {
+    var calls = 0;
+    final service = LrclibMusicLyricsService(
+        createClient: () => MockClient((_) async {
+              calls++;
+              return http.Response('', 429, headers: {'retry-after': '10'});
+            }));
+    final failed = throwsA(isA<MusicLyricsRequestException>());
+    await expectLater(
+        service.search(
+          trackName: 'Example Song',
+          artistName: 'Example Artist',
+          albumName: '',
+          durationSeconds: 180,
+          isCurrent: () => true,
+        ),
+        failed);
+    await expectLater(service.load(_song, 180, isCurrent: () => true), failed);
     expect(calls, 1);
   });
 }

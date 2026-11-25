@@ -25,6 +25,8 @@ import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_cover_corners.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/models/music_lyrics_match.dart';
+import 'package:clipious/music/services/music_lyrics_corrections.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/views/components/music_selection_feedback.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
@@ -1946,6 +1948,46 @@ void main() {
     pending.complete(const MusicLyrics.plain('Stale result'));
     await tester.pumpAndSettle();
     expect(find.text('Stale result'), findsNothing);
+    expect(find.text('No lyrics available for this track'), findsOneWidget);
+    await pressAndroidBack(tester);
+  });
+
+  testWidgets('Lyrics opens a saved correction and invalidates its editor',
+      (tester) async {
+    const videoId = 'correction1';
+    final recording = song.copyWith(videoId: videoId);
+    await player.seed(player.state.copyWith(currentlyPlaying: recording));
+    await tester.runAsync(() async {
+      await setLrclibEnabled(true);
+      await MusicLyricsCorrections(db.forProfile(db.profileId)).save(
+        videoId,
+        const MusicLyricsCorrection(
+          MusicLyrics.plain('Saved line', source: 'LRCLIB'),
+          edited: true,
+        ),
+      );
+    });
+    var automaticLookups = 0;
+    await pump(tester, child: MusicPlayer(lyricsLoader: (_, __, ___) async {
+      automaticLookups++;
+      return const MusicLyrics.unavailable();
+    }));
+
+    await tap(tester, 'music-player-lyrics');
+    await tester.pumpAndSettle();
+    expect(find.text('Saved line'), findsOneWidget);
+    expect(find.text('LRCLIB'), findsOneWidget);
+    expect(find.text('Edited on this device'), findsOneWidget);
+    expect(automaticLookups, 0);
+    await tester.tap(find.text('Correct lyrics match'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextFormField), findsNWidgets(3));
+
+    await player.seed(player.state.copyWith(currentlyPlaying: next));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextFormField), findsNothing);
+    expect(find.text('Saved line'), findsNothing);
+    await pressAndroidBack(tester);
     expect(find.text('No lyrics available for this track'), findsOneWidget);
     await pressAndroidBack(tester);
   });

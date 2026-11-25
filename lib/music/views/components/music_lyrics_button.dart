@@ -2,15 +2,21 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/models/music_lyrics_match.dart';
+import 'package:clipious/music/services/music_lyrics_corrections.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
+import 'package:clipious/music/services/music_lyrics_service.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
 import 'package:clipious/utils.dart';
 import 'package:clipious/utils/motion.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_bloc/flutter_bloc.dart';
+
+import 'music_lyrics_match_dialog.dart';
 
 class MusicLyricsButton extends StatefulWidget {
   final MusicLyricsLoader loader;
@@ -90,6 +96,7 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
       if (!mounted || !isCurrent() || !isLrclibEnabled()) return;
       final duration = video?.lengthSeconds ?? offline?.lengthSeconds;
       final consent = lrclibPreferenceRevision.value;
+      final corrections = MusicLyricsCorrections(database.forProfile(profile));
       bool mayLoad() =>
           isCurrent() &&
           isLrclibEnabled() &&
@@ -110,7 +117,10 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
                     child: Text(
                         AppLocalizations.of(context)!.musicLyricsUnavailable))
                 : _MusicLyricsSheet(
-                    songTitle: track.title,
+                    track: track,
+                    durationSeconds: duration,
+                    videoId: videoId,
+                    corrections: corrections,
                     load: () => loader(track, duration, videoId),
                     isCurrent: mayLoad),
           )),
@@ -137,26 +147,96 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
 }
 
 class _MusicLyricsSheet extends StatefulWidget {
-  final String songTitle;
+  final MusicMetadata track;
+  final int? durationSeconds;
+  final String videoId;
+  final MusicLyricsCorrections corrections;
   final Future<MusicLyrics> Function() load;
   final bool Function() isCurrent;
 
-  const _MusicLyricsSheet(
-      {required this.songTitle, required this.load, required this.isCurrent});
+  const _MusicLyricsSheet({
+    required this.track,
+    required this.durationSeconds,
+    required this.videoId,
+    required this.corrections,
+    required this.load,
+    required this.isCurrent,
+  });
 
   @override
   State<_MusicLyricsSheet> createState() => _MusicLyricsSheetState();
 }
 
 class _MusicLyricsSheetState extends State<_MusicLyricsSheet> {
+  MusicLyricsCorrection? _correction;
   late Future<MusicLyrics> _request = _load();
 
   Future<MusicLyrics> _load() async {
     if (!widget.isCurrent()) return const MusicLyrics.unavailable();
-    final lyrics = await widget.load();
+    _correction = widget.corrections.read(widget.videoId);
+    final lyrics = _correction?.lyrics ?? await widget.load();
     return mounted && widget.isCurrent()
         ? lyrics
         : const MusicLyrics.unavailable();
+  }
+
+  Future<void> _correct(MusicLyrics? lyrics) async {
+    final track = widget.track;
+    final duration = widget.durationSeconds;
+    final videoId = widget.videoId;
+    final corrections = widget.corrections;
+    final hasCorrection = _correction != null;
+    final isCurrent = widget.isCurrent;
+    bool mayCorrect() => mounted && isCurrent();
+
+    if (!mayCorrect()) return;
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: false,
+      builder: (routeContext) => PlayerModalBackHandler(
+        onBack: () => Navigator.of(routeContext).maybePop(),
+        child: ValueListenableBuilder<int>(
+          valueListenable: lrclibPreferenceRevision,
+          builder: (context, _, __) {
+            final currentTrack =
+                context.select((PlayerCubit player) => mayCorrect());
+            final currentSession =
+                context.select((AppCubit app) => mayCorrect());
+            if (!currentTrack || !currentSession) {
+              final locals = AppLocalizations.of(context)!;
+              return AlertDialog(
+                content: Text(locals.musicLyricsUnavailable),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text(locals.cancel)),
+                ],
+              );
+            }
+            return MusicLyricsMatchDialog(
+              track: track,
+              durationSeconds: duration,
+              currentLyrics: lyrics,
+              hasCorrection: hasCorrection,
+              isCurrent: mayCorrect,
+              search: searchMusicLyrics,
+              save: (correction) async {
+                if (!mayCorrect()) return;
+                if (correction == null) {
+                  await corrections.clear(videoId);
+                } else {
+                  await corrections.save(videoId, correction);
+                }
+              },
+            );
+          },
+        ),
+      ),
+    );
+    if (saved == true && mayCorrect()) {
+      setState(() => _request = _load());
+    }
   }
 
   Duration? _seekLimit(PlayerState state) {
@@ -187,8 +267,9 @@ class _MusicLyricsSheetState extends State<_MusicLyricsSheet> {
           return Center(child: Text(locals.musicLyricsUnavailable));
         }
         final lyrics = snapshot.data;
+        final ready = snapshot.connectionState == ConnectionState.done;
         Widget body;
-        if (snapshot.connectionState != ConnectionState.done) {
+        if (!ready) {
           body = const Center(
               child:
                   MotionLoadingIndicator(child: CircularProgressIndicator()));
@@ -221,8 +302,10 @@ class _MusicLyricsSheetState extends State<_MusicLyricsSheet> {
                     children: [SelectableText(result.text!)]),
             MusicLyricsKind.instrumental =>
               Center(child: Text(locals.musicLyricsInstrumental)),
-            MusicLyricsKind.unavailable =>
-              Center(child: Text(locals.musicLyricsUnavailable)),
+            MusicLyricsKind.unavailable => Center(
+                child: Text(_correction == null
+                    ? locals.musicLyricsUnavailable
+                    : locals.musicLyricsMatchDiscarded)),
           };
         }
         return Padding(
@@ -231,12 +314,26 @@ class _MusicLyricsSheetState extends State<_MusicLyricsSheet> {
               Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Text(locals.musicLyrics,
                 style: Theme.of(context).textTheme.titleLarge),
-            Text(widget.songTitle,
+            Text(widget.track.title,
                 maxLines: 2, overflow: TextOverflow.ellipsis),
-            if (lyrics?.source case final source?)
-              Text(source, style: Theme.of(context).textTheme.labelMedium),
+            if (ready) ...[
+              if (lyrics?.source case final source?)
+                Text(source, style: Theme.of(context).textTheme.labelMedium),
+              if (_correction?.edited == true)
+                Text(locals.musicLyricsEdited,
+                    style: Theme.of(context).textTheme.labelMedium),
+            ],
             const Divider(),
             Expanded(child: body),
+            if (ready)
+              Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: TextButton.icon(
+                  onPressed: () => _correct(lyrics),
+                  icon: const Icon(Icons.edit_outlined),
+                  label: Text(locals.musicLyricsCorrectMatch),
+                ),
+              ),
           ]),
         );
       },

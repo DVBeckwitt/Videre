@@ -11,29 +11,65 @@ import '../../network/network_proxy.dart';
 import '../../network/reloadable_http_client.dart';
 import '../../videos/models/music_metadata.dart';
 import '../models/music_lyrics.dart';
+import '../models/music_lyrics_match.dart';
 import 'lrc_lyrics.dart';
 import 'music_lyrics_preferences.dart';
 
 const _source = 'LRCLIB';
 const _host = 'lrclib.net';
-const _path = '/api/get';
+const _lookupPath = '/api/get';
+const _searchPath = '/api/search';
 const _maxResponseBytes = 512 * 1024;
+const _maxSearchResponseBytes = 2 * 1024 * 1024;
+const _maxSearchResults = 20;
+const _maxCandidateDuration = Duration(days: 365);
 const _timeout = Duration(seconds: 12);
 final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
-final _lookup = LrclibMusicLyricsService();
+final _lrclib = LrclibMusicLyricsService();
 
 Future<MusicLyrics> loadMusicLyrics(
-    MusicMetadata track, int? durationSeconds, String videoId) async {
-  if (!_videoId.hasMatch(videoId) || !isLrclibEnabled()) {
-    return const MusicLyrics.unavailable();
-  }
+    MusicMetadata track, int? durationSeconds, String videoId) {
+  return _withLrclibConsent(
+    const MusicLyrics.unavailable(),
+    () => _videoId.hasMatch(videoId),
+    (isCurrent) => _lrclib.load(track, durationSeconds, isCurrent: isCurrent),
+  );
+}
+
+Future<List<MusicLyricsMatch>> searchMusicLyrics({
+  required String trackName,
+  required String artistName,
+  required String albumName,
+  required int? durationSeconds,
+  required bool Function() isCurrent,
+}) {
+  return _withLrclibConsent(
+    const <MusicLyricsMatch>[],
+    isCurrent,
+    (isCurrent) => _lrclib.search(
+      trackName: trackName,
+      artistName: artistName,
+      albumName: albumName,
+      durationSeconds: durationSeconds,
+      isCurrent: isCurrent,
+    ),
+  );
+}
+
+Future<T> _withLrclibConsent<T>(
+  T unavailable,
+  bool Function() isRequestCurrent,
+  Future<T> Function(bool Function()) run,
+) async {
+  if (!isRequestCurrent() || !isLrclibEnabled()) return unavailable;
   final database = db;
   final profile = database.profileId;
   final consent = lrclibPreferenceRevision.value;
   final proxy = NetworkProxy.instance;
   final config = proxy.config;
-  return _lookup.load(track, durationSeconds, isCurrent: () {
-    return identical(db, database) &&
+  return run(() {
+    return isRequestCurrent() &&
+        identical(db, database) &&
         db.profileId == profile &&
         lrclibPreferenceRevision.value == consent &&
         !proxy.isChanging &&
@@ -46,7 +82,7 @@ void _validateDestination(Uri uri) {
   if (uri.scheme != 'https' ||
       uri.host != _host ||
       uri.port != 443 ||
-      uri.path != _path ||
+      (uri.path != _lookupPath && uri.path != _searchPath) ||
       uri.userInfo.isNotEmpty ||
       uri.hasFragment) {
     throw const MusicLyricsRequestException();
@@ -80,19 +116,93 @@ class LrclibMusicLyricsService {
         _now = now ?? DateTime.now;
 
   Future<MusicLyrics> load(MusicMetadata track, int? playbackSeconds,
-      {required bool Function() isCurrent}) async {
-    if (!isCurrent()) return const MusicLyrics.unavailable();
+      {required bool Function() isCurrent}) {
+    const unavailable = MusicLyrics.unavailable();
     final signature = _signature(track);
-    if (signature == null) return const MusicLyrics.unavailable();
+    if (signature == null) return Future.value(unavailable);
     final (title, artist, album) = signature;
     final duration =
         playbackSeconds != null && playbackSeconds > 0 ? playbackSeconds : null;
-    final uri = Uri.https(_host, _path, {
+    final uri = Uri.https(_host, _lookupPath, {
       'track_name': title,
       'artist_name': artist,
       if (album.isNotEmpty) 'album_name': album,
       if (duration != null && duration <= 3600) 'duration': '$duration',
     });
+    return _request(uri, _maxResponseBytes, unavailable, isCurrent, (json) {
+      if (json is! Map<String, dynamic>) {
+        throw const MusicLyricsRequestException();
+      }
+      final record = _recordMetadata(json);
+      if (record == null) throw const MusicLyricsRequestException();
+      if (_key(record.title) != _key(title) ||
+          _key(record.artist) != _key(artist) ||
+          (album.isNotEmpty && _key(record.album) != _key(album)) ||
+          (duration != null && (record.duration - duration).abs() > 2)) {
+        return unavailable;
+      }
+      return _parseLyrics(json, duration);
+    });
+  }
+
+  Future<List<MusicLyricsMatch>> search({
+    required String trackName,
+    required String artistName,
+    required String albumName,
+    required int? durationSeconds,
+    required bool Function() isCurrent,
+  }) {
+    const unavailable = <MusicLyricsMatch>[];
+    final title = _label(trackName);
+    final artist = _label(artistName);
+    final album = _label(albumName);
+    if (title.isEmpty) return Future.value(unavailable);
+    final uri = Uri.https(_host, _searchPath, {
+      'track_name': title,
+      if (artist.isNotEmpty) 'artist_name': artist,
+      if (album.isNotEmpty) 'album_name': album,
+    });
+    return _request(uri, _maxSearchResponseBytes, unavailable, isCurrent,
+        (json) {
+      if (json is! List) throw const MusicLyricsRequestException();
+      final matches = <MusicLyricsMatch>[];
+      final ids = <int>{};
+      for (final entry in json.take(_maxSearchResults)) {
+        if (entry is! Map<String, dynamic>) continue;
+        final result = _recordMetadata(entry);
+        if (result == null ||
+            result.duration > _maxCandidateDuration.inSeconds) {
+          continue;
+        }
+        final canSync = durationSeconds != null &&
+            (result.duration - durationSeconds).abs() <= 2;
+        final lyrics = _parseLyrics(entry, canSync ? durationSeconds : null);
+        if (lyrics.kind == MusicLyricsKind.unavailable || !ids.add(result.id)) {
+          continue;
+        }
+        matches.add(MusicLyricsMatch(
+          id: result.id,
+          trackName: result.title,
+          artistName: result.artist,
+          albumName: result.album,
+          duration: Duration(
+              microseconds:
+                  (result.duration * Duration.microsecondsPerSecond).round()),
+          lyrics: lyrics,
+        ));
+      }
+      return List.unmodifiable(matches);
+    });
+  }
+
+  Future<T> _request<T>(
+    Uri uri,
+    int maxResponseBytes,
+    T unavailable,
+    bool Function() isCurrent,
+    T Function(Object) decode,
+  ) async {
+    if (!isCurrent()) return unavailable;
     final retryAfter = _retryAfter;
     if (_loading || (retryAfter != null && _now().isBefore(retryAfter))) {
       throw const MusicLyricsRequestException();
@@ -101,15 +211,13 @@ class LrclibMusicLyricsService {
     http.Client? client;
     try {
       _validateDestination(uri);
-      if (!isCurrent()) return const MusicLyrics.unavailable();
+      if (!isCurrent()) return unavailable;
       client = _createClient();
-      final record = await _get(client, uri, isCurrent).timeout(_timeout);
-      if (!isCurrent() || record == null) {
-        return const MusicLyrics.unavailable();
-      }
-      return _parseMatch(record, title, artist, album, duration);
+      final payload = await _get(client, uri, maxResponseBytes, isCurrent)
+          .timeout(_timeout);
+      return !isCurrent() || payload == null ? unavailable : decode(payload);
     } catch (_) {
-      if (!isCurrent()) return const MusicLyrics.unavailable();
+      if (!isCurrent()) return unavailable;
       throw const MusicLyricsRequestException();
     } finally {
       client?.close();
@@ -117,8 +225,8 @@ class LrclibMusicLyricsService {
     }
   }
 
-  Future<Map<String, dynamic>?> _get(
-      http.Client client, Uri uri, bool Function() isCurrent) async {
+  Future<Object?> _get(http.Client client, Uri uri, int maxResponseBytes,
+      bool Function() isCurrent) async {
     final request = http.Request('GET', uri)
       ..followRedirects = false
       ..headers['accept'] = 'application/json'
@@ -130,7 +238,7 @@ class LrclibMusicLyricsService {
     }
     if (!isCurrent() ||
         response.statusCode != 200 ||
-        (response.contentLength ?? 0) > _maxResponseBytes ||
+        (response.contentLength ?? 0) > maxResponseBytes ||
         response.headers['content-type']
                 ?.split(';')
                 .first
@@ -144,13 +252,13 @@ class LrclibMusicLyricsService {
     final bytes = BytesBuilder(copy: false);
     await for (final chunk in response.stream) {
       if (!isCurrent()) return null;
-      if (bytes.length + chunk.length > _maxResponseBytes) {
+      if (bytes.length + chunk.length > maxResponseBytes) {
         throw const MusicLyricsRequestException();
       }
       bytes.add(chunk);
     }
     final json = jsonDecode(utf8.decode(bytes.takeBytes()));
-    if (json is! Map<String, dynamic>) {
+    if (json == null) {
       throw const MusicLyricsRequestException();
     }
     return json;
@@ -204,27 +312,39 @@ String _key(Object? value) => _label(value).toLowerCase().replaceAll('’', "'")
   return (title, artist, _label(track.album));
 }
 
-MusicLyrics _parseMatch(Map<String, dynamic> record, String title,
-    String artist, String album, int? playbackSeconds) {
+typedef _RecordMetadata = ({
+  int id,
+  String title,
+  String artist,
+  String album,
+  num duration,
+});
+
+_RecordMetadata? _recordMetadata(Map<String, dynamic> record) {
+  final id = record['id'];
   final length = record['duration'];
-  final recordTitle = _key(record['trackName'] ?? record['name']);
-  final recordArtist = _key(record['artistName']);
-  if (record['id'] is! int ||
-      (record['id'] as int) <= 0 ||
-      recordTitle.isEmpty ||
-      recordArtist.isEmpty ||
+  final title = _label(record['trackName'] ?? record['name']);
+  final artist = _label(record['artistName']);
+  if (id is! int ||
+      id <= 0 ||
+      title.isEmpty ||
+      artist.isEmpty ||
       length is! num ||
       !length.isFinite ||
       length <= 0 ||
       record['instrumental'] is! bool) {
-    throw const MusicLyricsRequestException();
+    return null;
   }
-  if (recordTitle != _key(title) ||
-      recordArtist != _key(artist) ||
-      (album.isNotEmpty && _key(record['albumName']) != _key(album)) ||
-      (playbackSeconds != null && (length - playbackSeconds).abs() > 2)) {
-    return const MusicLyrics.unavailable();
-  }
+  return (
+    id: id,
+    title: title,
+    artist: artist,
+    album: _label(record['albumName']),
+    duration: length,
+  );
+}
+
+MusicLyrics _parseLyrics(Map<String, dynamic> record, int? playbackSeconds) {
   if (record['instrumental'] == true) {
     return const MusicLyrics.instrumental(source: _source);
   }
