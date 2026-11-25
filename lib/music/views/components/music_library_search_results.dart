@@ -17,8 +17,10 @@ import '../../models/music_library_entry.dart';
 import '../../models/on_device_music_entry.dart';
 import '../../services/music_library_search.dart';
 import '../../services/music_library_service.dart';
+import '../../services/music_playlist_covers.dart';
 import '../screens/music.dart';
 import '../screens/music_library.dart';
+import 'music_playlist_cover.dart';
 import 'music_status_title.dart';
 
 typedef _SearchOwner = ({
@@ -310,7 +312,15 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
     final titleLabel = Text(title);
     return ListTile(
       key: ValueKey(('music-library-search-hit', hit.key)),
-      leading: Icon(icon),
+      leading: hit is MusicLibrarySearchPlaylist
+          ? MusicPlaylistCoverImage(
+              encoded: MusicPlaylistCovers.forProfile(
+                      owner.database, owner.profileId)
+                  .encodedCover(hit.playlist.playlistId),
+              fallback: Icon(icon),
+              size: 40,
+            )
+          : Icon(icon),
       title: switch (hit) {
         MusicLibrarySearchBookmark(:final entry)
             when entry.kind == MusicLibraryKind.song =>

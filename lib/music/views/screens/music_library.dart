@@ -15,6 +15,7 @@ import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/models/song_artwork.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_playlist_covers.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_download_storage_summary.dart';
@@ -23,6 +24,7 @@ import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/music/views/components/music_playlist_edit_actions.dart';
 import 'package:clipious/music/views/components/music_playlist_rename.dart';
+import 'package:clipious/music/views/components/music_playlist_cover.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
@@ -690,6 +692,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
 
   Widget _localPlaylist(Playlist playlist, MusicLibraryService library) {
     final locals = AppLocalizations.of(context)!;
+    final covers = MusicPlaylistCovers.forProfile(db, library.profileId);
     final title = playlist.playlistId == localWatchLaterId
         ? locals.watchLater
         : playlist.title;
@@ -793,6 +796,20 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   MusicPlaylistEditActions(
                       playlist: playlist, reference: reference),
               ]),
+            ),
+          if (!_playlistSelecting &&
+              !_playlistSearching &&
+              MusicPlaylistCovers.supports(playlist.playlistId))
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: MusicPlaylistCoverEditor(
+                  key: ValueKey((library.profileId, playlist.playlistId)),
+                  covers: covers,
+                  playlistId: playlist.playlistId,
+                ),
+              ),
             ),
         ]);
 
@@ -1242,6 +1259,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final count = items.length + shortcuts.length;
     final locals = AppLocalizations.of(context)!;
     final allItems = playbackItems ?? items;
+    final covers = MusicPlaylistCovers.forProfile(db, library.profileId);
     final layout = _grid ? 'grid' : 'list';
     final collectionKey = PageStorageKey(_filter == _LibraryFilter.songs
         ? 'music-library-$layout-songs-${library.profileId}'
@@ -1272,7 +1290,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         }
         return ListTile(
             key: _itemKey(item),
-            leading: const Icon(Icons.queue_music),
+            leading: MusicPlaylistCoverImage(
+              encoded: covers.encodedCover(item.playlist!.playlistId),
+              fallback: const Icon(Icons.queue_music),
+              size: 40,
+            ),
             title: Text(_itemTitle(item)),
             subtitle: Text(AppLocalizations.of(context)!.onDevice),
             trailing: const Icon(Icons.chevron_right),
@@ -1315,7 +1337,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       final cards = SliverChildBuilderDelegate(
           (_, index) => index < shortcuts.length
               ? _gridShortcut(shortcuts[index], locals)
-              : _gridItem(items[index - shortcuts.length], savedCovers,
+              : _gridItem(items[index - shortcuts.length], savedCovers, covers,
                   () => _openItem(items[index - shortcuts.length], allItems)),
           childCount: count,
           findChildIndexCallback: (key) => indices[key]);
@@ -1353,9 +1375,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   Widget _gridItem(
       _LibraryItem item,
       Map<String, List<ImageObject>> savedCovers,
+      MusicPlaylistCovers covers,
       Future<void> Function() onOpen) {
     final entry = item.bookmark;
-    final song = item.playlist?.videos.firstOrNull;
+    final local = item.playlist;
+    final song = local?.videos.firstOrNull;
     final music = song?.musicMetadata;
     final images = entry?.displayThumbnails ??
         (song == null
@@ -1367,36 +1391,41 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 artTrack: music?.isArtTrack ?? false,
                 instanceUrl: context.read<AppCubit>().state.server?.url));
     final artist = entry?.kind == MusicLibraryKind.artist;
-    final playlist =
-        item.playlist != null || entry?.kind == MusicLibraryKind.playlist;
+    final playlist = local != null || entry?.kind == MusicLibraryKind.playlist;
     final plays = entry?.kind == MusicLibraryKind.song;
     final selected =
         entry == null ? null : _savedSongsSelection?.contains(entry.id);
     final colors = Theme.of(context).colorScheme;
+    final defaultArtwork = _bookmarkArtwork(
+        entry,
+        images.isEmpty
+            ? ColoredBox(
+                color: colors.surfaceContainerHighest,
+                child: Icon(
+                    artist
+                        ? Icons.person_rounded
+                        : playlist
+                            ? Icons.queue_music_rounded
+                            : Icons.music_note_rounded,
+                    size: 48,
+                    color: colors.onSurfaceVariant))
+            : Thumbnail(
+                musicArtwork: true,
+                images: images,
+                instanceOnly: true,
+                decoration: const BoxDecoration()));
     return _gridCard(
       key: _itemKey(item),
       title: _itemTitle(item),
       bookmark: entry,
       subtitle: entry?.subtitle ?? AppLocalizations.of(context)!.onDevice,
       artworkRadius: artist ? 300 : 7,
-      artwork: _bookmarkArtwork(
-          entry,
-          images.isEmpty
-              ? ColoredBox(
-                  color: colors.surfaceContainerHighest,
-                  child: Icon(
-                      artist
-                          ? Icons.person_rounded
-                          : playlist
-                              ? Icons.queue_music_rounded
-                              : Icons.music_note_rounded,
-                      size: 48,
-                      color: colors.onSurfaceVariant))
-              : Thumbnail(
-                  musicArtwork: true,
-                  images: images,
-                  instanceOnly: true,
-                  decoration: const BoxDecoration())),
+      artwork: local == null
+          ? defaultArtwork
+          : MusicPlaylistCoverImage(
+              encoded: covers.encodedCover(local.playlistId),
+              fallback: defaultArtwork,
+            ),
       action: entry == null || selected != null
           ? null
           : _bookmarkActions(entry, onOpen),

@@ -45,7 +45,12 @@ class MainActivity : AudioServiceActivity() {
     private var pipAspectRatio = Rational(16, 9)
     private var pendingFile: FileRequest? = null
 
-    private class FileRequest(val result: MethodChannel.Result, val bytes: ByteArray?, val takeout: Boolean = false)
+    private class FileRequest(
+        val result: MethodChannel.Result,
+        val bytes: ByteArray?,
+        val takeout: Boolean,
+        val image: Boolean,
+    )
     private class FileTooLarge : IOException()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -131,7 +136,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun pickFile(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method != "save" && call.method != "open" && call.method != "openTakeout") {
+        if (call.method != "save" && call.method != "open" &&
+            call.method != "openTakeout" && call.method != "openPlaylistCover") {
             result.notImplemented()
             return
         }
@@ -156,12 +162,18 @@ class MainActivity : AudioServiceActivity() {
             result.error("FILE_TOO_LARGE", "Files must be no larger than 10 MiB.", null)
             return
         }
-        val request = FileRequest(result, bytes, takeout = call.method == "openTakeout")
+        val request = FileRequest(result, bytes,
+            takeout = call.method == "openTakeout", image = call.method == "openPlaylistCover")
         pendingFile = request
         val intent = Intent(if (saving) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = if (saving) "application/json" else "*/*"
+            type = when {
+                saving -> "application/json"
+                request.image -> "image/*"
+                else -> "*/*"
+            }
             if (saving) putExtra(Intent.EXTRA_TITLE, name)
+            else if (request.image) putExtra(Intent.EXTRA_LOCAL_ONLY, true)
             else if (request.takeout) {
                 putExtra(Intent.EXTRA_LOCAL_ONLY, true)
                 putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("text/csv", "text/comma-separated-values",
@@ -224,7 +236,9 @@ class MainActivity : AudioServiceActivity() {
                             if (output.size() + count > MAX_FILE_BYTES) throw FileTooLarge()
                             output.write(buffer, 0, count)
                         }
-                        Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(output.toByteArray())).toString()
+                        val contents = output.toByteArray()
+                        if (request.image) contents
+                        else Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(contents)).toString()
                     }
                 }
                 mainHandler.post { finishFile(request, value) }
