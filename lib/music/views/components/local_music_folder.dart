@@ -877,17 +877,18 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                 }
               }
             : null);
-    if (!_library.enabled) return toggle;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       toggle,
-      Padding(
-        padding: const EdgeInsetsDirectional.only(start: 16),
-        child: TextButton(
-          onPressed:
-              _ready ? () => showLocalMusicLocations(context, _library) : null,
-          child: Text(locals.localMusicManageLocations),
+      if (_library.enabled)
+        Padding(
+          padding: const EdgeInsetsDirectional.only(start: 16),
+          child: TextButton(
+            onPressed: _ready
+                ? () => showLocalMusicLocations(context, _library)
+                : null,
+            child: Text(locals.localMusicManageLocations),
+          ),
         ),
-      ),
       if (_library.scanning)
         Padding(
           padding: const EdgeInsetsDirectional.only(start: 16),

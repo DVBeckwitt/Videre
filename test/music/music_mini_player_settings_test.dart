@@ -298,6 +298,7 @@ void main() {
         find.descendant(of: offload, matching: find.text('Standard playback')),
         findsOneWidget);
 
+    await tester.ensureVisible(dismissal);
     await tester.tap(dismissal);
     await tester.pumpAndSettle();
     await tester
@@ -306,6 +307,7 @@ void main() {
     expect(settings.state.musicTaskRemoval, MusicTaskRemoval.keepPlaying);
     expect(settings.state.musicAudioOffload, MusicAudioOffload.disabled);
 
+    await tester.ensureVisible(offload);
     await tester.tap(offload);
     await tester.pumpAndSettle();
     await tester

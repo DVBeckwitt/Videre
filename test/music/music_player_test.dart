@@ -4133,6 +4133,7 @@ void main() {
   testWidgets(
       'current and locked queue rows keep their playback and library actions',
       (tester) async {
+    await tester.runAsync(() async => player.enqueueZone = Zone.current);
     await player.seed(player.state.copyWith(
         isPlaying: true,
         mediaEvent: const MediaEvent(state: MediaState.playing)));

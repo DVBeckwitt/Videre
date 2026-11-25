@@ -52,6 +52,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   bool get isLocalMusicSession => false;
 
   @override
+  bool canAddDeviceMusicRequest(OnDeviceMusicEntry entry) => false;
+
+  @override
   Future<void> enqueueLocalMusic(LocalMusicTrack track,
       {required bool playNext}) async {
     enqueued.add((track.title, playNext));
@@ -492,7 +495,17 @@ void main() {
         duplicate(copy, [root, copies, copyMix]),
       ]);
     await show(tester, settings: false);
-    expect(find.text('Unlocated song'), findsOneWidget);
+    final unlocated = find.text('Unlocated song');
+    final trackList = find.descendant(
+        of: find.byType(LocalMusicFolder),
+        matching: find.byWidgetPredicate((widget) =>
+            widget is Scrollable &&
+            widget.axisDirection == AxisDirection.down));
+    await tester.scrollUntilVisible(unlocated, 120, scrollable: trackList);
+    expect(unlocated, findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Browse folders'), -120,
+        scrollable: trackList);
+    await tester.pumpAndSettle();
 
     Future<void> tap(Finder finder) async {
       await tester.tap(finder);
@@ -1524,14 +1537,20 @@ void main() {
         'trackId': library.tracks.first.playbackId,
       },
     ]);
-    expect(calls, ['shareTrack']);
+    // Bringing the chooser forward also revalidates the authorized root.
+    expect(calls, ['shareTrack', 'checkFolderAccess']);
     expect(library.enabled, isTrue);
     expect(library.tracks.length, 2);
 
     canLaunchShare = false;
     await shareFirst();
     expect(find.text('Could not share this audio file.'), findsOneWidget);
-    expect(calls, ['shareTrack', 'shareTrack']);
+    expect(calls, [
+      'shareTrack',
+      'checkFolderAccess',
+      'shareTrack',
+      'checkFolderAccess',
+    ]);
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets('rename uses the actual filename and retains its suffix',
