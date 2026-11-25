@@ -2831,8 +2831,14 @@ void main() {
     expectSelectedTab(3);
     expect(find.text('Saved songs'), findsOneWidget);
 
-    final trailingEdgeDrag = await tester.startGesture(const Offset(350, 500));
-    await trailingEdgeDrag.moveBy(const Offset(-120, 0));
+    // Drag a heading, not a shelf whose horizontal scroll owns the gesture.
+    final musicHeading = find.text('Saved songs');
+    await tester.ensureVisible(musicHeading);
+    final trailingEdgeDrag =
+        await tester.startGesture(tester.getCenter(musicHeading));
+    await trailingEdgeDrag.moveBy(const Offset(-24, 0));
+    await tester.pump();
+    await trailingEdgeDrag.moveBy(const Offset(-96, 0));
     await tester.pump();
     expect(tabPosition.pixels, greaterThan(tabPosition.maxScrollExtent));
     await trailingEdgeDrag.up();
@@ -2840,7 +2846,8 @@ void main() {
     expectSelectedTab(3);
     expect(find.byType(TextField), findsNothing);
 
-    await swipeRight();
+    await tester.dragFrom(tester.getCenter(musicHeading), const Offset(320, 0));
+    await tester.pumpAndSettle();
     expectSelectedTab(2);
     await swipeRight();
     expectSelectedTab(1);

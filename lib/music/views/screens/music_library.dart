@@ -689,6 +689,25 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         },
       );
 
+  Widget _libraryControlsRow({
+    required Widget leading,
+    required List<Widget> actions,
+    required double actionWidth,
+  }) =>
+      Row(children: [
+        Expanded(child: leading),
+        if (actions.length * kMinInteractiveDimension <= actionWidth)
+          ...actions
+        else
+          ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: actionWidth),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(mainAxisSize: MainAxisSize.min, children: actions),
+            ),
+          ),
+      ]);
+
   Widget _libraryFindView({
     required Key key,
     required Widget toolbar,
@@ -1600,34 +1619,91 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         const ValueKey('music-saved-songs-search'),
         _LibraryFilter.songs,
         locals.musicSearchSavedSongs);
-    final sortMenu = MusicCollectionSortMenu(
-      key: const ValueKey('music-library-sort'),
-      settingName: settingName,
-      order: order,
-      compact: finding,
-      savedOrder: true,
-      fields: filter == _LibraryFilter.songs
-          ? MusicCollectionSortField.values
-          : const [
-              MusicCollectionSortField.source,
-              MusicCollectionSortField.title
-            ],
-      isCurrent: () =>
-          mounted &&
-          _filter == filter &&
-          _playlistId == null &&
-          _librarySelection == null,
-      onChanged: () {
-        if (finding) _jumpToLibraryFindStart();
-      },
-    );
+    Widget sortMenu({required bool compact}) => MusicCollectionSortMenu(
+          key: const ValueKey('music-library-sort'),
+          settingName: settingName,
+          order: order,
+          compact: compact,
+          savedOrder: true,
+          fields: filter == _LibraryFilter.songs
+              ? MusicCollectionSortField.values
+              : const [
+                  MusicCollectionSortField.source,
+                  MusicCollectionSortField.title
+                ],
+          isCurrent: () =>
+              mounted &&
+              _filter == filter &&
+              _playlistId == null &&
+              _librarySelection == null,
+          onChanged: () {
+            if (finding) _jumpToLibraryFindStart();
+          },
+        );
     final collections = items.where(_isCollection).toList();
     final collectionSelection = _collectionSelection;
     Widget toolbar({Widget? saveResults}) => Padding(
           padding: EdgeInsetsDirectional.only(start: finding ? 0 : 18, end: 8),
-          child: Row(children: [
-            Expanded(
-              child: finding
+          child: LayoutBuilder(builder: (context, constraints) {
+            final actions = <Widget>[
+              if (saveResults != null) saveResults,
+              if (finding) sortMenu(compact: true),
+              if (hasPlaylists && folder == null)
+                const MusicRulePlaylistsButton(),
+              if (hasPlaylists && folder == null)
+                IconButton(
+                    tooltip: locals.createNewPlaylist,
+                    onPressed: () =>
+                        MusicLibraryActions.createPlaylist(context),
+                    icon: const Icon(Icons.playlist_add_rounded)),
+              if (hasPlaylists)
+                IconButton(
+                    tooltip: locals.musicRecentlyDeletedPlaylists,
+                    onPressed: () => showRecentlyDeletedMusicPlaylists(context),
+                    icon: const Icon(Icons.restore_from_trash_outlined)),
+              if (hasPlaylists)
+                IconButton(
+                  key: const ValueKey('music-playlist-new-folder'),
+                  tooltip: locals.musicPlaylistNewFolder,
+                  onPressed: () => MusicPlaylistFolderActions.create(
+                      context, folderService,
+                      parentId: folder?.id, isCurrent: isCurrent),
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+              if (_filter == _LibraryFilter.songs && !finding) searchButton,
+              if (_filter == _LibraryFilter.songs && items.isNotEmpty)
+                _librarySelectButton(const ValueKey('music-saved-songs-select'),
+                    _LibraryFilter.songs),
+              if (collections.isNotEmpty)
+                _librarySelectButton(
+                  const ValueKey('music-library-select-collections'),
+                  _filter,
+                  label: locals.musicSelectCollections,
+                ),
+              IconButton(
+                  key: const ValueKey('music-library-layout'),
+                  tooltip: _grid
+                      ? locals.musicLibraryListView
+                      : locals.musicLibraryGridView,
+                  onPressed: () {
+                    setState(() => _grid = !_grid);
+                    if (finding) _jumpToLibraryFindStart();
+                  },
+                  icon: Icon(_grid ? Icons.view_list : Icons.grid_view)),
+              if (finding) searchButton,
+            ];
+            final width = constraints.maxWidth;
+            final sortWidth =
+                math.max(96.0, MediaQuery.textScalerOf(context).scale(96));
+            final compactSort =
+                width < sortWidth + actions.length * kMinInteractiveDimension;
+            final leadingWidth = finding
+                ? math.min(144.0, width / 2)
+                : compactSort
+                    ? kMinInteractiveDimension
+                    : sortWidth;
+            return _libraryControlsRow(
+              leading: finding
                   ? _collectionSearchField(
                       key: const ValueKey('music-saved-songs-query'),
                       label: locals.musicSearchSavedSongs,
@@ -1637,53 +1713,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       compact: true)
                   : Align(
                       alignment: AlignmentDirectional.centerStart,
-                      child: sortMenu),
-            ),
-            if (saveResults != null) saveResults,
-            if (finding) sortMenu,
-            if (hasPlaylists && folder == null)
-              const MusicRulePlaylistsButton(),
-            if (hasPlaylists && folder == null)
-              IconButton(
-                  tooltip: locals.createNewPlaylist,
-                  onPressed: () => MusicLibraryActions.createPlaylist(context),
-                  icon: const Icon(Icons.playlist_add_rounded)),
-            if (hasPlaylists)
-              IconButton(
-                  tooltip: locals.musicRecentlyDeletedPlaylists,
-                  onPressed: () => showRecentlyDeletedMusicPlaylists(context),
-                  icon: const Icon(Icons.restore_from_trash_outlined)),
-            if (hasPlaylists)
-              IconButton(
-                key: const ValueKey('music-playlist-new-folder'),
-                tooltip: locals.musicPlaylistNewFolder,
-                onPressed: () => MusicPlaylistFolderActions.create(
-                    context, folderService,
-                    parentId: folder?.id, isCurrent: isCurrent),
-                icon: const Icon(Icons.create_new_folder_outlined),
-              ),
-            if (_filter == _LibraryFilter.songs && !finding) searchButton,
-            if (_filter == _LibraryFilter.songs && items.isNotEmpty)
-              _librarySelectButton(const ValueKey('music-saved-songs-select'),
-                  _LibraryFilter.songs),
-            if (collections.isNotEmpty)
-              _librarySelectButton(
-                const ValueKey('music-library-select-collections'),
-                _filter,
-                label: locals.musicSelectCollections,
-              ),
-            IconButton(
-                key: const ValueKey('music-library-layout'),
-                tooltip: _grid
-                    ? locals.musicLibraryListView
-                    : locals.musicLibraryGridView,
-                onPressed: () {
-                  setState(() => _grid = !_grid);
-                  if (finding) _jumpToLibraryFindStart();
-                },
-                icon: Icon(_grid ? Icons.view_list : Icons.grid_view)),
-            if (finding) searchButton,
-          ]),
+                      child: sortMenu(compact: compactSort)),
+              actions: actions,
+              actionWidth: math.max(0.0, width - leadingWidth),
+            );
+          }),
         );
     if (finding) {
       final searchable = [
@@ -2997,15 +3031,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       children: [
                         if (showLibraryChrome)
                           Padding(
-                              padding: const EdgeInsetsDirectional.only(
-                                  start: 16, end: 6),
-                              child: Row(children: [
-                                Expanded(
-                                    child: Semantics(
-                                        header: true,
-                                        child: Text(locals.musicLibrary,
-                                            style:
-                                                theme.textTheme.titleLarge))),
+                            padding: const EdgeInsetsDirectional.only(
+                                start: 16, end: 6),
+                            child:
+                                LayoutBuilder(builder: (context, constraints) {
+                              final actions = <Widget>[
                                 if (canCustomize)
                                   IconButton(
                                     key:
@@ -3085,7 +3115,23 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                                   : _filter);
                                             }
                                           }),
-                              ])),
+                              ];
+                              final titleWidth = math.max(96.0,
+                                  MediaQuery.textScalerOf(context).scale(96));
+                              return _libraryControlsRow(
+                                leading: Semantics(
+                                  header: true,
+                                  child: Text(locals.musicLibrary,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: theme.textTheme.titleLarge),
+                                ),
+                                actions: actions,
+                                actionWidth: math.max(
+                                    0.0, constraints.maxWidth - titleWidth),
+                              );
+                            }),
+                          ),
                         if (showLibraryChrome && filters.isNotEmpty)
                           SingleChildScrollView(
                             scrollDirection: Axis.horizontal,

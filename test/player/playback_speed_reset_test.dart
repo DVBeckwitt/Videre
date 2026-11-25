@@ -38,6 +38,17 @@ class _VideoWithoutAutostart extends VideoPlayerCubit {
 }
 
 class _RetainedAudioPlayer implements AudioPlayer {
+  @override
+  bool get androidMusicGainEnabled => false;
+
+  @override
+  double volume = 1;
+
+  @override
+  Future<void> setVolume(double value) async {
+    volume = value;
+  }
+
   bool nativePlaying = false;
   double nativeSpeed = 1;
   double nativePitch = 1;

@@ -64,6 +64,17 @@ class _VideoWithoutNative extends VideoPlayerCubit {
 }
 
 class _HeldAudioPlayer implements AudioPlayer {
+  @override
+  bool get androidMusicGainEnabled => false;
+
+  @override
+  double volume = 1;
+
+  @override
+  Future<void> setVolume(double value) async {
+    volume = value;
+  }
+
   final sourceRequested = Completer<void>();
   final source = Completer<Duration?>();
   final disposal = Completer<void>();

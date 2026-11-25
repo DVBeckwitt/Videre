@@ -1167,26 +1167,37 @@ void main() {
     expect(incoming.playedTracks, ['next']);
   });
 
-  test('a decoder reused for ordinary audio restores its usual level',
+  test('switching between Music and ordinary audio applies the right volume',
       () async {
-    final decoder = loaded('current').single;
+    final firstMusic = loaded('current').single;
     await settings.setMusicPlaybackVolume(0.3);
-    await _until(() => decoder.volume == 0.3, 'Current Music level changed');
+    await _until(() => firstMusic.volume == 0.3, 'Current Music level changed');
 
     final ordinary = next.copyWith(musicMetadata: null);
     player.select(ordinary);
     audio.switchVideo(ordinary);
-    await _until(() => decoder.playedTracks.contains('next'),
-        'The existing decoder starts ordinary audio');
-    expect(decoder.playVolumes.last, 1);
+    await _until(
+        () =>
+            firstMusic.disposed &&
+            loaded('next')
+                .any((decoder) => decoder.playedTracks.contains('next')),
+        'Ordinary audio plays after the Music decoder retires');
+    final ordinaryDecoder = loaded('next').single;
+    expect(ordinaryDecoder.playVolumes.single, 1);
 
     await settings.setMusicPlaybackVolume(0.6);
-    expect(decoder.volume, 1);
+    expect(ordinaryDecoder.volume, 1);
     player.select(current);
     audio.switchVideo(current);
-    await _until(() => decoder.playedTracks.length == 3,
-        'The same decoder returns to Music');
-    expect(decoder.playVolumes.last, 0.6);
+    await _until(
+        () =>
+            ordinaryDecoder.disposed &&
+            loaded('current').any((decoder) =>
+                !decoder.disposed && decoder.playedTracks.contains('current')),
+        'Music plays again after the ordinary decoder retires');
+    final resumedMusic =
+        loaded('current').singleWhere((decoder) => !decoder.disposed);
+    expect(resumedMusic.playVolumes.single, 0.6);
   });
 
   test('repeated adjacent snapshots keep one silent decoder per neighbor',

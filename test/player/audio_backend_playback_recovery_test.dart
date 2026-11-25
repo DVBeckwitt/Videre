@@ -169,6 +169,17 @@ class _HydratingPlayer extends _MediaSessionPlayer {
 }
 
 class _NativeAudio implements AudioPlayer {
+  @override
+  bool get androidMusicGainEnabled => false;
+
+  @override
+  double volume = 1;
+
+  @override
+  Future<void> setVolume(double value) async {
+    volume = value;
+  }
+
   final errors = <Object>[];
   final sources = <AudioSource>[];
   final sourcePositions = <Duration?>[];
