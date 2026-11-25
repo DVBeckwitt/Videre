@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:clipious/music/models/device_playlist_track.dart';
-import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';

@@ -54,7 +54,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
       {int startIndex = 0,
       String? queueTitle,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      bool songTap = false}) async {
     if (isCurrent?.call() == false) return;
     queue = tracks;
     title = queueTitle;
