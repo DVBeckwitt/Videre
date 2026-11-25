@@ -4,6 +4,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/local_music_album.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/utils.dart' show selectKeys;
@@ -14,18 +15,18 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../components/music_collection_panes.dart';
 import 'music.dart';
 
-/// Opens the device album containing a particular file in the selected source.
+/// Opens an exact device album, optionally centered on the playing file.
 class MusicDeviceAlbumPage extends StatefulWidget {
   const MusicDeviceAlbumPage({
     super.key,
     required this.selectionId,
-    required this.playbackId,
     required this.albumKey,
+    this.playbackId,
     this.library,
   });
 
   final String? selectionId;
-  final String playbackId;
+  final String? playbackId;
   final String albumKey;
   final LocalMusicLibrary? library;
 
@@ -57,12 +58,32 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
         active.server == _session.server;
   }
 
-  LocalMusicTrack? get _anchor {
-    if (!_current || !_library.acceptsSessionSelection(widget.selectionId)) {
+  ({
+    String? title,
+    String? albumArtist,
+    String? releaseDate,
+    String? originalReleaseDate,
+    List<LocalMusicTrack> tracks,
+  })? get _album {
+    if (_checking ||
+        !_current ||
+        !_library.acceptsSessionSelection(widget.selectionId)) {
       return null;
     }
-    final track = _library.trackById(widget.playbackId);
-    return track?.albumKey == widget.albumKey ? track : null;
+    final id = widget.playbackId;
+    final anchor = id == null ? null : _library.trackById(id);
+    if (id != null && anchor?.albumKey != widget.albumKey) return null;
+    final album = findLocalMusicAlbum(_library.visibleTracks, widget.albumKey);
+    if (album == null && anchor == null) return null;
+    return (
+      title: album?.title ?? anchor?.album,
+      albumArtist: album?.albumArtist ?? anchor?.albumArtist,
+      releaseDate: album == null ? anchor?.releaseDate : album.releaseDate,
+      originalReleaseDate: album == null
+          ? anchor?.originalReleaseDate
+          : album.originalReleaseDate,
+      tracks: album?.tracks ?? const [],
+    );
   }
 
   @override
@@ -103,23 +124,18 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
     }
   }
 
-  List<LocalMusicTrack> _members() => [
-        for (final track in _library.visibleTracks)
-          if (track.albumKey == widget.albumKey) track,
-      ];
-
   Future<void> _play(String? id) async {
-    final anchor = _anchor;
-    if (_checking || anchor == null) return;
-    final tracks = _members();
+    final album = _album;
+    if (album == null || album.tracks.isEmpty) return;
+    final tracks = album.tracks;
     final index =
         id == null ? 0 : tracks.indexWhere((track) => track.playbackId == id);
-    if (index < 0 || tracks.isEmpty) return;
+    if (index < 0) return;
     try {
       await MusicScreen.playLocalTracks(context, tracks,
-          startIndex: index, queueTitle: anchor.album);
+          startIndex: index, queueTitle: album.title);
     } catch (_) {
-      if (mounted && _anchor != null) {
+      if (mounted && _album != null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(AppLocalizations.of(context)!.musicPlaybackError)));
       }
@@ -133,13 +149,13 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
     return ListenableBuilder(
         listenable: _library,
         builder: (context, _) {
-          final anchor = _checking ? null : _anchor;
+          final album = _album;
           final Widget body;
           if (!_current) {
             body = Center(child: Text(locals.musicNoResults));
           } else if (_checking) {
             body = const Center(child: CircularProgressIndicator());
-          } else if (anchor == null) {
+          } else if (album == null) {
             final message =
                 !_library.acceptsSessionSelection(widget.selectionId)
                     ? (_library.isSystem &&
@@ -160,7 +176,10 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                   child: Text(locals.retry)),
             ]));
           } else {
-            final tracks = _members();
+            final tracks = album.tracks;
+            final artist = album.albumArtist;
+            final releaseDate = album.releaseDate;
+            final originalReleaseDate = album.originalReleaseDate;
             final details = Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -170,9 +189,24 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                     spacing: 12,
                     runSpacing: 4,
                     children: [
-                      if (anchor.albumArtist case final artist?)
-                        Text(artist,
-                            style: Theme.of(context).textTheme.titleMedium),
+                      if (artist != null ||
+                          releaseDate != null ||
+                          originalReleaseDate != null)
+                        Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (artist != null)
+                                Text(artist,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                              if (releaseDate != null) Text(releaseDate),
+                              if (originalReleaseDate != null &&
+                                  originalReleaseDate != releaseDate)
+                                Text(locals.localMusicOriginalReleaseDate(
+                                    originalReleaseDate)),
+                            ]),
                       FilledButton.icon(
                           onPressed: tracks.isEmpty ? null : () => _play(null),
                           icon: const Icon(Icons.play_arrow),
@@ -202,8 +236,8 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
             );
           }
           final page = Scaffold(
-            appBar: AppBar(
-                title: Text(anchor?.album ?? locals.localMusicSortAlbum)),
+            appBar:
+                AppBar(title: Text(album?.title ?? locals.localMusicSortAlbum)),
             body: SafeArea(child: body),
           );
           return Shortcuts(shortcuts: {
@@ -222,7 +256,7 @@ class _AlbumTracks extends StatefulWidget {
       required this.play});
 
   final List<LocalMusicTrack> tracks;
-  final String anchorId;
+  final String? anchorId;
   final ValueChanged<String> play;
 
   @override
@@ -243,8 +277,10 @@ class _AlbumTracksState extends State<_AlbumTracks> {
     final scaler = MediaQuery.textScalerOf(context);
     final extent =
         math.max(72.0, 24 + scaler.scale(16) * 1.5 + scaler.scale(14) * 1.5);
-    final anchorIndex = widget.tracks
-        .indexWhere((track) => track.playbackId == widget.anchorId);
+    final anchorId = widget.anchorId;
+    final anchorIndex = anchorId == null
+        ? -1
+        : widget.tracks.indexWhere((track) => track.playbackId == anchorId);
     return LayoutBuilder(builder: (context, size) {
       if (_scroll == null) {
         final maxOffset =
@@ -262,12 +298,24 @@ class _AlbumTracksState extends State<_AlbumTracks> {
         itemBuilder: (context, index) {
           final track = widget.tracks[index];
           final selected = index == anchorIndex;
+          final discNumber = track.discNumber;
+          final trackNumber = track.trackNumber;
           return ListTile(
             key: ValueKey(track.playbackId),
             selected: selected,
             autofocus: isTv && index == math.max(anchorIndex, 0),
-            leading:
-                Icon(selected ? Icons.music_note : Icons.audiotrack_outlined),
+            leading: SizedBox(
+                width: 40,
+                child: trackNumber == null
+                    ? Icon(
+                        selected ? Icons.music_note : Icons.audiotrack_outlined)
+                    : Text(
+                        discNumber == null
+                            ? '$trackNumber'
+                            : '$discNumber.$trackNumber',
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis)),
             title:
                 Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
             subtitle: track.artist == null

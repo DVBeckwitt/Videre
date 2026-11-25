@@ -36,7 +36,7 @@ internal data class LocalMusicRow(
             modifiedMs == previous.modifiedMs && sizeBytes == previous.sizeBytes
 
     fun needsTagRead(previous: LocalMusicRow?): Boolean =
-        previous?.metadata?.albumArtistRead != true || !matchesRevision(previous) ||
+        previous?.metadata?.albumTagsRead != true || !matchesRevision(previous) ||
             identityKey != previous.identityKey
 
     fun inheritsIdentity(previous: LocalMusicRow) = copy(
@@ -76,6 +76,10 @@ internal data class LocalMusicRow(
         "album" to metadata?.album,
         "albumArtist" to metadata?.albumArtist,
         "albumKey" to source?.let(::albumKey),
+        "discNumber" to metadata?.discNumber,
+        "trackNumber" to metadata?.trackNumber,
+        "releaseDate" to metadata?.releaseDate,
+        "originalReleaseDate" to metadata?.originalReleaseDate,
         "durationMs" to (metadata?.durationMs ?: 0L),
         "artPath" to artPath,
         "addedMs" to addedMs,
@@ -98,6 +102,10 @@ internal data class LocalMusicRow(
         remove("album")
         remove("albumArtist")
         remove("albumKey")
+        remove("discNumber")
+        remove("trackNumber")
+        remove("releaseDate")
+        remove("originalReleaseDate")
         remove("durationMs")
         remove("visibilityKey")
         put("metadata", metadata?.toJson())
@@ -138,12 +146,19 @@ internal data class LocalMusicMetadata(
     val durationMs: Long,
     val cover: String? = null,
     val albumArtist: String? = null,
-    val albumArtistRead: Boolean = true,
+    val discNumber: Int? = null,
+    val trackNumber: Int? = null,
+    val releaseDate: String? = null,
+    val originalReleaseDate: String? = null,
+    val albumTagsRead: Boolean = false,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("title", title).put("artist", artist).put("album", album)
         .put("durationMs", durationMs).put("cover", cover)
-        .apply { if (albumArtistRead) put("albumArtist", albumArtist ?: JSONObject.NULL) }
+        .put("albumArtist", albumArtist ?: JSONObject.NULL)
+        .put("discNumber", discNumber).put("trackNumber", trackNumber)
+        .put("releaseDate", releaseDate).put("originalReleaseDate", originalReleaseDate)
+        .put("albumTagsRead", albumTagsRead)
 
     companion object {
         fun fromJson(json: JSONObject): LocalMusicMetadata = LocalMusicMetadata(
@@ -153,8 +168,12 @@ internal data class LocalMusicMetadata(
             json.getLong("durationMs"),
             json.stringOrNull("cover"),
             json.stringOrNull("albumArtist"),
+            localAlbumPosition(json.opt("discNumber")?.toString()),
+            localAlbumPosition(json.opt("trackNumber")?.toString()),
+            localReleaseDate(json.stringOrNull("releaseDate")),
+            localReleaseDate(json.stringOrNull("originalReleaseDate")),
             // Refresh legacy tags once without losing dates, track IDs or the rename journal.
-            json.has("albumArtist"),
+            json.opt("albumTagsRead") == true,
         )
     }
 }

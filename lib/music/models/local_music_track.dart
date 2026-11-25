@@ -30,6 +30,12 @@ class LocalMusicTrack {
 
   /// Identifies an album grouping only within the authorized device catalog.
   final String? albumKey;
+  final int? discNumber;
+  final int? trackNumber;
+
+  /// Embedded music date at its original precision (year, month, or day).
+  final String? releaseDate;
+  final String? originalReleaseDate;
   final int durationMs;
   final String? artPath;
   final String? fileName;
@@ -57,6 +63,10 @@ class LocalMusicTrack {
     this.album,
     this.albumArtist,
     this.albumKey,
+    this.discNumber,
+    this.trackNumber,
+    this.releaseDate,
+    this.originalReleaseDate,
     this.durationMs = 0,
     this.artPath,
     this.fileName,
@@ -117,6 +127,10 @@ class LocalMusicTrack {
       albumKey: albumKey is String && _identityPattern.hasMatch(albumKey)
           ? albumKey
           : null,
+      discNumber: _albumPosition(value['discNumber']),
+      trackNumber: _albumPosition(value['trackNumber']),
+      releaseDate: _releaseDate(value['releaseDate']),
+      originalReleaseDate: _releaseDate(value['originalReleaseDate']),
       durationMs: duration is int && duration > 0 ? duration : 0,
       artPath: art is String && art.startsWith('/') ? art : null,
       fileName: name is String && name.isNotEmpty ? name : null,
@@ -167,6 +181,25 @@ class LocalMusicTrack {
       value is int && value > 0 && value <= 8640000000000000
           ? DateTime.fromMillisecondsSinceEpoch(value)
           : null;
+
+  static int? _albumPosition(Object? value) =>
+      value is int && value > 0 && value <= 0xffff ? value : null;
+
+  static final _releaseDatePattern = RegExp(r'^\d{4}(?:-\d{2}(?:-\d{2})?)?$');
+
+  static String? _releaseDate(Object? value) {
+    if (value is! String || _releaseDatePattern.stringMatch(value) != value) {
+      return null;
+    }
+    final parts = value.split('-').map(int.parse).toList();
+    final year = parts[0];
+    final month = parts.length > 1 ? parts[1] : 1;
+    final day = parts.length > 2 ? parts[2] : 1;
+    if (year == 0 || month < 1 || month > 12 || day < 1 || day > 31) {
+      return null;
+    }
+    return DateTime.utc(year, month, day).month == month ? value : null;
+  }
 
   static List<LocalMusicFolderLocation> _parseFolderLocations(Object? value) {
     if (value is! List || value.isEmpty || value.length > 64) return const [];

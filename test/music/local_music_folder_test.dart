@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
+import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' as globals;
+import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
@@ -21,6 +23,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+
+class _App extends Cubit<AppState> implements AppCubit {
+  _App()
+      : super(AppState(0, null, HomeLayout(), profileId: globals.db.profileId));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 class _Player extends Cubit<PlayerState> implements PlayerCubit {
   _Player() : super(PlayerState.init(null));
@@ -225,10 +235,12 @@ void main() {
   Future<void> show(WidgetTester tester,
       {required bool settings,
       bool settle = true,
+      _App? app,
       _Downloads? manager,
       OnDeviceMusicDownloads? downloads}) async {
     await tester.pumpWidget(MultiBlocProvider(
         providers: [
+          if (app != null) BlocProvider<AppCubit>.value(value: app),
           BlocProvider<PlayerCubit>.value(value: player),
           BlocProvider<SettingsCubit>.value(value: preferences),
           if (manager != null)
@@ -1014,6 +1026,62 @@ void main() {
     await tester.pump();
     expect(player.queue.map((track) => track.title), ['First']);
     expect(calls.where((call) => call == 'listTracks'), hasLength(1));
+  });
+
+  testWidgets(
+      'Albums and the album filter keep exact same-title editions apart',
+      (tester) async {
+    consent = picked;
+    final compilation = 'a' * 64;
+    final otherEdition = 'b' * 64;
+    final app = _App();
+    addTearDown(app.close);
+    pendingScan = Completer<List<Object?>>()
+      ..complete([
+        {
+          ...first,
+          'albumKey': compilation,
+          'albumArtist': 'Compilation credit',
+          'trackNumber': 12,
+        },
+        {
+          ...second,
+          'albumKey': compilation,
+          'albumArtist': 'Compilation credit',
+          'artist': 'Guest performer',
+          'trackNumber': 2,
+        },
+        {
+          ...first,
+          'title': 'Distinct edition',
+          'uri': '$tree/document/edition',
+          'albumKey': otherEdition,
+          'albumArtist': 'Solo credit',
+        },
+      ]);
+    await show(tester, settings: false, app: app);
+    await tester.tap(find.text('Albums'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(ValueKey(compilation)), findsOneWidget);
+    expect(find.byKey(ValueKey(otherEdition)), findsOneWidget);
+    await tester.tap(find.byKey(ValueKey(compilation)));
+    await tester.pumpAndSettle();
+    expect(find.text('Compilation credit'), findsOneWidget);
+    expect(find.text('Guest performer'), findsOneWidget);
+    expect(find.text('Distinct edition'), findsNothing);
+    await tester.tap(find.text('Play all'));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((track) => track.title), ['Second', 'First']);
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(InputChip, 'Album'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Solo credit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Distinct edition'), findsOneWidget);
+    expect(find.text('First'), findsNothing);
+    expect(find.text('Second'), findsNothing);
   });
 
   testWidgets('catalog refresh drops vanished tags and retains the search',

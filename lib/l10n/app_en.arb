@@ -2046,6 +2046,13 @@
   "localMusicForgetAndroidLibrary": "Stop using Android music library",
   "localMusicSortArtist": "Artist",
   "localMusicSortAlbum": "Album",
+  "localMusicBrowseAlbums": "Albums",
+  "localMusicOriginalReleaseDate": "Original release {date}",
+  "@localMusicOriginalReleaseDate": {
+    "placeholders": {
+      "date": {"type": "String"}
+    }
+  },
   "localMusicSortDateAdded": "Date added",
   "localMusicSortDateModified": "Date modified",
   "localMusicFirstSeen": "First seen by Videre",

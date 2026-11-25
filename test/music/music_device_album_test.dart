@@ -109,10 +109,12 @@ void main() {
   });
 
   Future<void> show(WidgetTester tester,
-      {bool settle = true, bool fromLibrary = false}) async {
+      {bool settle = true,
+      bool fromLibrary = false,
+      bool anchored = true}) async {
     final album = MusicDeviceAlbumPage(
         selectionId: 'original',
-        playbackId: anchorId,
+        playbackId: anchored ? anchorId : null,
         albumKey: albumKey,
         library: library);
     await tester.pumpWidget(MultiBlocProvider(
@@ -138,6 +140,46 @@ void main() {
     }
     if (settle) await tester.pumpAndSettle();
   }
+
+  testWidgets('browse opens one edition and plays in disc and track order',
+      (tester) async {
+    rows = [
+      {...song(21), 'discNumber': 2, 'trackNumber': 1},
+      {...song(10), 'discNumber': 1, 'trackNumber': 10},
+      {...song(2), 'discNumber': 1, 'trackNumber': 2, 'releaseDate': '1997-09'},
+      {...song(80), 'albumKey': otherAlbumKey, 'title': 'Other edition'},
+    ];
+    await show(tester, fromLibrary: true, anchored: false);
+    expect(find.text('Live'), findsOneWidget);
+    expect(find.text('The ensemble'), findsOneWidget);
+    expect(find.text('1997-09'), findsOneWidget);
+    expect(find.text('Other edition'), findsNothing);
+    expect(find.text('1.2'), findsOneWidget);
+    expect(find.text('1.10'), findsOneWidget);
+    expect(find.text('2.1'), findsOneWidget);
+    final first = find.text('Song 2');
+    final next = find.text('Song 10');
+    final last = find.text('Song 21');
+    expect(tester.getTopLeft(first).dy, lessThan(tester.getTopLeft(next).dy));
+    expect(tester.getTopLeft(next).dy, lessThan(tester.getTopLeft(last).dy));
+    expect(player.queue, isEmpty);
+
+    await tester.tap(next);
+    await tester.pumpAndSettle();
+    final expected = [
+      '$tree/document/2',
+      '$tree/document/10',
+      '$tree/document/21',
+    ];
+    expect(player.queue.map((track) => track.uri), expected);
+    expect(player.start, 1);
+    expect(player.source, 'Live');
+
+    await tester.tap(find.text('Play all'));
+    await tester.pumpAndSettle();
+    expect(player.queue.map((track) => track.uri), expected);
+    expect(player.start, 0);
+  });
 
   testWidgets('opens and reveals the selected file before any play action',
       (tester) async {

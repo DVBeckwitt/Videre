@@ -447,6 +447,7 @@ internal class LocalMusicCatalog(
         val columns = mutableListOf(
             Audio._ID, Audio.DISPLAY_NAME, Audio.MIME_TYPE, Audio.SIZE, Audio.DATE_ADDED,
             Audio.DATE_MODIFIED, Audio.TITLE, Audio.ARTIST, Audio.ALBUM, Audio.ALBUM_ID, Audio.DURATION,
+            Audio.TRACK,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             columns.add(MediaStore.MediaColumns.VOLUME_NAME)
@@ -498,6 +499,8 @@ internal class LocalMusicCatalog(
                 val uri = ContentUris.withAppendedId(collection, id).toString()
                 val modified = mediaStoreTime(it.numeric(Audio.DATE_MODIFIED))
                 val size = it.numeric(Audio.SIZE)
+                // Android encodes the disc and track as (disc * 1000) + track.
+                val position = it.numeric(Audio.TRACK) ?: 0
                 collect(LocalMusicRow(
                     uri = uri,
                     fileName = name,
@@ -521,6 +524,8 @@ internal class LocalMusicCatalog(
                         artist = it.string(Audio.ARTIST),
                         album = it.string(Audio.ALBUM),
                         durationMs = it.numeric(Audio.DURATION) ?: 0L,
+                        discNumber = (position / 1000).takeIf { number -> number in 1..0xffff }?.toInt(),
+                        trackNumber = (position % 1000).takeIf { number -> number > 0 }?.toInt(),
                     ),
                 ))
             }
@@ -597,16 +602,32 @@ internal class LocalMusicCatalog(
     }
 
     private fun readMetadata(uri: Uri, prior: LocalMusicMetadata?): LocalMusicMetadata {
-        var metadata = prior?.copy(albumArtistRead = true) ?: LocalMusicMetadata(null, null, null, 0L)
+        var metadata = (prior ?: LocalMusicMetadata(null, null, null, 0L)).copy(albumTagsRead = true)
         try {
             readMedia(uri) { retriever ->
                 fun tag(key: Int) = retriever.extractMetadata(key)?.trim()?.takeIf(String::isNotEmpty)?.take(1024)
+                val mime = tag(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                val id3 = if (mime == "audio/mpeg" || mime == "audio/mp3") {
+                    readLocalId3Dates { context.contentResolver.openInputStream(uri) }
+                } else null
+                // MP4 DATE can be the container creation time. Its music date
+                // tag (©day) is exposed as YEAR instead.
+                val commentDate = when (mime) {
+                    "audio/flac", "audio/ogg", "application/ogg" ->
+                        localReleaseDate(tag(MediaMetadataRetriever.METADATA_KEY_DATE))
+                    else -> null
+                }
                 metadata = metadata.copy(
                     title = tag(MediaMetadataRetriever.METADATA_KEY_TITLE),
                     artist = tag(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: prior?.artist,
                     album = localAlbumTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
                         ?: prior?.album),
                     albumArtist = localAlbumTag(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)),
+                    discNumber = localAlbumPosition(tag(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER)) ?: prior?.discNumber,
+                    trackNumber = localAlbumPosition(tag(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)) ?: prior?.trackNumber,
+                    releaseDate = id3?.release ?: commentDate
+                        ?: localReleaseDate(tag(MediaMetadataRetriever.METADATA_KEY_YEAR)),
+                    originalReleaseDate = id3?.original,
                     durationMs = tag(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                         ?.coerceAtLeast(0L) ?: prior?.durationMs ?: 0L,
                 )
