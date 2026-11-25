@@ -5,6 +5,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/local_music_album.dart';
+import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/utils.dart' show selectKeys;
@@ -14,6 +15,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../components/music_collection_panes.dart';
 import 'music.dart';
+import 'music_device_artist.dart';
 
 /// Opens an exact device album, optionally centered on the playing file.
 class MusicDeviceAlbumPage extends StatefulWidget {
@@ -178,6 +180,7 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
           } else {
             final tracks = album.tracks;
             final artist = album.albumArtist;
+            final artistKey = localMusicArtistKey(artist);
             final releaseDate = album.releaseDate;
             final originalReleaseDate = album.originalReleaseDate;
             final details = Padding(
@@ -197,10 +200,39 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               if (artist != null)
-                                Text(artist,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium),
+                                artistKey == null
+                                    ? Text(artist,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium)
+                                    : Tooltip(
+                                        message:
+                                            locals.musicOpenNamedArtist(artist),
+                                        child: TextButton(
+                                          style: TextButton.styleFrom(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 4),
+                                            alignment: AlignmentDirectional
+                                                .centerStart,
+                                          ),
+                                          onPressed: () {
+                                            if (localMusicArtistKey(
+                                                    _album?.albumArtist) !=
+                                                artistKey) {
+                                              return;
+                                            }
+                                            MusicScreen.openDeviceCollection(
+                                              context,
+                                              MusicDeviceArtistPage(
+                                                selectionId: widget.selectionId,
+                                                artistKey: artistKey,
+                                                library: _library,
+                                              ),
+                                            );
+                                          },
+                                          child: Text(artist),
+                                        ),
+                                      ),
                               if (releaseDate != null) Text(releaseDate),
                               if (originalReleaseDate != null &&
                                   originalReleaseDate != releaseDate)

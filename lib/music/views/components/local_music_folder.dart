@@ -21,6 +21,7 @@ import '../../models/on_device_music_entry.dart';
 import '../../services/local_music_library.dart';
 import '../../services/on_device_music_downloads.dart';
 import '../screens/music.dart';
+import '../screens/music_device_artist.dart';
 import 'local_music_albums.dart';
 import 'local_music_exclusions.dart';
 import 'local_music_locations.dart';
@@ -633,6 +634,23 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                       label: Text(locals.localMusicBrowseAlbums),
                     ),
                     if (hiddenFiles != null) hiddenFiles,
+                    if (canBrowse && _library.visibleTracks.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () {
+                          if (!_library.acceptsSessionSelection(selection)) {
+                            return;
+                          }
+                          MusicScreen.openDeviceCollection(
+                            context,
+                            MusicDeviceArtistIndexPage(
+                              selectionId: selection,
+                              library: _library,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.people_outline),
+                        label: Text(locals.localMusicBrowseArtists),
+                      ),
                   ]),
                 ),
               ] else ...[

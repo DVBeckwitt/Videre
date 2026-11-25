@@ -7,6 +7,7 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/local_music_artist.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
@@ -44,6 +45,7 @@ import 'music_duration_label.dart';
 import 'music_library_actions.dart';
 import 'music_player_artwork.dart';
 import 'music_playback_artwork.dart';
+import 'music_playing_device_artists.dart';
 import 'music_playing_source.dart';
 import 'music_sound_sheet.dart';
 import 'music_sponsor_notice.dart';
@@ -349,11 +351,11 @@ class _MusicPlayerState extends State<MusicPlayer>
                           // Keep the artwork in place while the header previews
                           // an incoming song whose source is still opening.
                           final source = player.playlistReference;
+                          final mountedDeviceTrack =
+                              localMusicTrackForPlayback(state.currentQueueId);
                           final hasSourceAction = source != null ||
                               mountedMusic?.albumPlaylistId != null ||
-                              localMusicTrackForPlayback(state.currentQueueId)
-                                      ?.albumKey !=
-                                  null;
+                              mountedDeviceTrack?.albumKey != null;
                           final albumTitle = mountedMusic?.album?.trim();
                           final hasSeparateAlbumLabel =
                               musicQueueAlbumId(source) != null &&
@@ -374,6 +376,12 @@ class _MusicPlayerState extends State<MusicPlayer>
                                       context, mountedMusic, titleStyle,
                                       width: panel.maxWidth,
                                       hasBookmark: mountedVideo != null,
+                                      deviceArtist: mountedDeviceTrack == null
+                                          ? null
+                                          : localMusicArtistCredits(
+                                                  mountedDeviceTrack)
+                                              .firstOrNull
+                                              ?.name,
                                       onDevice: isLocalMusicPlaybackId(
                                           mountedVideo?.videoId ??
                                               mountedOffline?.videoId))
@@ -927,19 +935,22 @@ class _MusicPlayerState extends State<MusicPlayer>
       BuildContext context, MusicMetadata music, TextStyle? titleStyle,
       {required double width,
       required bool hasBookmark,
+      required String? deviceArtist,
       required bool onDevice}) {
     final titleDirection = Directionality.of(context);
     final textScaler = MediaQuery.textScalerOf(context);
     final artistStyle = Theme.of(context).textTheme.titleMedium;
-    final linked =
+    final linked = deviceArtist != null ||
         !onDevice && music.artistCredits.any((credit) => credit.id != null);
-    final artist = onDevice && music.artist.isEmpty
-        ? AppLocalizations.of(context)!.onDevice
-        : music.artist;
+    final artist = deviceArtist ??
+        (onDevice && music.artist.isEmpty
+            ? AppLocalizations.of(context)!.onDevice
+            : music.artist);
     final measurement = (
       width,
       music.title,
       artist,
+      deviceArtist != null,
       linked,
       hasBookmark,
       onDevice,
@@ -977,7 +988,9 @@ class _MusicPlayerState extends State<MusicPlayer>
     final byline = measure(artist, artistStyle, width);
     final textHeight =
         title.height + 2 + math.max(byline.height, linked ? 48.0 : 0.0);
-    final wrapsActions = math.max(title.width, byline.width) > inlineWidth;
+    final wrapsActions =
+        math.max(title.width, byline.width + (deviceArtist == null ? 0 : 26)) >
+            inlineWidth;
     final fit = wrapsActions ? textHeight + 52 : math.max(48.0, textHeight);
 
     // Reserve only the height beyond the original two-line inline layout.
@@ -1060,15 +1073,18 @@ class _MusicPlayerState extends State<MusicPlayer>
 
   Widget _artistByline(BuildContext context, MusicMetadata music, bool onDevice,
       (String, int, int, String?) occurrence) {
+    if (onDevice) {
+      return MusicPlayingDeviceArtists(
+        byline: music.artist,
+        occurrence: occurrence,
+        television: widget.television,
+      );
+    }
     final theme = Theme.of(context);
     final style = theme.textTheme.titleMedium
         ?.copyWith(color: theme.colorScheme.onSurfaceVariant);
-    if (onDevice || !music.artistCredits.any((credit) => credit.id != null)) {
-      return Text(
-          onDevice && music.artist.isEmpty
-              ? AppLocalizations.of(context)!.onDevice
-              : music.artist,
-          style: style);
+    if (!music.artistCredits.any((credit) => credit.id != null)) {
+      return Text(music.artist, style: style);
     }
     void openArtist(String id) {
       if (!context.mounted || !mounted || !TickerMode.of(context)) return;

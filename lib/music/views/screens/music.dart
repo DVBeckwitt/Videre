@@ -189,6 +189,12 @@ class MusicScreen extends StatefulWidget {
         .push<void>(_PlayingMusicSourceRoute(page, player, app, session));
   }
 
+  static Future<void> openDeviceCollection(BuildContext context, Widget page) =>
+      ModalRoute.of(context) is _PlayingMusicSourceRoute
+          ? openPlayingSource(context, page, television: isTv)
+          : Navigator.of(context)
+              .push<void>(MaterialPageRoute(builder: (_) => page));
+
   static Future<void> playLocalTracks(
       BuildContext context, List<LocalMusicTrack> tracks,
       {int startIndex = 0, String? queueTitle}) async {
