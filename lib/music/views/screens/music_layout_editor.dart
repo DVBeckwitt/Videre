@@ -4,19 +4,31 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../../app/states/app.dart';
 import '../../../globals.dart';
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../main.dart' show isTv;
 import '../../../settings/states/settings.dart';
 import '../../models/music_layout.dart';
+import '../components/local_music_folder.dart';
 
 class MusicLayoutEditor extends StatefulWidget {
   final bool includeSearchShortcut;
+  final bool libraryCategoriesOnly;
 
-  const MusicLayoutEditor({super.key, this.includeSearchShortcut = false});
+  const MusicLayoutEditor({
+    super.key,
+    this.includeSearchShortcut = false,
+    this.libraryCategoriesOnly = false,
+  });
 
-  static Future<void> open(BuildContext context,
-          {bool includeSearchShortcut = false}) =>
+  static Future<void> open(
+    BuildContext context, {
+    bool includeSearchShortcut = false,
+    bool libraryCategoriesOnly = false,
+  }) =>
       Navigator.of(context).push(MaterialPageRoute<void>(
-          builder: (_) =>
-              MusicLayoutEditor(includeSearchShortcut: includeSearchShortcut)));
+          builder: (_) => MusicLayoutEditor(
+                includeSearchShortcut: includeSearchShortcut,
+                libraryCategoriesOnly: libraryCategoriesOnly,
+              )));
 
   @override
   State<MusicLayoutEditor> createState() => _MusicLayoutEditorState();
@@ -41,14 +53,15 @@ class _MusicLayoutEditorState extends State<MusicLayoutEditor> {
       !state.globalLoading &&
       !state.sessionRecoveryRequired;
 
-  Future<void> _save(MusicLayout layout) async {
+  Future<void> _save(MusicLayout Function(MusicLayout) update) async {
     if (!_current(context.read<AppCubit>().state)) return;
+    final settings = context.read<SettingsCubit>();
     final revision = ++_editRevision;
     // Writes run in order. Keep the latest edit interactive while the database
     // catches up, including when moving several buttons with a TV remote.
-    setState(() => _pending = layout);
+    setState(() => _pending = update(_pending ?? settings.state.musicLayout));
     try {
-      await context.read<SettingsCubit>().setMusicLayout(layout);
+      await settings.updateMusicLayout(update);
     } on Object {
       if (mounted &&
           revision == _editRevision &&
@@ -64,8 +77,20 @@ class _MusicLayoutEditorState extends State<MusicLayoutEditor> {
     }
   }
 
-  bool _available(MusicShortcut item) =>
+  bool _shortcutAvailable(MusicShortcut item) =>
       widget.includeSearchShortcut || item != MusicShortcut.search;
+
+  bool _categoryAvailable(MusicLibraryCategory item) =>
+      item.isAvailable(tv: isTv, deviceFolders: supportsLocalMusicFolders);
+
+  List<T> _reorderAvailable<T>(
+      List<T> current, List<T> reordered, bool Function(T) available) {
+    var index = 0;
+    return [
+      for (final item in current)
+        if (available(item)) reordered[index++] else item,
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,66 +99,107 @@ class _MusicLayoutEditorState extends State<MusicLayoutEditor> {
     final saved =
         context.select((SettingsCubit cubit) => cubit.state.musicLayout);
     final layout = _pending ?? saved;
-    final visible = layout.shortcuts.where(_available).toList();
+    final onlyCategories = widget.libraryCategoriesOnly;
+    final visible = layout.shortcuts.where(_shortcutAvailable).toList();
     final hidden = MusicShortcut.values
-        .where((item) => _available(item) && !visible.contains(item));
+        .where((item) => _shortcutAvailable(item) && !visible.contains(item));
+    final categories = layout.libraryCategories.where(_categoryAvailable);
     final heading = Theme.of(context).textTheme.titleMedium;
 
     void toggle(MusicShortcut item, bool show) {
-      final shortcuts = List.of(layout.shortcuts)..remove(item);
-      if (show) shortcuts.add(item);
-      _save(layout.copyWith(shortcuts: shortcuts));
+      _save((value) {
+        final shortcuts = List.of(value.shortcuts)..remove(item);
+        if (show) shortcuts.add(item);
+        return value.copyWith(shortcuts: shortcuts);
+      });
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text(locals.customizeMusicLayout)),
+      appBar: AppBar(
+          title: Text(onlyCategories
+              ? locals.musicLayoutLibraryCategories
+              : locals.customizeMusicLayout)),
       body: SafeArea(
         child: ListView(padding: const EdgeInsets.all(16), children: [
-          Text(locals.musicLayoutHelp),
-          const SizedBox(height: 16),
-          Text(locals.musicLayoutDestinations, style: heading),
-          _ButtonOrder<MusicDestination>(
-            keyPrefix: 'music-destination',
-            items: layout.destinations,
+          if (!onlyCategories) ...[
+            Text(locals.musicLayoutHelp),
+            const SizedBox(height: 16),
+            Text(locals.musicLayoutDestinations, style: heading),
+            _ButtonOrder<MusicDestination>(
+              keyPrefix: 'music-destination',
+              items: layout.destinations,
+              label: (item) => item.label(locals),
+              enabled: current,
+              onChanged: (items) =>
+                  _save((value) => value.copyWith(destinations: items)),
+            ),
+            const Divider(),
+            Text(locals.musicLayoutShortcuts, style: heading),
+            _ButtonOrder<MusicShortcut>(
+              keyPrefix: 'music-shortcut',
+              items: visible,
+              label: (item) => item.label(locals),
+              enabled: current,
+              onToggle: toggle,
+              onChanged: (items) {
+                // Keep the TV-only Search shortcut in its slot on touch devices.
+                final reordered = _reorderAvailable(
+                    layout.shortcuts, items, _shortcutAvailable);
+                _save((value) => value.copyWith(shortcuts: reordered));
+              },
+            ),
+            if (hidden.isNotEmpty) ...[
+              Text(locals.phoneNavigationHidden, style: heading),
+              for (final item in hidden)
+                SwitchListTile(
+                  key: ValueKey('music-shortcut-${item.name}-toggle'),
+                  title: Text(item.label(locals)),
+                  value: false,
+                  onChanged: current ? (show) => toggle(item, show) : null,
+                ),
+            ],
+            const Divider(),
+            Text(locals.musicLayoutLibraryCategories, style: heading),
+          ],
+          Text(locals.musicLayoutLibraryCategoriesHelp),
+          _ButtonOrder<MusicLibraryCategory>(
+            keyPrefix: 'music-library-category',
+            items: categories.toList(),
             label: (item) => item.label(locals),
             enabled: current,
-            onChanged: (items) => _save(layout.copyWith(destinations: items)),
-          ),
-          const Divider(),
-          Text(locals.musicLayoutShortcuts, style: heading),
-          _ButtonOrder<MusicShortcut>(
-            keyPrefix: 'music-shortcut',
-            items: visible,
-            label: (item) => item.label(locals),
-            enabled: current,
-            onToggle: toggle,
+            isChecked: (item) => !layout.hiddenLibraryCategories.contains(item),
+            onToggle: (item, show) => _save((value) {
+              final hidden = Set.of(value.hiddenLibraryCategories);
+              if (show) {
+                hidden.remove(item);
+              } else {
+                hidden.add(item);
+              }
+              return value.copyWith(hiddenLibraryCategories: hidden);
+            }),
             onChanged: (items) {
-              // Keep the TV-only Search shortcut in its slot on touch devices.
-              var index = 0;
-              _save(layout.copyWith(shortcuts: [
-                for (final item in layout.shortcuts)
-                  if (_available(item)) items[index++] else item
-              ]));
+              final reordered = _reorderAvailable(
+                  layout.libraryCategories, items, _categoryAvailable);
+              _save((value) => value.copyWith(libraryCategories: reordered));
             },
           ),
-          if (hidden.isNotEmpty) ...[
-            Text(locals.phoneNavigationHidden, style: heading),
-            for (final item in hidden)
-              SwitchListTile(
-                key: ValueKey('music-shortcut-${item.name}-toggle'),
-                title: Text(item.label(locals)),
-                value: false,
-                onChanged: current ? (show) => toggle(item, show) : null,
-              ),
-          ],
           Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: TextButton(
-                key: const ValueKey('music-layout-reset'),
-                onPressed:
-                    current ? () => _save(const MusicLayout.defaults()) : null,
-                child: Text(locals.musicLayoutReset),
-              )),
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton(
+              key: const ValueKey('music-layout-reset'),
+              onPressed: !current
+                  ? null
+                  : () => _save((value) => onlyCategories
+                      ? value.copyWith(
+                          libraryCategories: MusicLibraryCategory.values,
+                          hiddenLibraryCategories: const {},
+                        )
+                      : const MusicLayout.defaults()),
+              child: Text(onlyCategories
+                  ? locals.musicLayoutLibraryCategoriesReset
+                  : locals.musicLayoutReset),
+            ),
+          ),
         ]),
       ),
     );
@@ -147,6 +213,7 @@ class _ButtonOrder<T extends Enum> extends StatelessWidget {
   final bool enabled;
   final ValueChanged<List<T>> onChanged;
   final void Function(T item, bool show)? onToggle;
+  final bool Function(T item)? isChecked;
 
   const _ButtonOrder({
     required this.keyPrefix,
@@ -155,6 +222,7 @@ class _ButtonOrder<T extends Enum> extends StatelessWidget {
     required this.enabled,
     required this.onChanged,
     this.onToggle,
+    this.isChecked,
   });
 
   void _move(int from, int to) {
@@ -193,7 +261,7 @@ class _ButtonOrder<T extends Enum> extends StatelessWidget {
                       key: ValueKey('$key-toggle'),
                       contentPadding: EdgeInsets.zero,
                       title: Text(label(item)),
-                      value: true,
+                      value: isChecked?.call(item) ?? true,
                       onChanged:
                           enabled ? (show) => onToggle!(item, show) : null,
                     )),

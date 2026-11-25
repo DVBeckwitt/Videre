@@ -10,6 +10,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_download_order.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_playlist_selection.dart';
 import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/models/song_artwork.dart';
@@ -32,6 +33,7 @@ import 'package:clipious/music/views/components/takeout_import_dialog.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_history.dart';
 import 'package:clipious/music/views/screens/music_rule_playlists.dart';
+import 'package:clipious/music/views/screens/music_layout_editor.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/podcasts/views/podcast_library.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -48,13 +50,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 enum _LibraryFilter {
-  all,
-  playlists,
-  songs,
-  onDevice,
-  channels,
-  downloads,
-  podcasts
+  all(null),
+  playlists(MusicLibraryCategory.playlists),
+  songs(MusicLibraryCategory.songs),
+  onDevice(MusicLibraryCategory.onDevice),
+  channels(MusicLibraryCategory.channels),
+  downloads(MusicLibraryCategory.downloads),
+  podcasts(MusicLibraryCategory.podcasts);
+
+  const _LibraryFilter(this.category);
+
+  final MusicLibraryCategory? category;
+
+  static final byCategory = {
+    for (final filter in values)
+      if (filter.category case final category?) category: filter,
+  };
 }
 
 enum _LibrarySort { saved, title }
@@ -77,7 +88,7 @@ class MusicLibraryPage extends StatefulWidget {
 }
 
 class _MusicLibraryPageState extends State<MusicLibraryPage> {
-  _LibraryFilter _filter = isTv ? _LibraryFilter.playlists : _LibraryFilter.all;
+  late _LibraryFilter _filter;
   _LibrarySort _sort = _LibrarySort.saved;
   bool _grid = !isTv;
   String? _playlistId;
@@ -115,6 +126,24 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         ? selection.ids
         : null;
   }
+
+  @override
+  void initState() {
+    super.initState();
+    final saved = context.read<SettingsCubit?>()?.state.musicLayout;
+    _filter = _defaultFilter(_categoryFilters(saved));
+  }
+
+  List<_LibraryFilter> _categoryFilters(MusicLayout? layout) => [
+        for (final category in (layout ?? const MusicLayout.defaults())
+            .visibleLibraryCategories)
+          if (category.isAvailable(
+              tv: isTv, deviceFolders: supportsLocalMusicFolders))
+            _LibraryFilter.byCategory[category]!,
+      ];
+
+  _LibraryFilter _defaultFilter(List<_LibraryFilter> filters) =>
+      isTv ? filters.firstOrNull ?? _LibraryFilter.all : _LibraryFilter.all;
 
   @override
   void didUpdateWidget(MusicLibraryPage oldWidget) {
@@ -500,17 +529,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         onLongPress: _bookmarkLongPress(entry, onOpen),
         onTap: onOpen);
   }
-
-  String _label(_LibraryFilter filter, AppLocalizations locals) =>
-      switch (filter) {
-        _LibraryFilter.all => locals.musicLibrary,
-        _LibraryFilter.playlists => locals.musicPlaylists,
-        _LibraryFilter.songs => locals.musicSongs,
-        _LibraryFilter.onDevice => locals.onDevice,
-        _LibraryFilter.podcasts => locals.podcasts,
-        _LibraryFilter.channels => locals.channels,
-        _LibraryFilter.downloads => locals.downloads,
-      };
 
   Widget _playlistSearchButton() => IconButton(
         key: const ValueKey('music-local-playlist-search'),
@@ -1034,7 +1052,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
-  Widget _catalogLibrary(MusicLibraryService library) {
+  Widget _catalogLibrary(
+      MusicLibraryService library, List<_LibraryFilter> filters) {
     final theme = Theme.of(context);
     final locals = AppLocalizations.of(context)!;
     final playlists = service
@@ -1078,13 +1097,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         for (final playlist in playlists) (playlist: playlist, bookmark: null),
       for (final entry in entries) (playlist: null, bookmark: entry),
     ];
-    final shortcuts = <_LibraryFilter>[
-      if (_filter == _LibraryFilter.all) _LibraryFilter.songs,
-      if (_filter == _LibraryFilter.all &&
-          context.watch<DownloadManagerCubit?>() != null)
-        _LibraryFilter.downloads,
-    ];
-    _sortLibraryItems(sortedItems);
+    final shortcuts = _filter == _LibraryFilter.all
+        ? filters
+            .where((filter) =>
+                filter == _LibraryFilter.songs ||
+                (filter == _LibraryFilter.downloads &&
+                    context.watch<DownloadManagerCubit?>() != null))
+            .toList()
+        : const <_LibraryFilter>[];
+    _sortLibraryItems(items);
     final pins =
         hasPlaylists ? library.pinnedLocalPlaylistIds : const <String>{};
     final items = pins.isEmpty
@@ -2144,7 +2165,32 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       });
 
   @override
-  Widget build(BuildContext context) => BlocConsumer<AppCubit, AppState>(
+  Widget build(BuildContext context) {
+    if (widget.source != null || context.read<SettingsCubit?>() == null) {
+      return _buildLibrary(_categoryFilters(null), canCustomize: false);
+    }
+    return BlocConsumer<SettingsCubit, SettingsState>(
+      listenWhen: _categoriesChanged,
+      buildWhen: _categoriesChanged,
+      listener: (_, state) {
+        final filters = _categoryFilters(state.musicLayout);
+        final fallback = _defaultFilter(filters);
+        if (_filter != fallback && !filters.contains(_filter)) {
+          _selectFilter(fallback);
+        }
+      },
+      builder: (_, state) => _buildLibrary(_categoryFilters(state.musicLayout),
+          canCustomize: true),
+    );
+  }
+
+  bool _categoriesChanged(SettingsState before, SettingsState after) =>
+      !listEquals(_categoryFilters(before.musicLayout),
+          _categoryFilters(after.musicLayout));
+
+  Widget _buildLibrary(List<_LibraryFilter> filters,
+          {required bool canCustomize}) =>
+      BlocConsumer<AppCubit, AppState>(
         listenWhen: (before, after) =>
             before.profileId != after.profileId ||
             before.sessionRevision != after.sessionRevision ||
@@ -2202,6 +2248,19 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         child: Text(locals.musicLibrary,
                                             style:
                                                 theme.textTheme.titleLarge))),
+                                if (canCustomize)
+                                  IconButton(
+                                    key:
+                                        const ValueKey('music-library-arrange'),
+                                    tooltip:
+                                        locals.musicLayoutLibraryCategories,
+                                    icon: const Icon(Icons.tune),
+                                    onPressed: state.globalLoading ||
+                                            state.sessionRecoveryRequired
+                                        ? null
+                                        : () => MusicLayoutEditor.open(context,
+                                            libraryCategoriesOnly: true),
+                                  ),
                                 IconButton(
                                   key: const ValueKey('music-library-history'),
                                   tooltip: locals.musicPlaybackHistory,
@@ -2226,52 +2285,54 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                                 await showTakeoutImport(
                                                     context);
                                             if (mounted && imported == true) {
-                                              setState(() {
-                                                _filter = _LibraryFilter.songs;
-                                                _playlistId = null;
-                                                _resetPlaylistSearch();
-                                                _resetLibraryFind();
-                                              });
+                                              final layout = this
+                                                  .context
+                                                  .read<SettingsCubit?>()
+                                                  ?.state
+                                                  .musicLayout;
+                                              final songsVisible =
+                                                  _categoryFilters(layout)
+                                                      .contains(
+                                                          _LibraryFilter.songs);
+                                              _selectFilter(songsVisible
+                                                  ? _LibraryFilter.songs
+                                                  : _filter);
                                             }
                                           }),
                               ])),
-                        if (showLibraryChrome)
+                        if (showLibraryChrome && filters.isNotEmpty)
                           SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             padding: const EdgeInsets.symmetric(horizontal: 12),
                             child: Row(children: [
-                              for (final filter in _LibraryFilter.values)
-                                if (filter != _LibraryFilter.all &&
-                                    (filter != _LibraryFilter.onDevice ||
-                                        supportsLocalMusicFolders) &&
-                                    (!isTv ||
-                                        filter != _LibraryFilter.downloads))
-                                  Padding(
-                                      padding: const EdgeInsets.only(right: 8),
-                                      child: ChoiceChip(
-                                          key: ValueKey(
-                                              'music-library-tab-${filter.name}'),
-                                          label: Text(_label(filter, locals)),
-                                          labelStyle: theme.textTheme.labelLarge
-                                              ?.copyWith(
-                                                  color: _filter == filter
-                                                      ? colors.onInverseSurface
-                                                      : colors
-                                                          .onSurfaceVariant),
-                                          labelPadding:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 9),
-                                          showCheckmark: false,
-                                          shape: const StadiumBorder(),
-                                          side: BorderSide.none,
-                                          backgroundColor:
-                                              colors.surfaceContainerHighest,
-                                          selectedColor: colors.inverseSurface,
-                                          selected: _filter == filter,
-                                          onSelected: (selected) =>
-                                              _selectFilter(selected || isTv
-                                                  ? filter
-                                                  : _LibraryFilter.all))),
+                              for (final filter in filters)
+                                Padding(
+                                    key: ValueKey(filter),
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: ChoiceChip(
+                                        key: ValueKey(
+                                            'music-library-tab-${filter.name}'),
+                                        label: Text(
+                                            filter.category!.label(locals)),
+                                        labelStyle: theme.textTheme.labelLarge
+                                            ?.copyWith(
+                                                color: _filter == filter
+                                                    ? colors.onInverseSurface
+                                                    : colors.onSurfaceVariant),
+                                        labelPadding:
+                                            const EdgeInsets.symmetric(
+                                                horizontal: 9),
+                                        showCheckmark: false,
+                                        shape: const StadiumBorder(),
+                                        side: BorderSide.none,
+                                        backgroundColor:
+                                            colors.surfaceContainerHighest,
+                                        selectedColor: colors.inverseSurface,
+                                        selected: _filter == filter,
+                                        onSelected: (selected) => _selectFilter(
+                                            selected || isTv
+                                                ? filter
+                                                : _LibraryFilter.all))),
                             ]),
                           ),
                         Expanded(
@@ -2288,7 +2349,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         : _filter == _LibraryFilter.downloads &&
                                                 !isTv
                                             ? _downloads()
-                                            : _catalogLibrary(library)),
+                                            : _catalogLibrary(
+                                                library, filters)),
                       ],
                     )),
           );

@@ -815,13 +815,27 @@ void main() {
     }
   });
 
-  test('Music layout backup retains section order and an empty shortcut row',
+  test('Music layout backup retains category order, visibility and shortcuts',
       () async {
-    final layout = MusicLayout(destinations: [
-      MusicDestination.library,
-      MusicDestination.home,
-      MusicDestination.search,
-    ], shortcuts: []);
+    final layout = MusicLayout(
+      destinations: [
+        MusicDestination.library,
+        MusicDestination.home,
+        MusicDestination.search,
+      ],
+      shortcuts: [],
+      libraryCategories: MusicLibraryCategory.values.reversed.toList(),
+      hiddenLibraryCategories: {MusicLibraryCategory.channels},
+    );
+    expect(
+        UserBackup.validSetting(SettingsValue(
+            musicLayoutSettingName,
+            jsonEncode({
+              'version': 1,
+              'destinations': ['library', 'home', 'search'],
+              'shortcuts': [],
+            }))),
+        isTrue);
     await source
         .saveSetting(SettingsValue(musicLayoutSettingName, layout.encode()));
     final exported = await source.exportBackup();
@@ -832,8 +846,7 @@ void main() {
         replace: true);
     final restored = MusicLayout.tryDecode(
         target.getSettings(musicLayoutSettingName)?.value);
-    expect(restored?.destinations, layout.destinations);
-    expect(restored?.shortcuts, isEmpty);
+    expect(restored, layout);
     expect(previous.getSettings(musicLayoutSettingName), isNull);
 
     final invalid = jsonDecode(exported.encode()) as Map<String, dynamic>;

@@ -14,6 +14,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/music_download_order.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
+import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
@@ -268,6 +269,115 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 1));
         return true;
       }).timeout(const Duration(seconds: 5));
+
+  testWidgets(
+      'Library editor moves and hides categories and overview shortcuts',
+      (tester) async {
+    final downloads = _Downloads(const DownloadManagerState());
+    addTearDown(downloads.close);
+    const songs = MusicLibraryCategory.songs;
+    const savedDownloads = MusicLibraryCategory.downloads;
+    final layout = MusicLayout(
+      destinations: MusicDestination.values.reversed.toList(),
+      shortcuts: const [MusicShortcut.charts],
+      libraryCategories: [
+        savedDownloads,
+        songs,
+        for (final category in MusicLibraryCategory.values)
+          if (category != songs && category != savedDownloads) category,
+      ],
+    );
+    await tester.runAsync(() => settings.setMusicLayout(layout));
+    await show(tester, downloads: downloads);
+
+    Finder control(String key) => find.byKey(ValueKey(key));
+    final songsTab = control('music-library-tab-songs');
+    final downloadsTab = control('music-library-tab-downloads');
+    final songsShortcut = control('music-library-shortcut-songs');
+    final downloadsShortcut = control('music-library-shortcut-downloads');
+    final arrange = control('music-library-arrange');
+    final songsToggle = control('music-library-category-songs-toggle');
+
+    Future<void> tap(Finder target) async {
+      await tester.ensureVisible(target);
+      await tester.tap(target);
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> settleSave() async {
+      for (var i = 0; i < 4; i++) {
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.pumpAndSettle();
+    }
+
+    expect(tester.getTopLeft(downloadsTab).dx,
+        lessThan(tester.getTopLeft(songsTab).dx));
+    expect(tester.getTopLeft(downloadsShortcut).dx,
+        lessThan(tester.getTopLeft(songsShortcut).dx));
+    await tap(songsTab);
+    await tap(arrange);
+    await tap(control('music-library-category-songs-move'));
+    await tap(find.text('Move earlier'));
+    await tap(songsToggle);
+    await settleSave();
+    expect(settings.state.musicLayout.libraryCategories.first, songs);
+    expect(settings.state.musicLayout.hiddenLibraryCategories, contains(songs));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(songsTab, findsNothing);
+    expect(songsShortcut, findsNothing);
+    expect(downloadsShortcut, findsOneWidget);
+
+    await tap(arrange);
+    expect(tester.widget<SwitchListTile>(songsToggle).value, isFalse);
+    await tap(songsToggle);
+    await settleSave();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(songsTab).dx,
+        lessThan(tester.getTopLeft(downloadsTab).dx));
+    expect(tester.getTopLeft(songsShortcut).dx,
+        lessThan(tester.getTopLeft(downloadsShortcut).dx));
+
+    await tap(arrange);
+    await tap(control('music-layout-reset'));
+    await settleSave();
+    expect(settings.state.musicLayout.libraryCategories,
+        MusicLibraryCategory.values);
+    expect(settings.state.musicLayout.hiddenLibraryCategories, isEmpty);
+    expect(settings.state.musicLayout.destinations, layout.destinations);
+    expect(settings.state.musicLayout.shortcuts, layout.shortcuts);
+  });
+
+  testWidgets('TV selects an available category after hiding the active one',
+      (tester) async {
+    app_globals.isTv = true;
+    const defaults = MusicLayout.defaults();
+    const playlists = MusicLibraryCategory.playlists;
+    const songs = MusicLibraryCategory.songs;
+    await show(tester);
+    ChoiceChip chip(MusicLibraryCategory category) => tester.widget<ChoiceChip>(
+        find.byKey(ValueKey('music-library-tab-${category.name}')));
+
+    expect(chip(playlists).selected, isTrue);
+    await tester.runAsync(() => settings.setMusicLayout(
+        defaults.copyWith(hiddenLibraryCategories: const {playlists})));
+    await tester.pumpAndSettle();
+    expect(chip(songs).selected, isTrue);
+    expect(find.byKey(const ValueKey('music-library-tab-downloads')),
+        findsNothing);
+
+    await tester.runAsync(() => settings.setMusicLayout(defaults.copyWith(
+        hiddenLibraryCategories: MusicLibraryCategory.values.toSet())));
+    await tester.pumpAndSettle();
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byKey(const ValueKey('music-library-arrange')), findsOneWidget);
+    await tester.runAsync(() => settings.setMusicLayout(defaults));
+    await tester.pumpAndSettle();
+    expect(chip(playlists).selected, isTrue);
+  });
 
   testWidgets('Now Playing opens its exact local playlist and Back returns',
       (tester) async {

@@ -561,7 +561,11 @@ class SettingsCubit extends Cubit<SettingsState> {
   }
 
   Future<void> setMusicLayout(MusicLayout layout) =>
-      _saveSettingInOrder(musicLayoutSettingName, layout.encode);
+      updateMusicLayout((_) => layout);
+
+  Future<void> updateMusicLayout(MusicLayout Function(MusicLayout) update) =>
+      _saveSettingInOrder(
+          musicLayoutSettingName, () => update(state.musicLayout).encode());
 
   Future<void> setMusicDownloadOrder(MusicDownloadOrder order) =>
       _saveSettingInOrder(musicDownloadOrderSettingName, order.encode);
