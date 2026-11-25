@@ -526,8 +526,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 dimension: 52,
                 child:
                     _bookmarkArtwork(entry, _artwork(entry.displayThumbnails))),
-        title: _bookmarkTitle(entry,
-            Text(entry.displayTitle, maxLines: 2, overflow: TextOverflow.ellipsis)),
+        title: _bookmarkTitle(
+            entry,
+            Text(entry.displayTitle,
+                maxLines: 2, overflow: TextOverflow.ellipsis)),
         subtitle: entry.subtitle.isEmpty
             ? null
             : Text(entry.subtitle,
@@ -849,15 +851,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final reference = PlaylistReference.forPlaylist(
         playlist, db.forProfile(library.profileId));
     String displayTitle(Video song) =>
-        library.savedSong(song.videoId)?.savedTitle ?? song.musicMetadata!.title;
+        library.savedSong(song.videoId)?.savedTitle ??
+        song.musicMetadata!.title;
     Object? displaySortValue(Video song, MusicCollectionSortField field) =>
         field == MusicCollectionSortField.title
             ? displayTitle(song)
             : musicPlaylistTrackSortValue(song, field);
     final displayOrder =
         MusicCollectionSortMenu.playlistOrder(context, reference);
-    final displayIndices = displayOrder.orderIndices(songs,
-        sortValue: displaySortValue);
+    final displayIndices =
+        displayOrder.orderIndices(songs, sortValue: displaySortValue);
     final sortMenu = MusicCollectionSortMenu.playlist(
       reference: reference,
       order: displayOrder,
@@ -1114,12 +1117,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 input.text
               ),
               sections: musicFastScrollSectionsFor<int>(context, visible,
-                  sortValue:
-                      displayOrder.field == MusicCollectionSortField.source
-                          ? null
-                          : (index) => MusicCollectionOrder.normalizeSortValue(
-                              displaySortValue(
-                                  songs[index], displayOrder.field))),
+                  sortValue: displayOrder.field ==
+                          MusicCollectionSortField.source
+                      ? null
+                      : (index) => MusicCollectionOrder.normalizeSortValue(
+                          displaySortValue(songs[index], displayOrder.field))),
               child: view,
             );
           },
@@ -1408,7 +1410,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       Expanded(
         child: items.isEmpty && shortcuts.isEmpty
             ? _empty()
-            : _collection(items, shortcuts, library, order, pinnedPlaylistIds: pins),
+            : _collection(items, shortcuts, library, order,
+                pinnedPlaylistIds: pins),
       ),
     ]);
   }
@@ -1630,7 +1633,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           return _gridShortcut(shortcuts[index], locals);
         }
         final item = items[index - shortcuts.length];
-        return _gridItem(item, savedCovers, covers, () => _openItem(item, allItems),
+        return _gridItem(
+            item, savedCovers, covers, () => _openItem(item, allItems),
             pinned: pinnedPlaylistIds.contains(item.playlist?.playlistId));
       }, childCount: count, findChildIndexCallback: (key) => indices[key]);
       return searchToolbar == null

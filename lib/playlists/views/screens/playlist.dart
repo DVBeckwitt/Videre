@@ -134,7 +134,8 @@ class PlaylistViewScreen extends StatelessWidget {
         builder: (context, playlistState) {
           final cubit = context.read<PlaylistCubit>();
           final source = cubit.reference;
-          final canRemove = canDeleteVideos && !playlistState.playlist.isEditLocked;
+          final canRemove =
+              canDeleteVideos && !playlistState.playlist.isEditLocked;
           final hasEntries = playlistState.loading ||
               playlistState.error.isNotEmpty ||
               playlistState.playlist.videos.isNotEmpty;

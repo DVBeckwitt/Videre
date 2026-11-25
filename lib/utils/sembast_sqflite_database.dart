@@ -1082,7 +1082,8 @@ class SembastSqfDb extends IDbClient {
             .toList(),
       _musicListeningEvents:
           _musicListeningStore.findSync(db).map((r) => r.value).toList(),
-      'playlists': jsonDecode(getSettings(localPlaylistsSetting)?.value ?? '[]'),
+      'playlists':
+          jsonDecode(getSettings(localPlaylistsSetting)?.value ?? '[]'),
       'savedPlaylists': [
         for (final saved in SavedPlaylist.decodeLibrary(
             getSettings(playlistLibrarySettingName)?.value, profileId))

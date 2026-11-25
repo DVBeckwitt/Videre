@@ -1011,18 +1011,22 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
     final title = _findAlbum(album, artist)?.album?.trim();
     return (
       artist: artist,
-      album: title == null ? null : (key: album.key, label: title, exact: album.exact),
+      album: title == null
+          ? null
+          : (key: album.key, label: title, exact: album.exact),
     );
   }
 
   bool _hasArtist(String credit) =>
       widget.currentEntries().any((track) => track.artist?.trim() == credit);
 
-  OnDeviceMusicEntry? _findAlbum(
-          _LocalAlbumFilter album, String? withArtist) =>
-      widget.currentEntries().where((track) =>
-          (withArtist == null || track.artist?.trim() == withArtist) &&
-          _matchesAlbum(track, album)).firstOrNull;
+  OnDeviceMusicEntry? _findAlbum(_LocalAlbumFilter album, String? withArtist) =>
+      widget
+          .currentEntries()
+          .where((track) =>
+              (withArtist == null || track.artist?.trim() == withArtist) &&
+              _matchesAlbum(track, album))
+          .firstOrNull;
 
   @override
   void dispose() {
@@ -1055,7 +1059,8 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
       builder: (context) => _withSelectKeys(ListenableBuilder(
         listenable: widget.catalogChanges,
         builder: (context, _) {
-          final values = <Object, ({
+          final values = <Object,
+              ({
             _LocalAlbumFilter filter,
             String? credit,
             List<String?> tags,
@@ -1090,8 +1095,8 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
                   final byName = compareLocalMusicSortNames(
                       sortNames[a.key], sortNames[b.key]);
                   if (byName != 0) return byName;
-                  final byLabel = a.value.filter.label.compareTo(
-                      b.value.filter.label);
+                  final byLabel =
+                      a.value.filter.label.compareTo(b.value.filter.label);
                   return byLabel != 0
                       ? byLabel
                       : (a.value.filter.key ?? '')
@@ -1126,7 +1131,9 @@ class _LocalTrackBrowserState extends State<_LocalTrackBrowser> {
     );
     if (!mounted || value == null || !isCurrent()) return;
     final current = _activeFilters;
-    if (artist ? !_hasArtist(value.label) : _findAlbum(value, current.artist) == null) {
+    if (artist
+        ? !_hasArtist(value.label)
+        : _findAlbum(value, current.artist) == null) {
       return;
     }
     if (artist && current.artist != value.label) {
