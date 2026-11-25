@@ -134,6 +134,7 @@ class PlaylistViewScreen extends StatelessWidget {
         builder: (context, playlistState) {
           final cubit = context.read<PlaylistCubit>();
           final source = cubit.reference;
+          final canRemove = canDeleteVideos && !playlistState.playlist.isEditLocked;
           final hasEntries = playlistState.loading ||
               playlistState.error.isNotEmpty ||
               playlistState.playlist.videos.isNotEmpty;
@@ -161,7 +162,7 @@ class PlaylistViewScreen extends StatelessWidget {
                     context, PublicPlaylistShareLinks(source!.playlistId)),
                 icon: const Icon(Icons.share_outlined),
               ),
-            if ((canDeleteVideos || bookmarkOwner != null) &&
+            if ((canRemove || bookmarkOwner != null) &&
                 playlist.playlistId != localWatchLaterId)
               IconButton(
                 tooltip: locals.delete,
@@ -188,14 +189,14 @@ class PlaylistViewScreen extends StatelessWidget {
                       child: hasEntries
                           ? DeviceWidget(
                               phone: PlaylistInnerView(
-                                canDeleteVideos: canDeleteVideos,
+                                canDeleteVideos: canRemove,
                                 openVideo: openVideo,
                                 headerActions: headerActions,
                                 removeVideoFromPlaylist:
                                     removeVideoFromPlayList,
                               ),
                               tablet: TabletPlaylistInnerView(
-                                canDeleteVideos: canDeleteVideos,
+                                canDeleteVideos: canRemove,
                                 openVideo: openVideo,
                                 headerActions: headerActions,
                                 removeVideoFromPlaylist:

@@ -16,16 +16,19 @@ class MusicPlaylistEditActions extends StatelessWidget {
     super.key,
     required this.playlist,
     required this.reference,
+    this.allowReorder = true,
   });
 
   final Playlist playlist;
   final PlaylistReference reference;
+  final bool allowReorder;
 
   Future<void> _edit(BuildContext context, _EditAction action) async {
     final session = MusicLibrarySession(context.read<AppCubit>());
     if (!session.isCurrent || !reference.matchesOwner(db)) return;
     final playlists = service;
     if (action == _EditAction.reorder) {
+      if (!allowReorder || playlist.isEditLocked) return;
       final entries = playlist.videos;
       final rows = [
         for (final video in entries)
@@ -88,7 +91,8 @@ class MusicPlaylistEditActions extends StatelessWidget {
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final locked = playlist.isEditLocked;
-    final canReorder = !locked &&
+    final canReorder = allowReorder &&
+        !locked &&
         playlist.videos
                 .where((video) => video.musicMetadata != null)
                 .take(2)

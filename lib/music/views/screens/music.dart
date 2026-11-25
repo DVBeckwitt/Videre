@@ -15,6 +15,7 @@ import 'package:clipious/music/models/music_artist.dart';
 import 'package:clipious/music/models/music_artist_page.dart';
 import 'package:clipious/music/models/music_catalog_search.dart';
 import 'package:clipious/music/models/music_collection.dart';
+import 'package:clipious/music/models/music_collection_order.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
@@ -25,6 +26,7 @@ import 'package:clipious/music/services/music_library_search.dart';
 import 'package:clipious/music/services/music_online_recents.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
+import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_library_search_results.dart';
 import 'package:clipious/music/views/components/music_online_recents_button.dart';
@@ -1641,7 +1643,10 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
       );
     }
     final collection = _collection;
-    if (collection != null) return _collectionResults(collection);
+    if (collection != null) {
+      return Builder(
+          builder: (context) => _collectionResults(context, collection));
+    }
     final artistPage = _artistPage;
     if (artistPage != null) return _artistResults(artistPage);
     final listing = _onlineListing;
@@ -1791,7 +1796,7 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         ),
       );
 
-  Widget _collectionResults(MusicCollection collection) {
+  Widget _collectionResults(BuildContext context, MusicCollection collection) {
     final locals = AppLocalizations.of(context)!;
     final session = context.read<AppCubit>().state;
     final videos = collection.tracks.map((track) => track.toVideo()).toList();
@@ -1800,6 +1805,9 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
         playlistId: collection.id,
         displayTitle: collection.title,
         profileId: db.profileId);
+    final order = MusicCollectionSortMenu.playlistOrder(context, reference);
+    final displayIndices =
+        order.orderIndices(videos, sortValue: musicPlaylistTrackSortValue);
     final details = Padding(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1821,13 +1829,29 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             reference: reference,
             enabled: !_starting),
         const SizedBox(height: 12),
-        FilledButton.icon(
-            key: const ValueKey('music-play-all'),
-            onPressed: collection.tracks.isEmpty
-                ? null
-                : () => _play(collection.tracks, reference: reference),
-            icon: const Icon(Icons.play_arrow),
-            label: Text(locals.musicPlayAll)),
+        Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            FilledButton.icon(
+                key: const ValueKey('music-play-all'),
+                onPressed: collection.tracks.isEmpty
+                    ? null
+                    : () => _play(collection.tracks, reference: reference),
+                icon: const Icon(Icons.play_arrow),
+                label: Text(locals.musicPlayAll)),
+            if (collection.tracks.isNotEmpty)
+              MusicCollectionSortMenu.playlist(
+                reference: reference,
+                order: order,
+                compact: true,
+                isCurrent: () =>
+                    mounted &&
+                    _collection?.id == collection.id &&
+                    _sameSession(session),
+              ),
+          ],
+        ),
         MusicPlaylistResume(
             reference: reference,
             videos: videos,
@@ -1861,8 +1885,8 @@ class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
             Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(locals.musicEmptyCollection)),
-          for (var i = 0; i < collection.tracks.length; i++)
-            _song(collection.tracks, i, reference: reference),
+          for (final index in displayIndices)
+            _song(collection.tracks, index, reference: reference),
         ],
       ),
     );

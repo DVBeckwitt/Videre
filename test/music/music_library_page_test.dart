@@ -379,6 +379,24 @@ void main() {
     expect(chip(playlists).selected, isTrue);
   });
 
+  String? savedLibraryOrder(String collection) => settings
+      .state.settings['music-collection-library-order:$collection']?.value;
+
+  Future<void> chooseOrder(WidgetTester tester, String menu, String label,
+      bool Function() saved) async {
+    await tester.tap(find.byKey(ValueKey(menu)));
+    await tester.pumpAndSettle();
+    final option = find.ancestor(
+        of: find.text(label),
+        matching: find.byWidgetPredicate((widget) => widget is PopupMenuItem));
+    await tester.runAsync(() async {
+      await tester.tap(option);
+      await tester.pumpAndSettle();
+      await waitFor(saved);
+    });
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('Now Playing opens its exact local playlist and Back returns',
       (tester) async {
     final id = (await tester.runAsync(() async {
@@ -455,6 +473,14 @@ void main() {
     await show(tester);
     await tester.tap(find.text(playlist.title));
     await tester.pumpAndSettle();
+    bool savedOrder(String order) =>
+        settings.state.settings.values.any((setting) => setting.value == order);
+    await chooseOrder(tester, 'music-playlist-sort', 'Title',
+        () => savedOrder('title:ascending'));
+    await chooseOrder(tester, 'music-playlist-sort', 'Descending',
+        () => savedOrder('title:descending'));
+    expect(tester.getTopLeft(find.text('Étoile du matin')).dy,
+        lessThan(tester.getTopLeft(find.text('Étoile').first).dy));
     await tester.tap(find.byTooltip('Search playlist'));
     await tester.pumpAndSettle();
     final query = find.byKey(const ValueKey('music-local-playlist-query'));
@@ -498,6 +524,19 @@ void main() {
         expected.map((entry) => entry.queueEntryId));
     expect(player.start, 3);
     expect(queue[player.start!].queueEntryId, expected.last.queueEntryId);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    await chooseOrder(tester, 'music-playlist-sort', 'Default order',
+        () => savedOrder('source:descending'));
+    expect(player.online.map((song) => song.videoId),
+        songs.map((song) => song.videoId));
+    expect(
+        service
+            .getLocalPlaylists(database: db)
+            .singleWhere((stored) => stored.playlistId == playlist.playlistId)
+            .videos
+            .map((song) => song.videoId),
+        playlist.videos.map((song) => song.videoId));
   });
 
   testWidgets(
@@ -1282,10 +1321,8 @@ void main() {
     expect(tester.getTopLeft(find.text('Zulu song')).dy,
         lessThan(tester.getTopLeft(find.text('Alpha song')).dy));
 
-    await tester.tap(find.byKey(const ValueKey('music-library-sort')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Title'));
-    await tester.pumpAndSettle();
+    await chooseOrder(tester, 'music-library-sort', 'Title',
+        () => savedLibraryOrder('songs') == 'title:ascending');
     expect(tester.getTopLeft(find.text('Alpha song')).dy,
         lessThan(tester.getTopLeft(find.text('Zulu song')).dy));
     expect(library.entries.map((entry) => entry.id), [last.id, first.id]);
@@ -1299,6 +1336,36 @@ void main() {
     expect(player.start, 1);
     expect(find.byTooltip('Music actions'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
+
+    await chooseOrder(tester, 'music-library-sort', 'Descending',
+        () => savedLibraryOrder('songs') == 'title:descending');
+    expect(player.online.map((song) => song.videoId), [first.id, last.id]);
+    await tester.tap(find.byKey(const ValueKey('music-library-tab-channels')));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved order'), findsOneWidget);
+    expect(savedLibraryOrder('channels'), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await settings.close();
+    settings = TestSettingsCubit(SettingsState.init(), app);
+    await show(tester);
+    await tester.tap(find.byKey(const ValueKey('music-library-tab-songs')));
+    await tester.pumpAndSettle();
+    expect(savedLibraryOrder('songs'), 'title:descending');
+    expect(tester.getTopLeft(find.text('Zulu song')).dx,
+        lessThan(tester.getTopLeft(find.text('Alpha song')).dx));
+
+    final next = (await tester.runAsync(() => db.createProfile('Second')))!;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await settings.close();
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.profileChanged(next.id);
+    settings = TestSettingsCubit(SettingsState.init(), app);
+    await show(tester);
+    await tester.tap(find.byKey(const ValueKey('music-library-tab-songs')));
+    await tester.pumpAndSettle();
+    expect(savedLibraryOrder('songs'), isNull);
+    expect(find.text('Saved order'), findsOneWidget);
   });
 
   for (final listMenu in [false, true]) {
@@ -1338,10 +1405,8 @@ void main() {
       expect(search, findsNothing);
       await tester.tap(find.byKey(const ValueKey('music-library-tab-songs')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('music-library-sort')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Title'));
-      await tester.pumpAndSettle();
+      await chooseOrder(tester, 'music-library-sort', 'Title',
+          () => savedLibraryOrder('songs') == 'title:ascending');
       expect(
           find.byTooltip('Search saved songs').hitTestable(), findsOneWidget);
       await tester.tap(search);
@@ -1403,10 +1468,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('music-library-tab-songs')));
       await tester.pumpAndSettle();
       expect(select.hitTestable(), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('music-library-sort')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Title'));
-      await tester.pumpAndSettle();
+      await chooseOrder(tester, 'music-library-sort', 'Title',
+          () => savedLibraryOrder('songs') == 'title:ascending');
       if (list) {
         await tester.tap(find.byKey(const ValueKey('music-library-layout')));
         await tester.pumpAndSettle();

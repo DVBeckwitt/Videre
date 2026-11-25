@@ -9,6 +9,7 @@ import 'package:clipious/downloads/views/components/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
+import 'package:clipious/music/models/music_collection_order.dart';
 import 'package:clipious/music/models/music_download_order.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_layout.dart';
@@ -21,6 +22,7 @@ import 'package:clipious/music/services/music_playlist_covers.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
 import 'package:clipious/music/views/components/music_collection_selection_bar.dart';
+import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
 import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_download_storage_summary.dart';
 import 'package:clipious/music/views/components/music_duration_label.dart';
@@ -71,8 +73,6 @@ enum _LibraryFilter {
   };
 }
 
-enum _LibrarySort { saved, title }
-
 typedef _LibraryItem = ({Playlist? playlist, MusicLibraryEntry? bookmark});
 typedef _LibrarySelection = ({
   _LibraryFilter filter,
@@ -92,7 +92,6 @@ class MusicLibraryPage extends StatefulWidget {
 
 class _MusicLibraryPageState extends State<MusicLibraryPage> {
   late _LibraryFilter _filter;
-  _LibrarySort _sort = _LibrarySort.saved;
   bool _grid = !isTv;
   String? _playlistId;
   MusicLibrarySession? _sourceSession;
@@ -678,11 +677,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
-  Widget _savedSongsSelectionBar(
-      List<_LibraryItem> visible, List<_LibraryItem> all, Set<String> scope) {
+  Widget _savedSongsSelectionBar(List<_LibraryItem> visible,
+      List<_LibraryItem> all, Set<String> scope, MusicCollectionOrder order) {
     final title = AppLocalizations.of(context)!.musicSavedSongs;
     final session = MusicLibrarySession(context.read<AppCubit>());
-    final sort = _sort;
     final selected = [
       for (final item in all)
         if (scope.contains(item.bookmark!.id)) item.bookmark!,
@@ -693,18 +691,21 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     bool isCurrent() {
       if (!mounted ||
           !session.isCurrent ||
-          !identical(_savedSongsSelection, scope) ||
-          _sort != sort) {
+          !identical(_savedSongsSelection, scope)) {
         return false;
       }
+      final settings = context.read<SettingsCubit?>();
+      final currentOrder = MusicCollectionOrder.decode(settings
+          ?.state.settings[_libraryOrderSetting(_LibraryFilter.songs)]?.value);
+      if (currentOrder != order) return false;
       final live = <_LibraryItem>[
         for (final entry in session.library.entries)
           if (entry.kind == MusicLibraryKind.song && scope.contains(entry.id))
             (playlist: null, bookmark: entry),
       ];
-      _sortLibraryItems(live);
-      return listEquals(
-          selectedIds, [for (final item in live) item.bookmark!.id]);
+      return listEquals(selectedIds, [
+        for (final item in _sortedLibraryItems(live, order)) item.bookmark!.id,
+      ]);
     }
 
     return MusicSongSelectionBar(
@@ -821,7 +822,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
-  Widget _localPlaylist(Playlist playlist, MusicLibraryService library) {
+  Widget _localPlaylist(
+      BuildContext context, Playlist playlist, MusicLibraryService library) {
     final locals = AppLocalizations.of(context)!;
     final covers = MusicPlaylistCovers.forProfile(db, library.profileId);
     final title = playlist.playlistId == localWatchLaterId
@@ -845,6 +847,18 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     }
     final reference = PlaylistReference.forPlaylist(
         playlist, db.forProfile(library.profileId));
+    final displayOrder =
+        MusicCollectionSortMenu.playlistOrder(context, reference);
+    final displayIndices = displayOrder.orderIndices(songs,
+        sortValue: musicPlaylistTrackSortValue);
+    final sortMenu = MusicCollectionSortMenu.playlist(
+      reference: reference,
+      order: displayOrder,
+      compact: true,
+      isCurrent: () =>
+          mounted && _playlistId == playlist.playlistId && !_playlistSelecting,
+      onChanged: _jumpToPlaylistResults,
+    );
     final searchable = _playlistSearching
         ? [
             for (final song in songs)
@@ -928,7 +942,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 ],
                 if (playlist.playlistId != localWatchLaterId)
                   MusicPlaylistEditActions(
-                      playlist: playlist, reference: reference),
+                    playlist: playlist,
+                    reference: reference,
+                    allowReorder: displayOrder.isSourceOrder,
+                  ),
                 if (canPin)
                   OutlinedButton.icon(
                     onPressed: () => _setPlaylistPinned(
@@ -964,7 +981,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           builder: (_, input, __) {
             final terms = musicSearchTerms(input.text);
             final visible = [
-              for (var index = 0; index < songs.length; index++)
+              for (final index in displayIndices)
                 if (terms.isEmpty || terms.every(searchable[index].contains))
                   index,
             ];
@@ -996,6 +1013,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                     _playlistSelectButton(),
                                   if (widget.source == null)
                                     _playlistSearchButton(),
+                                  if (widget.source == null && songs.isNotEmpty)
+                                    sortMenu,
                                 ])
                               : ListTile(
                                   leading: IconButton(
@@ -1013,6 +1032,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                         if (songs.isNotEmpty)
                                           _playlistSelectButton(),
                                         _playlistSearchButton(),
+                                        if (songs.isNotEmpty) sortMenu,
                                       ]),
                                 ),
                     ),
@@ -1152,21 +1172,30 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                   if (playlist.videos.any((song) => song.musicMetadata != null))
                     _playlistSelectButton(),
                   _playlistSearchButton(),
+                  if (playlist.videos.any((song) => song.musicMetadata != null))
+                    MusicCollectionSortMenu.playlist(
+                      reference: source,
+                      order: MusicCollectionSortMenu.playlistOrder(
+                          context, source),
+                      compact: true,
+                      isCurrent: () =>
+                          widget.source == source && !_playlistSelecting,
+                      onChanged: _jumpToPlaylistResults,
+                    ),
                 ],
               ],
             ),
             body: playlist == null
                 ? Center(child: Text(locals.musicSourceUnavailable))
-                : _localPlaylist(playlist, library),
+                : _localPlaylist(context, playlist, library),
           ),
         );
       },
     );
   }
 
-  Widget _catalogLibrary(
-      MusicLibraryService library, List<_LibraryFilter> filters) {
-    final theme = Theme.of(context);
+  Widget _catalogLibrary(BuildContext context, MusicLibraryService library,
+      List<_LibraryFilter> filters) {
     final locals = AppLocalizations.of(context)!;
     final playlists = service
         .getLocalPlaylists(database: db.forProfile(library.profileId))
@@ -1175,7 +1204,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final selected = playlists
         .where((playlist) => playlist.playlistId == _playlistId)
         .firstOrNull;
-    if (selected != null) return _localPlaylist(selected, library);
+    if (selected != null) return _localPlaylist(context, selected, library);
     if (_playlistId case final missingId?) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
@@ -1204,11 +1233,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         .toList();
     final hasPlaylists =
         _filter == _LibraryFilter.playlists || _filter == _LibraryFilter.all;
-    final sortedItems = <_LibraryItem>[
+    final filter = _filter;
+    final settingName = _libraryOrderSetting(filter);
+    final order = MusicCollectionSortMenu.readOrder(context, settingName);
+    final sortedItems = _sortedLibraryItems([
       if (hasPlaylists)
         for (final playlist in playlists) (playlist: playlist, bookmark: null),
       for (final entry in entries) (playlist: null, bookmark: entry),
-    ];
+    ], order);
     final shortcuts = _filter == _LibraryFilter.all
         ? filters
             .where((filter) =>
@@ -1217,7 +1249,6 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                     context.watch<DownloadManagerCubit?>() != null))
             .toList()
         : const <_LibraryFilter>[];
-    _sortLibraryItems(items);
     final pins =
         hasPlaylists ? library.pinnedLocalPlaylistIds : const <String>{};
     final items = pins.isEmpty
@@ -1235,40 +1266,26 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         const ValueKey('music-saved-songs-search'),
         _LibraryFilter.songs,
         locals.musicSearchSavedSongs);
-    final sortMenu = PopupMenuButton<_LibrarySort>(
+    final sortMenu = MusicCollectionSortMenu(
       key: const ValueKey('music-library-sort'),
-      tooltip: locals.searchSortBy,
-      initialValue: _sort,
-      onSelected: (value) {
-        if (_sort == value) return;
-        setState(() => _sort = value);
+      settingName: settingName,
+      order: order,
+      compact: finding,
+      savedOrder: true,
+      fields: filter == _LibraryFilter.songs
+          ? MusicCollectionSortField.values
+          : const [
+              MusicCollectionSortField.source,
+              MusicCollectionSortField.title
+            ],
+      isCurrent: () =>
+          mounted &&
+          _filter == filter &&
+          _playlistId == null &&
+          _librarySelection == null,
+      onChanged: () {
         if (finding) _jumpToLibraryFindStart();
       },
-      itemBuilder: (_) => [
-        PopupMenuItem(
-            value: _LibrarySort.saved,
-            child: Text(locals.musicLibrarySavedOrder)),
-        PopupMenuItem(
-            value: _LibrarySort.title,
-            child: Text(locals.musicLibraryTitleOrder)),
-      ],
-      icon: finding ? const Icon(Icons.sort) : null,
-      child: finding
-          ? null
-          : Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Flexible(
-                  child: Text(
-                      _sort == _LibrarySort.saved
-                          ? locals.musicLibrarySavedOrder
-                          : locals.musicLibraryTitleOrder,
-                      style: theme.textTheme.titleSmall),
-                ),
-                const SizedBox(width: 8),
-                const Icon(Icons.arrow_downward_rounded, size: 16),
-              ]),
-            ),
     );
     final collections = items.where(_isCollection).toList();
     final collectionSelection = _collectionSelection;
@@ -1335,7 +1352,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               playbackItems: items,
               searchToolbar: selection == null
                   ? toolbar
-                  : _savedSongsSelectionBar(matches, items, selection),
+                  : _savedSongsSelectionBar(matches, items, selection, order),
               emptyResults: matches.isEmpty
                   ? terms.isEmpty
                       ? _empty()
@@ -1348,7 +1365,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       if (collectionSelection != null)
         _collectionSelectionBar(collections, collectionSelection, library)
       else if (selection != null)
-        _savedSongsSelectionBar(items, items, selection)
+        _savedSongsSelectionBar(items, items, selection, order)
       else
         toolbar,
       if (selection == null &&
@@ -1383,17 +1400,30 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           ? AppLocalizations.of(context)!.watchLater
           : item.playlist?.title ?? item.bookmark!.title;
 
-  void _sortLibraryItems(List<_LibraryItem> items) {
-    if (_sort != _LibrarySort.title) return;
-    items.sort((first, second) {
-      final title = _itemTitle(first)
-          .toLowerCase()
-          .compareTo(_itemTitle(second).toLowerCase());
-      return title != 0
-          ? title
-          : _itemKey(first).value.compareTo(_itemKey(second).value);
-    });
-  }
+  String _libraryOrderSetting(_LibraryFilter filter) =>
+      'music-collection-library-order:${filter.name}';
+
+  List<_LibraryItem> _sortedLibraryItems(
+          List<_LibraryItem> items, MusicCollectionOrder order) =>
+      [
+        for (final index
+            in order.orderIndices(items, sortValue: _libraryItemSortValue))
+          items[index],
+      ];
+
+  Object? _libraryItemSortValue(
+          _LibraryItem item, MusicCollectionSortField field) =>
+      switch (field) {
+        MusicCollectionSortField.source => null,
+        MusicCollectionSortField.title => _itemTitle(item),
+        MusicCollectionSortField.artist => item.bookmark?.subtitle,
+        MusicCollectionSortField.album => item.bookmark?.album,
+        MusicCollectionSortField.duration => switch (
+              item.bookmark?.durationSeconds) {
+            final int seconds when seconds > 0 => seconds,
+            _ => null,
+          },
+      };
 
   bool _isCollection(_LibraryItem item) =>
       item.playlist != null || item.bookmark?.kind == MusicLibraryKind.playlist;
@@ -2512,7 +2542,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                                 !isTv
                                             ? _downloads()
                                             : _catalogLibrary(
-                                                library, filters)),
+                                                context, library, filters)),
                       ],
                     )),
           );

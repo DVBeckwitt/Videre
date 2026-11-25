@@ -22,7 +22,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
 class _App extends Cubit<AppState> implements AppCubit {
   _App()
@@ -95,15 +94,20 @@ class _Downloads extends Cubit<DownloadManagerState>
 }
 
 class _Settings extends Cubit<SettingsState> implements SettingsCubit {
-  _Settings()
-      : super(SettingsState(
-            settings: const {},
-            packageInfo: PackageInfo(
-                appName: '', packageName: '', version: '', buildNumber: '')));
+  _Settings(this.database) : super(SettingsState.init());
+
+  final SembastSqfDb database;
 
   @override
-  Future<void> saveSetting(SettingsValue setting) async {
-    emit(state.copyWith(settings: {...state.settings, setting.name: setting}));
+  Future<void> reloadForProfile() async => emit(SettingsState.init());
+
+  @override
+  Future<void> setMusicCollectionPreference(String name, String value) async {
+    final owner = database.forProfile(database.profileId);
+    await owner.saveSetting(SettingsValue(name, value));
+    if (!isClosed && owner.profileId == database.profileId) {
+      await reloadForProfile();
+    }
   }
 
   @override
@@ -162,7 +166,7 @@ void main() {
     globals.db = database;
     library = LocalMusicLibrary(visibilityDatabase: () => database);
     player = _Player();
-    preferences = _Settings();
+    preferences = _Settings(database);
     calls = [];
     consent = null;
     cancelled = false;
@@ -543,7 +547,10 @@ void main() {
     await tester.tap(find.text('Descending'));
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
-    expect(preferences.state.settings['local-music-sort']?.value,
+    expect(
+        database
+            .getSettings('music-collection-device-sort-v1:legacy-folder')
+            ?.value,
         'dateModified:descending');
     expect(calls.where((method) => method == 'listTracks'), hasLength(1));
     await tester.tap(find.text('Second'));
@@ -581,6 +588,91 @@ void main() {
     expect(find.text('Total duration 00:01'), findsOneWidget);
     expect(find.text('Known size 100 B'), findsOneWidget);
     expect(find.text('Bonus'), findsNothing);
+  });
+
+  testWidgets('device collection preferences survive reopening per profile',
+      (tester) async {
+    consent = {...picked, 'selectionId': 'remembered-folder'};
+    pendingScan = Completer<List<Object?>>()
+      ..complete([
+        first,
+        {...second, 'album': 'Studio'},
+        {
+          ...second,
+          'title': 'Third',
+          'artist': 'Guest',
+          'uri': '$tree/document/Third',
+        },
+      ]);
+    final firstProfile = database.profileId;
+    final secondProfile = await tester.runAsync(() async {
+      await database
+          .saveSetting(SettingsValue('local-music-sort', 'title:descending'));
+      return (await database.createProfile('Another person')).id;
+    });
+    await preferences.reloadForProfile();
+    await show(tester, settings: false);
+    await tester.tap(find.text('Third'));
+    await tester.pumpAndSettle();
+    final playing = player.queue;
+    expect(playing.map((track) => track.title), ['Third', 'Second', 'First']);
+
+    await tester.tap(find.byTooltip('Sort by'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Date added'));
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    for (final label in ['Artist', 'Album']) {
+      await tester.tap(find.widgetWithText(InputChip, label));
+      await tester.pumpAndSettle();
+      await tester.tap(find
+          .descendant(of: find.byType(BottomSheet), matching: find.text(label))
+          .last);
+      await tester.pumpAndSettle();
+    }
+    expect(find.widgetWithText(InputChip, 'Artist · Artist'), findsOneWidget);
+    expect(find.widgetWithText(InputChip, 'Album · Album'), findsOneWidget);
+    expect(find.text('First'), findsOneWidget);
+    expect(find.text('Second'), findsNothing);
+    expect(find.text('Third'), findsNothing);
+    expect(player.queue, same(playing));
+
+    await tester.enterText(find.byType(TextField), 'no matching title');
+    await tester.pumpAndSettle();
+    expect(find.text('First'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await preferences.close();
+    preferences = _Settings(database);
+    await show(tester, settings: false);
+    expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        isEmpty);
+    expect(find.widgetWithText(InputChip, 'Artist · Artist'), findsOneWidget);
+    expect(find.widgetWithText(InputChip, 'Album · Album'), findsOneWidget);
+    expect(find.text('First'), findsOneWidget);
+    expect(
+        database
+            .getSettings(
+                'music-collection-device-sort-v1:selection:remembered-folder')
+            ?.value,
+        'dateAdded:descending');
+
+    await tester.runAsync(() => database.useProfile(secondProfile!));
+    await preferences.reloadForProfile();
+    library.visibilityProfileChanged();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(InputChip, 'Artist'), findsOneWidget);
+    expect(find.widgetWithText(InputChip, 'Album'), findsOneWidget);
+    expect(find.text('First'), findsOneWidget);
+    expect(find.text('Second'), findsOneWidget);
+
+    await tester.runAsync(() => database.useProfile(firstProfile));
+    await preferences.reloadForProfile();
+    library.visibilityProfileChanged();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(InputChip, 'Artist · Artist'), findsOneWidget);
+    expect(find.widgetWithText(InputChip, 'Album · Album'), findsOneWidget);
+    expect(find.text('Second'), findsNothing);
+    expect(player.queue, same(playing));
   });
 
   testWidgets('search matches local filenames and keeps the playing snapshot',
@@ -1110,6 +1202,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Solo credit'));
     await tester.pumpAndSettle();
+    expect(find.text('Distinct edition'), findsOneWidget);
+    expect(find.text('First'), findsNothing);
+    expect(find.text('Second'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    await show(tester, settings: false, app: app);
+    expect(find.widgetWithText(InputChip, 'Album · Album'), findsOneWidget);
     expect(find.text('Distinct edition'), findsOneWidget);
     expect(find.text('First'), findsNothing);
     expect(find.text('Second'), findsNothing);

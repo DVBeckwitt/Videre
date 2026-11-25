@@ -23,6 +23,7 @@ import '../../home/models/db/home_layout.dart';
 import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
 import '../../home/models/home_tabs_layout.dart';
+import '../../music/models/music_collection_order.dart';
 import '../../music/models/music_download_order.dart';
 import '../../music/models/music_layout.dart';
 import '../../music/models/music_mini_player_preferences.dart';
@@ -566,6 +567,20 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> updateMusicLayout(MusicLayout Function(MusicLayout) update) =>
       _saveSettingInOrder(
           musicLayoutSettingName, () => update(state.musicLayout).encode());
+
+  Future<void> setMusicCollectionPreference(String name, String value) =>
+      _saveSettingInOrder(name, () => value);
+
+  Future<void> updateMusicCollectionOrder(String name,
+          {MusicCollectionSortField? field, bool? descending}) =>
+      _saveSettingInOrder(name, () {
+        final current =
+            MusicCollectionOrder.decode(state.settings[name]?.value);
+        return MusicCollectionOrder(
+                field: field ?? current.field,
+                descending: descending ?? current.descending)
+            .encode();
+      });
 
   Future<void> setMusicDownloadOrder(MusicDownloadOrder order) =>
       _saveSettingInOrder(musicDownloadOrderSettingName, order.encode);

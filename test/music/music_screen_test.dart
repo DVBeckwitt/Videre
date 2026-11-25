@@ -26,6 +26,7 @@ import 'package:clipious/music/services/music_online_recents.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
+import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -2642,6 +2643,62 @@ void main() {
         [first.videoId, second.videoId]);
     expect(player.calls.single.startIndex, 1);
     expect(player.calls.single.audio, isTrue);
+  });
+
+  testWidgets('public playlist display sort preserves duplicate queue entries',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(800, 1100);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    catalog.collection = const MusicCollection(
+        id: 'PLpublic',
+        title: 'Public playlist',
+        tracks: [first, second, first]);
+    await show(tester, screen: const MusicScreen(playlistId: 'PLpublic'));
+    await tester.pumpAndSettle();
+
+    final locals =
+        AppLocalizations.of(tester.element(find.byType(MusicScreen)))!;
+    final sort = find.byTooltip(locals.searchSortBy);
+    final settingName =
+        MusicCollectionSortMenu.playlistSettingName(PlaylistReference(
+      kind: PlaylistSourceKind.public,
+      playlistId: 'PLpublic',
+      profileId: db.profileId,
+    ));
+    Future<void> choose(String label, String expected) async {
+      await tester.tap(sort);
+      await tester.pumpAndSettle();
+      final option = find.ancestor(
+          of: find.text(label),
+          matching:
+              find.byWidgetPredicate((widget) => widget is PopupMenuItem));
+      await tester.runAsync(() async {
+        final committed = settings.stream.firstWhere(
+            (state) => state.settings[settingName]?.value == expected);
+        await tester.tap(option);
+        await tester.pumpAndSettle();
+        await committed.timeout(const Duration(seconds: 3));
+      });
+      await tester.pumpAndSettle();
+    }
+
+    await choose(locals.musicLibraryTitleOrder, 'title:ascending');
+    await choose(locals.localMusicDescending, 'title:descending');
+    final firstRow = find.byKey(const ValueKey('music-song-0-firstsong01'));
+    final secondRow = find.byKey(const ValueKey('music-song-1-secondsong2'));
+    final duplicateRow = find.byKey(const ValueKey('music-song-2-firstsong01'));
+    double top(Finder row) => tester.getTopLeft(row).dy;
+    expect(top(secondRow), lessThan(top(firstRow)));
+    expect(top(firstRow), lessThan(top(duplicateRow)));
+    expect(player.calls, isEmpty);
+
+    await tester.tap(duplicateRow);
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.map((video) => video.videoId),
+        [first.videoId, second.videoId, first.videoId]);
+    expect(player.calls.single.startIndex, 2);
   });
 
   testWidgets('late artist detail cannot replace a newer search',
