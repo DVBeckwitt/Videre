@@ -13,6 +13,7 @@ import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_lyrics_service.dart';
 import 'package:clipious/music/views/components/music_playback_toggles.dart';
 import 'package:clipious/music/views/screens/music.dart';
@@ -68,6 +69,57 @@ class MusicPlayer extends StatefulWidget {
 }
 
 const _canvas = Color(0xff121212);
+
+/// Resolves saved titles for the visible player without changing its queue.
+class MusicPlaybackTitles extends StatelessWidget {
+  const MusicPlaybackTitles({super.key, required this.builder});
+
+  final Widget Function(BuildContext, String? Function(IdedVideo?)) builder;
+
+  @override
+  Widget build(BuildContext context) {
+    final profileId = context.select((AppCubit? app) {
+      final session = app?.state;
+      if (session == null ||
+          session.globalLoading ||
+          session.sessionRecoveryRequired) {
+        return null;
+      }
+      return session.profileId;
+    });
+    final library = profileId != null && profileId == db.profileId
+        ? MusicLibraryService.forProfile(db, profileId)
+        : null;
+
+    String? savedTitle(IdedVideo? entry) {
+      if (library == null ||
+          entry == null ||
+          isLocalMusicPlaybackId(entry.videoId)) {
+        return null;
+      }
+      final ownedSong = switch (entry) {
+        Video(
+          :final musicMetadata,
+          :final playbackConnection,
+          :final backendPlayback
+        ) =>
+          musicMetadata != null &&
+              ((playbackConnection ?? backendPlayback)?.server.profileId ??
+                      library.profileId) ==
+                  library.profileId,
+        DownloadedVideo(:final musicMetadata, :final profileId) =>
+          musicMetadata != null && profileId == library.profileId,
+        _ => false,
+      };
+      return ownedSong ? library.savedSong(entry.videoId)?.savedTitle : null;
+    }
+
+    return ListenableBuilder(
+      listenable: library?.changes ?? const AlwaysStoppedAnimation(0),
+      builder: (context, _) => builder(context, savedTitle),
+    );
+  }
+}
 
 /// Keeps the song launcher and the active player on the same surface.
 class _MusicPlayerSurface extends StatelessWidget {
@@ -235,10 +287,12 @@ class _MusicPlayerState extends State<MusicPlayer>
 
   @override
   Widget build(BuildContext context) {
-    return _MusicPlayerSurface(child: Builder(builder: _buildPlayer));
+    return _MusicPlayerSurface(
+        child: MusicPlaybackTitles(builder: _buildPlayer));
   }
 
-  Widget _buildPlayer(BuildContext context) {
+  Widget _buildPlayer(
+      BuildContext context, String? Function(IdedVideo?) savedTitle) {
     final app = context.watch<AppCubit>();
     final session = app.state;
     final player = context.read<PlayerCubit>();
@@ -274,6 +328,7 @@ class _MusicPlayerState extends State<MusicPlayer>
     }
     final music = video?.musicMetadata ?? offline?.musicMetadata;
     if (music == null) return const SizedBox.shrink();
+    final displayTitle = savedTitle(entry) ?? music.title;
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
@@ -370,22 +425,26 @@ class _MusicPlayerState extends State<MusicPlayer>
                                   (hasSeparateAlbumLabel
                                       ? 22 + metadataHeight
                                       : 0.0);
-                          final metadataReserve =
-                              portraitPhone && mountedMusic != null
-                                  ? _portraitMetadataReserve(
-                                      context, mountedMusic, titleStyle,
-                                      width: panel.maxWidth,
-                                      hasBookmark: mountedVideo != null,
-                                      deviceArtist: mountedDeviceTrack == null
-                                          ? null
-                                          : localMusicArtistCredits(
-                                                  mountedDeviceTrack)
-                                              .firstOrNull
-                                              ?.name,
-                                      onDevice: isLocalMusicPlaybackId(
-                                          mountedVideo?.videoId ??
-                                              mountedOffline?.videoId))
-                                  : 0.0;
+                          final metadataReserve = portraitPhone &&
+                                  mountedMusic != null
+                              ? _portraitMetadataReserve(
+                                  context,
+                                  mountedMusic,
+                                  savedTitle(mountedVideo ?? mountedOffline) ??
+                                      mountedMusic.title,
+                                  titleStyle,
+                                  width: panel.maxWidth,
+                                  hasBookmark: mountedVideo != null,
+                                  deviceArtist: mountedDeviceTrack == null
+                                      ? null
+                                      : localMusicArtistCredits(
+                                              mountedDeviceTrack)
+                                          .firstOrNull
+                                          ?.name,
+                                  onDevice: isLocalMusicPlaybackId(
+                                      mountedVideo?.videoId ??
+                                          mountedOffline?.videoId))
+                              : 0.0;
                           final controlBudget = 318 +
                               metadataHeight * 2 +
                               metadataReserve +
@@ -435,7 +494,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                                               children: [
                                                 Semantics(
                                                   header: true,
-                                                  child: Text(music.title,
+                                                  child: Text(displayTitle,
                                                       key: const ValueKey(
                                                           'music-player-title'),
                                                       style: titleStyle),
@@ -931,8 +990,8 @@ class _MusicPlayerState extends State<MusicPlayer>
           textDirection: Directionality.of(context),
           textScaler: MediaQuery.textScalerOf(context));
 
-  double _portraitMetadataReserve(
-      BuildContext context, MusicMetadata music, TextStyle? titleStyle,
+  double _portraitMetadataReserve(BuildContext context, MusicMetadata music,
+      String displayTitle, TextStyle? titleStyle,
       {required double width,
       required bool hasBookmark,
       required String? deviceArtist,
@@ -948,7 +1007,7 @@ class _MusicPlayerState extends State<MusicPlayer>
             : music.artist);
     final measurement = (
       width,
-      music.title,
+      displayTitle,
       artist,
       deviceArtist != null,
       linked,
@@ -984,7 +1043,7 @@ class _MusicPlayerState extends State<MusicPlayer>
         (actionLabelWidth <= width * 0.45 ? actionLabelWidth : 48.0) +
             (hasBookmark && !onDevice ? 52.0 : 0.0);
     final inlineWidth = math.max(1.0, width - actionWidth - 8);
-    final title = measure(music.title, titleStyle, width);
+    final title = measure(displayTitle, titleStyle, width);
     final byline = measure(artist, artistStyle, width);
     final textHeight =
         title.height + 2 + math.max(byline.height, linked ? 48.0 : 0.0);
@@ -997,7 +1056,7 @@ class _MusicPlayerState extends State<MusicPlayer>
     // The caller measures the mounted track so the cover cannot jump as a
     // swipe selects the next title before its decoder opens.
     final priorTitle =
-        measure(music.title, titleStyle, inlineWidth, maxLines: 2);
+        measure(displayTitle, titleStyle, inlineWidth, maxLines: 2);
     final priorByline = measure(artist, artistStyle, inlineWidth, maxLines: 1);
     final prior = math.max(
         48.0,
@@ -1580,7 +1639,11 @@ class _MusicQueueFooterLabel extends StatelessWidget {
   const _MusicQueueFooterLabel();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MusicPlaybackTitles(builder: _buildPreview);
+
+  Widget _buildPreview(
+      BuildContext context, String? Function(IdedVideo?) savedTitle) {
     // Position updates and sheet animation frames do not change this target.
     context.select((PlayerCubit player) {
       final state = player.state;
@@ -1603,7 +1666,7 @@ class _MusicQueueFooterLabel extends StatelessWidget {
       builder: (context, _, __) {
         final locals = AppLocalizations.of(context)!;
         final next = player.adjacentMusicEntry(previous: false);
-        final (title, artist) = switch (next) {
+        final (catalogTitle, artist) = switch (next) {
           Video(:final musicMetadata, :final title, :final author) => (
               musicMetadata?.title ?? title ?? '',
               musicMetadata?.artist ?? author ?? '',
@@ -1615,6 +1678,7 @@ class _MusicQueueFooterLabel extends StatelessWidget {
             ),
           _ => ('', ''),
         };
+        final title = savedTitle(next) ?? catalogTitle;
         const overflow = TextOverflow.ellipsis;
         final queue = Text(locals.musicQueue, maxLines: 1, overflow: overflow);
         if (title.isEmpty) return queue;
@@ -1909,7 +1973,11 @@ class _MusicQueueState extends State<MusicQueue> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MusicPlaybackTitles(builder: _buildQueue);
+
+  Widget _buildQueue(
+      BuildContext context, String? Function(IdedVideo?) savedTitle) {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final videos = _entries(player);
@@ -2151,7 +2219,8 @@ class _MusicQueueState extends State<MusicQueue> {
         final video = item is Video ? item : null;
         final offline = item is DownloadedVideo ? item : null;
         final music = video?.musicMetadata ?? offline?.musicMetadata;
-        final (:title, :artist) = musicQueueLabels(item);
+        final (title: catalogTitle, :artist) = musicQueueLabels(item);
+        final title = savedTitle(item) ?? catalogTitle;
         final isActive = id == currentId;
         final canEdit = editing && !_isProtectedOccurrence(player, id);
         final isEarlier = active >= 0 && index < active;

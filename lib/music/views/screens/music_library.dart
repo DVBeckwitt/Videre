@@ -527,7 +527,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                 child:
                     _bookmarkArtwork(entry, _artwork(entry.displayThumbnails))),
         title: _bookmarkTitle(entry,
-            Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis)),
+            Text(entry.displayTitle, maxLines: 2, overflow: TextOverflow.ellipsis)),
         subtitle: entry.subtitle.isEmpty
             ? null
             : Text(entry.subtitle,
@@ -848,10 +848,16 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     }
     final reference = PlaylistReference.forPlaylist(
         playlist, db.forProfile(library.profileId));
+    String displayTitle(Video song) =>
+        library.savedSong(song.videoId)?.savedTitle ?? song.musicMetadata!.title;
+    Object? displaySortValue(Video song, MusicCollectionSortField field) =>
+        field == MusicCollectionSortField.title
+            ? displayTitle(song)
+            : musicPlaylistTrackSortValue(song, field);
     final displayOrder =
         MusicCollectionSortMenu.playlistOrder(context, reference);
     final displayIndices = displayOrder.orderIndices(songs,
-        sortValue: musicPlaylistTrackSortValue);
+        sortValue: displaySortValue);
     final sortMenu = MusicCollectionSortMenu.playlist(
       reference: reference,
       order: displayOrder,
@@ -864,7 +870,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
         ? [
             for (final song in songs)
               normalizeMusicSearchText(
-                  '${song.musicMetadata!.title} ${song.musicMetadata!.artist}'),
+                  '${displayTitle(song)} ${song.musicMetadata!.artist}'),
           ]
         : const <String>[];
     Future<void> playSong(int index) {
@@ -1077,7 +1083,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                               ]),
                             ),
                             title: MusicStatusTitle.song(
-                                video: song, child: Text(music.title)),
+                                video: song, child: Text(displayTitle(song))),
                             subtitle: Text(music.artist),
                             trailing: _playlistSelecting
                                 ? ExcludeSemantics(
@@ -1112,7 +1118,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                       displayOrder.field == MusicCollectionSortField.source
                           ? null
                           : (index) => MusicCollectionOrder.normalizeSortValue(
-                              musicPlaylistTrackSortValue(
+                              displaySortValue(
                                   songs[index], displayOrder.field))),
               child: view,
             );
@@ -1355,7 +1361,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       final searchable = [
         for (final item in items)
           normalizeMusicSearchText(
-              '${item.bookmark!.title} ${item.bookmark!.subtitle}'),
+              '${item.bookmark!.displayTitle} ${item.bookmark!.subtitle}'),
       ];
       return ValueListenableBuilder(
         valueListenable: _libraryQuery,
@@ -1415,7 +1421,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   String _itemTitle(_LibraryItem item) =>
       item.playlist?.playlistId == localWatchLaterId
           ? AppLocalizations.of(context)!.watchLater
-          : item.playlist?.title ?? item.bookmark!.title;
+          : item.playlist?.title ?? item.bookmark!.displayTitle;
 
   String _libraryOrderSetting(_LibraryFilter filter) =>
       'music-collection-library-order:${filter.name}';

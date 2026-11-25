@@ -10,12 +10,22 @@ enum MusicLibraryKind { song, album, artist, playlist }
 
 const musicLibraryMaximumBytes = 5 * 1024 * 1024;
 const musicLibraryMaximumEntries = 10000;
+const savedSongTitleMaximumLength = 1024;
+
+String? normalizeSavedSongTitle(Object? value) {
+  if (value is! String) return null;
+  final clean = value.replaceAll(RegExp(r'[\x00-\x1f\x7f-\x9f]'), ' ').trim();
+  return clean.isEmpty || clean.runes.length > savedSongTitleMaximumLength
+      ? null
+      : clean;
+}
 
 /// Display metadata and public catalog identities, never playback responses.
 class MusicLibraryEntry {
   final MusicLibraryKind kind;
   final String id;
   final String title;
+  final String? savedTitle;
   final String subtitle;
   final List<MusicArtistCredit> artistCredits;
   final String? album;
@@ -24,6 +34,8 @@ class MusicLibraryEntry {
   final List<ImageObject> thumbnails;
   final bool usesVideoThumbnails;
   final bool isArtTrack;
+
+  String get displayTitle => savedTitle ?? title;
 
   List<ImageObject> get coverThumbnails =>
       kind == MusicLibraryKind.song && !usesVideoThumbnails
@@ -40,6 +52,7 @@ class MusicLibraryEntry {
     required this.kind,
     required this.id,
     required this.title,
+    this.savedTitle,
     this.subtitle = '',
     this.artistCredits = const [],
     this.album,
@@ -102,6 +115,21 @@ class MusicLibraryEntry {
       title: artist.name,
       thumbnails: artist.thumbnails);
 
+  MusicLibraryEntry withSavedTitle(String? savedTitle) => MusicLibraryEntry(
+        kind: kind,
+        id: id,
+        title: title,
+        savedTitle: savedTitle,
+        subtitle: subtitle,
+        artistCredits: artistCredits,
+        album: album,
+        albumPlaylistId: albumPlaylistId,
+        durationSeconds: durationSeconds,
+        thumbnails: thumbnails,
+        usesVideoThumbnails: usesVideoThumbnails,
+        isArtTrack: isArtTrack,
+      );
+
   Video toVideo() {
     if (kind != MusicLibraryKind.song) {
       throw StateError('Only songs can be played directly');
@@ -130,6 +158,8 @@ class MusicLibraryEntry {
         'kind': kind.name,
         'id': id,
         'title': title,
+        if (kind == MusicLibraryKind.song && savedTitle != null)
+          'savedTitle': savedTitle,
         'subtitle': subtitle,
         if (artistCredits.isNotEmpty && kind == MusicLibraryKind.song)
           'artistCredits':
@@ -183,6 +213,9 @@ class MusicLibraryEntry {
         kind: kind,
         id: id,
         title: title,
+        savedTitle: kind == MusicLibraryKind.song
+            ? normalizeSavedSongTitle(value['savedTitle'])
+            : null,
         subtitle: _text(value['subtitle']) ?? '',
         artistCredits: kind == MusicLibraryKind.song
             ? MusicArtistCredit.parseList(value['artistCredits'])

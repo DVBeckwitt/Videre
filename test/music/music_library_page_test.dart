@@ -1296,6 +1296,66 @@ void main() {
     expect(library.entries.single.id, song.videoId);
   });
 
+  testWidgets('saved song title edits update the row and Find until reset',
+      (tester) async {
+    const editedTitle = 'Étoile Live';
+    await tester.runAsync(() => library.save(MusicLibraryEntry.song(song)));
+    await show(tester);
+    await tester.tap(find.byKey(const ValueKey('music-library-tab-songs')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('music-library-layout')));
+    await tester.pumpAndSettle();
+
+    final row = find.byKey(ValueKey('music-saved-song-${song.videoId}'));
+    final actions =
+        find.descendant(of: row, matching: find.byTooltip('Music actions'));
+    final input = find.byKey(const ValueKey('music-saved-song-title-input'));
+    Finder rowTitle(String title) =>
+        find.descendant(of: row, matching: find.text(title));
+
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit title'));
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: input, matching: find.text(song.title!)),
+        findsOneWidget);
+    await tester.enterText(input, '  $editedTitle  ');
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      await waitFor(() => library.entries.single.savedTitle == editedTitle);
+    });
+    await tester.pumpAndSettle();
+    expect(rowTitle(editedTitle), findsOneWidget);
+    expect(rowTitle(song.title!), findsNothing);
+    expect(library.entries.single.title, song.title);
+    expect(library.entries.single.id, song.videoId);
+
+    await tester.tap(find.byKey(const ValueKey('music-saved-songs-search')));
+    await tester.pumpAndSettle();
+    final query = find.byKey(const ValueKey('music-saved-songs-query'));
+    await tester.enterText(query, 'etoile live');
+    await tester.pumpAndSettle();
+    expect(rowTitle(editedTitle), findsOneWidget);
+
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit title'));
+    await tester.pumpAndSettle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Use original title'));
+      await tester.pumpAndSettle();
+      await waitFor(() => library.entries.single.savedTitle == null);
+    });
+    await tester.pumpAndSettle();
+    expect(row, findsNothing);
+    expect(find.text('No results found.'), findsOneWidget);
+
+    await tester.enterText(query, 'saved song');
+    await tester.pumpAndSettle();
+    expect(rowTitle(song.title!), findsOneWidget);
+  });
+
   testWidgets('title sorting is local and grid actions preserve saved songs',
       (tester) async {
     const first = MusicLibraryEntry(

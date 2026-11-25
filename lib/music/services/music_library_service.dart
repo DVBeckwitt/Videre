@@ -15,6 +15,7 @@ class _ProfileChanges extends ChangeNotifier {
   String? storedValue;
   Map<String, dynamic> data = {};
   List<MusicLibraryEntry>? entries;
+  Map<String, MusicLibraryEntry>? songsById;
   Map<String, List<ImageObject>>? coversBySongId;
 
   void changed() => notifyListeners();
@@ -40,6 +41,7 @@ class MusicLibraryService {
     _changes.storedValue = stored;
     _changes.data = {};
     _changes.entries = null;
+    _changes.songsById = null;
     _changes.coversBySongId = null;
     try {
       final value = jsonDecode(stored ?? '{}');
@@ -55,6 +57,15 @@ class MusicLibraryService {
   List<MusicLibraryEntry> get entries {
     final data = _read();
     return _changes.entries ??= List.unmodifiable(_entries(data));
+  }
+
+  MusicLibraryEntry? savedSong(String songId) {
+    final bookmarks = entries;
+    final songs = _changes.songsById ??= {
+      for (final entry in bookmarks)
+        if (entry.kind == MusicLibraryKind.song) entry.id: entry,
+    };
+    return songs[songId];
   }
 
   /// Resolve a whole catalog page against one snapshot of this profile's
@@ -139,10 +150,40 @@ class MusicLibraryService {
     final clean = MusicLibraryEntry.tryParse(entry.toJson());
     if (clean == null) throw ArgumentError('Invalid music bookmark');
     return _write((entries, _) {
-      entries.removeWhere(
-          (item) => item.kind == clean.kind && item.id == clean.id);
-      entries.insert(0, clean);
+      final index = entries
+          .indexWhere((item) => item.kind == clean.kind && item.id == clean.id);
+      final savedTitle = index < 0 ? null : entries.removeAt(index).savedTitle;
+      entries.insert(
+          0,
+          savedTitle == clean.savedTitle
+              ? clean
+              : clean.withSavedTitle(savedTitle));
     });
+  }
+
+  /// Change a saved song's display title in place. Null restores its metadata
+  /// title. The song must still belong to this profile when the write starts.
+  Future<bool> setSavedSongTitle(String songId, String? title,
+      {required bool Function() isCurrent}) async {
+    final clean = normalizeSavedSongTitle(title);
+    if (title != null && clean == null) {
+      throw ArgumentError('Invalid saved song title');
+    }
+    var found = false;
+    var changed = false;
+    await _write((entries, _) {
+      if (!isCurrent()) return;
+      final index = entries.indexWhere(
+          (entry) => entry.kind == MusicLibraryKind.song && entry.id == songId);
+      if (index < 0) return;
+      found = true;
+      final entry = entries[index];
+      final savedTitle = clean == entry.title ? null : clean;
+      if (savedTitle == entry.savedTitle) return;
+      entries[index] = entry.withSavedTitle(savedTitle);
+      changed = true;
+    }, shouldWrite: () => changed);
+    return found;
   }
 
   /// Merge a local song list without replacing bookmarks or fetching metadata.
@@ -246,6 +287,7 @@ class MusicLibraryService {
           kind: entry.kind,
           id: entry.id,
           title: title,
+          savedTitle: entry.savedTitle,
           subtitle: artist,
           artistCredits:
               useDetailCredits ? detail.artistCredits : entry.artistCredits,

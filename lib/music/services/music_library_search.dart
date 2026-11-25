@@ -29,7 +29,7 @@ final class MusicLibrarySearchBookmark extends MusicLibrarySearchHit {
   @override
   String get key => 'bookmark:${entry.kind.name}:${entry.id}';
   @override
-  String get title => entry.title;
+  String get title => entry.displayTitle;
   @override
   String? get subtitle => entry.subtitle.isEmpty ? null : entry.subtitle;
 }
@@ -189,7 +189,7 @@ class MusicLibrarySearch extends ChangeNotifier {
         if (((includeSongs && item.kind == MusicLibraryKind.song) ||
                 (includePlaylists && item.kind == MusicLibraryKind.playlist)) &&
             matches(item, [
-              item.title,
+              item.displayTitle,
               item.subtitle,
               item.album,
               ...item.artistCredits.map((credit) => credit.name),

@@ -141,6 +141,88 @@ void main() {
     expect(library.entries, hasLength(30));
   });
 
+  test('saved song title is private to its profile and survives reopening',
+      () async {
+    final factory = newDatabaseFactoryMemory();
+    var store = SembastSqfDb(await factory.openDatabase('saved-song-title'));
+    await store.getProfiles();
+    final ownerId = store.profileId;
+    final otherId = (await store.createProfile('Another listener')).id;
+    var saved = MusicLibraryService.forProfile(store, ownerId);
+    await saved.save(song);
+    await MusicLibraryService.forProfile(store, otherId).save(song);
+    await saved.markLocalPlaylist('local:playlist');
+    expect(
+        await saved.setSavedSongTitle(song.id, '  My\tSong  ',
+            isCurrent: () => true),
+        isTrue);
+    await store.close();
+
+    store = SembastSqfDb(await factory.openDatabase('saved-song-title'));
+    await store.getProfiles();
+    saved = MusicLibraryService.forProfile(store, ownerId);
+    final edited = saved.savedSong(song.id)!;
+    expect(edited.toJson(), {...song.toJson(), 'savedTitle': 'My Song'});
+    expect(edited.displayTitle, 'My Song');
+    expect(edited.toVideo().videoId, song.id);
+    expect(edited.toVideo().musicMetadata!.title, song.title);
+    expect(saved.localPlaylistIds, {'local:playlist'});
+    final other = MusicLibraryService.forProfile(store, otherId);
+    expect(other.savedSong(song.id)!.displayTitle, song.title);
+    expect(await saved.setSavedSongTitle(song.id, null, isCurrent: () => true),
+        isTrue);
+    expect(saved.savedSong(song.id)!.toJson(), song.toJson());
+    await store.close();
+  });
+
+  test('title edits preserve order, survive details and respect stale writes',
+      () async {
+    const imported = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: 'takeout0001', title: 'takeout0001');
+    const details = MusicLibraryEntry(
+        kind: MusicLibraryKind.song, id: 'takeout0001', title: 'Catalog title');
+    await library.save(song);
+    await library.importSongs([imported]);
+
+    var current = true;
+    final stale = library.setSavedSongTitle(imported.id, 'Stale',
+        isCurrent: () => current);
+    current = false;
+    expect(await stale, isFalse);
+    expect(library.savedSong(imported.id)!.savedTitle, isNull);
+
+    await library.setSavedSongTitle(imported.id, 'Mine', isCurrent: () => true);
+    expect(library.entries.map((entry) => entry.id), [song.id, imported.id]);
+    expect(await library.fillSongDetails([details], isCurrent: () => true), 1);
+    expect(library.savedSong(imported.id)!.displayTitle, 'Mine');
+    expect(library.savedSong(imported.id)!.title, details.title);
+    await library.save(details);
+    expect(library.savedSong(imported.id)!.displayTitle, 'Mine');
+    await library.setSavedSongTitle(imported.id, null, isCurrent: () => true);
+    expect(library.savedSong(imported.id)!.displayTitle, details.title);
+
+    final removed = library.remove(imported.kind, imported.id);
+    final pending = library.setSavedSongTitle(imported.id, 'Removed',
+        isCurrent: () => true);
+    await removed;
+    expect(await pending, isFalse);
+    expect(library.savedSong(imported.id), isNull);
+  });
+
+  test('invalid saved title leaves the song readable and preserves its title',
+      () async {
+    await library.save(song);
+    for (final invalid in [' \n\t ', 'x' * (savedSongTitleMaximumLength + 1)]) {
+      await expectLater(
+          library.setSavedSongTitle(song.id, invalid, isCurrent: () => true),
+          throwsArgumentError);
+      final parsed =
+          MusicLibraryEntry.tryParse({...song.toJson(), 'savedTitle': invalid});
+      expect(parsed?.displayTitle, song.title);
+    }
+    expect(library.savedSong(song.id)?.toJson(), song.toJson());
+  });
+
   test('fills imported song details in place and preserves existing metadata',
       () async {
     const imported = 'takeout0001';

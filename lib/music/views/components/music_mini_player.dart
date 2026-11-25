@@ -18,12 +18,14 @@ import 'package:clipious/player/views/components/player_modal_back_handler.dart'
 import 'package:clipious/settings/models/theme_palette.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart' show DeviceType, getDeviceType;
+import 'package:clipious/videos/models/ided_video.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'music_library_actions.dart';
+import 'music_player.dart' show MusicPlaybackTitles;
 import 'music_playback_artwork.dart';
 import 'music_playback_toggles.dart';
 import 'music_playing_source.dart';
@@ -34,7 +36,11 @@ class MusicMiniPlayer extends StatelessWidget {
   const MusicMiniPlayer({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MusicPlaybackTitles(builder: _buildMiniPlayer);
+
+  Widget _buildMiniPlayer(
+      BuildContext context, String? Function(IdedVideo?) savedTitle) {
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final pending = player.openingMusicEntry;
@@ -44,6 +50,7 @@ class MusicMiniPlayer extends StatelessWidget {
     final offline = entry is DownloadedVideo ? entry : null;
     final music = video?.musicMetadata ?? offline?.musicMetadata;
     if (music == null) return const SizedBox.shrink();
+    final displayTitle = savedTitle(entry) ?? music.title;
     final locals = AppLocalizations.of(context)!;
     final palette =
         context.select((SettingsCubit cubit) => cubit.state.themePalette);
@@ -112,7 +119,7 @@ class MusicMiniPlayer extends StatelessWidget {
     final largeText = MediaQuery.textScalerOf(context).scale(14) > 22;
     const errorIcon = Icon(Icons.error_outline,
         key: ValueKey('music-mini-error'), size: 20, color: error);
-    final title = Text(music.title,
+    final title = Text(displayTitle,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: text.bodyMedium?.copyWith(
@@ -169,7 +176,7 @@ class MusicMiniPlayer extends StatelessWidget {
                       child: Semantics(
                         button: true,
                         label:
-                            '${locals.musicNowPlaying}, ${music.title}, $artist${statusLabel == null ? '' : ', $statusLabel'}',
+                            '${locals.musicNowPlaying}, $displayTitle, $artist${statusLabel == null ? '' : ', $statusLabel'}',
                         onTap: player.showBigPlayer,
                         onLongPress: openAlbum,
                         customSemanticsActions: openAlbum == null

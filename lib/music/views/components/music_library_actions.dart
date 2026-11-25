@@ -36,6 +36,7 @@ import 'package:logging/logging.dart';
 import '../screens/music.dart';
 import 'local_music_folder.dart' show renameLocalMusicTrack;
 import 'music_listening_timeline.dart';
+import 'music_saved_song_title_dialog.dart';
 
 void _showActionError(BuildContext context) {
   final message = AppLocalizations.of(context)!.musicLibraryActionError;
@@ -222,6 +223,7 @@ enum _LibraryAction {
   enqueue,
   saveBookmark,
   removeBookmark,
+  editSavedTitle,
   save,
   removeFromPlaylist,
   download,
@@ -601,6 +603,11 @@ class MusicLibraryActions extends StatefulWidget {
                 ? _LibraryAction.removeBookmark
                 : _LibraryAction.saveBookmark,
             child: Text(saved ? locals.musicRemoveSong : locals.musicSaveSong)),
+        if (saved)
+          PopupMenuItem(
+              key: const ValueKey('music-edit-saved-song-title'),
+              value: _LibraryAction.editSavedTitle,
+              child: Text(locals.musicEditSavedSongTitle)),
       ],
       PopupMenuItem(
           value: _LibraryAction.save,
@@ -661,6 +668,18 @@ class MusicLibraryActions extends StatefulWidget {
       if (song != null) {
         await session.setBookmark(song,
             saved: action == _LibraryAction.saveBookmark);
+      }
+    } else if (action == _LibraryAction.editSavedTitle) {
+      final entry = session.library.savedSong(videos.single.videoId);
+      bool current() =>
+          context.mounted && session.isCurrent && (isCurrent?.call() ?? true);
+      if (entry != null && current()) {
+        await showSavedSongTitleEditor(context,
+            entry: entry,
+            isCurrent: current,
+            inPlayer: inPlayer,
+            onSave: (title) => session.library
+                .setSavedSongTitle(entry.id, title, isCurrent: current));
       }
     } else if (action == _LibraryAction.save) {
       await _showSave(context, videos, inPlayer: inPlayer, canSave: isCurrent);
