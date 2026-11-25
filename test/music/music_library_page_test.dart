@@ -529,7 +529,7 @@ void main() {
     await chooseOrder(tester, 'music-playlist-sort', 'Default order',
         () => savedOrder('source:descending'));
     expect(player.online.map((song) => song.videoId),
-        songs.map((song) => song.videoId));
+        expected.map((song) => song.videoId));
     expect(
         service
             .getLocalPlaylists(database: db)
