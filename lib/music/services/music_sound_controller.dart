@@ -4,6 +4,9 @@ import 'package:clipious/globals.dart';
 import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
+import '../models/replay_gain.dart';
+import 'music_replay_gain_preferences.dart';
+
 class MusicEqualizerBand {
   final int index;
   final double frequency;
@@ -56,11 +59,13 @@ class _JustAudioEqualizer implements MusicEqualizerBackend {
       .setAndroidEqualizerBandGain(band, gain, expectedSessionId: session);
 }
 
-/// Sound settings last for the current listening session. Effects are created
-/// only after Sound is opened, and failures never enter the playback error path.
+/// Equalizer effects last for the current listening session and are created
+/// only after Sound is opened. ReplayGain and preamp are profile preferences.
 class MusicSoundController extends ChangeNotifier {
-  MusicSoundController({bool? supported, String Function()? currentProfile})
-      : supported = supported ??
+  MusicSoundController({
+    bool? supported,
+    String Function()? currentProfile,
+  })  : supported = supported ??
             (!kIsWeb && defaultTargetPlatform == TargetPlatform.android),
         _currentProfile = currentProfile ?? (() => db.profileId);
 
@@ -87,6 +92,32 @@ class MusicSoundController extends ChangeNotifier {
   bool get enabled => _enabled;
   bool get waiting => supported && (_session == null || _session! <= 0);
   bool get available => supported && _parameters != null && !_failed;
+
+  bool get replayGainSupported => supported;
+  ReplayGainMode get replayGainMode =>
+      replayGainSupported ? _replayGainPreferences.mode : ReplayGainMode.off;
+  double get musicPreampDb =>
+      replayGainSupported ? _replayGainPreferences.preampDb : 0;
+
+  MusicReplayGainPreferences get _replayGainPreferences =>
+      MusicReplayGainPreferences(db.forProfile(db.profileId));
+
+  Future<void> setReplayGainMode(ReplayGainMode mode) =>
+      _saveReplayGain((preferences) => preferences.setMode(mode));
+
+  Future<void> setMusicPreampDb(double db) =>
+      _saveReplayGain((preferences) => preferences.setPreampDb(db));
+
+  Future<void> _saveReplayGain(
+      Future<void> Function(MusicReplayGainPreferences) save) async {
+    if (_disposed || !replayGainSupported) return;
+    final database = db;
+    final profile = database.profileId;
+    await save(MusicReplayGainPreferences(database.forProfile(profile)));
+    if (identical(db, database) && db.profileId == profile) {
+      _notify();
+    }
+  }
 
   void attach(AudioPlayer player, {required String profileId}) =>
       attachBackend(_JustAudioEqualizer(player),

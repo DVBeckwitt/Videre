@@ -14,8 +14,11 @@ import 'package:just_audio/just_audio.dart';
 import 'package:logging/logging.dart';
 
 import '../../settings/states/settings.dart';
+import '../../music/models/music_background_playback.dart';
 import '../../music/models/music_content_advisory.dart';
+import '../../music/models/replay_gain.dart';
 import '../../music/models/song_transition.dart';
+import '../../music/services/cached_music.dart';
 import '../../videos/models/ided_video.dart';
 import '../../network/network_proxy.dart';
 import '../audio_playback_sources.dart';
@@ -25,6 +28,7 @@ import '../models/media_event.dart';
 import '../models/backend_playback.dart';
 import '../models/audio_stall_detector.dart';
 import '../models/playback_pitch.dart';
+import '../models/playback_recovery.dart';
 import '../models/music_audio_quality.dart';
 import '../models/local_music_playback.dart';
 import '../models/manual_music_preparation.dart';
@@ -102,6 +106,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   int _parentPlaybackGeneration = 0;
   bool get _ownsParentPlayback =>
       _parentPlaybackGeneration == player.backendPlaybackGeneration;
+  bool get _selectedSourceIsMusic =>
+      (state.video?.musicMetadata ?? state.offlineVideo?.musicMetadata) != null;
+  bool _requiresLocalSource(Video? video) =>
+      isLocalMusicPlaybackId(video?.videoId) ||
+      video?.explicitMusicDownload != null ||
+      CachedMusicPlayback.of(video) != null;
   double _playbackSpeed = 1;
   int _playbackPitchSemitones = 0;
   int? _loadingGeneration;
@@ -136,12 +146,15 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       _nativeProgressRequest;
   Future<void>? _disposal;
   final _standbys = <String, _StandbyAudio>{};
-  StreamSubscription<SettingsState>? _qualityChanges;
+  StreamSubscription<SettingsState>? _settingsChanges;
   Map<String, IdedVideo> _adjacentEntries = const {};
   final _retiring = <Future<void>>{};
   _StandbyAudio? _promoted;
   _ManualMusicDecoder? _manual;
   late final _transition = _SongTransitionPlayback(this);
+  final _musicGainDatabase = db;
+  final _musicGainProfile = db.profileId;
+  final _replayGainTags = Expando<ReplayGain>();
   final _playerSubscriptions = <StreamSubscription<dynamic>>[];
 
   AudioPlayerCubit(super.initialState, super.player, this.settings) {
@@ -155,10 +168,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       player.hasOpeningMusicCrossfade = null;
     }
     player.removeAdjacentMusicListener(_updateAdjacents);
+    player.musicSound.removeListener(_refreshMusicGain);
     try {
       await stopForProxyChange();
     } finally {
-      await _qualityChanges?.cancel();
+      await _settingsChanges?.cancel();
       await super.close();
     }
   }
@@ -170,15 +184,24 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     initPlayer();
     playVideo(state.offlineVideo != null, startAt: player.state.startAt);
     player.addAdjacentMusicListener(_updateAdjacents);
-    var previous = settings.state.musicStreamingQuality;
-    _qualityChanges = settings.stream.listen((state) {
+    player.musicSound.addListener(_refreshMusicGain);
+    var previousQuality = settings.state.musicStreamingQuality;
+    var previousVolume = settings.state.musicPlaybackVolume;
+    _settingsChanges = settings.stream.listen((state) {
+      final volume = state.musicPlaybackVolume;
+      if (volume != previousVolume) {
+        previousVolume = volume;
+        if (_ownsParentPlayback && _transition.primaryIsMusic) {
+          _transition.refreshVolume();
+        }
+      }
       final quality = state.musicStreamingQuality;
-      if (quality == previous) return;
-      previous = quality;
+      if (quality == previousQuality) return;
+      previousQuality = quality;
       for (final slot in _standbys.values) {
         final entry = slot.entry;
         if (entry is! Video ||
-            entry.explicitMusicDownload != null ||
+            _requiresLocalSource(entry) ||
             slot.failed ||
             slot.decoder.playing) {
           continue;
@@ -249,15 +272,71 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     return disposal;
   }
 
-  AudioPlayer _newDecoder() => AudioPlayer(
-      // Keep recently played samples on the decoder so a rewind can reuse
-      // them, including after a prepared song becomes the active song.
-      audioLoadConfiguration: const AudioLoadConfiguration(
-          androidLoadControl:
-              AndroidLoadControl(backBufferDuration: Duration(seconds: 90))),
-      // Preserve the selected instance origin for Android's native transport.
-      useProxyForRequestHeaders:
-          kIsWeb || defaultTargetPlatform != TargetPlatform.android);
+  bool _supportsMusicGain(IdedVideo? entry) =>
+      player.musicSound.replayGainSupported &&
+      (entry is Video && entry.musicMetadata != null ||
+          entry is DownloadedVideo && entry.musicMetadata != null);
+
+  AudioPlayer _newDecoder(IdedVideo? entry) {
+    late final AudioPlayer decoder;
+    decoder = AudioPlayer(
+        androidMusicGainEnabled: _supportsMusicGain(entry),
+        // A focus event can arrive before the widget forwards Pause or Stop
+        // to an already paused decoder. Consult the current parent intent.
+        shouldResumeAfterInterruption: () =>
+            !isClosed &&
+            _ownsParentPlayback &&
+            _wantsToPlay &&
+            player.intendsPlayback &&
+            !_terminalErrorSent &&
+            identical(audioPlayer, decoder),
+        // Keep recently played samples for rewinding prepared songs.
+        audioLoadConfiguration: const AudioLoadConfiguration(
+            androidLoadControl:
+                AndroidLoadControl(backBufferDuration: Duration(seconds: 90))),
+        // Preserve the selected instance origin for Android's native transport.
+        useProxyForRequestHeaders:
+            kIsWeb || defaultTargetPlatform != TargetPlatform.android);
+    return decoder;
+  }
+
+  Future<void> _setMusicGain(AudioPlayer decoder, AudioSource source) {
+    if (!decoder.androidMusicGainEnabled) return Future<void>.value();
+    final tag = source is IndexedAudioSource ? source.tag : null;
+    _replayGainTags[decoder] = tag is ReplayGain ? tag : null;
+    return _applyMusicGain(decoder);
+  }
+
+  Future<void> _applyMusicGain(AudioPlayer decoder) async {
+    if (!decoder.androidMusicGainEnabled ||
+        !identical(db, _musicGainDatabase) ||
+        db.profileId != _musicGainProfile) {
+      return;
+    }
+    final sound = player.musicSound;
+    final factor = musicGainFactor(
+        sound.replayGainMode, sound.musicPreampDb, _replayGainTags[decoder]);
+    if (decoder.androidMusicGain == factor) return;
+    try {
+      await decoder.setAndroidMusicGain(factor);
+    } catch (error) {
+      log.fine('Music gain update failed (${error.runtimeType})');
+    }
+  }
+
+  void _refreshMusicGain() {
+    if (isClosed || !_ownsParentPlayback) return;
+    final decoders = {
+      if (audioPlayer case final current?) current,
+      if (_manual?.slot.decoder case final manual?) manual,
+      if (_transition.incoming?.decoder case final incoming?) incoming,
+      for (final slot in _standbys.values)
+        if (!slot.failed) slot.decoder,
+    };
+    for (final decoder in decoders) {
+      unawaited(_applyMusicGain(decoder));
+    }
+  }
 
   Future<void> _retire(Future<void> release) {
     final retired = release.onError((Object error, StackTrace _) {
@@ -295,9 +374,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         adjacent.matches(entry);
     final slot = reuse
         ? _standbys.remove(id)!
-        : (_StandbyAudio(entry, _newDecoder())..ready = Future.value(null));
-    final request = _manual =
-        _ManualMusicDecoder(slot, startAt, isCurrent, borrowedAdjacent: reuse);
+        : (_StandbyAudio(entry, _newDecoder(entry))
+          ..ready = Future.value(null));
+    final request = _manual = _ManualMusicDecoder(
+        this, slot, startAt, isCurrent,
+        borrowedAdjacent: reuse);
     final ready =
         await Future.any([request.prepare(), request.cancelled.future]);
     if (!identical(_manual, request)) return false;
@@ -376,7 +457,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   }
 
   void _stage(IdedVideo entry) {
-    final slot = _StandbyAudio(entry, _newDecoder());
+    final slot = _StandbyAudio(entry, _newDecoder(entry));
     _standbys[playbackQueueId(entry)] = slot;
     slot.ready = _prepare(slot);
   }
@@ -422,6 +503,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
               'standby:${identityHashCode(slot)}:${DateTime.now().microsecondsSinceEpoch}');
       if (!active()) return null;
       if (sources != null && sources.sources.isNotEmpty) {
+        await _setMusicGain(slot.decoder, sources.sources.first);
+        if (!active()) return null;
         // Queue traversal starts songs at zero even if they have watch history.
         if (!samePreparedAudioSource(previous, sources)) {
           await slot.decoder.setAudioSource(sources.sources.first,
@@ -449,7 +532,9 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
   }
 
   void initPlayer() {
-    if (audioPlayer == null) _bindDecoder(_newDecoder());
+    if (audioPlayer == null) {
+      _bindDecoder(_newDecoder(state.offlineVideo ?? state.video));
+    }
   }
 
   void _bindDecoder(AudioPlayer current) {
@@ -881,7 +966,8 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     }());
   }
 
-  void _failPlayback(Object error) {
+  void _failPlayback(Object error,
+      {Duration? position, bool retryExhausted = false}) {
     if (isClosed || _terminalErrorSent) return;
     _terminalErrorSent = true;
     _remainingFormats = {};
@@ -889,8 +975,28 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _clearMusicQuality();
     _clearWatchAudioTracks();
     _stopStallWatch();
+    if (retryExhausted &&
+        _wantsToPlay &&
+        player.shouldStartPlayback &&
+        settings.state.musicSkipAfterRetryExhaustion) {
+      // Keep the parent's Play intent for the successor, while stopping the
+      // failed decoder before the queue switch can start another one.
+      unawaited(audioPlayer?.pause());
+      if (player.trySkipMusicAfterRetryExhaustion()) {
+        _wantsToPlay = false;
+        emit(state.copyWith(loading: false));
+        return;
+      }
+    }
     // A failed source is not playing. Publish pause before the error so the
     // controls and notification stop without hiding the actionable failure.
+    if (position != null) {
+      emit(state.copyWith(audioPosition: position));
+      player.setEvent(MediaEvent<Duration>(
+          state: MediaState.ready,
+          type: MediaEventType.progress,
+          value: position));
+    }
     pause();
     // Native and metadata exceptions may contain signed URLs or request data.
     log.warning('Audio playback failed (${error.runtimeType})');
@@ -1132,7 +1238,22 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       }
     }
 
+    bool exhaustedRefresh() {
+      final route = video?.playbackConnection ?? video?.backendPlayback;
+      return allowStreamRefresh &&
+          firstError != null &&
+          _retryableAudioFailure(firstError) &&
+          (firstError is! PlayerException || !firstError.mediaOriginBlocked) &&
+          player.isMusicAudio &&
+          player.playbackRefreshExhausted &&
+          video?.backendPlayback?.canRetry != true &&
+          route != null &&
+          audioPlaybackRouteIsCurrent(route);
+    }
+
     Object? failure = remainingAfterBlock == null ? firstError : null;
+    var reconnectDisabled = false;
+    var retryExhausted = false;
     if (queueId != null && active()) {
       player.reportMusicContentAdvisory(
           queueId: queueId, generation: parentGeneration, advisory: null);
@@ -1143,6 +1264,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
           if (_playbackOffline ||
               !_retryableAudioFailure(failure) ||
               video == null) {
+            throw failure;
+          }
+          if (allowStreamRefresh &&
+              player.isMusicAudio &&
+              !settings.state.musicAutoReconnect) {
+            reconnectDisabled = true;
             throw failure;
           }
           _backendMetadataGeneration = generation;
@@ -1156,7 +1283,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                 sameRoute = next != null;
               } catch (error) {
                 if (!active()) return false;
-                if (!isBackendRetryable(error)) rethrow;
+                if (!isBackendRetryable(error)) {
+                  retryExhausted = exhaustedRefresh() &&
+                      isPlaybackRefreshRetryable(error, hasAlternate: false);
+                  rethrow;
+                }
                 // Only a classified transient refresh failure can proceed to
                 // the existing, separately bounded alternate-backend policy.
               }
@@ -1180,7 +1311,10 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
             }
           }
           if (!active()) return false;
-          if (next == null) throw failure;
+          if (next == null) {
+            retryExhausted = exhaustedRefresh();
+            throw failure;
+          }
           next = next.preservingMusicMetadataFrom(video);
           video = next;
           if (!sameRoute) player.reportBackendVideoLoaded(next);
@@ -1292,6 +1426,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
               continueOverlap = false;
               if (current.playing && !continuing) await current.pause();
               if (!active()) return false;
+              await _setMusicGain(current, sources[index]);
+              if (!active()) return false;
+              // Keep the outgoing source's level until it stops, then apply
+              // the new level before a recycled decoder can play again.
+              _transition.primaryIsMusic = _selectedSourceIsMusic;
+              _transition.applyStartVolume();
               if (captureCurrentPosition) {
                 startAt = current.position;
                 captureCurrentPosition = false;
@@ -1353,6 +1493,16 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
                 .setPitch(pitchFactorForSemitones(_playbackPitchSemitones));
           }
           if (!active()) return false;
+          final transition = settings.state.songTransitionMode;
+          if (settings.state.musicAudioOffload ==
+                  MusicAudioOffload.whenSupported &&
+              (video?.musicMetadata ?? offlineVideo?.musicMetadata) != null &&
+              transition != SongTransitionMode.fade &&
+              transition != SongTransitionMode.crossfade &&
+              !player.musicSound.enabled) {
+            await current.preferAndroidMusicOffload();
+            if (!active()) return false;
+          }
           // Seeking the old source while metadata or native setup is pending
           // would be overwritten by the replacement's initial position. Apply
           // the latest request after all asynchronous setup has finished.
@@ -1455,7 +1605,11 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         }
       }
     } catch (error) {
-      if (active()) _failPlayback(error);
+      if (active()) {
+        _failPlayback(error,
+            position: reconnectDisabled ? _pendingSeek ?? startAt : null,
+            retryExhausted: retryExhausted);
+      }
     } finally {
       if (_loadingGeneration == generation) _loadingGeneration = null;
     }
@@ -1488,7 +1642,7 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
     _resumeAfterFocus = _focusInterrupted && _wantsToPlay;
     _deferredFocusResume = false;
     _stopStallWatch(forgetProgress: true);
-    _playbackOffline = offline || state.video?.explicitMusicDownload != null;
+    _playbackOffline = offline || _requiresLocalSource(state.video);
     _terminalErrorSent = false;
     final entry = (offline ? state.offlineVideo : state.video)!;
     final videoId = entry.videoId;
@@ -1517,13 +1671,14 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       final old = audioPlayer;
       final subscriptions = List.of(_playerSubscriptions);
       _playerSubscriptions.clear();
+      _transition.primaryIsMusic = _selectedSourceIsMusic;
       final volume = _transition.startVolume;
       _bindDecoder(standby.decoder);
       for (final subscription in subscriptions) {
         _retire(subscription.cancel());
       }
       // Pause the old audio before the prepared decoder can start. Keep the
-      // user's mute setting and rebind the equalizer through the usual path.
+      // user's volume settings and rebind the equalizer through the usual path.
       try {
         await Future.wait([
           if (old != null) _pauseAndRetire(old),
@@ -1538,16 +1693,29 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
       }
       if (isClosed || generation != _playbackGeneration) return;
     } else {
+      // The optional PCM processor belongs only to Music decoders.
+      if (audioPlayer case final old?
+          when old.androidMusicGainEnabled != _supportsMusicGain(entry)) {
+        final subscriptions = List.of(_playerSubscriptions);
+        _playerSubscriptions.clear();
+        audioPlayer = null;
+        for (final subscription in subscriptions) {
+          _retire(subscription.cancel());
+        }
+        await Future.wait([
+          _pauseAndRetire(old),
+          player.musicSound.detach(old),
+        ]);
+        if (isClosed || generation != _playbackGeneration) return;
+      }
       initPlayer();
-      if (_transition.startVolume != 1) _transition.applyStartVolume();
     }
     final current = audioPlayer;
     if (current == null) {
       _loadingGeneration = null;
       return;
     }
-    if ((state.video?.musicMetadata ?? state.offlineVideo?.musicMetadata) !=
-        null) {
+    if (_selectedSourceIsMusic) {
       player.musicSound.attach(current, profileId: db.profileId);
     } else {
       await player.musicSound.detach(current);
@@ -1559,10 +1727,12 @@ class AudioPlayerCubit extends MediaPlayerCubit<AudioPlayerState>
         return;
       }
     }
-    final audioLength = Duration(
-        seconds: offline
-            ? state.offlineVideo!.lengthSeconds
-            : (state.video!.lengthSeconds ?? 0));
+    final audioLength =
+        localMusicCueDuration(localMusicTrackForPlayback(videoId)) ??
+            Duration(
+                seconds: offline
+                    ? state.offlineVideo!.lengthSeconds
+                    : (state.video!.lengthSeconds ?? 0));
     startAt ??= _resumePosition(videoId, audioLength.inSeconds);
     emit(state.copyWith(
         audioPosition: Duration.zero,

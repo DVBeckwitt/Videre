@@ -96,6 +96,10 @@ void main() {
         throwsStateError);
     await expectLater(
         api.deleteUserPlaylist(reference.playlistId), throwsStateError);
+    await expectLater(
+        api.deleteMusicPlaylist(reference.playlistId, isCurrent: () => true),
+        throwsStateError);
+    expect(api.getRecentlyDeletedMusicPlaylists(), isEmpty);
     expect(ids(read()), order);
 
     expect(

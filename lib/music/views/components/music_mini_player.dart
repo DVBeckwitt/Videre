@@ -107,9 +107,12 @@ class MusicMiniPlayer extends StatelessWidget {
                 : recovery?.phase == BackendRecoveryPhase.succeeded
                     ? locals.backendPlaybackResumed
                     : null;
-    final duration = video?.liveNow == true
+    final length = video?.lengthSeconds ?? offline?.lengthSeconds;
+    final duration = video?.liveNow == true || length == null
         ? 0
-        : (video?.lengthSeconds ?? offline?.lengthSeconds ?? 0) * 1000;
+        : pending == null
+            ? player.duration.inMilliseconds
+            : length * 1000;
     final progress = duration <= 0
         ? 0.0
         : (state.position.inMilliseconds / duration).clamp(0.0, 1.0);
@@ -165,7 +168,9 @@ class MusicMiniPlayer extends StatelessWidget {
                   final inlineNext = shortcut == MusicMiniPlayerShortcut.next ||
                       (!compact &&
                           !assignedShortcut &&
-                          (state.hasQueue || customControls));
+                          (state.hasQueue ||
+                              player.hasMusicRequestSuccessor ||
+                              customControls));
                   final menu = _CompactQueueMenu(
                       style: controlStyle,
                       showPrevious: !inlinePrevious,
@@ -274,6 +279,7 @@ class MusicMiniPlayer extends StatelessWidget {
                         valueListenable: player.playlistLoadingRevision,
                         builder: (context, _, __) => customControls ||
                                 state.hasQueue ||
+                                player.hasMusicRequestSuccessor ||
                                 !player.playlistComplete
                             ? menu
                             : close,
@@ -348,6 +354,7 @@ class MusicMiniPlayer extends StatelessWidget {
 }
 
 bool _canAdvance(PlayerCubit player, PlayerRepeat repeat) =>
+    player.hasMusicRequestSuccessor ||
     player.state.playQueue.isNotEmpty ||
     !player.playlistComplete ||
     repeat != PlayerRepeat.noRepeat;

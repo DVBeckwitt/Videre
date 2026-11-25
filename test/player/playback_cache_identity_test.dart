@@ -4,6 +4,7 @@ import 'package:clipious/player/models/playback_cache_identity.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/videos/models/adaptive_format.dart';
 import 'package:clipious/videos/models/format_stream.dart';
+import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,6 +41,41 @@ Map<String, Object?> _resource(Map<String, Object?> payload, String url) =>
         .singleWhere((resource) => resource['url'] == url);
 
 void main() {
+  test('only admitted immutable progressive Music audio carries song metadata',
+      () {
+    final audio = _audio();
+    final video = Video(
+        videoId: 'song',
+        lengthSeconds: 180,
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+        adaptiveFormats: [audio]);
+    Map<String, Object?>? identity(Video video, AdaptiveFormat? format,
+            {bool companions = false}) =>
+        playbackCacheIdentity(
+            video: video,
+            server: _server,
+            sourceUrl: _url,
+            sessionId: 'session-a',
+            mediaCompanions: companions,
+            progressiveMusicAudio: format);
+
+    expect(identity(video, audio)!['musicSong'], {
+      'title': 'Song',
+      'artist': 'Artist',
+      'lengthSeconds': 180,
+      'byteLength': 12345,
+    });
+    expect(identity(video, null)!['musicSong'], isNull);
+    expect(identity(video, audio, companions: true)!['musicSong'], isNull);
+    expect(identity(video.copyWith(isUpcoming: true), audio)!['musicSong'],
+        isNull);
+    final partial = _audio(clen: '');
+    expect(
+        identity(
+            video.copyWith(adaptiveFormats: [partial]), partial)!['musicSong'],
+        isNull);
+  });
+
   test('signed URL refresh preserves immutable representation identity', () {
     const fresh = 'https://inv.example/videoplayback?itag=140&sig=new';
     final old = _resource(_identity()!, _url);

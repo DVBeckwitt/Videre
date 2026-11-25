@@ -28,4 +28,32 @@ void main() {
     expect(parseLrc('x' * (maxLyricsCharacters + 1)), isEmpty);
     expect(cleanLyricsText('\uFEFFLine\r\n<example>\u0000'), 'Line\n<example>');
   });
+
+  test('local LRC applies a file-wide millisecond offset and clamps to zero',
+      () {
+    final earlier = parseLocalLrc('[ar:Fixture]\n'
+        '[00:00.050][00:02.125]Repeat\n'
+        '[00:02.125]Another voice\n'
+        '[OFFSET:+125]');
+    expect(
+        earlier.cues.map((cue) => cue.start.inMilliseconds), [0, 2000, 2000]);
+    expect(earlier.cues.map((cue) => cue.text),
+        ['Repeat', 'Repeat', 'Another voice']);
+    final later = parseLocalLrc('[offset: -250]\n[00:00.500]Line');
+    expect(later.cues.single.start.inMilliseconds, 750);
+  });
+
+  test('local LRC retains readable text when timing is unsafe', () {
+    for (final source in [
+      '[offset:unknown]\n[00:01]Start\n[00:02]Finish',
+      '[offset:+1]\n[00:01]Start\n[00:02]Finish\n[offset:-1]',
+      '[00:01]<00:01.250>Start\n[00:99]Finish',
+      '[00:01]Start\nFinish',
+    ]) {
+      final lyrics = parseLocalLrc(source);
+      expect(lyrics.cues, isEmpty, reason: source);
+      expect(lyrics.plain, 'Start\nFinish', reason: source);
+    }
+    expect(parseLocalLrc('[ti:Fixture]\n[offset:0]').plain, isEmpty);
+  });
 }

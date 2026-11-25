@@ -17,6 +17,27 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
+class _VidereInitRequest extends InitRequest {
+  _VidereInitRequest({
+    required super.id,
+    super.audioLoadConfiguration,
+    super.androidAudioEffects,
+    super.darwinAudioEffects,
+    super.androidOffloadSchedulingEnabled,
+    super.androidAudioOffloadPreferences,
+    super.useLazyPreparation,
+    this.androidMusicGain,
+  });
+
+  final double? androidMusicGain;
+
+  @override
+  Map<dynamic, dynamic> toMap() => {
+        ...super.toMap(),
+        if (androidMusicGain != null) 'androidMusicGain': androidMusicGain,
+      };
+}
+
 JustAudioPlatform? _pluginPlatformCache;
 
 JustAudioPlatform get _pluginPlatform {
@@ -71,6 +92,9 @@ class AudioPlayer {
   final bool _androidOffloadSchedulingEnabled;
 
   final AndroidAudioOffloadPreferences? _androidAudioOffloadPreferences;
+
+  final bool androidMusicGainEnabled;
+  double _androidMusicGain = 1;
 
   /// This is `true` when the audio player needs to engage the native platform
   /// side of the plugin to decode or play audio, and is `false` when the native
@@ -214,6 +238,8 @@ class AudioPlayer {
   ///
   /// The player will automatically pause/duck and resume/unduck when audio
   /// interruptions occur (e.g. a phone call) or when headphones are unplugged.
+  /// [shouldResumeAfterInterruption] can veto an automatic resume when
+  /// application transport intent has changed during a temporary interruption.
   /// If you wish to handle audio interruptions manually, set
   /// [handleInterruptions] to `false` and interface directly with the audio
   /// session via the [audio_session](https://pub.dev/packages/audio_session)
@@ -243,11 +269,13 @@ class AudioPlayer {
   AudioPlayer({
     String? userAgent,
     bool handleInterruptions = true,
+    bool Function()? shouldResumeAfterInterruption,
     bool androidApplyAudioAttributes = true,
     bool handleAudioSessionActivation = true,
     AudioLoadConfiguration? audioLoadConfiguration,
     AudioPipeline? audioPipeline,
     AndroidAudioOffloadPreferences? androidAudioOffloadPreferences,
+    this.androidMusicGainEnabled = false,
     @Deprecated('Use androidAudioOffloadPreferences instead')
     bool androidOffloadSchedulingEnabled = false,
     bool useProxyForRequestHeaders = true,
@@ -414,8 +442,11 @@ class AudioPlayer {
                 _playInterrupted = false;
                 break;
               case AudioInterruptionType.pause:
-                if (_playInterrupted) play();
+                final resume = _playInterrupted;
                 _playInterrupted = false;
+                if (resume && (shouldResumeAfterInterruption?.call() ?? true)) {
+                  play();
+                }
                 break;
               case AudioInterruptionType.unknown:
                 _playInterrupted = false;
@@ -714,6 +745,38 @@ class AudioPlayer {
     }
   }
 
+  /// Prefers offload for the current Android Music source. A subsequent load
+  /// starts with the decoder's original preferences. Keep this optional on
+  /// platforms that do not provide Videre's Android extension.
+  Future<void> preferAndroidMusicOffload() async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        _disposed ||
+        !_active) {
+      return;
+    }
+    final native = _nativePlatform;
+    final id = _id;
+    final revision = _sourceLoadRevision;
+    if (native == null || id == null) return;
+    try {
+      await native;
+      if (_disposed ||
+          !_active ||
+          _id != id ||
+          !identical(_nativePlatform, native) ||
+          _sourceLoadRevision != revision) {
+        return;
+      }
+      await MethodChannel('com.ryanheise.just_audio.methods.$id')
+          .invokeMethod<void>('preferMusicOffload');
+    } on MissingPluginException {
+      // Standard playback remains available.
+    } on PlatformException {
+      // An optional preference must never fail source setup.
+    }
+  }
+
   /// Reads a recognized file advisory from the currently loaded Android source.
   /// No decoder is activated for this optional metadata.
   Future<int?> getCurrentFileAdvisory(AudioSource source) async {
@@ -747,6 +810,37 @@ class AudioPlayer {
       return null;
     } on PlatformException {
       return null;
+    }
+  }
+
+  /// The requested PCM gain, independent of the player's volume.
+  double get androidMusicGain => _androidMusicGain;
+
+  /// Sets linear PCM gain on Android. Idle players use this gain on activation.
+  Future<void> setAndroidMusicGain(double gain) async {
+    if (!androidMusicGainEnabled ||
+        _disposed ||
+        kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    if (!gain.isFinite || gain < 0 || gain > 16) {
+      throw ArgumentError.value(gain, 'gain', 'Expected a gain from 0 to 16');
+    }
+    _androidMusicGain = gain;
+    final native = _nativePlatform;
+    final id = _id;
+    bool current() =>
+        !_disposed &&
+        _active &&
+        _id == id &&
+        identical(_nativePlatform, native) &&
+        _androidMusicGain == gain;
+    if (native == null || id == null || !current()) return;
+    await native;
+    if (current()) {
+      await MethodChannel('com.ryanheise.just_audio.methods.$id')
+          .invokeMethod<void>('setAndroidMusicGain', {'gain': gain});
     }
   }
 
@@ -1298,10 +1392,10 @@ class AudioPlayer {
   /// ![playing].
   Future<void> pause() async {
     if (_disposed) return;
+    _playInterrupted = false;
     if (!playing) return;
     final stopwatch = Stopwatch();
     stopwatch.start();
-    _playInterrupted = false;
     // Update local state immediately so that queries aren't surprised.
     _playerEventSubject.add(PlayerEvent(
       playing: false,
@@ -1820,7 +1914,7 @@ class AudioPlayer {
         // During initialisation, we must only use this platform reference in case
         // _platform is updated again during initialisation.
         final platform = active && !_disposed
-            ? await (_nativePlatform = _pluginPlatform.init(InitRequest(
+            ? await (_nativePlatform = _pluginPlatform.init(_VidereInitRequest(
                 id: _id = _generateId(),
                 audioLoadConfiguration: _audioLoadConfiguration?._toMessage(),
                 androidAudioEffects: (_isAndroid() || _isUnitTest())
@@ -1838,6 +1932,11 @@ class AudioPlayer {
                 androidAudioOffloadPreferences:
                     _androidAudioOffloadPreferences?._toMessage(),
                 useLazyPreparation: _playlist.useLazyPreparation,
+                androidMusicGain: androidMusicGainEnabled &&
+                        !kIsWeb &&
+                        defaultTargetPlatform == TargetPlatform.android
+                    ? _androidMusicGain
+                    : null,
               )))
             : (_idlePlatform = _IdleAudioPlayer(
                 id: _id = _generateId(),

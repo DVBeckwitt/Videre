@@ -7,19 +7,25 @@ class MusicCollection {
   final String title;
   final List<String> artists;
   final List<MusicArtist> artistLinks;
+  final MusicArtistCredit? playlistAuthor;
+  final String? description;
   final List<ImageObject> thumbnails;
   final List<MusicTrack> tracks;
   final int? videoCount;
   final int? updated;
+  final bool loadingComplete;
 
   const MusicCollection({
     required this.id,
     required this.title,
     this.artists = const [],
     this.artistLinks = const [],
+    this.playlistAuthor,
+    this.description,
     this.thumbnails = const [],
     this.tracks = const [],
     this.videoCount,
     this.updated,
+    this.loadingComplete = true,
   });
 }

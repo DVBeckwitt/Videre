@@ -3,6 +3,7 @@ import 'dart:collection';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/channels/models/channel_sort_by.dart';
 import 'package:clipious/channels/models/channel_videos.dart';
@@ -392,7 +393,9 @@ class _WatchSelectionPlayer extends TestPlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      PlaylistReference? recommendationSource,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     selection.add((videos.single.videoId, audio));
   }
 }
@@ -1730,6 +1733,19 @@ void main() {
           _phoneTab(PhoneNavigationItem.history).hitTestable(), findsOneWidget);
     }
 
+    expectPlaybackStack();
+    final settings =
+        tester.element(find.byType(MusicModeScreen)).read<SettingsCubit>();
+    final originalLayout = settings.state.musicLayout;
+    final globalHeight = tester.getSize(_phoneNavigation).height;
+    expect(tester.getSize(_musicNavigation).height, greaterThan(48));
+    await tester.runAsync(() =>
+        settings.setMusicLayout(originalLayout.copyWith(slimNavigation: true)));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(_musicNavigation).height, 48);
+    expect(tester.getSize(_phoneNavigation).height, globalHeight);
+    _expectMusicSection(tester, MusicDestination.search);
+    expect(tester.widget<TextField>(field).controller!.text, 'scrolling query');
     expectPlaybackStack();
     await tester.drag(results, const Offset(0, -385));
     await tester.pumpAndSettle();

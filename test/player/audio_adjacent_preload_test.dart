@@ -6,6 +6,7 @@ import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/music/models/local_music_track.dart';
+import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -119,6 +120,7 @@ class _Decoder {
   final loads = <String>[];
   final playedTracks = <String>[];
   final playVolumes = <double>[];
+  final playMusicGains = <double>[];
   final playPositions = <Duration>[];
   Duration position = Duration.zero;
   final volumes = <double>[];
@@ -127,6 +129,7 @@ class _Decoder {
   double get volume => volumes.lastOrNull ?? 1;
   double speed = 1;
   double pitch = 1;
+  double musicGain = 1;
   bool playing = false;
   int pauses = 0;
   bool disposed = false;
@@ -201,6 +204,8 @@ void main() {
         final configuration = call.arguments['audioLoadConfiguration'] as Map?;
         final decoder = _Decoder(call.arguments['id'] as String,
             configuration?['androidLoadControl'] as Map<Object?, Object?>?);
+        decoder.musicGain =
+            (call.arguments['androidMusicGain'] as num?)?.toDouble() ?? 1;
         decoders.add(decoder);
         messenger.setMockMethodCallHandler(decoder.events, (_) async => null);
         messenger.setMockMethodCallHandler(decoder.data, (_) async => null);
@@ -236,6 +241,7 @@ void main() {
           if (method.method == 'play') {
             decoder.playing = true;
             decoder.playVolumes.add(decoder.volume);
+            decoder.playMusicGains.add(decoder.musicGain);
             decoder.playPositions.add(decoder.position);
             decoder.playedTracks.add(decoder.loads.last);
           }
@@ -245,6 +251,9 @@ void main() {
           }
           if (method.method == 'setVolume') {
             decoder.volumes.add((method.arguments['volume'] as num).toDouble());
+          }
+          if (method.method == 'setAndroidMusicGain') {
+            decoder.musicGain = (method.arguments['gain'] as num).toDouble();
           }
           if (method.method == 'setSpeed') {
             decoder.speed = method.arguments['speed'] as double;
@@ -780,7 +789,7 @@ void main() {
   }
 
   Future<List<LocalMusicTrack>> scanDeviceMusic(
-      {bool Function()? canRead}) async {
+      {bool Function()? canRead, bool tagged = false}) async {
     const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
     const tree = 'content://provider.example/tree/music';
     messenger.setMockMethodCallHandler(channel, (call) async {
@@ -800,7 +809,12 @@ void main() {
                 'uri': '$tree/document/$title.mp3',
                 'title': title,
                 'artist': 'Device artist',
-                'durationMs': 120000
+                'durationMs': 120000,
+                if (tagged)
+                  'replayGain': {
+                    'trackGainDb': title == 'Intro' ? -6.0 : 6.0,
+                    'trackPeak': 0.75,
+                  },
               }
           ];
         default:
@@ -825,7 +839,8 @@ void main() {
     await settings.setLastPitch(-3, music: false);
     await settings.setLastSpeed(1.25, music: true);
     await settings.setLastPitch(12, music: true);
-    final tracks = await scanDeviceMusic();
+    await player.musicSound.setReplayGainMode(ReplayGainMode.track);
+    final tracks = await scanDeviceMusic(tagged: true);
     final queue = [
       for (final track in tracks) localMusicPlaybackEntry(track, db.profileId)
     ];
@@ -850,6 +865,8 @@ void main() {
         'Both document decoders overlap');
     expect((outgoing.speed, outgoing.pitch), (1.25, 2.0));
     expect((incoming.speed, incoming.pitch), (1.25, 2.0));
+    expect(outgoing.playMusicGains.last, closeTo(0.501187, 0.000001));
+    expect(incoming.playMusicGains.single, closeTo(1 / 0.75, 0.000001));
     await incoming.report(
         ProcessingStateMessage.ready, const Duration(milliseconds: 500));
     final seekCount = incoming.seeks.length;
@@ -873,6 +890,10 @@ void main() {
     expect(incoming.playedTracks, ['Finale.mp3']);
     expect(incoming.seeks.skip(seekCount), isEmpty);
     expect(incoming.volume, 1);
+    expect(incoming.musicGain, closeTo(1 / 0.75, 0.000001));
+    await player.musicSound.setMusicPreampDb(-6);
+    await _until(() => incoming.musicGain == 1,
+        'Preamp is applied to the promoted decoder');
     expect((incoming.speed, incoming.pitch), (1.25, 2.0));
     expect(player.state.speed, 1.25);
     expect(player.state.pitchSemitones, 12);
@@ -1114,6 +1135,58 @@ void main() {
     await audio.stopForProxyChange();
     expect(outgoing.disposed, isTrue);
     expect(incoming.disposed, isTrue);
+  });
+
+  test('Music volume follows both decoders through automatic promotion',
+      () async {
+    final (outgoing, incoming) = await overlap();
+    await settings.setMusicPlaybackVolume(0.4);
+    await _until(
+        () =>
+            outgoing.volume > 0 &&
+            incoming.volume > 0 &&
+            (outgoing.volume + incoming.volume - 0.4).abs() < 0.003,
+        'The two crossfade gains are scaled to the Music volume');
+
+    await settings.setMusicPlaybackVolume(0);
+    await _until(() => outgoing.volume == 0 && incoming.volume == 0,
+        'A zero Music volume silences both decoders');
+    expect(outgoing.playing, isTrue);
+    expect(incoming.playing, isTrue);
+    await settings.setMusicPlaybackVolume(0.4);
+    await outgoing.report(
+        ProcessingStateMessage.completed, const Duration(minutes: 2));
+    await _until(
+        () => player.events.any((e) => e.state == MediaState.completed),
+        'Queue received native EOF');
+    selectNext(automatic: true);
+    await _until(
+        () =>
+            outgoing.disposed && !audio.state.loading && incoming.volume == 0.4,
+        'The promoted decoder keeps the Music volume');
+    expect(incoming.playedTracks, ['next']);
+  });
+
+  test('a decoder reused for ordinary audio restores its usual level',
+      () async {
+    final decoder = loaded('current').single;
+    await settings.setMusicPlaybackVolume(0.3);
+    await _until(() => decoder.volume == 0.3, 'Current Music level changed');
+
+    final ordinary = next.copyWith(musicMetadata: null);
+    player.select(ordinary);
+    audio.switchVideo(ordinary);
+    await _until(() => decoder.playedTracks.contains('next'),
+        'The existing decoder starts ordinary audio');
+    expect(decoder.playVolumes.last, 1);
+
+    await settings.setMusicPlaybackVolume(0.6);
+    expect(decoder.volume, 1);
+    player.select(current);
+    audio.switchVideo(current);
+    await _until(() => decoder.playedTracks.length == 3,
+        'The same decoder returns to Music');
+    expect(decoder.playVolumes.last, 0.6);
   });
 
   test('repeated adjacent snapshots keep one silent decoder per neighbor',

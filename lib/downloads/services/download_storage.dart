@@ -110,6 +110,25 @@ class DownloadStorage {
   static int _nextWrite = 0;
   static final _fileProof = RegExp(r'^[a-f0-9]{64}$');
 
+  static bool _readyMusicFile(DownloadedVideo file, String profileId) =>
+      file.profileId == profileId &&
+      file.downloadComplete &&
+      !file.downloadFailed &&
+      !file.storageFailed &&
+      !file.authenticationRequired &&
+      file.audioOnly &&
+      file.musicMetadata?.title.trim().isNotEmpty == true &&
+      DownloadedVideo.isSafeFileId(file.videoId);
+
+  static Future<String> _privateMusicFolder(String profileId) async =>
+      p.joinAll([
+        (await getApplicationDocumentsDirectory()).path,
+        ...privateDownloadFolderSegments(profileId),
+      ]);
+
+  static String _privateMusicUri(String folder, DownloadedVideo file) =>
+      Uri.file(p.join(folder, '${file.videoId}.${file.extension}')).toString();
+
   Future<String?> musicFileProof(DownloadedVideo file,
           {bool verifyCompletion = false}) async =>
       (await _probeMusicFiles(file.profileId, [file],
@@ -130,15 +149,7 @@ class DownloadStorage {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return [];
 
     final files = downloads
-        .where((file) =>
-            file.profileId == profileId &&
-            file.downloadComplete &&
-            !file.downloadFailed &&
-            !file.storageFailed &&
-            !file.authenticationRequired &&
-            file.audioOnly &&
-            file.musicMetadata?.title.trim().isNotEmpty == true &&
-            DownloadedVideo.isSafeFileId(file.videoId))
+        .where((file) => _readyMusicFile(file, profileId))
         .toList(growable: false);
     final result = <MusicFileProbe>[];
     String? privateFolder;
@@ -148,13 +159,8 @@ class DownloadStorage {
         try {
           var uri = file.storageUri;
           if (uri == null) {
-            privateFolder ??= p.joinAll([
-              (await getApplicationDocumentsDirectory()).path,
-              ...privateDownloadFolderSegments(profileId),
-            ]);
-            uri = Uri.file(
-                    p.join(privateFolder, '${file.videoId}.${file.extension}'))
-                .toString();
+            privateFolder ??= await _privateMusicFolder(profileId);
+            uri = _privateMusicUri(privateFolder, file);
           } else if (file.folderUri == null) {
             continue;
           }
@@ -202,6 +208,39 @@ class DownloadStorage {
       }
     }
     return result;
+  }
+
+  /// Opens Android sharing for one current, completed audible rendition.
+  Future<bool> shareMusicFile(DownloadedVideo file,
+      {String? expectedIdentity, required bool Function() isCurrent}) async {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android ||
+        !_readyMusicFile(file, file.profileId) ||
+        !DownloadedVideo.isSafeFileId(file.profileId) ||
+        (file.storageUri == null) != (file.folderUri == null) ||
+        (expectedIdentity != null &&
+            _fileProof.stringMatch(expectedIdentity) != expectedIdentity) ||
+        !isCurrent()) {
+      return false;
+    }
+    try {
+      final uri = file.storageUri ??
+          _privateMusicUri(await _privateMusicFolder(file.profileId), file);
+      if (!isCurrent()) return false;
+      return await _channel.invokeMethod<bool>('shareMusicFile', {
+            'profileId': file.profileId,
+            'videoId': file.videoId,
+            'uri': uri,
+            'folderUri': file.folderUri,
+            'mime': file.mimeType,
+            'expectedIdentity': expectedIdentity,
+            'expectedSha256': file.playbackProvenance?.sha256,
+            'byteLength': file.playbackProvenance?.byteLength,
+          }) ==
+          true;
+    } on Exception {
+      return false;
+    }
   }
 
   bool get supportsSharedMusic => Platform.isAndroid;

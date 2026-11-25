@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
@@ -16,17 +17,23 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_playback_artwork.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/player/models/playback_queue.dart';
+import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/service.dart';
+import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/states/settings.dart';
+import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/models/image_object.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -56,17 +63,26 @@ class _App extends AppCubit {
 }
 
 class _PausedLibrary extends Service {
-  final firstSaved = Completer<void>();
+  final appendStarted = Completer<void>();
   final release = Completer<void>();
 
   @override
-  Future<void> addVideoToPlaylist(String playlistId, String videoId,
-      {Video? video}) async {
-    await super.addVideoToPlaylist(playlistId, videoId, video: video);
-    if (!firstSaved.isCompleted) {
-      firstSaved.complete();
-      await release.future;
-    }
+  Future<int> appendLocalPlaylistEntries(
+    String playlistId,
+    List<Video> videos, {
+    bool allowDuplicates = false,
+    IDbClient? database,
+    bool Function()? isCurrent,
+  }) async {
+    appendStarted.complete();
+    await release.future;
+    return super.appendLocalPlaylistEntries(
+      playlistId,
+      videos,
+      allowDuplicates: allowDuplicates,
+      database: database,
+      isCurrent: isCurrent,
+    );
   }
 }
 
@@ -133,15 +149,24 @@ class _PlaybackPlayer extends TestPlayerCubit {
   final offlineCalls = <List<DownloadedVideo>>[];
   int queueReplacements = 0;
   Zone? enqueueZone;
+  PlaylistReference? enqueuedRecommendationSource;
+  PlaylistReference? playedRecommendationSource;
 
   @override
   int get playlistGeneration => super.playlistGeneration + queueReplacements;
 
   @override
   Future<bool> enqueueMusicSongs(List<Video> selection,
-          {required bool next, List<DownloadedVideo>? downloads}) =>
-      (enqueueZone ?? Zone.current).run(() =>
-          super.enqueueMusicSongs(selection, next: next, downloads: downloads));
+      {required bool next,
+      List<DownloadedVideo>? downloads,
+      PlaylistReference? recommendationSource}) {
+    enqueuedRecommendationSource = recommendationSource;
+    return (enqueueZone ?? Zone.current).run(() => super.enqueueMusicSongs(
+        selection,
+        next: next,
+        downloads: downloads,
+        recommendationSource: recommendationSource));
+  }
 
   @override
   Future<void> playVideo(List<Video> videos,
@@ -150,14 +175,42 @@ class _PlaybackPlayer extends TestPlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      bool fromMusic = false,
+      bool songTap = false,
+      PlaylistReference? recommendationSource}) async {
+    playedRecommendationSource = recommendationSource;
     calls.add((videos: List.of(videos), audio: audio, startIndex: startIndex));
   }
 
   @override
   Future<void> playOfflineVideos(List<DownloadedVideo> videos,
-      {int startIndex = 0, bool fromMusic = false}) async {
+      {int startIndex = 0,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     offlineCalls.add(List.of(videos));
+  }
+}
+
+class _SongOperationCatalog extends MusicCatalogService {
+  final preview = Completer<MusicTrack>();
+  final related = Completer<List<MusicTrack>>();
+  VideoLoadObserver? previewObserver;
+  bool Function()? radioIsCurrent;
+  List<String>? seeds;
+
+  @override
+  Future<MusicTrack> getSong(String videoId,
+      {VideoLoadObserver? loadObserver}) {
+    previewObserver = loadObserver;
+    return preview.future;
+  }
+
+  @override
+  Future<List<MusicTrack>> getRelatedSongs(Iterable<String> seedIds,
+      {bool Function()? isCurrent}) {
+    seeds = seedIds.toList();
+    radioIsCurrent = isCurrent;
+    return related.future;
   }
 }
 
@@ -188,6 +241,9 @@ void main() {
     app_globals.isTv = false;
     service = Service();
     db = await SembastSqfDb.createInMemory();
+    // Run the profile's queue setup on the real database clock.
+    await db.saveSetting(SettingsValue(
+        namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
     app = _App();
     settings = null;
     player = null;
@@ -331,29 +387,32 @@ void main() {
     expect(downloads.calls, isEmpty);
   });
 
-  test('profile switch stops a collection save before touching another library',
-      () async {
-    final originalProfile = db.profileId;
-    final paused = _PausedLibrary();
-    service = paused;
-    final saving = MusicLibrarySession(app)
-        .saveToPlaylist(localWatchLaterId, [first, second]);
-    final failed = expectLater(saving, throwsStateError);
-    await paused.firstSaved.future;
-    final next = await db.createProfile('Another person');
-    await db.useProfile(next.id);
-    app.profileChanged(next.id);
-    paused.release.complete();
-    await failed;
-    expect(service.getLocalPlaylists().first.videos, isEmpty);
-    expect(
+  test(
+    'profile switch prevents a pending save from writing a partial batch',
+    () async {
+      final originalProfile = db.profileId;
+      final paused = _PausedLibrary();
+      service = paused;
+      final saving = MusicLibrarySession(
+        app,
+      ).saveToPlaylist(localWatchLaterId, [first, second]);
+      final failed = expectLater(saving, throwsStateError);
+      await paused.appendStarted.future;
+      final next = await db.createProfile('Another person');
+      await db.useProfile(next.id);
+      app.profileChanged(next.id);
+      paused.release.complete();
+      await failed;
+      expect(service.getLocalPlaylists().first.videos, isEmpty);
+      expect(
         service
             .getLocalPlaylists(database: db.forProfile(originalProfile))
             .first
-            .videos
-            .map((video) => video.videoId),
-        [first.videoId]);
-  });
+            .videos,
+        isEmpty,
+      );
+    },
+  );
 
   Future<void> show(WidgetTester tester,
       {bool compact = false, Widget? body}) async {
@@ -371,14 +430,18 @@ void main() {
     ));
   }
 
-  Widget songRow(Video video, {Future<void> Function()? onPlay}) => Builder(
+  Widget songRow(Video video,
+          {Future<void> Function()? onPlay,
+          PlaylistReference? recommendationSource}) =>
+      Builder(
         builder: (context) => ListTile(
           key: const ValueKey('song-long-press-row'),
           title: Text(video.musicMetadata!.title),
           onTap: onPlay ?? () => MusicScreen.playTracks(context, [video]),
-          onLongPress: () =>
-              MusicLibraryActions.showSongMenu(context, video, onPlay: onPlay),
-          trailing: MusicLibraryActions(videos: [video]),
+          onLongPress: () => MusicLibraryActions.showSongMenu(context, video,
+              onPlay: onPlay, recommendationSource: recommendationSource),
+          trailing: MusicLibraryActions(
+              videos: [video], recommendationSource: recommendationSource),
         ),
       );
 
@@ -402,6 +465,157 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('a catalog song shares a watch link from its row menu',
+      (tester) async {
+    const server = Server(url: 'https://selected.example/invidious/');
+    await tester.runAsync(() => db.useServer(server));
+    const shareChannel = MethodChannel('dev.fluttercommunity.plus/share');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final shared = Completer<MethodCall>();
+    messenger.setMockMethodCallHandler(shareChannel, (call) async {
+      shared.complete(call);
+      return 'dev.fluttercommunity.plus/share/unavailable';
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(shareChannel, null));
+
+    await showSongActions(tester);
+    await openSongMenu(tester);
+    expect(find.text('Share audio file'), findsNothing);
+    await tester.tap(find.text('Share song link'));
+    await tester.pumpAndSettle();
+    expect(find.text('Share Invidious link'), findsOneWidget);
+    expect(find.text('Share YouTube link'), findsOneWidget);
+    expect(find.text('Add timestamp'), findsNothing);
+    expect(shared.isCompleted, isFalse);
+
+    final call = await tester.runAsync(() async {
+      await tester.tap(find.text('Share Invidious link'));
+      return shared.future.timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    expect(call?.arguments, {
+      'text': 'https://selected.example/invidious/watch?v=${first.videoId}',
+    });
+  });
+
+  testWidgets('a noncatalog song row cannot share a watch link',
+      (tester) async {
+    final song = first.copyWith(videoId: 'unverified-catalog-recording');
+    await showSongActions(tester, body: (_) => songRow(song));
+    await openSongMenu(tester);
+
+    expect(find.text('Play'), findsOneWidget);
+    expect(find.text('Share song link'), findsNothing);
+    expect(find.text('Share audio file'), findsNothing);
+  });
+
+  testWidgets(
+      'download sharing offers both actions and rechecks a removed file',
+      (tester) async {
+    final saved = DownloadedVideo(
+        videoId: first.videoId,
+        title: first.title ?? 'Saved file',
+        profileId: db.profileId,
+        lengthSeconds: 60,
+        quality: 'best',
+        downloadComplete: true,
+        audioOnly: true,
+        musicMetadata: first.musicMetadata);
+    DownloadedVideo? current = saved;
+    var resolutions = 0;
+    await showSongActions(tester,
+        body: (_) => Builder(builder: (context) {
+              return TextButton(
+                  onPressed: () => MusicLibraryActions.showSongMenu(
+                          context, first, downloads: [saved],
+                          resolveDownload: () {
+                        resolutions++;
+                        return current;
+                      }),
+                  child: const Text('Song actions'));
+            }));
+    await tester.tap(find.text('Song actions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Share song link'), findsOneWidget);
+    expect(find.text('Share audio file'), findsOneWidget);
+
+    current = null;
+    final beforeSelection = resolutions;
+    await tester.tap(find.text('Share audio file'));
+    await tester.pumpAndSettle();
+    expect(resolutions, beforeSelection + 1);
+    expect(find.text('Share Invidious link'), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('sharing a managed song sends its exact audio file to Android',
+      (tester) async {
+    const folder =
+        'content://com.android.externalstorage.documents/tree/primary%3AMusic';
+    const uri = '$folder/document/primary%3AMusic%2Fsong.m4a';
+    final saved = DownloadedVideo(
+        videoId: first.videoId,
+        title: 'Saved song',
+        profileId: db.profileId,
+        lengthSeconds: 60,
+        quality: 'best',
+        downloadComplete: true,
+        audioOnly: true,
+        musicFormat: MusicDownloadFormat.m4a,
+        musicMetadata: first.musicMetadata,
+        storageUri: uri,
+        folderUri: folder);
+    await tester.runAsync(() => db.upsertDownload(saved));
+
+    const storageChannel = MethodChannel('videre/download_storage');
+    const linkChannel = MethodChannel('dev.fluttercommunity.plus/share');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final files = <MethodCall>[];
+    final links = <MethodCall>[];
+    messenger.setMockMethodCallHandler(storageChannel, (call) async {
+      files.add(call);
+      return true;
+    });
+    messenger.setMockMethodCallHandler(linkChannel, (call) async {
+      links.add(call);
+      return 'dev.fluttercommunity.plus/share/unavailable';
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(storageChannel, null);
+      messenger.setMockMethodCallHandler(linkChannel, null);
+    });
+
+    await showSongActions(tester,
+        body: (_) => Builder(builder: (context) {
+              return TextButton(
+                  onPressed: () => MusicLibraryActions.showSongMenu(
+                      context, first,
+                      downloads: [saved],
+                      resolveDownload: () =>
+                          db.getDownloadByVideoId(saved.videoId)),
+                  child: const Text('Song actions'));
+            }));
+    await tester.tap(find.text('Song actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Share audio file'));
+    await tester.pumpAndSettle();
+
+    final call = files.single;
+    expect(call.method, 'shareMusicFile');
+    expect(
+        call.arguments,
+        allOf(
+          containsPair('profileId', saved.profileId),
+          containsPair('videoId', first.videoId),
+          containsPair('uri', uri),
+          containsPair('folderUri', folder),
+          containsPair('mime', 'audio/mp4'),
+        ));
+    expect(links, isEmpty);
+    expect(find.text('Share Invidious link'), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
   PlayerState playingPlaylist() => PlayerState.init(null).copyWith(
         isAudio: true,
         isHidden: false,
@@ -412,13 +626,94 @@ void main() {
         position: const Duration(seconds: 37),
       );
 
+  _SongOperationCatalog useSongOperationCatalog() {
+    final previous = musicCatalogService;
+    final next = _SongOperationCatalog();
+    musicCatalogService = next;
+    addTearDown(() => musicCatalogService = previous);
+    return next;
+  }
+
+  testWidgets('Back cancels a loading preview and preserves the active queue',
+      (tester) async {
+    final catalog = useSongOperationCatalog();
+    final current = await showSongActions(tester, initial: playingPlaylist());
+    await openSongMenu(tester);
+    await tester.tap(find.text('Preview song'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(catalog.previewObserver!.isCurrent(), isTrue);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(catalog.previewObserver!.isCurrent(), isFalse);
+    catalog.preview.complete(
+        const MusicTrack(videoId: 'firstsong01', title: 'First song'));
+    await tester.pumpAndSettle();
+    expect(current.state.currentlyPlaying, first);
+    expect(current.state.playQueue.toList(), [second.videoId]);
+    expect(current.state.position, const Duration(seconds: 37));
+    expect(current.state.isPlaying, isTrue);
+    expect(current.calls, isEmpty);
+  });
+
+  testWidgets('related radio starts the seed and at most six unique songs',
+      (tester) async {
+    final catalog = useSongOperationCatalog();
+    final current = await showSongActions(tester, initial: playingPlaylist());
+    await openSongMenu(tester);
+    await tester.tap(find.text('Start related radio'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(catalog.seeds, [first.videoId]);
+    expect(catalog.radioIsCurrent!(), isTrue);
+    final matches = List.generate(
+        9,
+        (index) => MusicTrack(
+            videoId: 'related000$index',
+            title: 'Related $index',
+            artists: const ['Artist']));
+    catalog.related.complete([
+      const MusicTrack(videoId: 'firstsong01', title: 'Seed'),
+      matches.first,
+      ...matches,
+    ]);
+    await tester.pumpAndSettle();
+    expect(current.calls.single.audio, isTrue);
+    expect(current.calls.single.videos.map((video) => video.videoId),
+        [first.videoId, ...matches.take(6).map((track) => track.videoId)]);
+  });
+
+  testWidgets('cancelling related lookup leaves the queue intact',
+      (tester) async {
+    final catalog = useSongOperationCatalog();
+    final current = await showSongActions(tester, initial: playingPlaylist());
+    await openSongMenu(tester);
+    await tester.tap(find.text('Start related radio'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(catalog.radioIsCurrent!(), isFalse);
+    catalog.related
+        .complete(const [MusicTrack(videoId: 'secondsong2', title: 'Related')]);
+    await tester.pumpAndSettle();
+    expect(current.calls, isEmpty);
+    expect(current.state.playQueue.toList(), [second.videoId]);
+  });
+
   testWidgets('playlist selection Play next inserts every occurrence in order',
       (tester) async {
     var completed = 0;
+    final source = PlaylistReference(
+        kind: PlaylistSourceKind.local,
+        playlistId: 'local:selected',
+        profileId: db.profileId);
     final current = await showSongActions(tester,
         initial: playingPlaylist(),
         body: (_) => MusicPlaylistSelectionActions(
             videos: const [second, first, second],
+            recommendationSource: source,
             onPlay: (_) async => fail('Play next must retain the decoder'),
             onCompleted: () => completed++,
             isCurrent: () => true));
@@ -434,6 +729,7 @@ void main() {
 
     final state = current.state;
     expect(completed, 1);
+    expect(current.enqueuedRecommendationSource, source);
     expect(state.currentlyPlaying, same(first));
     expect(state.position, const Duration(seconds: 37));
     expect(state.isPlaying, isTrue);
@@ -744,7 +1040,13 @@ void main() {
         'held ${next ? 'Play next' : 'Add to queue'} starts audio when playback is idle',
         (tester) async {
       final initial = PlayerState.init(null);
-      final current = await showSongActions(tester, initial: initial);
+      final source = PlaylistReference(
+          kind: PlaylistSourceKind.public,
+          playlistId: 'PLpublic',
+          profileId: db.profileId);
+      final current = await showSongActions(tester,
+          initial: initial,
+          body: (_) => songRow(first, recommendationSource: source));
       await openSongMenu(tester);
       await tester.tap(find.byKey(
           ValueKey(next ? 'music-song-play-next' : 'music-song-add-to-queue')));
@@ -752,6 +1054,7 @@ void main() {
       expect(current.calls, hasLength(1));
       expect(current.calls.single.videos, [first]);
       expect(current.calls.single.audio, isTrue);
+      expect(current.playedRecommendationSource, source);
       // The fake only records a fresh launch. An idle queue has no active
       // decoder or occurrence that needs to be retained.
       expect(current.state.videos, initial.videos);
@@ -1240,24 +1543,266 @@ void main() {
   });
 
   testWidgets(
-      'collection destination stays enabled when only its first song is saved',
-      (tester) async {
-    await tester.runAsync(() => service
-        .addVideoToPlaylist(localWatchLaterId, first.videoId, video: first));
+    'skip duplicates appends only new songs to a partly matching destination',
+    (tester) async {
+      await tester.runAsync(
+        () => service.addVideoToPlaylist(
+          localWatchLaterId,
+          first.videoId,
+          video: first,
+        ),
+      );
+      await show(tester);
+      await tester.tap(find.text('Save to playlist'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Watch Later'));
+      await tester.pumpAndSettle();
+      expect(find.text('Duplicate songs'), findsOneWidget);
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Skip duplicates'));
+        await Future.doWhile(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await tester.pump();
+          return service.getLocalPlaylists().first.videos.length != 2;
+        }).timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+      expect(
+        service.getLocalPlaylists().first.videos.map((video) => video.videoId),
+        [first.videoId, second.videoId],
+      );
+    },
+  );
+
+  testWidgets(
+    'destinations show song counts and move latest edits to the top',
+    (tester) async {
+      const older = Playlist(
+        title: 'Older list',
+        playlistId: 'local:older',
+        author: '',
+        videoCount: 1,
+        updated: 12,
+        videos: [first],
+      );
+      const newer = Playlist(
+        title: 'Newer list',
+        playlistId: 'local:newer',
+        author: '',
+        videoCount: 2,
+        updated: 24,
+        videos: [first, second],
+      );
+      await tester.runAsync(
+        () => db.saveSetting(
+          SettingsValue(
+            localPlaylistsSetting,
+            jsonEncode([older.toJson(), newer.toJson()]),
+          ),
+        ),
+      );
+      await show(tester, body: const MusicLibraryActions(videos: [second]));
+      final save = find.text('Save to playlist');
+      final olderTitle = find.text('Older list');
+      final newerTitle = find.text('Newer list');
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(find.text('0 songs'), findsOneWidget);
+      expect(find.text('1 song'), findsOneWidget);
+      expect(find.text('2 songs'), findsOneWidget);
+      expect(
+        tester.getTopLeft(newerTitle).dy,
+        lessThan(tester.getTopLeft(olderTitle).dy),
+      );
+
+      await tester.runAsync(() async {
+        await tester.tap(olderTitle);
+        await Future.doWhile(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          return service
+                  .getLocalPlaylists()
+                  .singleWhere(
+                    (playlist) => playlist.playlistId == older.playlistId,
+                  )
+                  .videos
+                  .length !=
+              2;
+        }).timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(find.text('2 songs'), findsNWidgets(2));
+      expect(
+        tester.getTopLeft(olderTitle).dy,
+        lessThan(tester.getTopLeft(newerTitle).dy),
+      );
+    },
+  );
+
+  testWidgets(
+    'an all-duplicate selection can cancel, skip or add a new entry',
+    (tester) async {
+      await tester.runAsync(
+        () => service.addVideoToPlaylist(
+          localWatchLaterId,
+          first.videoId,
+          video: first,
+        ),
+      );
+      Playlist watchLater() => service.getLocalPlaylists().first;
+      final original = watchLater();
+      await show(tester, body: const MusicLibraryActions(videos: [first]));
+      final save = find.text('Save to playlist');
+      final destination = find.text('Watch Later');
+
+      Future<void> chooseDestination() async {
+        await tester.tap(destination);
+        await tester.pumpAndSettle();
+        expect(find.text('Duplicate songs').hitTestable(), findsOneWidget);
+      }
+
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      await chooseDestination();
+      await tester.tap(find.text('Cancel').hitTestable());
+      await tester.pumpAndSettle();
+      expect(destination.hitTestable(), findsOneWidget);
+      expect(watchLater(), original);
+
+      await chooseDestination();
+      await tester.tap(find.text('Skip duplicates'));
+      await tester.pumpAndSettle();
+      expect(find.text('No songs added'), findsOneWidget);
+      expect(watchLater(), original);
+
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      await chooseDestination();
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Add anyway'));
+        await Future.doWhile(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          await tester.pump();
+          return watchLater().videos.length != 2;
+        }).timeout(const Duration(seconds: 5));
+      });
+      await tester.pumpAndSettle();
+      final entries = watchLater().videos;
+      expect(entries.map((video) => video.videoId), [
+        first.videoId,
+        first.videoId,
+      ]);
+      expect(entries.first, original.videos.single);
+      expect(entries.last.indexId, isNotEmpty);
+      expect(entries.last.indexId, isNot(entries.first.indexId));
+    },
+  );
+
+  testWidgets('new destinations can keep repeated songs in selection order', (
+    tester,
+  ) async {
+    await show(
+      tester,
+      body: const MusicLibraryActions(videos: [second, first, second]),
+    );
+    await tester.tap(find.text('Save to playlist'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Create new playlist'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Repeated songs');
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel').hitTestable());
+    await tester.pumpAndSettle();
+    expect(find.text('Repeated songs'), findsOneWidget);
+    expect(service.getLocalPlaylists(), hasLength(1));
+
+    await tester.tap(find.text('Add'));
+    await tester.pumpAndSettle();
+    Playlist? created() => service
+        .getLocalPlaylists()
+        .where((playlist) => playlist.title == 'Repeated songs')
+        .firstOrNull;
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Add anyway'));
+      await Future.doWhile(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+        await tester.pump();
+        return created()?.videos.length != 3;
+      }).timeout(const Duration(seconds: 5));
+    });
+    await tester.pumpAndSettle();
+    final entries = created()!.videos;
+    expect(entries.map((video) => video.videoId), [
+      second.videoId,
+      first.videoId,
+      second.videoId,
+    ]);
+    expect(entries.map((video) => video.indexId).toSet(), hasLength(3));
+  });
+
+  testWidgets('switching profiles dismisses both save and duplicate dialogs', (
+    tester,
+  ) async {
+    final original = db.profileId;
+    await tester.runAsync(
+      () => service.addVideoToPlaylist(
+        localWatchLaterId,
+        first.videoId,
+        video: first,
+      ),
+    );
     await show(tester);
     await tester.tap(find.text('Save to playlist'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Watch Later'));
+    await tester.pumpAndSettle();
+    expect(find.text('Duplicate songs'), findsOneWidget);
+    final next = (await tester.runAsync(
+      () => db.createProfile('Another person'),
+    ))!;
+    await tester.runAsync(() => db.useProfile(next.id));
+    app.profileChanged(next.id);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(service.getLocalPlaylists().first.videos, isEmpty);
+    expect(
+      service
+          .getLocalPlaylists(database: db.forProfile(original))
+          .first
+          .videos
+          .single
+          .videoId,
+      first.videoId,
+    );
+  });
+
+  testWidgets('media Save picker shows and saves the captured Music song',
+      (tester) async {
+    await show(tester,
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => MusicLibraryActions.savePlaybackEntry(
+                context, first,
+                deviceTrack: null, isCurrent: () => true),
+            child: const Text('Open picker'),
+          ),
+        ));
+    await tester.tap(find.text('Open picker'));
+    await tester.pumpAndSettle();
+    expect(find.text('First song'), findsOneWidget);
     await tester.runAsync(() async {
       await tester.tap(find.text('Watch Later'));
       await Future.doWhile(() async {
         await Future<void>.delayed(const Duration(milliseconds: 1));
-        return service.getLocalPlaylists().first.videos.length != 2;
+        return service.getLocalPlaylists().first.videos.isEmpty;
       }).timeout(const Duration(seconds: 5));
     });
     await tester.pumpAndSettle();
     expect(
-        service.getLocalPlaylists().first.videos.map((video) => video.videoId),
-        [first.videoId, second.videoId]);
+        service.getLocalPlaylists().first.videos.single.videoId, first.videoId);
   });
 
   testWidgets('profile switch dismisses owned save and create controls',
@@ -1279,23 +1824,42 @@ void main() {
   });
 
   for (final action in ['Save to playlist', 'Download audio']) {
-    testWidgets('Android Back cancels $action before the player queue',
-        (tester) async {
+    testWidgets('Android Back cancels $action before the player queue', (
+      tester,
+    ) async {
       final downloads = _Downloads();
-      await show(tester,
-          body: BlocProvider<DownloadManagerCubit>.value(
-            value: downloads,
-            child: const MusicLibraryActions(
-                videos: [first, second], compact: false, inPlayer: true),
-          ));
+      final saving = action == 'Save to playlist';
+      if (saving) {
+        await tester.runAsync(
+          () => service.addVideoToPlaylist(
+            localWatchLaterId,
+            first.videoId,
+            video: first,
+          ),
+        );
+      }
+      await show(
+        tester,
+        body: BlocProvider<DownloadManagerCubit>.value(
+          value: downloads,
+          child: const MusicLibraryActions(
+            videos: [first, second],
+            compact: false,
+            inPlayer: true,
+          ),
+        ),
+      );
       var queueBacks = 0;
       bool queueBack(bool stopped, RouteInfo info) {
         queueBacks++;
         return true;
       }
 
-      BackButtonInterceptor.add(queueBack,
-          zIndex: 4, ifNotYetIntercepted: true);
+      BackButtonInterceptor.add(
+        queueBack,
+        zIndex: 4,
+        ifNotYetIntercepted: true,
+      );
       addTearDown(() => BackButtonInterceptor.remove(queueBack));
       await tester.tap(find.text(action));
       await tester.pumpAndSettle();
@@ -1306,28 +1870,31 @@ void main() {
       Future<void> back() async {
         await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
           SystemChannels.navigation.name,
-          SystemChannels.navigation.codec
-              .encodeMethodCall(const MethodCall('popRoute')),
+          SystemChannels.navigation.codec.encodeMethodCall(
+            const MethodCall('popRoute'),
+          ),
           null,
         );
         await tester.pumpAndSettle();
       }
 
-      if (action == 'Download audio') {
-        await tester.tap(options.hitTestable());
-        await tester.pumpAndSettle();
-        final format = find.text('M4A (AAC)').hitTestable();
-        expect(format, findsOneWidget);
-        await back();
-        expect(format, findsNothing);
-        expect(options.hitTestable(), findsOneWidget);
-        expect(queueBacks, 0);
-      }
+      await tester.tap(options.hitTestable());
+      await tester.pumpAndSettle();
+      final choices =
+          find.text(saving ? 'Duplicate songs' : 'M4A (AAC)').hitTestable();
+      expect(choices, findsOneWidget);
+      await back();
+      expect(choices, findsNothing);
+      expect(options.hitTestable(), findsOneWidget);
+      expect(queueBacks, 0);
       await back();
       expect(options, findsNothing);
       expect(find.text(action).hitTestable(), findsOneWidget);
       expect(queueBacks, 0);
-      expect(service.getLocalPlaylists().first.videos, isEmpty);
+      expect(
+        service.getLocalPlaylists().first.videos,
+        hasLength(saving ? 1 : 0),
+      );
       expect(downloads.calls, isEmpty);
     });
   }

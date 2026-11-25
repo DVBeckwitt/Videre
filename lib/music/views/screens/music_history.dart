@@ -11,6 +11,7 @@ import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/views/components/music_history_privacy.dart';
+import 'package:clipious/music/views/components/music_history_transfer.dart';
 import 'package:clipious/music/views/components/music_listening_timeline.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
@@ -24,7 +25,15 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'music.dart';
 
-enum _HistoryAction { play, shuffle, remove, clear, timeline, privacy }
+enum _HistoryAction {
+  play,
+  shuffle,
+  remove,
+  clear,
+  timeline,
+  privacy,
+  transfer
+}
 
 enum _PlaybackGroup { catalogAndDownloads, deviceFiles }
 
@@ -532,16 +541,24 @@ class _MusicHistoryScreenState extends State<MusicHistoryScreen> {
                 key: const ValueKey('music-history-more'),
                 onSelected: (action) {
                   if (!_current) return;
-                  if (action == _HistoryAction.privacy) {
-                    unawaited(showMusicHistoryPrivacy(context));
-                  } else {
-                    unawaited(_confirmRemoval());
+                  switch (action) {
+                    case _HistoryAction.privacy:
+                      unawaited(showMusicHistoryPrivacy(context));
+                    case _HistoryAction.transfer:
+                      unawaited(showMusicHistoryTransfer(context));
+                    case _HistoryAction.clear:
+                      unawaited(_confirmRemoval());
+                    default:
+                      break;
                   }
                 },
                 itemBuilder: (_) => [
                   PopupMenuItem(
                       value: _HistoryAction.privacy,
                       child: Text(locals.musicHistoryPrivacy)),
+                  PopupMenuItem(
+                      value: _HistoryAction.transfer,
+                      child: Text(locals.musicHistoryTransfer)),
                   PopupMenuItem(
                       enabled: _rows.isNotEmpty && !_removing,
                       value: _HistoryAction.clear,

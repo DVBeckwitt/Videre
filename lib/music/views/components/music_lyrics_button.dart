@@ -1,22 +1,19 @@
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
-import 'package:clipious/music/models/music_lyrics_match.dart';
+import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/lrc_lyrics.dart';
 import 'package:clipious/music/services/music_lyrics_corrections.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
-import 'package:clipious/music/services/music_lyrics_service.dart';
 import 'package:clipious/player/models/local_music_playback.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
-import 'package:clipious/utils.dart';
-import 'package:clipious/utils/motion.dart';
-import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-import 'music_lyrics_match_dialog.dart';
+import 'music_lyrics_reader.dart';
 
 class MusicLyricsButton extends StatefulWidget {
   final MusicLyricsLoader loader;
@@ -42,34 +39,63 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
     final offline = state.offlineCurrentlyPlaying;
     final track = video?.musicMetadata ?? offline?.musicMetadata;
     final videoId = video?.videoId ?? offline?.videoId;
-    if (track == null || videoId == null || isLocalMusicPlaybackId(videoId)) {
-      return;
+    if (track == null || videoId == null) return;
+    final local = isLocalMusicPlaybackId(videoId);
+    final library = LocalMusicLibrary.instance;
+    final indexedTrack = localMusicTrackForPlayback(videoId);
+    final localTrack = indexedTrack != null &&
+            !indexedTrack.isCueTrack &&
+            indexedTrack.uri == offline?.storageUri
+        ? indexedTrack
+        : null;
+    final localSelection = library.selectionId;
+    final localRoot =
+        localTrack == null ? null : library.approvedRootForTrack(localTrack);
+
+    bool hasSameLocalGrant() {
+      if (localTrack == null || localRoot == null) return true;
+      final currentTrack = localMusicTrackForPlayback(videoId);
+      if (currentTrack == null ||
+          currentTrack.playbackId != localTrack.playbackId ||
+          currentTrack.uri != localTrack.uri) {
+        return false;
+      }
+      final currentRoot = library.approvedRootForTrack(currentTrack);
+      return library.acceptsSessionSelection(localSelection) &&
+          currentRoot != null &&
+          currentRoot.uri == localRoot.uri &&
+          currentRoot.selectionId == localRoot.selectionId;
     }
 
     bool isCurrent() {
       final current = player.state;
-      return mounted &&
-          !player.isClosed &&
+      return !player.isClosed &&
           !app.isClosed &&
           identical(db, database) &&
           database.profileId == profile &&
+          session.profileId == profile &&
           !app.state.globalLoading &&
           !app.state.sessionRecoveryRequired &&
           app.state.sessionRevision == session.sessionRevision &&
           app.state.profileId == session.profileId &&
           player.backendPlaybackGeneration == generation &&
+          player.openingMusicEntry == null &&
           current.isAudio &&
           !current.isClosing &&
           !current.isHidden &&
           current.currentQueueId == state.currentQueueId &&
           current.currentlyPlaying?.videoId == video?.videoId &&
-          current.offlineCurrentlyPlaying?.videoId == offline?.videoId;
+          current.offlineCurrentlyPlaying?.videoId == offline?.videoId &&
+          (!local ||
+              (current.offlineCurrentlyPlaying?.storageUri ==
+                      offline?.storageUri &&
+                  hasSameLocalGrant()));
     }
 
     if (!isCurrent()) return;
     _opening = true;
     try {
-      if (!isLrclibEnabled()) {
+      if (!local && !isLrclibEnabled()) {
         final confirmed = await showDialog<bool>(
           context: context,
           builder: (context) {
@@ -90,42 +116,57 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
             ));
           },
         );
-        if (confirmed != true || !isCurrent()) return;
+        if (confirmed != true || !mounted || !isCurrent()) return;
         await setLrclibEnabled(true, expectedProfileId: profile);
       }
-      if (!mounted || !isCurrent() || !isLrclibEnabled()) return;
+      if (!mounted || !isCurrent() || (!local && !isLrclibEnabled())) return;
       final duration = video?.lengthSeconds ?? offline?.lengthSeconds;
       final consent = lrclibPreferenceRevision.value;
-      final corrections = MusicLyricsCorrections(database.forProfile(profile));
-      bool mayLoad() =>
-          isCurrent() &&
-          isLrclibEnabled() &&
-          lrclibPreferenceRevision.value == consent;
       final loader = widget.loader;
-      await showSafeModalBottomSheet<void>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (context) => FractionallySizedBox(
-          widthFactor: 1,
-          heightFactor: 0.85,
-          child: PlayerModalBackHandler(
-              child: ValueListenableBuilder<int>(
-            valueListenable: lrclibPreferenceRevision,
-            builder: (context, revision, _) => revision != consent
-                ? Center(
-                    child: Text(
-                        AppLocalizations.of(context)!.musicLyricsUnavailable))
-                : _MusicLyricsSheet(
-                    track: track,
-                    durationSeconds: duration,
-                    videoId: videoId,
-                    corrections: corrections,
-                    load: () => loader(track, duration, videoId),
-                    isCurrent: mayLoad),
-          )),
-        ),
-      );
+      final localDuration = localTrack != null && localTrack.durationMs > 0
+          ? Duration(milliseconds: localTrack.durationMs)
+          : null;
+      final owner = database.forProfile(profile);
+      final correctionTarget = local
+          ? null
+          : (
+              track: track,
+              durationSeconds: duration,
+              videoId: videoId,
+              corrections: MusicLyricsCorrections(owner),
+            );
+      bool mayRead() =>
+          isCurrent() &&
+          (local ||
+              (isLrclibEnabled() && lrclibPreferenceRevision.value == consent));
+      final navigator = Navigator.of(context);
+      final themes =
+          InheritedTheme.capture(from: context, to: navigator.context);
+      await navigator.push(MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (context) => themes.wrap(MultiBlocProvider(
+          providers: [
+            BlocProvider.value(value: app),
+            BlocProvider.value(value: player),
+          ],
+          child: ListenableBuilder(
+            listenable: local ? library : lrclibPreferenceRevision,
+            builder: (context, _) => MusicLyricsReader(
+              track: track,
+              load: local
+                  ? () => _loadLocalLyrics(
+                      localRoot == null ? null : localTrack,
+                      localDuration,
+                      AppLocalizations.of(context)!)
+                  : () => loader(track, duration, videoId),
+              isCurrent: mayRead,
+              preferencesDatabase: owner,
+              localDuration: localDuration,
+              correctionTarget: correctionTarget,
+            ),
+          ),
+        )),
+      ));
     } catch (_) {
       if (mounted && isCurrent()) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
@@ -137,6 +178,26 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
     }
   }
 
+  Future<MusicLyrics> _loadLocalLyrics(LocalMusicTrack? track,
+      Duration? duration, AppLocalizations locals) async {
+    if (track == null) return const MusicLyrics.unavailable();
+    final lyrics = await LocalMusicLibrary.instance.readTrackLyrics(track);
+    for (final (text, source) in [
+      (lyrics?.sidecar, locals.musicLyricsSidecarSource),
+      (lyrics?.embedded, locals.musicLyricsEmbeddedSource),
+    ]) {
+      final parsed = parseLocalLrc(text);
+      final cues = parsed.cues;
+      if (duration != null && cues.isNotEmpty && cues.last.start <= duration) {
+        return MusicLyrics.synced(cues, source: source);
+      }
+      if (parsed.plain.isNotEmpty) {
+        return MusicLyrics.plain(parsed.plain, source: source);
+      }
+    }
+    return const MusicLyrics.unavailable();
+  }
+
   @override
   Widget build(BuildContext context) => FilledButton.tonalIcon(
         key: const ValueKey('music-player-lyrics'),
@@ -144,392 +205,4 @@ class _MusicLyricsButtonState extends State<MusicLyricsButton> {
         icon: const Icon(Icons.lyrics_outlined, size: 20),
         label: Text(AppLocalizations.of(context)!.musicLyrics),
       );
-}
-
-class _MusicLyricsSheet extends StatefulWidget {
-  final MusicMetadata track;
-  final int? durationSeconds;
-  final String videoId;
-  final MusicLyricsCorrections corrections;
-  final Future<MusicLyrics> Function() load;
-  final bool Function() isCurrent;
-
-  const _MusicLyricsSheet({
-    required this.track,
-    required this.durationSeconds,
-    required this.videoId,
-    required this.corrections,
-    required this.load,
-    required this.isCurrent,
-  });
-
-  @override
-  State<_MusicLyricsSheet> createState() => _MusicLyricsSheetState();
-}
-
-class _MusicLyricsSheetState extends State<_MusicLyricsSheet> {
-  MusicLyricsCorrection? _correction;
-  late Future<MusicLyrics> _request = _load();
-
-  Future<MusicLyrics> _load() async {
-    if (!widget.isCurrent()) return const MusicLyrics.unavailable();
-    _correction = widget.corrections.read(widget.videoId);
-    final lyrics = _correction?.lyrics ?? await widget.load();
-    return mounted && widget.isCurrent()
-        ? lyrics
-        : const MusicLyrics.unavailable();
-  }
-
-  Future<void> _correct(MusicLyrics? lyrics) async {
-    final track = widget.track;
-    final duration = widget.durationSeconds;
-    final videoId = widget.videoId;
-    final corrections = widget.corrections;
-    final hasCorrection = _correction != null;
-    final isCurrent = widget.isCurrent;
-    bool mayCorrect() => mounted && isCurrent();
-
-    if (!mayCorrect()) return;
-    final saved = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      useRootNavigator: false,
-      builder: (routeContext) => PlayerModalBackHandler(
-        onBack: () => Navigator.of(routeContext).maybePop(),
-        child: ValueListenableBuilder<int>(
-          valueListenable: lrclibPreferenceRevision,
-          builder: (context, _, __) {
-            final currentTrack =
-                context.select((PlayerCubit player) => mayCorrect());
-            final currentSession =
-                context.select((AppCubit app) => mayCorrect());
-            if (!currentTrack || !currentSession) {
-              final locals = AppLocalizations.of(context)!;
-              return AlertDialog(
-                content: Text(locals.musicLyricsUnavailable),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: Text(locals.cancel)),
-                ],
-              );
-            }
-            return MusicLyricsMatchDialog(
-              track: track,
-              durationSeconds: duration,
-              currentLyrics: lyrics,
-              hasCorrection: hasCorrection,
-              isCurrent: mayCorrect,
-              search: searchMusicLyrics,
-              save: (correction) async {
-                if (!mayCorrect()) return;
-                if (correction == null) {
-                  await corrections.clear(videoId);
-                } else {
-                  await corrections.save(videoId, correction);
-                }
-              },
-            );
-          },
-        ),
-      ),
-    );
-    if (saved == true && mayCorrect()) {
-      setState(() => _request = _load());
-    }
-  }
-
-  Duration? _seekLimit(PlayerState state) {
-    final seconds = state.currentlyPlaying?.lengthSeconds ??
-        state.offlineCurrentlyPlaying?.lengthSeconds;
-    return state.currentlyPlaying?.liveNow != true &&
-            seconds != null &&
-            seconds > 0
-        ? Duration(seconds: seconds)
-        : null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final locals = AppLocalizations.of(context)!;
-    final currentTrack =
-        context.select((PlayerCubit player) => widget.isCurrent());
-    final currentSession = context.select((AppCubit app) => widget.isCurrent());
-    final seekLimit =
-        context.select((PlayerCubit player) => _seekLimit(player.state));
-    if (!currentTrack || !currentSession) {
-      return Center(child: Text(locals.musicLyricsUnavailable));
-    }
-    return FutureBuilder<MusicLyrics>(
-      future: _request,
-      builder: (context, snapshot) {
-        if (!widget.isCurrent()) {
-          return Center(child: Text(locals.musicLyricsUnavailable));
-        }
-        final lyrics = snapshot.data;
-        final ready = snapshot.connectionState == ConnectionState.done;
-        Widget body;
-        if (!ready) {
-          body = const Center(
-              child:
-                  MotionLoadingIndicator(child: CircularProgressIndicator()));
-        } else if (snapshot.hasError) {
-          body = Center(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(locals.musicLyricsLoadFailed),
-            TextButton(
-                onPressed: () {
-                  if (!widget.isCurrent()) return;
-                  final nextRequest = _load();
-                  setState(() {
-                    _request = nextRequest;
-                  });
-                },
-                child: Text(locals.retry)),
-          ]));
-        } else {
-          final result = snapshot.requireData;
-          body = switch (result.kind) {
-            MusicLyricsKind.synced => seekLimit != null &&
-                    result.cues.isNotEmpty &&
-                    result.cues.last.start <= seekLimit
-                ? _timedLines(result.cues)
-                : _plainLines(result.cues),
-            MusicLyricsKind.plain => result.text == null
-                ? _plainLines(result.cues)
-                : ListView(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    children: [SelectableText(result.text!)]),
-            MusicLyricsKind.instrumental =>
-              Center(child: Text(locals.musicLyricsInstrumental)),
-            MusicLyricsKind.unavailable => Center(
-                child: Text(_correction == null
-                    ? locals.musicLyricsUnavailable
-                    : locals.musicLyricsMatchDiscarded)),
-          };
-        }
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(locals.musicLyrics,
-                style: Theme.of(context).textTheme.titleLarge),
-            Text(widget.track.title,
-                maxLines: 2, overflow: TextOverflow.ellipsis),
-            if (ready) ...[
-              if (lyrics?.source case final source?)
-                Text(source, style: Theme.of(context).textTheme.labelMedium),
-              if (_correction?.edited == true)
-                Text(locals.musicLyricsEdited,
-                    style: Theme.of(context).textTheme.labelMedium),
-            ],
-            const Divider(),
-            Expanded(child: body),
-            if (ready)
-              Align(
-                alignment: AlignmentDirectional.centerEnd,
-                child: TextButton.icon(
-                  onPressed: () => _correct(lyrics),
-                  icon: const Icon(Icons.edit_outlined),
-                  label: Text(locals.musicLyricsCorrectMatch),
-                ),
-              ),
-          ]),
-        );
-      },
-    );
-  }
-
-  Widget _plainLines(List<MusicLyricCue> cues) => ListView.builder(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        itemCount: cues.length,
-        itemBuilder: (context, index) => SelectableText(cues[index].text),
-      );
-
-  Widget _timedLines(List<MusicLyricCue> cues) => _TimedLyrics(
-        cues: cues,
-        onSeek: (start) {
-          final player = context.read<PlayerCubit>();
-          final limit = _seekLimit(player.state);
-          if (widget.isCurrent() && limit != null && start <= limit) {
-            player.seek(start);
-          }
-        },
-      );
-}
-
-class _TimedLyrics extends StatefulWidget {
-  final List<MusicLyricCue> cues;
-  final ValueChanged<Duration> onSeek;
-
-  const _TimedLyrics({required this.cues, required this.onSeek});
-
-  @override
-  State<_TimedLyrics> createState() => _TimedLyricsState();
-}
-
-class _TimedLyricsState extends State<_TimedLyrics> {
-  static const _center = ValueKey('music-lyrics-current-section');
-  static const _alignment = 0.32;
-  final _lineKeys = <int, GlobalKey>{};
-  late int _anchor;
-  int? _lastFollowed;
-  bool _following = true;
-
-  @override
-  void initState() {
-    super.initState();
-    final active = _activeLine(context.read<PlayerCubit>().state.position);
-    _anchor = active < 0 ? 0 : active;
-  }
-
-  int _activeLine(Duration position) {
-    final cues = widget.cues;
-    var start = 0;
-    var end = cues.length;
-    while (start < end) {
-      final middle = (start + end) ~/ 2;
-      if (cues[middle].start <= position) {
-        start = middle + 1;
-      } else {
-        end = middle;
-      }
-    }
-    if (start == 0) return -1;
-    final cueStart = cues[start - 1].start;
-    end = start - 1;
-    start = 0;
-    while (start < end) {
-      final middle = (start + end) ~/ 2;
-      if (cues[middle].start < cueStart) {
-        start = middle + 1;
-      } else {
-        end = middle;
-      }
-    }
-    return start;
-  }
-
-  void _reveal(int active, {bool animate = true}) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_following || _lastFollowed != active) return;
-      final target = active < 0 ? 0 : active;
-      final row = _lineKeys[target]?.currentContext;
-      if (row != null) {
-        Scrollable.ensureVisible(row,
-            alignment: _alignment,
-            duration: animate ? AppMotion.duration(row) : Duration.zero,
-            curve: Curves.easeInOut);
-      } else if (_anchor != target) {
-        // A seek can land far outside the lazy viewport. Center a new
-        // viewport on that cue without laying out the intervening rows.
-        setState(() {
-          _anchor = target;
-          _lastFollowed = null;
-        });
-      }
-    });
-  }
-
-  void _pauseFollowing() {
-    if (_following) setState(() => _following = false);
-  }
-
-  Widget _line(BuildContext context, int index, Duration? activeStart) {
-    final cue = widget.cues[index];
-    final active = cue.start == activeStart;
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    return IndexedSemantics(
-      index: index,
-      child: ListTile(
-        key: _lineKeys.putIfAbsent(index, GlobalKey.new),
-        selected: active,
-        selectedColor: colors.onSecondaryContainer,
-        selectedTileColor: colors.secondaryContainer,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        titleTextStyle: active
-            ? theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700)
-            : null,
-        leading: Row(mainAxisSize: MainAxisSize.min, children: [
-          AnimatedContainer(
-            duration: AppMotion.fadeDuration(
-                context, const Duration(milliseconds: 180)),
-            width: 4,
-            height: 24,
-            decoration: BoxDecoration(
-                color: active ? colors.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(2)),
-          ),
-          const SizedBox(width: 8),
-          Text(prettyDurationCustom(cue.start)),
-        ]),
-        title: Text(cue.text),
-        onFocusChange: (focused) {
-          if (focused) _pauseFollowing();
-        },
-        onTap: () => widget.onSeek(cue.start),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final active = context
-        .select((PlayerCubit player) => _activeLine(player.state.position));
-    final activeStart = active < 0 ? null : widget.cues[active].start;
-    if (_following && _lastFollowed != active) {
-      final animate = _lastFollowed != null;
-      _lastFollowed = active;
-      _reveal(active, animate: animate);
-    }
-    return Column(children: [
-      Expanded(
-        child: NotificationListener<UserScrollNotification>(
-          onNotification: (notice) {
-            if (notice.depth == 0 && notice.direction != ScrollDirection.idle) {
-              _pauseFollowing();
-            }
-            return false;
-          },
-          child: KeyedSubtree(
-            key: const ValueKey('music-lyrics-lines'),
-            child: CustomScrollView(
-              key: ValueKey(_anchor),
-              primary: false,
-              center: _center,
-              semanticChildCount: widget.cues.length,
-              slivers: [
-                if (_anchor > 0)
-                  SliverList.builder(
-                    addSemanticIndexes: false,
-                    itemCount: _anchor,
-                    itemBuilder: (context, index) =>
-                        _line(context, _anchor - index - 1, activeStart),
-                  ),
-                SliverList.builder(
-                  key: _center,
-                  addSemanticIndexes: false,
-                  itemCount: widget.cues.length - _anchor,
-                  itemBuilder: (context, index) =>
-                      _line(context, _anchor + index, activeStart),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      Align(
-        alignment: AlignmentDirectional.centerEnd,
-        child: FilterChip(
-          label: Text(AppLocalizations.of(context)!.musicFollowLyrics),
-          selected: _following,
-          onSelected: (following) => setState(() {
-            _following = following;
-            _lastFollowed = null;
-          }),
-        ),
-      ),
-    ]);
-  }
 }

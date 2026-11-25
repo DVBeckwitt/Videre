@@ -10,6 +10,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/content_mode.dart';
 import 'package:clipious/home/views/components/flow_video_home.dart';
 import 'package:clipious/music/models/music_layout.dart';
+import 'package:clipious/music/views/components/music_screen_privacy.dart';
 import 'package:clipious/music/views/screens/music_discovery.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
@@ -721,7 +722,8 @@ class _TvHomeContentState extends State<_TvHomeContent> {
                                             padding: const EdgeInsets.only(
                                                 right: TvOverscan.horizontal,
                                                 bottom: TvOverscan.vertical),
-                                            child: _musicContent(),
+                                            child: MusicScreenPrivacySurface(
+                                                child: _musicContent()),
                                           ),
                                         ),
                                       ),

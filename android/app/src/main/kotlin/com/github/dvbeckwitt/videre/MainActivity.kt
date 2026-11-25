@@ -54,15 +54,22 @@ class MainActivity : AudioServiceActivity() {
     private class FileTooLarge : IOException()
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // No in-memory attempt survives a cold start. Remove owned callbacks
-        // before Flutter plugins inspect the initial intent for shared links.
-        if (NerdVpnBrowserAttempt.ownsCallback(intent?.dataString)) {
+        val widgetSave = intent?.takeIf { MusicHomeWidgetPlugin.isSaveIntent(it) }
+        // Remove owned callbacks before plugins inspect the intent for links.
+        // A widget action needs the live playback token from the cached engine.
+        if (widgetSave != null || NerdVpnBrowserAttempt.ownsCallback(intent?.dataString)) {
             setIntent(Intent(Intent.ACTION_MAIN).setComponent(componentName))
         }
         super.onCreate(savedInstanceState)
+        if (widgetSave != null) MusicHomeWidgetPlugin.handleSaveIntent(this, widgetSave)
     }
 
     override fun onNewIntent(intent: Intent) {
+        if (MusicHomeWidgetPlugin.isSaveIntent(intent)) {
+            super.onNewIntent(Intent(Intent.ACTION_MAIN).setComponent(componentName))
+            MusicHomeWidgetPlugin.handleSaveIntent(this, intent)
+            return
+        }
         val callback = intent.dataString
         if (NerdVpnBrowserAttempt.ownsCallback(callback)) {
             gatewayBrowser?.acceptExternalCallback(checkNotNull(callback))
@@ -72,14 +79,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun provideFlutterEngine(context: Context): FlutterEngine {
-        // The pinned AudioService provider returns its cached engine, creating
-        // one when needed; Flutter's nullable base signature still propagates.
         val engine = checkNotNull(super.provideFlutterEngine(context))
-        // AudioService creates/registers its cached engine before Flutter
-        // attaches the Activity. Remove the legacy Android parser here so it
-        // cannot interpret a typed web VIEW as a media file during attachment.
-        // The retained inbox below is the sole Android content-link intake.
-        engine.plugins.remove(ReceiveSharingIntentPlugin::class.java)
+        prepareMediaFlutterEngine(engine)
         return engine
     }
 
@@ -119,22 +120,6 @@ class MainActivity : AudioServiceActivity() {
         val torBrowser = TorBrowserLauncher(this)
         torBrowserChannel = MethodChannel(messenger, "videre/tor_browser").also {
             it.setMethodCallHandler(torBrowser::handle)
-        }
-        // AudioService retains this engine while the Activity is recreated.
-        if (!flutterEngine.plugins.has(VidereNetworkPlugin::class.java)) {
-            flutterEngine.plugins.add(VidereNetworkPlugin())
-        }
-        if (!flutterEngine.plugins.has(DownloadStoragePlugin::class.java)) {
-            flutterEngine.plugins.add(DownloadStoragePlugin())
-        }
-        if (!flutterEngine.plugins.has(LocalMusicPlugin::class.java)) {
-            flutterEngine.plugins.add(LocalMusicPlugin())
-        }
-        if (!flutterEngine.plugins.has(MusicVoiceSearchPlugin::class.java)) {
-            flutterEngine.plugins.add(MusicVoiceSearchPlugin())
-        }
-        if (!flutterEngine.plugins.has(IncomingLinksPlugin::class.java)) {
-            flutterEngine.plugins.add(IncomingLinksPlugin())
         }
     }
 
@@ -319,6 +304,40 @@ class MainActivity : AudioServiceActivity() {
     companion object {
         private const val FILE_REQUEST_CODE = 4401
         private const val MAX_FILE_BYTES = 10 * 1024 * 1024
+    }
+}
+
+// Android Auto can start the retained engine before an Activity exists.
+internal fun prepareMediaFlutterEngine(engine: FlutterEngine) {
+    // Remove the legacy parser before Activity attachment so only Videre's
+    // retained inbox interprets incoming links.
+    engine.plugins.remove(ReceiveSharingIntentPlugin::class.java)
+    if (!engine.plugins.has(VidereNetworkPlugin::class.java)) {
+        engine.plugins.add(VidereNetworkPlugin())
+    }
+    if (!engine.plugins.has(DownloadStoragePlugin::class.java)) {
+        engine.plugins.add(DownloadStoragePlugin())
+    }
+    if (!engine.plugins.has(LocalMusicPlugin::class.java)) {
+        engine.plugins.add(LocalMusicPlugin())
+    }
+    if (!engine.plugins.has(IncomingLinksPlugin::class.java)) {
+        engine.plugins.add(IncomingLinksPlugin())
+    }
+    if (!engine.plugins.has(MusicVoiceSearchPlugin::class.java)) {
+        engine.plugins.add(MusicVoiceSearchPlugin())
+    }
+    if (!engine.plugins.has(MusicHomeWidgetPlugin::class.java)) {
+        engine.plugins.add(MusicHomeWidgetPlugin())
+    }
+    if (!engine.plugins.has(MusicLyricsScreenPlugin::class.java)) {
+        engine.plugins.add(MusicLyricsScreenPlugin())
+    }
+    if (!engine.plugins.has(MusicScreenPrivacyPlugin::class.java)) {
+        engine.plugins.add(MusicScreenPrivacyPlugin())
+    }
+    if (!engine.plugins.has(AndroidAutoMediaPlugin::class.java)) {
+        engine.plugins.add(AndroidAutoMediaPlugin())
     }
 }
 

@@ -25,6 +25,8 @@ import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:uuid/uuid.dart';
 
 import '../settings/states/settings.dart';
+import '../music/models/deleted_music_playlist.dart';
+import '../music/services/music_playlist_covers.dart';
 import '../network/media_companion.dart';
 import '../playlists/services/playlist_progress.dart';
 import '../playlists/services/playlist_library_service.dart';
@@ -43,6 +45,8 @@ const _musicListeningEvents = 'musicListeningEvents';
 class _AbandonedAccountSetup implements Exception {}
 
 class SembastSqfDb extends IDbClient {
+  static const _playlistOnlyField = 'playlistOnly';
+
   final log = Logger('SembastSqfLDB');
   final Database _database;
   final String? _fixedProfileId;
@@ -200,13 +204,22 @@ class SembastSqfDb extends IDbClient {
   static SettingsValue _encodedLocalPlaylists(Iterable<Playlist> playlists) =>
       SettingsValue(localPlaylistsSetting, jsonEncode(playlists.toList()));
 
-  Future<void> updateLocalPlaylistSetting(String? Function(String?) update) =>
+  Future<void> updateLocalPlaylistStorage(
+          Map<String, String?> Function(String?, String?) update) =>
       _writeProfile((owner, txn) async {
-        final record = owner.settingsStore.record(localPlaylistsSetting);
-        final value = update((await record.get(txn))?['value'] as String?);
-        if (value != null) {
-          await record.put(
-              txn, SettingsValue(localPlaylistsSetting, value).toJson());
+        final settings = owner.settingsStore;
+        final playlists = await settings.record(localPlaylistsSetting).get(txn);
+        final deleted =
+            await settings.record(deletedMusicPlaylistsSetting).get(txn);
+        for (final entry in update(
+                playlists?['value'] as String?, deleted?['value'] as String?)
+            .entries) {
+          final record = settings.record(entry.key);
+          if (entry.value case final value?) {
+            await record.put(txn, SettingsValue(entry.key, value).toJson());
+          } else {
+            await record.delete(txn);
+          }
         }
       });
 
@@ -689,6 +702,14 @@ class SembastSqfDb extends IDbClient {
   SettingsValue? getSettings(String name) {
     var v = _settingsFor(name).record(name).getSync(db);
     return v != null ? SettingsValue.fromJson(v) : null;
+  }
+
+  @override
+  Stream<SettingsValue?> watchSetting(String name) {
+    final owner = forProfile(profileId);
+    return owner._settingsFor(name).record(name).onSnapshot(owner.db).map(
+        (record) =>
+            record == null ? null : SettingsValue.fromJson(record.value));
   }
 
   @override
@@ -1225,6 +1246,19 @@ class SembastSqfDb extends IDbClient {
         }
         await playlistRecord.put(
             txn, _encodedLocalPlaylists(lists.values).toJson());
+        if (replace) {
+          final deleted = settingsStore.record(deletedMusicPlaylistsSetting);
+          final stored = (await deleted.get(txn))?['value'] as String?;
+          for (final entry in DeletedMusicPlaylist.decode(stored)) {
+            final id = entry.playlist.playlistId;
+            if (!lists.containsKey(id) && MusicPlaylistCovers.supports(id)) {
+              await settingsStore
+                  .record(MusicPlaylistCovers.settingName(id))
+                  .delete(txn);
+            }
+          }
+          await deleted.delete(txn);
+        }
         final storedBookmarks =
             await settingsStore.record(playlistLibrarySettingName).get(txn);
         final bookmarks = <String, SavedPlaylist>{
@@ -1328,9 +1362,52 @@ class SembastSqfDb extends IDbClient {
     if (vid.profileId != profileId) {
       throw StateError('Download belongs to a different profile');
     }
-    await _writeProfile((owner, txn) =>
-        owner.downloadedVideosStore.record(vid.videoId).put(txn, vid.toJson()));
+    await _writeProfile((owner, txn) async {
+      final record = owner.downloadedVideosStore.record(vid.videoId);
+      final previous = await record.get(txn);
+      // Transfers save job snapshots that may predate an ownership change.
+      await record.put(txn, {
+        ...vid.toJson(),
+        if (previous?[_playlistOnlyField] == true) _playlistOnlyField: true,
+      });
+    });
   }
+
+  @override
+  bool isPlaylistOwnedMusicDownload(String videoId) {
+    final download = downloadedVideosStore.record(videoId).getSync(db);
+    return download?[_playlistOnlyField] == true;
+  }
+
+  @override
+  Set<String> getPlaylistOwnedMusicDownloadIds() => downloadedVideosStore
+      .findKeysSync(db,
+          finder: Finder(filter: Filter.equals(_playlistOnlyField, true)))
+      .toSet();
+
+  @override
+  Future<bool> insertPlaylistOwnedMusicDownload(DownloadedVideo video) =>
+      _writeProfile((owner, txn) async {
+        if (video.profileId != owner.profileId || !video.audioOnly) {
+          throw StateError('Invalid playlist music download');
+        }
+        final record = owner.downloadedVideosStore.record(video.videoId);
+        if (await record.exists(txn)) return false;
+        await record.put(txn, {...video.toJson(), _playlistOnlyField: true});
+        return true;
+      });
+
+  @override
+  Future<bool> makeMusicDownloadExplicit(String videoId) =>
+      _writeProfile((owner, txn) async {
+        final record = owner.downloadedVideosStore.record(videoId);
+        final previous = await record.get(txn);
+        if (previous == null || previous[_playlistOnlyField] != true) {
+          return false;
+        }
+        await record.put(txn, {...previous, _playlistOnlyField: false});
+        return true;
+      });
 
   @override
   Future<void> saveDownloadExport(String videoId, ExportedMusicCopy copy) =>

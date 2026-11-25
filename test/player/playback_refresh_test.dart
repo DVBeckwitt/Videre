@@ -320,6 +320,67 @@ void main() {
     expect(player.shouldStartPlayback, isFalse);
   });
 
+  test('Music can require explicit Play after a temporary focus loss',
+      () async {
+    await settings.setMusicResumeAfterAudioFocusLoss(false);
+    final music = original.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    player.seed(player.state
+        .copyWith(currentlyPlaying: music, videos: [music], isAudio: true));
+    final loss = AudioInterruptionEvent(true, AudioInterruptionType.pause);
+    final gain = AudioInterruptionEvent(false, AudioInterruptionType.pause);
+
+    player.handleAudioInterruption(loss);
+    expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+    player.handleAudioInterruption(gain);
+    expect(player.shouldStartPlayback, isFalse);
+
+    player.play();
+    expect(player.shouldStartPlayback, isTrue);
+    player.handleAudioInterruption(loss);
+    player.play();
+    expect(player.shouldStartPlayback, isFalse);
+    player.handleAudioInterruption(gain);
+    expect(player.shouldStartPlayback, isTrue);
+  });
+
+  test('zero media volume cancels Music resume intent during focus loss',
+      () async {
+    await settings.setMusicPauseAtZeroVolume(true);
+    final music = original.copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    player.seed(player.state
+        .copyWith(currentlyPlaying: music, videos: [music], isAudio: true));
+    final loss = AudioInterruptionEvent(true, AudioInterruptionType.pause);
+    final gain = AudioInterruptionEvent(false, AudioInterruptionType.pause);
+
+    player.handleMediaVolumeChange(0);
+    expect(player.shouldStartPlayback, isTrue);
+    player.handleMediaVolumeChange(0.5);
+    player.handleAudioInterruption(loss);
+    player.handleMediaVolumeChange(0);
+    expect(player.state.mediaCommand!.type, MediaCommandType.pause);
+    player.handleAudioInterruption(gain);
+    player.handleMediaVolumeChange(0.5);
+    expect(player.shouldStartPlayback, isFalse);
+    player.play();
+    expect(player.shouldStartPlayback, isTrue);
+  });
+
+  test('Music interruption settings leave background video audio unchanged',
+      () async {
+    await settings.setMusicResumeAfterAudioFocusLoss(false);
+    await settings.setMusicPauseAtZeroVolume(true);
+    player.switchAudio(true);
+    player.handleMediaVolumeChange(0.5);
+    player.handleMediaVolumeChange(0);
+    player.handleAudioInterruption(
+        AudioInterruptionEvent(true, AudioInterruptionType.pause));
+    player.handleAudioInterruption(
+        AudioInterruptionEvent(false, AudioInterruptionType.pause));
+    expect(player.shouldStartPlayback, isTrue);
+  });
+
   test('explicit Play while interrupted defers playback until focus returns',
       () {
     player.handleAudioInterruption(

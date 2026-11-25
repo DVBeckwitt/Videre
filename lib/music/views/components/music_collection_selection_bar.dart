@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../player/states/player.dart';
+import '../../../playlists/models/playlist_reference.dart';
 import '../../../videos/models/video.dart';
 import '../screens/music.dart';
 
@@ -28,7 +29,12 @@ class MusicCollectionSelectionBar extends StatefulWidget {
   final VoidCallback onClose;
   final FocusNode closeFocus;
   final bool Function() isCurrent;
-  final Future<List<Video>> Function() loadTracks;
+  final Future<
+          ({
+            List<Video> tracks,
+            List<PlaylistReference?> recommendationSources
+          })>
+      Function() loadTracks;
 
   @override
   State<MusicCollectionSelectionBar> createState() =>
@@ -127,7 +133,7 @@ class _MusicCollectionSelectionBarState
         show(locals.musicCollectionSelectionError);
         return;
       }
-      final tracks = await source.loadTracks();
+      final (:tracks, :recommendationSources) = await source.loadTracks();
       if (!mounted || !current()) return;
       if (tracks.isEmpty) {
         show(locals.musicEmptyCollection);
@@ -136,7 +142,8 @@ class _MusicCollectionSelectionBarState
       if (action == _CollectionAction.append) {
         if (!queueCurrent() ||
             !player!.canEnqueueMusicSongs(tracks) ||
-            !await player.enqueueMusicSongs(tracks, next: false)) {
+            !await player.enqueueMusicCollectionQueue(tracks,
+                recommendationSources: recommendationSources)) {
           if (current()) show(locals.musicCollectionSelectionError);
           return;
         }
@@ -144,6 +151,7 @@ class _MusicCollectionSelectionBarState
         await MusicScreen.playCollectionTracks(context, tracks,
             queueTitle: locals.musicSelectedCollections,
             shuffle: action == _CollectionAction.shuffle,
+            recommendationSources: recommendationSources,
             isCurrent: current);
       }
       if (current()) source.onClose();

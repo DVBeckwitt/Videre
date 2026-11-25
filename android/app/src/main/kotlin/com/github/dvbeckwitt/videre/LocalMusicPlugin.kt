@@ -2,6 +2,7 @@ package com.github.dvbeckwitt.videre
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -14,6 +15,7 @@ import android.os.OperationCanceledException
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.MediaStore
+import android.webkit.MimeTypeMap
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -24,6 +26,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -34,15 +37,20 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     private var activity: ActivityPluginBinding? = null
     private var picker: SourcePicker? = null
     private var systemPicker: SourcePicker? = null
+    private var pendingShare: PendingShare? = null
     private var rename: RenameOperation? = null
     // A scan supersedes only earlier work for the same root. Completed signals
     // also guard download matching until that root is rescanned or removed.
-    private val scans = mutableMapOf<String, CancellationSignal>()
+    private val scans = mutableMapOf<String, RootScan>()
     private val completedCatalogs = mutableMapOf<String, CompletedCatalog>()
+    private lateinit var scanWatcher: LocalMusicScanWatcher
+    private var watchId: Int? = null
+    private val observedCatalogs = mutableMapOf<String, ObservedCatalog>()
     private val worker = Executors.newSingleThreadExecutor()
     private val accessWorker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val preferences get() = context.getSharedPreferences("videre_local_music", Context.MODE_PRIVATE)
+    private val scanPreferences get() = context.getSharedPreferences("videre_local_music_scan", Context.MODE_PRIVATE)
     private val systemSource get() = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
     private val renameArchive get() = LocalMusicRenameArchive(File(context.noBackupFilesDir, "music-rename-events.json"))
 
@@ -54,6 +62,10 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         val cancellation = CancellationSignal()
         var waitingForActivity = true
     }
+
+    private data class PendingShare(val tree: String, val result: MethodChannel.Result)
+    private data class RootScan(val signal: CancellationSignal, var id: Int?)
+    private data class ObservedCatalog(val selectionId: String?, val uris: Set<Uri>)
 
     private class RenameOperation(
         val source: Uri,
@@ -67,6 +79,13 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
+        scanWatcher = LocalMusicScanWatcher(context.contentResolver, main) { source ->
+            val tree = source.toString()
+            val id = watchId
+            if (id != null && automaticScan() && roots().find(tree)?.needsReapproval == false) {
+                channel?.invokeMethod("libraryChanged", mapOf("watchId" to id, "treeUri" to tree))
+            }
+        }
         channel = MethodChannel(binding.binaryMessenger, "com.github.dvbeckwitt.videre/local_music").also {
             it.setMethodCallHandler(::handle)
         }
@@ -74,11 +93,52 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
 
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "getFolder" -> result.success(roots().channelValue())
+            "getFolder" -> {
+                val folder = roots().channelValue()
+                if (call.argument<Boolean>("includeScanPreference") == true) {
+                    result.success(mapOf("folder" to folder, "automaticScan" to automaticScan()))
+                } else {
+                    result.success(folder)
+                }
+            }
+            "setAutomaticScan" -> {
+                scanPreferences.edit().putBoolean("enabled", call.argument<Boolean>("enabled") == true).apply()
+                refreshScanWatcher()
+                result.success(null)
+            }
+            "watchLibrary" -> {
+                watchId = call.argument<Int>("watchId")
+                refreshScanWatcher()
+                result.success(null)
+            }
+            "cancelScan" -> {
+                val id = call.argument<Int>("scanId")
+                if (id != null) scans.values.firstOrNull { it.id == id }?.signal?.cancel()
+                result.success(null)
+            }
             "pickFolder" -> pickFolder(call.argument("initialUri"), result)
             "pickSystem" -> pickSystem(result)
             "checkFolderAccess" -> revalidateAccess(call.argument("treeUri"), result)
-            "listTracks" -> listTracks(call.argument("treeUri"), call.argument("scanId"), result)
+            "listTracks" -> listTracks(
+                call.argument("treeUri"), call.argument("scanId"),
+                call.argument<Boolean>("force") == true, call.argument<Boolean>("detailed") == true, result,
+            )
+            "listIndexedPlaylists" -> run(result) {
+                val tree = call.argument<String>("treeUri") ?: return@run null
+                if (tree != systemSource.toString()) return@run null
+                val completed = completedCatalogs[tree] ?: return@run null
+                if (completed.selectionId != call.argument<String>("selectionId") ||
+                    !catalogCurrent(tree, completed)) return@run null
+                try {
+                    if (checkFolderAccess(tree, completed.signal) != true) return@run null
+                    readIndexedMusicPlaylists(context.contentResolver, completed.signal)?.takeIf {
+                        checkFolderAccess(tree, completed.signal) == true && catalogCurrent(tree, completed)
+                    }
+                } catch (_: RuntimeException) {
+                    // Playlist compatibility tables can be unavailable independently of audio.
+                    null
+                }
+            }
             "matchDownloadTracks" -> run(result) {
                 val tree = call.argument<String>("treeUri") ?: return@run null
                 val completed = completedCatalogs[tree] ?: return@run null
@@ -96,7 +156,9 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                     null
                 }
             }
+            "readTrackLyrics" -> readTrackLyrics(call, result)
             "renameTrack" -> beginRename(call, result)
+            "shareTrack" -> shareTrack(call, result)
             "pendingRenames" -> run(result) {
                 pendingRenames()
             }
@@ -109,12 +171,16 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             }
             "forgetFolder" -> {
                 val tree = call.argument<String>("treeUri")
-                if (tree != null) scans.remove(tree)?.cancel()
+                if (tree != null) {
+                    cancelPendingShare(tree)
+                    scans.remove(tree)?.signal?.cancel()
+                }
                 run(result) { forgetRoots { it.uri == tree } }
             }
             "forgetFolders" -> {
+                cancelPendingShare()
                 cancelPickers()
-                scans.values.forEach(CancellationSignal::cancel)
+                scans.values.forEach { it.signal.cancel() }
                 scans.clear()
                 run(result) { forgetRoots { true } }
             }
@@ -122,14 +188,17 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         }
     }
 
-    private fun listTracks(tree: String?, scanId: Int?, result: MethodChannel.Result) {
+    private fun listTracks(
+        tree: String?, scanId: Int?, force: Boolean, detailed: Boolean, result: MethodChannel.Result,
+    ) {
         if (tree == null || roots().find(tree) == null) {
             result.error("FOLDER_UNAVAILABLE", "Choose the music folder again.", null)
             return
         }
         val signal = CancellationSignal()
-        scans.put(tree, signal)?.cancel()
-        run(result) {
+        val scan = RootScan(signal, scanId)
+        scans.put(tree, scan)?.signal?.cancel()
+        run(result, finished = { if (scans[tree] === scan) scan.id = null }) {
             signal.throwIfCanceled()
             val root = roots().find(tree) ?: throw SecurityException()
             when (checkFolderAccess(tree, signal)) {
@@ -137,19 +206,37 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                 false -> throw SecurityException()
                 true -> try {
                     val source = Uri.parse(tree)
-                    val tracks = catalog(source, root.selectionId).tracks(source, signal) { batch ->
+                    val scanned = catalog(source, root.selectionId).tracks(source, signal, force) { batch ->
                         if (scanId != null) {
                             main.post {
-                                if (scans[tree] === signal && !signal.isCanceled) {
+                                if (scans[tree] === scan && !signal.isCanceled) {
                                     channel?.invokeMethod("trackBatch", mapOf("scanId" to scanId, "tracks" to batch))
                                 }
                             }
                         }
                     }
+                    when (checkFolderAccess(tree, signal)) {
+                        false -> throw SecurityException()
+                        null -> throw ProviderTemporarilyUnavailable()
+                        true -> Unit
+                    }
                     signal.throwIfCanceled()
                     val completed = CompletedCatalog(root.selectionId, signal)
-                    if (catalogCurrent(tree, completed)) completedCatalogs[tree] = completed
-                    tracks
+                    if (!catalogCurrent(tree, completed)) throw SecurityException()
+                    if (!scanned.partial) completedCatalogs[tree] = completed
+                    main.post {
+                        if (scans[tree] === scan && catalogCurrent(tree, completed)) {
+                            val previous = observedCatalogs[tree]?.takeIf {
+                                scanned.partial && it.selectionId == root.selectionId
+                            }?.uris.orEmpty()
+                            val targets = (scanned.notificationUris + previous)
+                                .take(LocalMusicScanWatcher.MAX_NOTIFICATION_URIS).toSet()
+                            observedCatalogs[tree] = ObservedCatalog(root.selectionId, targets)
+                            refreshScanWatcher()
+                        }
+                    }
+                    if (detailed) mapOf("tracks" to scanned.tracks, "partial" to scanned.partial)
+                    else scanned.tracks
                 } catch (cancelled: OperationCanceledException) {
                     throw cancelled
                 } catch (_: Exception) {
@@ -162,10 +249,29 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         }
     }
 
+    private fun automaticScan() = scanPreferences.getBoolean("enabled", false)
+
+    private fun refreshScanWatcher() {
+        val eligibleRoots = roots().entries.filterNot { it.needsReapproval }
+        val activeUris = eligibleRoots.mapTo(mutableSetOf()) { it.uri }
+        observedCatalogs.keys.retainAll(activeUris)
+        if (watchId == null || !automaticScan()) {
+            scanWatcher.close()
+            return
+        }
+        scanWatcher.watch(eligibleRoots.associate { root ->
+            val targets = observedCatalogs[root.uri]?.takeIf {
+                it.selectionId == root.selectionId
+            }?.uris.orEmpty()
+            Uri.parse(root.uri) to targets
+        })
+    }
+
+    private fun rootCurrent(tree: String?, selectionId: String?): Boolean =
+        roots().find(tree)?.let { it.selectionId == selectionId && !it.needsReapproval } == true
+
     private fun catalogCurrent(tree: String, catalog: CompletedCatalog): Boolean =
-        !catalog.signal.isCanceled && roots().find(tree)?.let {
-            it.selectionId == catalog.selectionId && !it.needsReapproval
-        } == true
+        !catalog.signal.isCanceled && rootCurrent(tree, catalog.selectionId)
 
     private fun roots(): LocalMusicRoots = LocalMusicRoots.read(preferences.all)
 
@@ -173,6 +279,7 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         val edit = preferences.edit().putString(LocalMusicRoots.KEY, configuration.toJson())
         listOf("uri", "name", "selectionId", "ownsRead", "needsReapproval").forEach { edit.remove(it) }
         check(edit.commit())
+        main.post { if (channel != null) refreshScanWatcher() }
     }
 
     private fun forgetRoots(remove: (LocalMusicRoot) -> Boolean): Map<String, Any?> {
@@ -189,6 +296,29 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             clearLibraryCache(source, root.selectionId)
         }
         return updated.channelValue()
+    }
+
+    private fun readTrackLyrics(call: MethodCall, result: MethodChannel.Result) {
+        val arguments = call.arguments as? Map<*, *>
+        val tree = arguments?.get("treeUri") as? String
+        val selection = arguments?.get("selectionId")
+        val trackUri = arguments?.get("trackUri") as? String
+        val trackId = arguments?.get("trackId") as? String
+        if (tree == null || trackUri == null || trackId == null ||
+            (selection != null && selection !is String)) {
+            result.success(null)
+            return
+        }
+        val selectionId = selection as? String
+        run(result) {
+            fun sourceStillAuthorized(): Boolean =
+                rootCurrent(tree, selectionId) && checkFolderAccess(tree) == true
+
+            if (!sourceStillAuthorized()) return@run null
+            val source = Uri.parse(tree)
+            val lyrics = catalog(source, selectionId).readTrackLyrics(source, trackUri, trackId)
+            lyrics?.takeIf { sourceStillAuthorized() }
+        }
     }
 
     private fun pickFolder(initial: String?, result: MethodChannel.Result) {
@@ -235,6 +365,7 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             finishPicker(operation, null)
             return true
         }
+        cancelPendingShare()
         runPicker(operation, "FOLDER_UNAVAILABLE", "The music folder could not be opened.") {
             val tree = data?.data ?: throw IOException()
             require(tree.scheme == "content" && DocumentsContract.isTreeUri(tree))
@@ -307,6 +438,7 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     }
 
     private fun completeSystemPick(operation: SourcePicker) {
+        cancelPendingShare()
         operation.waitingForActivity = false
         runPicker(operation, "AUDIO_PERMISSION_DENIED", "Music and audio access is unavailable.") {
             check(mayReadSystemAudio())
@@ -478,6 +610,69 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         else operation.result.error(error, "The selected song could not be renamed.", null)
     }
 
+    private fun shareTrack(call: MethodCall, result: MethodChannel.Result) {
+        val host = activity?.activity
+        val tree = call.argument<String>("treeUri")
+        val selection = call.argument<String>("selectionId")
+        val trackUri = call.argument<String>("uri")?.let(Uri::parse)
+        val trackId = call.argument<String>("trackId")
+        fun sourceCurrent() = rootCurrent(tree, selection)
+
+        if (tree == null || trackUri == null || trackUri.scheme != ContentResolver.SCHEME_CONTENT ||
+            trackUri.encodedQuery != null || trackUri.encodedFragment != null ||
+            host == null || pendingShare != null || promptPending() || !sourceCurrent()) {
+            result.success(false)
+            return
+        }
+        val source = Uri.parse(tree)
+        val share = PendingShare(tree, result)
+        pendingShare = share
+        worker.execute {
+            val mime = try {
+                if (sourceCurrent() && probeAccess(source) == true) {
+                    trackShareMime(source, selection, trackUri, trackId)
+                } else null
+            } catch (_: Exception) {
+                // Provider failures may contain information about the selected file.
+                null
+            }
+            main.post {
+                if (pendingShare !== share) return@post
+                pendingShare = null
+                val launched = if (mime == null || activity?.activity !== host ||
+                    host.isFinishing || promptPending() || !sourceCurrent()) {
+                    false
+                } else try {
+                    shareAudioFile(host, trackUri, mime)
+                    true
+                } catch (_: RuntimeException) {
+                    false
+                }
+                result.success(launched)
+            }
+        }
+    }
+
+    private fun cancelPendingShare(tree: String? = null) {
+        val share = pendingShare ?: return
+        if (tree != null && share.tree != tree) return
+        pendingShare = null
+        share.result.success(false)
+    }
+
+    private fun trackShareMime(source: Uri, selection: String?, uri: Uri, trackId: String?): String? {
+        val name = catalog(source, selection).shareableTrackName(source, uri, trackId) ?: return null
+        val resolver = context.contentResolver
+        val mime = resolver.getType(uri).orEmpty().substringBefore(';').trim().lowercase(Locale.ROOT)
+        if (!LocalMusicCatalog.isAudio(mime, name)) return null
+        val descriptor = resolver.openAssetFileDescriptor(uri, "r") ?: return null
+        descriptor.close()
+        if (mime.startsWith("audio/")) return mime
+        val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        val inferred = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+        return inferred?.takeIf { it.startsWith("audio/") } ?: "audio/*"
+    }
+
     private fun folderName(tree: Uri, signal: CancellationSignal?): String {
         val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
         return context.contentResolver.query(root, arrayOf(Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE),
@@ -504,7 +699,8 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                     current == null || current.selectionId != root.selectionId -> result.success(null)
                     current.needsReapproval -> result.success(false)
                     accessible == false -> {
-                        scans.remove(root.uri)?.cancel()
+                        cancelPendingShare(root.uri)
+                        scans.remove(root.uri)?.signal?.cancel()
                         run(result) {
                             // Confirm again after any picker work already queued for this root.
                             val active = roots().find(root.uri)
@@ -630,18 +826,26 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         }
     }
 
-    private fun run(result: MethodChannel.Result, action: () -> Any?) {
+    private fun run(result: MethodChannel.Result, finished: () -> Unit = {}, action: () -> Any?) {
+        fun reply(send: () -> Unit) {
+            main.post {
+                if (channel != null) {
+                    finished()
+                    send()
+                }
+            }
+        }
         worker.execute {
             try {
                 val value = action()
-                main.post { if (channel != null) result.success(value) }
+                reply { result.success(value) }
             } catch (_: OperationCanceledException) {
-                main.post { if (channel != null) result.error("SCAN_CANCELLED", "The music scan was cancelled.", null) }
+                reply { result.error("SCAN_CANCELLED", "The music scan was cancelled.", null) }
             } catch (_: ProviderTemporarilyUnavailable) {
-                main.post { if (channel != null) result.error("SCAN_UNAVAILABLE", "The music scan is temporarily unavailable.", null) }
+                reply { result.error("SCAN_UNAVAILABLE", "The music scan is temporarily unavailable.", null) }
             } catch (_: Exception) {
                 // A provider error may contain a device path or account name.
-                main.post { if (channel != null) result.error("FOLDER_UNAVAILABLE", "Choose the music folder again.", null) }
+                reply { result.error("FOLDER_UNAVAILABLE", "Choose the music folder again.", null) }
             }
         }
     }
@@ -658,6 +862,7 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         activity?.removeActivityResultListener(this)
         activity?.removeRequestPermissionsResultListener(this)
         activity = null
+        cancelPendingShare()
     }
     override fun onDetachedFromActivity() {
         onDetachedFromActivityForConfigChanges()
@@ -669,8 +874,9 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         onDetachedFromActivity()
-        scans.values.forEach(CancellationSignal::cancel)
+        scans.values.forEach { it.signal.cancel() }
         scans.clear()
+        scanWatcher.close()
         accessWorker.shutdownNow()
         worker.shutdownNow()
         channel?.setMethodCallHandler(null)

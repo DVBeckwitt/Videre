@@ -28,6 +28,7 @@ import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart' hide PlayerState;
@@ -833,5 +834,43 @@ void main() {
       JustAudioPlatform.instance = originalPlatform;
       debugDefaultTargetPlatformOverride = originalTarget;
     }
+  });
+
+  test('an unavailable Android offload preference leaves a source paused',
+      () async {
+    final originalTarget = debugDefaultTargetPlatformOverride;
+    final originalPlatform = JustAudioPlatform.instance;
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    final platform = _TransportPlatform();
+    JustAudioPlatform.instance = platform;
+    addTearDown(() {
+      JustAudioPlatform.instance = originalPlatform;
+      debugDefaultTargetPlatformOverride = originalTarget;
+    });
+    final decoder = AudioPlayer();
+    addTearDown(decoder.dispose);
+    await decoder.preferAndroidMusicOffload();
+    expect(platform.players, isEmpty);
+    await decoder.setAudioSource(
+        AudioSource.uri(Uri.parse('https://instance.example/song.m4a')),
+        initialPosition: const Duration(seconds: 7));
+    final native = platform.player!;
+    final channel =
+        MethodChannel('com.ryanheise.just_audio.methods.${native.id}');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call.method);
+      throw PlatformException(code: 'unsupported-output');
+    });
+
+    await decoder.preferAndroidMusicOffload();
+
+    expect(calls, ['preferMusicOffload']);
+    expect(decoder.playing, isFalse);
+    expect(native.plays, 0);
+    expect(native.loads.single.initialPosition, const Duration(seconds: 7));
   });
 }

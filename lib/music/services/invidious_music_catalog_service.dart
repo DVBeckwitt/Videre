@@ -98,7 +98,10 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
 
   MusicTrack _track(
       Video video, Map<String, List<ImageObject>> savedCovers, Server server,
-      {Video? playbackVideo, String? albumPlaylistId, String? albumTitle}) {
+      {Video? playbackVideo,
+      String? albumPlaylistId,
+      String? albumTitle,
+      bool playlistEntry = false}) {
     if (!_videoId.hasMatch(video.videoId) ||
         video.title == null ||
         video.title!.trim().isEmpty) {
@@ -118,11 +121,15 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         if (author != null && author.trim().isNotEmpty && uploaderId != null)
           MusicArtist(id: uploaderId, name: author),
       ],
+      artistCredits: video.stockArtTrackCredits,
+      uploaderName: author,
       uploaderChannelId: uploaderId,
       uploaderChannelUrl: uploaderHandle == null
           ? null
           : Uri(pathSegments: ['', '@$uploaderHandle']).toString(),
       durationSeconds: video.lengthSeconds,
+      playlistIndex: playlistEntry ? video.index : null,
+      playlistIndexId: playlistEntry ? video.indexId : null,
       albumPlaylistId: albumPlaylistId,
       albumTitle: albumTitle ?? video.stockArtTrackAlbum,
       thumbnails: savedCovers[video.videoId] ?? const [],
@@ -737,17 +744,21 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         artTrack: video.isStockArtTrack, instanceUrl: server.url);
     final candidates =
         ImageObject.getThumbnailUrlsForSize(images, width: 320, height: 180);
+    final credits = video.stockArtTrackCredits;
     return MusicLibraryEntry.tryParse(MusicLibraryEntry(
       kind: MusicLibraryKind.song,
       id: video.videoId,
       title: title,
-      subtitle: video.author ?? '',
-      artistCredits: [
-        if (MusicArtistCredit.forAuthor(
-                video.author, video.authorId, video.authorUrl)
-            case final credit?)
-          credit,
-      ],
+      subtitle:
+          credits.isEmpty ? video.author ?? '' : credits.artistNames.join(', '),
+      artistCredits: credits.isNotEmpty
+          ? credits
+          : [
+              if (MusicArtistCredit.forAuthor(
+                      video.author, video.authorId, video.authorUrl)
+                  case final credit?)
+                credit,
+            ],
       album: video.stockArtTrackAlbum,
       durationSeconds: video.lengthSeconds,
       thumbnails: [
@@ -760,31 +771,70 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   }
 
   @override
-  Future<MusicArtistPage> getArtist(String id) {
+  Future<MusicArtistPage> getArtist(String id) =>
+      _getArtist(id, deferUploads: false);
+
+  @override
+  Future<MusicArtistPage> getArtistOverview(String id) =>
+      _getArtist(id, deferUploads: true);
+
+  Future<MusicArtistPage> _getArtist(String id, {required bool deferUploads}) {
     if (!_channelId.hasMatch(id)) {
       throw const MusicCatalogException('Invalid music artist.');
     }
     return _inSession((api, server, check) async {
-      final covers = _savedCovers(server);
       final channel = await api.getMusicChannel(id, server, check);
       await check();
       if (channel.authorId != id) {
         throw const MusicCatalogException(
-            'The server returned another artist channel.');
+          'The server returned another artist channel.',
+        );
       }
-      final videos = await api.getMusicChannelVideos(id, server, check);
       return MusicArtistPage(
         artist: MusicArtist(
           id: channel.authorId,
           name: channel.author,
           thumbnails: channel.authorThumbnails,
         ),
-        description: channel.description,
-        songs: [
-          for (final video in videos.videos) _track(video, covers, server)
-        ],
+        description: _nonBlank(channel.description),
+        loadsUploadsSeparately: deferUploads,
+        songs: deferUploads
+            ? const []
+            : await _artistUploads(id, api, server, check),
       );
     });
+  }
+
+  @override
+  Future<List<MusicTrack>> getArtistUploads(
+    String id, {
+    bool Function()? isCurrent,
+  }) {
+    if (!_channelId.hasMatch(id)) {
+      throw const MusicCatalogException('Invalid music artist.');
+    }
+    _requireCurrentDiscovery(isCurrent);
+    return _inSession(
+      (api, server, check) => _artistUploads(
+        id,
+        api,
+        server,
+        () => _checkDiscovery(check, isCurrent),
+      ),
+    );
+  }
+
+  Future<List<MusicTrack>> _artistUploads(
+    String id,
+    Service api,
+    Server server,
+    Future<void> Function() check,
+  ) async {
+    await check();
+    final videos = await api.getMusicChannelVideos(id, server, check);
+    await check();
+    final covers = _savedCovers(server);
+    return [for (final video in videos.videos) _track(video, covers, server)];
   }
 
   @override
@@ -841,10 +891,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           final author = entry['author'];
           final image = entry['playlistThumbnail'];
           final count = entry['videoCount'];
+          final authorName = author is String ? _nonBlank(author) : null;
           releases.add(MusicCollection(
             id: playlistId,
             title: title,
-            artists: [if (author is String && author.isNotEmpty) author],
+            artists: [if (authorName != null) authorName],
             thumbnails: [
               if (image is String &&
                   image.isNotEmpty &&
@@ -864,6 +915,11 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
                 : null,
       );
     });
+  }
+
+  static String? _nonBlank(String? value) {
+    final text = value?.trim();
+    return text == null || text.isEmpty ? null : text;
   }
 
   DateTime? _artistReleaseDeadline(Server server) {
@@ -907,12 +963,29 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
   }
 
   @override
-  Future<MusicCollection> getPlaylist(String id) {
+  Future<MusicCollection> getPlaylist(String id) => _loadPlaylist(id);
+
+  @override
+  Future<MusicCollection> getPlaylistProgressively(String id,
+          {required void Function(MusicCollection) onProgress,
+          required bool Function() isCurrent}) =>
+      _loadPlaylist(id, onProgress: onProgress, isCurrent: isCurrent);
+
+  Future<MusicCollection> _loadPlaylist(String id,
+      {void Function(MusicCollection)? onProgress,
+      bool Function()? isCurrent}) {
     final playlistId = id.startsWith('VL') ? id.substring(2) : id;
     if (!_playlistId.hasMatch(playlistId)) {
       throw const MusicCatalogException('Invalid music playlist.');
     }
-    return _inSession((api, server, check) async {
+    return _inSession((api, server, checkSession) async {
+      Future<void> check() async {
+        await checkSession();
+        if (isCurrent?.call() == false) {
+          throw const MusicCatalogException('The music request was cancelled.');
+        }
+      }
+
       final covers = _savedCovers(server);
       if (playlistId.startsWith('RD')) {
         final mix = await api.getMix(playlistId,
@@ -923,7 +996,8 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           artists: mix.author.isEmpty ? [] : [mix.author],
           thumbnails: _playlistPreview(mix.videos, server),
           tracks: [
-            for (final video in mix.videos) _track(video, covers, server)
+            for (final video in mix.videos)
+              _track(video, covers, server, playlistEntry: true)
           ],
           videoCount: mix.videoCount,
           updated: mix.updated,
@@ -931,14 +1005,33 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       }
       final first =
           await api.getMusicPlaylistPage(playlistId, 1, server, check);
+      final author = _nonBlank(first.author);
+      final authorId = normalizeChannelId(first.authordId) ??
+          channelIdFromAuthorUrl(first.authorUrl);
       final albumId = validMusicAlbumPlaylistId(playlistId);
       final albumTitle =
           albumId != null && first.title.trim().isNotEmpty ? first.title : null;
+      final thumbnails = _playlistPreview(first.videos, server);
       var page = first;
       var hasFilteredEntries = false;
       final tracks = <MusicTrack>[];
       final signatures = <String>{};
       final identities = <String>{};
+      MusicCollection snapshot({required bool complete}) => MusicCollection(
+            id: playlistId,
+            title: first.title,
+            artists: [if (author != null) author],
+            playlistAuthor: author == null
+                ? null
+                : MusicArtistCredit(name: author, id: authorId),
+            description: _nonBlank(first.description),
+            thumbnails: thumbnails,
+            tracks: List.unmodifiable(tracks),
+            videoCount: first.videoCount,
+            updated: first.updated,
+            loadingComplete: complete,
+          );
+
       for (var pageNumber = 1; pageNumber <= 50; pageNumber++) {
         await check();
         if (page.playlistId != playlistId ||
@@ -961,7 +1054,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
           final identity = playlistSourceEntryId(video);
           if (identity == null || identities.add(identity)) {
             tracks.add(_track(video, covers, server,
-                albumPlaylistId: albumId, albumTitle: albumTitle));
+                albumPlaylistId: albumId,
+                albumTitle: albumTitle,
+                playlistEntry: true));
           }
         }
         // Invidious pages can overlap. Filtered entries have already lost their
@@ -972,16 +1067,9 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
         hasFilteredEntries |= page.removedByFilter > 0;
         if ((!hasFilteredEntries && tracks.length >= first.videoCount) ||
             (page.videos.isEmpty && page.removedByFilter == 0)) {
-          return MusicCollection(
-            id: playlistId,
-            title: first.title,
-            artists: first.author.isEmpty ? [] : [first.author],
-            thumbnails: _playlistPreview(first.videos, server),
-            tracks: tracks,
-            videoCount: first.videoCount,
-            updated: first.updated,
-          );
+          return snapshot(complete: true);
         }
+        onProgress?.call(snapshot(complete: false));
         if (pageNumber == 50) break;
         page = await api.getMusicPlaylistPage(
             playlistId, pageNumber + 1, server, check);

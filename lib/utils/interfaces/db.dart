@@ -121,6 +121,9 @@ abstract class IDbClient {
 
   SettingsValue? getSettings(String name);
 
+  /// Observe the initial setting and subsequent committed changes.
+  Stream<SettingsValue?> watchSetting(String name) => const Stream.empty();
+
   Future<Server> getCurrentlySelectedServer() async {
     var server =
         (await getServers()).where((element) => element.inUse).firstOrNull;
@@ -246,6 +249,17 @@ abstract class IDbClient {
   List<DownloadedVideo> getAllDownloads();
 
   Future<void> upsertDownload(DownloadedVideo vid);
+
+  bool isPlaylistOwnedMusicDownload(String videoId) => false;
+
+  Set<String> getPlaylistOwnedMusicDownloadIds() => const {};
+
+  /// Create a playlist-only job if the profile has no matching download.
+  Future<bool> insertPlaylistOwnedMusicDownload(DownloadedVideo video) async =>
+      false;
+
+  /// Promote an existing playlist-only job to an explicit download.
+  Future<bool> makeMusicDownloadExplicit(String videoId) async => false;
 
   Future<void> saveDownloadExport(
       String videoId, ExportedMusicCopy copy) async {

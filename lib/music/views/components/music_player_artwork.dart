@@ -492,49 +492,46 @@ class _MusicPlayerArtworkState extends State<MusicPlayerArtwork>
                           ]))),
             ),
           ])),
-      if (!isLocalMusicPlaybackId(
-          widget.video?.videoId ?? widget.offline?.videoId))
-        PositionedDirectional(
-            start: 8,
-            end: 8,
-            bottom: 8,
-            child: Wrap(
-              alignment: WrapAlignment.end,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 4,
-              runSpacing: 2,
-              children: [
-                if (match != null)
-                  if (widget.size >=
-                      MediaQuery.textScalerOf(context).scale(218))
-                    Tooltip(
-                        message: showing
-                            ? locals.musicShowCover
-                            : locals.musicShowVideo,
-                        child: FilledButton.tonalIcon(
-                            key: const ValueKey('music-player-video-toggle'),
-                            onPressed: toggle,
-                            icon: Icon(
-                                showing
-                                    ? Icons.album_outlined
-                                    : Icons.music_video_outlined,
-                                size: 20),
-                            label: Text(showing
-                                ? locals.musicCoverLabel
-                                : locals.musicVideoLabel)))
-                  else
-                    IconButton.filledTonal(
-                        key: const ValueKey('music-player-video-toggle'),
-                        tooltip: showing
-                            ? locals.musicShowCover
-                            : locals.musicShowVideo,
-                        onPressed: toggle,
-                        icon: Icon(showing
-                            ? Icons.album_outlined
-                            : Icons.music_video_outlined)),
-                MusicLyricsButton(loader: widget.lyricsLoader),
-              ],
-            )),
+      PositionedDirectional(
+          start: 8,
+          end: 8,
+          bottom: 8,
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            runSpacing: 2,
+            children: [
+              if (match != null)
+                if (widget.size >= MediaQuery.textScalerOf(context).scale(218))
+                  Tooltip(
+                      message: showing
+                          ? locals.musicShowCover
+                          : locals.musicShowVideo,
+                      child: FilledButton.tonalIcon(
+                          key: const ValueKey('music-player-video-toggle'),
+                          onPressed: toggle,
+                          icon: Icon(
+                              showing
+                                  ? Icons.album_outlined
+                                  : Icons.music_video_outlined,
+                              size: 20),
+                          label: Text(showing
+                              ? locals.musicCoverLabel
+                              : locals.musicVideoLabel)))
+                else
+                  IconButton.filledTonal(
+                      key: const ValueKey('music-player-video-toggle'),
+                      tooltip: showing
+                          ? locals.musicShowCover
+                          : locals.musicShowVideo,
+                      onPressed: toggle,
+                      icon: Icon(showing
+                          ? Icons.album_outlined
+                          : Icons.music_video_outlined)),
+              MusicLyricsButton(loader: widget.lyricsLoader),
+            ],
+          )),
     ]));
   }
 }

@@ -35,7 +35,14 @@ enum NotificationTypes {
       id: 'playlist-notifications',
       description: 'Get notification from selected playlists (bell icon)',
       name: 'Playlist new videos',
-      idSpace: 3000000);
+      idSpace: 3000000),
+  musicPlaylistSave(
+      id: 'music-playlist-save',
+      description: 'Open the playlist picker from Music playback controls',
+      name: 'Save to Music playlist',
+      idSpace: 5000000,
+      playSound: false,
+      importance: NotificationImportance.Low);
 
   final NotificationImportance importance;
   final String id, name, description;
@@ -76,6 +83,28 @@ initializeNotifications() {
   });
 }
 
+class MusicPlaylistSaveNotification {
+  static const _type = NotificationTypes.musicPlaylistSave;
+  static const _ticketKey = 'ticket';
+
+  static void Function(String)? onOpen;
+  static void Function(String)? onDismiss;
+
+  static Future<void> show(String title, String ticket) async {
+    final notifications = AwesomeNotifications();
+    if (!await notifications.isNotificationAllowed()) return;
+    await notifications.createNotification(
+        content: NotificationContent(
+            id: _type.idSpace,
+            channelKey: _type.id,
+            title: title,
+            payload: {_ticketKey: ticket}));
+  }
+
+  static Future<void> dismiss() =>
+      AwesomeNotifications().dismiss(_type.idSpace);
+}
+
 class NotificationController {
   static bool Function() canHandleActions = () => true;
 
@@ -107,13 +136,24 @@ class NotificationController {
   @pragma("vm:entry-point")
   static Future<void> onDismissActionReceivedMethod(
       ReceivedAction receivedAction) async {
-    // Your code goes here
+    if (receivedAction.channelKey != NotificationTypes.musicPlaylistSave.id) {
+      return;
+    }
+    final ticket =
+        receivedAction.payload?[MusicPlaylistSaveNotification._ticketKey];
+    if (ticket != null) MusicPlaylistSaveNotification.onDismiss?.call(ticket);
   }
 
   /// Use this method to detect when the user taps on a notification or action button
   @pragma("vm:entry-point")
   static Future<void> onActionReceivedMethod(
       ReceivedAction receivedAction) async {
+    if (receivedAction.channelKey == NotificationTypes.musicPlaylistSave.id) {
+      final ticket =
+          receivedAction.payload?[MusicPlaylistSaveNotification._ticketKey];
+      if (ticket != null) MusicPlaylistSaveNotification.onOpen?.call(ticket);
+      return;
+    }
     if (receivedAction.payload != null && receivedAction.payload!.isNotEmpty) {
       var payload = receivedAction.payload!;
       final account = await _selectedAccount();

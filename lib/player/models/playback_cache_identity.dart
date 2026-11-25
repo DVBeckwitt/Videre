@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import '../../network/youtube_privacy.dart';
 import '../../network/gateway_context.dart';
 import '../../settings/models/db/server.dart';
+import '../../videos/models/adaptive_format.dart';
 import '../../videos/models/video.dart';
 import '../media_source.dart';
 
@@ -20,6 +21,7 @@ Map<String, Object?>? playbackCacheIdentity({
   required String sourceUrl,
   required String sessionId,
   bool mediaCompanions = false,
+  AdaptiveFormat? progressiveMusicAudio,
 }) {
   final serverUrl = parseMediaUrl(server.url);
   final admittedSource = mediaCompanions
@@ -116,6 +118,32 @@ Map<String, Object?>? playbackCacheIdentity({
   }
   resources.putIfAbsent(admittedSource, () => sessionResource(admittedSource));
 
+  final music = video.musicMetadata;
+  final seconds = video.lengthSeconds;
+  final byteLength = int.tryParse(progressiveMusicAudio?.clen ?? '');
+  final mime = progressiveMusicAudio?.type.split(';').first.trim();
+  final musicSong = !mediaCompanions &&
+          video.isUpcoming != true &&
+          RegExp(r'^[a-zA-Z0-9_-]{1,128}$').stringMatch(video.videoId) ==
+              video.videoId &&
+          music != null &&
+          music.title.trim().isNotEmpty &&
+          seconds != null &&
+          seconds > 0 &&
+          byteLength != null &&
+          byteLength > 0 &&
+          (mime == 'audio/mp4' || mime == 'audio/webm') &&
+          progressiveMusicAudio != null &&
+          admit(progressiveMusicAudio.url) == admittedSource &&
+          resources[admittedSource]?['persistent'] == true
+      ? {
+          'title': music.title,
+          'artist': music.artist,
+          'lengthSeconds': seconds,
+          'byteLength': byteLength,
+        }
+      : null;
+
   return {
     'version': 1,
     'profileId': server.profileId,
@@ -126,6 +154,7 @@ Map<String, Object?>? playbackCacheIdentity({
     // Unknown adaptive children are cacheable only with explicit VOD metadata.
     // A missing live flag is not evidence that a dynamic manifest is static.
     'adaptiveVod': video.liveNow == false,
+    if (musicSong != null) 'musicSong': musicSong,
     if (GatewayRequestContext.forAccount(
             server.profileId, server.accountId, server.url)
         case final context?)

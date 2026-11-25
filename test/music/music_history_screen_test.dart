@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
@@ -6,6 +8,7 @@ import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/music/views/screens/music_history.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/utils/interfaces/db.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/db/history_video_cache.dart';
@@ -43,7 +46,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      PlaylistReference? recommendationSource,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     expect(audio, isTrue);
     expect(fromMusic, isTrue);
     expect(queueTitle, 'Music history');
@@ -113,6 +118,41 @@ void main() {
     await tester.tap(find.text(action));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('an import picker stays bound to its original profile',
+      (tester) async {
+    const files = MethodChannel('videre/files');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final selection = Completer<String?>();
+    final calls = <String>[];
+    messenger.setMockMethodCallHandler(files, (call) {
+      calls.add(call.method);
+      return selection.future;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(files, null));
+
+    final original = MusicListeningHistory.forProfile(db, db.profileId);
+    final other = await tester.runAsync(() => db.createProfile('Other'));
+    await show(tester);
+    await tester.tap(find.byKey(const ValueKey('music-history-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Import or export history'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Import listening history'));
+    await tester.pumpAndSettle();
+    expect(calls, ['open']);
+
+    await tester.runAsync(() => db.useProfile(other!.id));
+    app.showProfile(other!.id);
+    selection.complete('invalid file from the old profile');
+    await tester.pumpAndSettle();
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(original.events(), isEmpty);
+    expect(
+        MusicListeningHistory.forProfile(db, db.profileId).events(), isEmpty);
+  });
 
   testWidgets('Find scopes ordered play, shuffle and removal to all matches',
       (tester) async {

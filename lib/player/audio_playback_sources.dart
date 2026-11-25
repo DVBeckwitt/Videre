@@ -9,6 +9,8 @@ import '../downloads/services/download_storage.dart';
 import '../downloads/services/explicit_music_download.dart';
 import '../extensions.dart';
 import '../globals.dart';
+import '../music/models/device_playlist_track.dart';
+import '../music/services/cached_music.dart';
 import '../network/media_companion.dart';
 import '../network/network_proxy.dart';
 import '../videos/models/adaptive_format.dart';
@@ -49,10 +51,17 @@ bool audioPlaybackRouteIsCurrent(BackendPlayback route) {
 }
 
 bool samePreparedAudioSource(
-    AudioPlaybackSources? prepared, AudioPlaybackSources active,
-    {int index = 0}) {
-  final first = prepared?.sources.elementAtOrNull(index);
-  final next = active.sources.elementAtOrNull(index);
+        AudioPlaybackSources? prepared, AudioPlaybackSources active,
+        {int index = 0}) =>
+    _sameAudioSource(prepared?.sources.elementAtOrNull(index),
+        active.sources.elementAtOrNull(index));
+
+bool _sameAudioSource(AudioSource? first, AudioSource? next) {
+  if (first is ClippingAudioSource && next is ClippingAudioSource) {
+    return first.start == next.start &&
+        first.end == next.end &&
+        _sameAudioSource(first.child, next.child);
+  }
   if (first is! UriAudioSource ||
       next is! UriAudioSource ||
       first.runtimeType != next.runtimeType ||
@@ -63,6 +72,11 @@ bool samePreparedAudioSource(
     return false;
   }
   if (first is ProgressiveAudioSource && next is ProgressiveAudioSource) {
+    final firstCached = first.playbackCache?['cachedMusic'] as Map?;
+    final nextCached = next.playbackCache?['cachedMusic'] as Map?;
+    if (firstCached != null || nextCached != null) {
+      return mapEquals(firstCached, nextCached);
+    }
     final firstDownload = first.playbackCache?['download'] as Map?;
     final nextDownload = next.playbackCache?['download'] as Map?;
     return mapEquals(firstDownload, nextDownload);
@@ -93,7 +107,14 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
   var streamingQuality = MusicStreamingQuality.auto;
   final entry = offlineVideo ?? video;
   final fingerprint = explicitAudioDownloadFingerprint(entry);
-  if (entry != null && fingerprint != null) {
+  if (CachedMusicPlayback.of(video) case final cached?) {
+    final database = db;
+    final server = await database.getCurrentlySelectedServer();
+    if (!isCurrent() || !identical(database, db)) return null;
+    final identity = cached.source(server, video!.videoId);
+    if (identity == null) throw StateError('Cached song is unavailable');
+    sources.add(ProgressiveAudioSource(cached.uri, playbackCache: identity));
+  } else if (entry != null && fingerprint != null) {
     if (!isCurrent()) return null;
     final database = db;
     if (offlineVideo != null && offlineVideo.profileId != database.profileId) {
@@ -125,14 +146,28 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
     // A document's name can resemble a streaming manifest. Always open the
     // selected file as a single progressive audio source.
     sources.add(ProgressiveAudioSource(uri));
-  } else if (isLocalMusicPlaybackId(offlineVideo?.videoId)) {
-    final track = localMusicTrackForPlayback(offlineVideo!.videoId);
-    if (track == null || offlineVideo.profileId != db.profileId) {
+  } else if (isLocalMusicPlaybackId(entry?.videoId)) {
+    if (!isCurrent()) return null;
+    final track = localMusicTrackForPlayback(entry!.videoId);
+    if (track == null ||
+        (offlineVideo != null && offlineVideo.profileId != db.profileId) ||
+        (offlineVideo == null &&
+            devicePlaylistFileProof(entry.videoId) == null)) {
       throw StateError('Local music file is unavailable');
     }
     // A provider's document name is opaque. Even a misleading suffix
     // must never select a playlist decoder that opens nested URLs.
-    sources.add(ProgressiveAudioSource(Uri.parse(track.uri)));
+    final gain = track.replayGain;
+    final source = ProgressiveAudioSource(Uri.parse(track.uri), tag: gain);
+    final start = track.cueStartUs;
+    final end = track.cueEndUs;
+    sources.add(start == null
+        ? source
+        : ClippingAudioSource(
+            child: source,
+            start: Duration(microseconds: start),
+            end: end == null ? null : Duration(microseconds: end),
+            tag: gain));
   } else if (offlineVideo != null) {
     // The local library can rename a managed document while this queue still
     // holds the previous provider URI. Resolve the current owned download on
@@ -281,6 +316,7 @@ Future<AudioPlaybackSources?> resolveAudioPlaybackSources({
             sourceUrl: url,
             sessionId: sessionId,
             mediaCompanions: companions != null,
+            progressiveMusicAudio: music ? audioByUrl[url] : null,
           ));
       sources.add(source);
       final quality = qualityByUrl[url];

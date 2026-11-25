@@ -13,6 +13,7 @@ import 'package:clipious/settings/models/errors/invidious_service_error.dart';
 import 'package:clipious/utils.dart';
 
 import '../../../globals.dart';
+import '../../../music/models/deleted_music_playlist.dart';
 import '../../../settings/models/db/server.dart';
 import '../../../utils/models/sharelink.dart';
 import '../../../utils/views/components/device_widget.dart';
@@ -55,8 +56,15 @@ class PlaylistViewScreen extends StatelessWidget {
   void deletePlayList(BuildContext context) {
     var cubit = context.read<PlaylistCubit>();
     var locals = AppLocalizations.of(context)!;
-    okCancelDialog(context, locals.deletePlayListQ, locals.irreversibleAction,
-        () async {
+    final source = cubit.bookmarkOwner ?? cubit.reference;
+    final recoverable = source?.kind == PlaylistSourceKind.local &&
+        source!.profileId == db.profileId &&
+        service.canRecoverMusicPlaylist(source.playlistId);
+    final notice = recoverable
+        ? locals.musicDeletedPlaylistRetention(
+            musicPlaylistRecoveryRetention.inDays)
+        : locals.irreversibleAction;
+    okCancelDialog(context, locals.deletePlayListQ, notice, () async {
       try {
         await cubit.deletePlaylist();
         if (context.mounted) Navigator.of(context).pop();

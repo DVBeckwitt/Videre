@@ -59,6 +59,14 @@ abstract final class PlaybackCache {
   static Future<PlaybackCacheStatus> clear() =>
       _statusCall('clearPlaybackCache');
 
+  static Future<List<Object?>> cachedMusicSongs(
+      Map<String, Object?> owner) async {
+    if (!supported) return const [];
+    return await _channel.invokeListMethod<Object?>(
+            'cachedMusicSongs', owner) ??
+        const [];
+  }
+
   /// Deletes only an inactive profile's byte spans and invalidates its sources.
   /// Stop that profile's playback first; other profiles continue uninterrupted.
   static Future<void> removeProfile(String profileId) async {

@@ -13,6 +13,7 @@ import '../../../settings/states/settings.dart';
 import '../../../utils.dart';
 import '../../../utils/motion.dart';
 import '../../models/music_layout.dart';
+import '../components/music_screen_privacy.dart';
 import 'music.dart';
 import 'music_discovery.dart';
 import 'music_library.dart';
@@ -187,7 +188,10 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MusicScreenPrivacySurface(child: _buildMusicMode(context));
+
+  Widget _buildMusicMode(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final phone = getDeviceType() == DeviceType.phone;
     final embedded = widget.inMainPager ||
@@ -198,10 +202,13 @@ class _MusicModeScreenState extends State<MusicModeScreen> {
     final dock = embeddedPhone ? MiniPlayerDock.maybeOf(context) : null;
     final keyboardVisible =
         dock?.keyboardVisible ?? MediaQuery.viewInsetsOf(context).bottom > 0;
+    final slimNavigation = context.select(
+        (SettingsCubit cubit) => cubit.state.musicLayout.slimNavigation);
     final phoneBar = phone && !(embeddedPhone && keyboardVisible)
         ? _navigationBar(context,
             embedded: embeddedPhone,
-            compact: embeddedPhone && usesCompactMusicNavigation(context))
+            compact: slimNavigation ||
+                embeddedPhone && usesCompactMusicNavigation(context))
         : null;
     final mainBar = widget.mainNavigationBar;
     final bottomBar = mainBar == null

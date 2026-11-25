@@ -70,8 +70,10 @@ class _Player extends TestPlayerCubit {
       Duration? startAt,
       bool? audio,
       bool? playing,
+      bool shuffleOnce = false,
       PlaylistLoadSession? playlistLoader,
-      bool fromMusic = false}) async {
+      bool fromMusic = false,
+      bool songTap = false}) async {
     calls.add(_PlaylistCall(entries, reference, startIndex, audio, startAt));
   }
 
@@ -82,7 +84,9 @@ class _Player extends TestPlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      PlaylistReference? recommendationSource,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     standaloneCalls++;
   }
 }

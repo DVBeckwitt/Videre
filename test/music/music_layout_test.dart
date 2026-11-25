@@ -25,6 +25,7 @@ void main() {
       MusicLibraryCategory.channels,
       MusicLibraryCategory.downloads,
       MusicLibraryCategory.podcasts,
+      MusicLibraryCategory.cachedSongs,
     ]);
   });
 
@@ -56,6 +57,7 @@ void main() {
     expect(restored, layout);
     expect(restored.hashCode, layout.hashCode);
     expect(restored.visibleLibraryCategories, [
+      MusicLibraryCategory.cachedSongs,
       MusicLibraryCategory.podcasts,
       MusicLibraryCategory.channels,
       MusicLibraryCategory.onDevice,
@@ -80,12 +82,83 @@ void main() {
       [MusicShortcut.charts, MusicShortcut.library],
       <MusicShortcut>[],
     ]) {
-      final saved =
-          MusicLayout(destinations: destinations, shortcuts: shortcuts);
+      final saved = MusicLayout(
+          destinations: destinations,
+          shortcuts: shortcuts,
+          gridSize: MusicGridSize.small,
+          songTitleLines: MusicSongTitleLines.two,
+          compactRows: true,
+          slimNavigation: true,
+          showHomeShortcuts: false,
+          showRecentActivity: false);
       final restored = MusicLayout.tryDecode(saved.encode());
-      expect(restored?.destinations, destinations);
-      expect(restored?.shortcuts, shortcuts);
+      expect(restored, saved);
+      expect(restored?.titleLines(1), 2);
     }
+  });
+
+  test('both version 2 layout formats migrate without dropping preferences',
+      () {
+    const navigation = {
+      'version': 2,
+      'destinations': ['library', 'search', 'home'],
+      'shortcuts': ['charts'],
+    };
+    const cache = MusicLibraryCategory.cachedSongs;
+    final categoryOrder = [
+      ...MusicLibraryCategory.values.reversed.where((item) => item != cache),
+    ];
+    final categories = MusicLayout.tryDecode(jsonEncode({
+      ...navigation,
+      'libraryCategories': categoryOrder.map((item) => item.name).toList(),
+      'hiddenLibraryCategories': ['downloads'],
+    }));
+    expect(categories?.libraryCategories, [...categoryOrder, cache]);
+    expect(
+        categories?.hiddenLibraryCategories, {MusicLibraryCategory.downloads});
+    expect(categories?.gridSize, MusicGridSize.medium);
+
+    final appearance = MusicLayout.tryDecode(jsonEncode({
+      ...navigation,
+      'gridSize': 'large',
+      'songTitleLines': 'two',
+      'compactRows': true,
+      'slimNavigation': true,
+      'showHomeShortcuts': false,
+      'showRecentActivity': false,
+    }));
+    expect(appearance?.libraryCategories, MusicLibraryCategory.values);
+    expect(appearance?.gridSize, MusicGridSize.large);
+    expect(appearance?.showHomeShortcuts, isFalse);
+
+    final combined = categories!.copyWith(
+      gridSize: appearance!.gridSize,
+      showHomeShortcuts: appearance.showHomeShortcuts,
+    );
+    expect(MusicLayout.tryDecode(combined.encode()), combined);
+    final beforeCache = jsonDecode(combined.encode()) as Map<String, dynamic>;
+    beforeCache['libraryCategories'] =
+        categoryOrder.map((item) => item.name).toList();
+    expect(MusicLayout.tryDecode(jsonEncode(beforeCache)), combined);
+  });
+
+  test('version one keeps customized order and gains presentation defaults',
+      () {
+    final layout = MusicLayout.tryDecode(jsonEncode({
+      'version': 1,
+      'destinations': ['library', 'home', 'search'],
+      'shortcuts': ['charts'],
+    }));
+    expect(
+        layout,
+        const MusicLayout.defaults().copyWith(destinations: [
+          MusicDestination.library,
+          MusicDestination.home,
+          MusicDestination.search,
+        ], shortcuts: [
+          MusicShortcut.charts,
+        ]));
+    expect(layout?.titleLines(1), 1);
   });
 
   test(
@@ -96,6 +169,8 @@ void main() {
     for (final raw in [
       '{',
       jsonEncode({...valid, 'version': 20}),
+      jsonEncode({...valid, 'gridSize': 'huge'}),
+      jsonEncode({...valid, 'compactRows': 1}),
       jsonEncode({...valid, 'shortcuts': 'charts'}),
       jsonEncode({
         ...valid,

@@ -3,6 +3,7 @@ part of 'audio_player.dart';
 /// A manual selection owns this silent decoder until its queue command arrives.
 /// It is independent of the old song's automatic next/previous window.
 class _ManualMusicDecoder {
+  final AudioPlayerCubit owner;
   final _StandbyAudio slot;
   final Duration startAt;
   final bool Function() isCurrent;
@@ -16,7 +17,7 @@ class _ManualMusicDecoder {
   int sourceIndex = 0;
   bool changedDecoder = false;
 
-  _ManualMusicDecoder(this.slot, this.startAt, this.isCurrent,
+  _ManualMusicDecoder(this.owner, this.slot, this.startAt, this.isCurrent,
       {required this.borrowedAdjacent});
 
   bool get decoderReady =>
@@ -60,6 +61,8 @@ class _ManualMusicDecoder {
           return false;
         }
         try {
+          await owner._setMusicGain(decoder, plan.sources[index]);
+          if (!active()) return false;
           if (index != 0 ||
               !decoderReady ||
               !samePreparedAudioSource(adjacent, plan)) {

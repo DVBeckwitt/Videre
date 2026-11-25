@@ -34,6 +34,11 @@ public class MainMethodCallHandler implements MethodCallHandler {
                 break;
             }
             List<Object> rawAudioEffects = call.argument("androidAudioEffects");
+            Double musicGain = call.argument("androidMusicGain");
+            if (musicGain != null && !MusicGainProcessor.isValidGain(musicGain)) {
+                result.error("invalid_music_gain", "Expected a music gain from 0 to 16", null);
+                break;
+            }
             players.put(
                 id,
                 new AudioPlayer(
@@ -44,7 +49,8 @@ public class MainMethodCallHandler implements MethodCallHandler {
                     rawAudioEffects,
                     call.argument("androidAudioOffloadPreferences"),
                     call.argument("androidOffloadSchedulingEnabled"),
-		    call.argument("useLazyPreparation")
+                    call.argument("useLazyPreparation"),
+                    musicGain
                 )
             );
             result.success(null);

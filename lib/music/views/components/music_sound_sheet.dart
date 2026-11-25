@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/replay_gain.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/views/components/playback_speed_controls.dart';
 import 'package:clipious/player/views/components/player_modal_back_handler.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 Future<void> showMusicSoundSheet(BuildContext context, PlayerCubit player) =>
@@ -73,6 +76,44 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
                     child: Text(locals.musicSoundSessionChanged),
                   )
                 else ...[
+                  StreamBuilder<SettingsState>(
+                    stream: widget.player.settings.stream,
+                    initialData: widget.player.settings.state,
+                    builder: (context, snapshot) {
+                      final settings = widget.player.settings;
+                      final volume = snapshot.data!.musicPlaybackVolume;
+                      final percent = NumberFormat.percentPattern(
+                          Localizations.localeOf(context).toString());
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(locals.musicPlaybackVolume),
+                            Slider(
+                              key: const ValueKey('music-playback-volume'),
+                              value: volume,
+                              divisions: 20,
+                              label: percent.format(volume),
+                              semanticFormatterCallback: (value) =>
+                                  '${locals.musicPlaybackVolume}, ${percent.format(value)}',
+                              onChanged: (value) async {
+                                if (!_current) return;
+                                try {
+                                  await settings.setMusicPlaybackVolume(value);
+                                } catch (_) {
+                                  if (context.mounted && _current) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text(locals.error)));
+                                  }
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                   PlaybackSpeedControls(
                     initialSpeed: state.speed,
                     onChanged: (value) {
@@ -89,6 +130,10 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
                         : null,
                   ),
                   const Divider(),
+                  _MusicReplayGainControls(
+                      controller: widget.player.musicSound,
+                      isCurrent: () => _current),
+                  const Divider(),
                   MusicEqualizerControls(
                       controller: widget.player.musicSound,
                       isCurrent: () => _current),
@@ -98,6 +143,149 @@ class _MusicSoundSheetState extends State<MusicSoundSheet> {
           ),
         );
       });
+}
+
+class _MusicReplayGainControls extends StatefulWidget {
+  final MusicSoundController controller;
+  final bool Function() isCurrent;
+
+  const _MusicReplayGainControls({
+    required this.controller,
+    required this.isCurrent,
+  });
+
+  @override
+  State<_MusicReplayGainControls> createState() =>
+      _MusicReplayGainControlsState();
+}
+
+class _MusicReplayGainControlsState extends State<_MusicReplayGainControls> {
+  bool _saving = false;
+  bool _failed = false;
+
+  Future<void> _save(Future<void> Function() write) async {
+    if (!widget.isCurrent() || _saving) return;
+    _saving = true;
+    if (_failed) setState(() => _failed = false);
+    try {
+      await write();
+    } catch (_) {
+      if (mounted && widget.isCurrent()) setState(() => _failed = true);
+    } finally {
+      _saving = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: widget.controller,
+        builder: (context, _) {
+          final locals = AppLocalizations.of(context)!;
+          final controller = widget.controller;
+          final preampDb = controller.musicPreampDb;
+          final number = NumberFormat(
+            '0.#',
+            Localizations.localeOf(context).toString(),
+          ).format(preampDb);
+          final gain =
+              locals.musicPreampValue(preampDb > 0 ? '+$number' : number);
+          final modeLabels = {
+            ReplayGainMode.off: locals.musicReplayGainOff,
+            ReplayGainMode.track: locals.musicReplayGainTrack,
+            ReplayGainMode.album: locals.musicReplayGainAlbum,
+          };
+          return Shortcuts(
+            shortcuts: const {
+              SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+            },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    locals.musicReplayGain,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  if (!controller.replayGainSupported)
+                    Text(locals.musicReplayGainUnavailable)
+                  else ...[
+                    Text(locals.musicReplayGainHelp),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        for (final MapEntry(key: mode, value: label)
+                            in modeLabels.entries)
+                          ChoiceChip(
+                            key: ValueKey('music-replaygain-${mode.name}'),
+                            label: Text(label),
+                            selected: controller.replayGainMode == mode,
+                            onSelected: (selected) {
+                              if (selected) {
+                                unawaited(
+                                  _save(
+                                      () => controller.setReplayGainMode(mode)),
+                                );
+                              }
+                            },
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      locals.musicPreamp,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    Row(
+                      children: [
+                        IconButton.filledTonal(
+                          key: const ValueKey('music-preamp-decrease'),
+                          tooltip: locals.musicPreampDecrease,
+                          onPressed: preampDb > minimumMusicPreampDb
+                              ? () => _save(
+                                    () => controller
+                                        .setMusicPreampDb(preampDb - 1),
+                                  )
+                              : null,
+                          icon: const Icon(Icons.remove),
+                        ),
+                        Expanded(
+                          child: Semantics(
+                            label: locals.musicPreamp,
+                            value: gain,
+                            liveRegion: true,
+                            excludeSemantics: true,
+                            child: Text(gain, textAlign: TextAlign.center),
+                          ),
+                        ),
+                        IconButton.filledTonal(
+                          key: const ValueKey('music-preamp-increase'),
+                          tooltip: locals.musicPreampIncrease,
+                          onPressed: preampDb < maximumMusicPreampDb
+                              ? () => _save(
+                                    () => controller
+                                        .setMusicPreampDb(preampDb + 1),
+                                  )
+                              : null,
+                          icon: const Icon(Icons.add),
+                        ),
+                      ],
+                    ),
+                    if (_failed)
+                      Semantics(
+                        liveRegion: true,
+                        child: Text(locals.musicReplayGainSaveFailed),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      );
 }
 
 class MusicEqualizerControls extends StatelessWidget {

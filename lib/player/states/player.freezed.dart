@@ -17,6 +17,7 @@ mixin _$PlayerState {
 // player display properties
   bool get isMini;
   bool get hasTimer;
+  int? get sleepTracksRemaining;
   double? get top;
   bool get isDragging;
   int get selectedFullScreenIndex;
@@ -73,6 +74,8 @@ mixin _$PlayerState {
             (identical(other.isMini, isMini) || other.isMini == isMini) &&
             (identical(other.hasTimer, hasTimer) ||
                 other.hasTimer == hasTimer) &&
+            (identical(other.sleepTracksRemaining, sleepTracksRemaining) ||
+                other.sleepTracksRemaining == sleepTracksRemaining) &&
             (identical(other.top, top) || other.top == top) &&
             (identical(other.isDragging, isDragging) ||
                 other.isDragging == isDragging) &&
@@ -148,6 +151,7 @@ mixin _$PlayerState {
         runtimeType,
         isMini,
         hasTimer,
+        sleepTracksRemaining,
         top,
         isDragging,
         selectedFullScreenIndex,
@@ -191,7 +195,7 @@ mixin _$PlayerState {
 
   @override
   String toString() {
-    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
+    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, sleepTracksRemaining: $sleepTracksRemaining, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
   }
 }
 
@@ -204,6 +208,7 @@ abstract mixin class $PlayerStateCopyWith<$Res> {
   $Res call(
       {bool isMini,
       bool hasTimer,
+      int? sleepTracksRemaining,
       double? top,
       bool isDragging,
       int selectedFullScreenIndex,
@@ -262,6 +267,7 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
   $Res call({
     Object? isMini = null,
     Object? hasTimer = null,
+    Object? sleepTracksRemaining = freezed,
     Object? top = freezed,
     Object? isDragging = null,
     Object? selectedFullScreenIndex = null,
@@ -311,6 +317,10 @@ class _$PlayerStateCopyWithImpl<$Res> implements $PlayerStateCopyWith<$Res> {
           ? _self.hasTimer
           : hasTimer // ignore: cast_nullable_to_non_nullable
               as bool,
+      sleepTracksRemaining: freezed == sleepTracksRemaining
+          ? _self.sleepTracksRemaining
+          : sleepTracksRemaining // ignore: cast_nullable_to_non_nullable
+              as int?,
       top: freezed == top
           ? _self.top
           : top // ignore: cast_nullable_to_non_nullable
@@ -506,6 +516,7 @@ class _PlayerState extends PlayerState {
   const _PlayerState(
       {this.isMini = true,
       this.hasTimer = false,
+      this.sleepTracksRemaining,
       this.top,
       this.isDragging = false,
       this.selectedFullScreenIndex = 0,
@@ -558,6 +569,8 @@ class _PlayerState extends PlayerState {
   @override
   @JsonKey()
   final bool hasTimer;
+  @override
+  final int? sleepTracksRemaining;
   @override
   final double? top;
   @override
@@ -718,6 +731,8 @@ class _PlayerState extends PlayerState {
             (identical(other.isMini, isMini) || other.isMini == isMini) &&
             (identical(other.hasTimer, hasTimer) ||
                 other.hasTimer == hasTimer) &&
+            (identical(other.sleepTracksRemaining, sleepTracksRemaining) ||
+                other.sleepTracksRemaining == sleepTracksRemaining) &&
             (identical(other.top, top) || other.top == top) &&
             (identical(other.isDragging, isDragging) ||
                 other.isDragging == isDragging) &&
@@ -793,6 +808,7 @@ class _PlayerState extends PlayerState {
         runtimeType,
         isMini,
         hasTimer,
+        sleepTracksRemaining,
         top,
         isDragging,
         selectedFullScreenIndex,
@@ -836,7 +852,7 @@ class _PlayerState extends PlayerState {
 
   @override
   String toString() {
-    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
+    return 'PlayerState(isMini: $isMini, hasTimer: $hasTimer, sleepTracksRemaining: $sleepTracksRemaining, top: $top, isDragging: $isDragging, selectedFullScreenIndex: $selectedFullScreenIndex, isHidden: $isHidden, isClosing: $isClosing, dragDistance: $dragDistance, showMiniPlaceholder: $showMiniPlaceholder, dragStartMini: $dragStartMini, height: $height, fullScreenState: $fullScreenState, muted: $muted, aspectRatio: $aspectRatio, currentlyPlaying: $currentlyPlaying, requestedBackend: $requestedBackend, backendRecovery: $backendRecovery, recoveringPlayback: $recoveringPlayback, offlineCurrentlyPlaying: $offlineCurrentlyPlaying, videos: $videos, offlineVideos: $offlineVideos, playedVideos: $playedVideos, playQueue: $playQueue, isAudio: $isAudio, isPip: $isPip, offset: $offset, startAt: $startAt, position: $position, bufferedPosition: $bufferedPosition, isPlaying: $isPlaying, speed: $speed, pitchSemitones: $pitchSemitones, mediaCommand: $mediaCommand, mediaEvent: $mediaEvent, sponsorSegments: $sponsorSegments, nextSegment: $nextSegment, forwardStep: $forwardStep, rewindStep: $rewindStep, totalFastForward: $totalFastForward, totalRewind: $totalRewind, orientation: $orientation)';
   }
 }
 
@@ -851,6 +867,7 @@ abstract mixin class _$PlayerStateCopyWith<$Res>
   $Res call(
       {bool isMini,
       bool hasTimer,
+      int? sleepTracksRemaining,
       double? top,
       bool isDragging,
       int selectedFullScreenIndex,
@@ -911,6 +928,7 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
   $Res call({
     Object? isMini = null,
     Object? hasTimer = null,
+    Object? sleepTracksRemaining = freezed,
     Object? top = freezed,
     Object? isDragging = null,
     Object? selectedFullScreenIndex = null,
@@ -960,6 +978,10 @@ class __$PlayerStateCopyWithImpl<$Res> implements _$PlayerStateCopyWith<$Res> {
           ? _self.hasTimer
           : hasTimer // ignore: cast_nullable_to_non_nullable
               as bool,
+      sleepTracksRemaining: freezed == sleepTracksRemaining
+          ? _self.sleepTracksRemaining
+          : sleepTracksRemaining // ignore: cast_nullable_to_non_nullable
+              as int?,
       top: freezed == top
           ? _self.top
           : top // ignore: cast_nullable_to_non_nullable

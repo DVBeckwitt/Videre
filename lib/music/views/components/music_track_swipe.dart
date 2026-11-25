@@ -27,14 +27,18 @@ class MusicTrackSwipe extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final player = context.watch<PlayerCubit>();
-    final (_, enabled) = context.select((SettingsCubit? settings) => (
-          settings?.state.playerRepeatMode,
-          compact || settings?.state.musicArtworkSwipe != false,
-        ));
+    final enabled = context
+        .select((SettingsCubit? settings) => (
+              enabled: compact || settings?.state.musicArtworkSwipe != false,
+              repeat: settings?.state.playerRepeatMode,
+              previousPolicy: settings?.state.musicPreviousTrackPolicy,
+            ))
+        .enabled;
     final session = context.watch<AppCubit>().state;
     final current =
         _occurrence(player.openingMusicEntry) ?? player.state.currentQueueId;
-    final previous = player.adjacentMusicEntry(previous: true);
+    final previous =
+        player.adjacentMusicEntry(previous: true, applyPreviousPolicy: true);
     final next = player.adjacentMusicEntry(previous: false);
     return LayoutBuilder(
       builder: (context, constraints) => _TrackSwipeGesture(
@@ -146,7 +150,8 @@ class _TrackSwipeGestureState extends State<_TrackSwipeGesture> {
     }
     final previous = _previous(distance);
     final expected = _occurrence(_neighbor(distance));
-    if (_occurrence(player.adjacentMusicEntry(previous: previous)) !=
+    if (_occurrence(player.adjacentMusicEntry(
+            previous: previous, applyPreviousPolicy: true)) !=
         expected) {
       _reset();
       return;

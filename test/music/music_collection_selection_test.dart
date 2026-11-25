@@ -15,6 +15,7 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -94,6 +95,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   final plays = <({List<Video> tracks, bool shuffle})>[];
   final appended = <List<Video>>[];
+  final playedSources = <List<PlaylistReference?>?>[];
+  final appendedSources = <List<PlaylistReference?>?>[];
 
   @override
   int playlistGeneration = 0;
@@ -113,9 +116,11 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   Future<void> playMusicCollectionQueue(List<Video> tracks,
       {required String queueTitle,
       bool shuffle = false,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      List<PlaylistReference?>? recommendationSources}) async {
     expect(isCurrent?.call(), isNot(false));
     plays.add((tracks: List.of(tracks), shuffle: shuffle));
+    playedSources.add(recommendationSources);
   }
 
   @override
@@ -124,10 +129,10 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       selection.isNotEmpty;
 
   @override
-  Future<bool> enqueueMusicSongs(List<Video> selection,
-      {required bool next, List<DownloadedVideo>? downloads}) async {
-    expect(next, isFalse);
+  Future<bool> enqueueMusicCollectionQueue(List<Video> selection,
+      {List<PlaylistReference?>? recommendationSources}) async {
     appended.add(List.of(selection));
+    appendedSources.add(recommendationSources);
     return true;
   }
 
@@ -220,6 +225,13 @@ void main() {
         [_sharedId, _playlistOnlyId, _sharedId, _albumOnlyId, _sharedId]);
     expect(played.tracks[0].musicMetadata?.title, 'First copy');
     expect(played.tracks[2].musicMetadata?.title, 'Second copy');
+    expect(player.playedSources.single?.map((source) => source?.playlistId), [
+      _playlist.playlistId,
+      _playlist.playlistId,
+      _playlist.playlistId,
+      _albumId,
+      _albumId
+    ]);
     expect(played.tracks.map((track) => track.indexId), everyElement(isNull));
     expect(played.tracks.last.musicMetadata?.albumPlaylistId, _albumId);
     expect(player.appended, isEmpty);
@@ -240,6 +252,13 @@ void main() {
 
     expect(player.appended.single.map((track) => track.videoId),
         [_sharedId, _playlistOnlyId, _sharedId, _albumOnlyId, _sharedId]);
+    expect(player.appendedSources.single?.map((source) => source?.playlistId), [
+      _playlist.playlistId,
+      _playlist.playlistId,
+      _playlist.playlistId,
+      _albumId,
+      _albumId
+    ]);
     expect(player.plays, isEmpty);
     expect(player.state, same(playing));
     expect(find.byKey(_actions), findsNothing);

@@ -44,7 +44,8 @@ void main() {
     await db.close();
   });
 
-  Future<void> mount(WidgetTester tester, {bool tv = false}) async {
+  Future<void> mount(WidgetTester tester,
+      {bool tv = false, double textScale = 1}) async {
     await tester.pumpWidget(MultiBlocProvider(
       providers: [
         BlocProvider<AppCubit>.value(value: app),
@@ -53,6 +54,11 @@ void main() {
       child: MaterialApp(
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: TextScaler.linear(textScale)),
+          child: child!,
+        ),
         home: MusicLayoutEditor(includeSearchShortcut: tv),
       ),
     ));
@@ -82,7 +88,7 @@ void main() {
     tester.view.physicalSize = const Size(450, 1400);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    await mount(tester);
+    await mount(tester, textScale: 2);
     expect(control('music-shortcut-search-toggle'), findsNothing);
     await tap(tester, control('music-destination-search-move'));
     await tap(tester, find.text('Move later'));
@@ -105,6 +111,28 @@ void main() {
         isNot(contains(MusicShortcut.library)));
     expect(
         settings.state.musicLayout.shortcuts, contains(MusicShortcut.search));
+
+    await tap(tester, control('music-layout-grid-size'));
+    await tap(tester, find.text('Small').last);
+    await tap(tester, control('music-layout-title-lines'));
+    await tap(tester, find.text('Two lines').last);
+    await tap(tester, control('music-layout-compact-rows'));
+    await tap(tester, control('music-layout-slim-navigation'));
+    await tap(tester, control('music-layout-show-home-shortcuts'));
+    await tap(tester, control('music-layout-show-recent-activity'));
+    await settleSave(tester);
+    expect(
+        settings.state.musicLayout,
+        const MusicLayout.defaults().copyWith(
+          destinations: settings.state.musicLayout.destinations,
+          shortcuts: settings.state.musicLayout.shortcuts,
+          gridSize: MusicGridSize.small,
+          songTitleLines: MusicSongTitleLines.two,
+          compactRows: true,
+          slimNavigation: true,
+          showHomeShortcuts: false,
+          showRecentActivity: false,
+        ));
 
     final saved = settings.state.musicLayout.encode();
     await tester.pumpWidget(const SizedBox.shrink());

@@ -99,8 +99,9 @@ class DownloadedVideoView extends StatelessWidget {
             title: Text(locals.delete),
             onTap: () async {
               Navigator.of(ctx).pop();
+              final bool removed;
               try {
-                await cubit.deleteVideo(video);
+                removed = await cubit.deleteVideo(video);
               } catch (_) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -108,9 +109,14 @@ class DownloadedVideoView extends StatelessWidget {
                 }
                 return;
               }
-              if (context.mounted) {
+              if (context.mounted && removed) {
                 ScaffoldMessenger.of(context)
                     .showSnackBar(SnackBar(content: Text(locals.videoDeleted)));
+              } else if (context.mounted &&
+                  video.audioOnly &&
+                  cubit.isMusicDownloadRequiredByPlaylist(video.videoId)) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(locals.musicDownloadHeldByPlaylist)));
               }
             },
           ),

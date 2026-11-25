@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/downloads/models/download_formats.dart';
 import 'package:clipious/downloads/models/download_playback_provenance.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
@@ -174,7 +175,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      PlaylistReference? recommendationSource,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     playRequests.add(videos);
     startPositions.add(startAt);
     emit(state.copyWith(videos: videos, currentlyPlaying: videos.first));

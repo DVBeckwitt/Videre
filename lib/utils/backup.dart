@@ -2,13 +2,18 @@ import 'dart:convert';
 import '../home/models/phone_navigation.dart';
 import '../home/models/home_tabs_layout.dart';
 import '../content_filter/community_filter.dart';
+import '../music/models/device_music_artwork_preferences.dart';
+import '../music/models/device_playlist_track.dart';
 import '../music/models/music_artwork_cache.dart';
+import '../music/models/music_background_playback.dart';
 import '../music/models/music_cover_corners.dart';
 import '../music/models/music_download_order.dart';
 import '../music/models/music_library_entry.dart';
 import '../music/models/music_layout.dart';
 import '../music/models/music_listening_event.dart';
 import '../music/models/music_mini_player_preferences.dart';
+import '../music/models/music_song_row_swipe_action.dart';
+import '../music/models/music_player_appearance.dart';
 import '../music/models/song_transition.dart';
 import '../player/models/music_audio_quality.dart';
 import '../player/models/playback_pitch.dart';
@@ -233,6 +238,27 @@ class UserBackup {
                 throw const FormatException('Invalid local playlist.');
               }
               final videos = playlist.videos.map((video) {
+                if (devicePlaylistFileProof(video.videoId) != null) {
+                  final music = _safeMusicMetadata(video.musicMetadata);
+                  final index = video.indexId;
+                  if (music == null ||
+                      index == null ||
+                      RegExp(r'^[A-Za-z0-9_-]{1,128}$').stringMatch(index) !=
+                          index) {
+                    throw const FormatException(
+                        'Invalid device playlist entry.');
+                  }
+                  return Video(
+                      videoId: video.videoId,
+                      indexId: index,
+                      title: music.title,
+                      author: music.artist,
+                      lengthSeconds: video.lengthSeconds,
+                      musicMetadata: MusicMetadata(
+                          title: music.title,
+                          artist: music.artist,
+                          album: music.album));
+                }
                 if (!_videoId.hasMatch(video.videoId)) {
                   throw const FormatException('Invalid playlist video.');
                 }
@@ -424,6 +450,11 @@ class UserBackup {
     const booleans = {
       musicArtworkSwipeSettingName,
       musicArtworkDoubleTapSeekSettingName,
+      musicResumeAfterAudioFocusLossSettingName,
+      musicPauseAtZeroVolumeSettingName,
+      musicAutoReconnectSettingName,
+      musicSkipAfterRetryExhaustionSettingName,
+      musicScreenPrivacySettingName,
       dynamicTheme,
       useDashSettingName,
       playerShuffle,
@@ -490,12 +521,31 @@ class UserBackup {
         SongTransitionMode.fromStorage(value) != null,
       musicStreamingQualitySettingName =>
         MusicStreamingQuality.fromStorage(value) != null,
+      musicTaskRemovalSettingName =>
+        MusicTaskRemoval.fromStorage(value) != null,
+      musicAudioOffloadSettingName =>
+        MusicAudioOffload.fromStorage(value) != null,
       musicMiniPlayerLayoutSettingName =>
         MusicMiniPlayerLayout.fromStorage(value) != null,
       musicMiniPlayerShortcutSettingName =>
         MusicMiniPlayerShortcut.fromStorage(value) != null,
+      musicSongSwipeTowardEndSettingName ||
+      musicSongSwipeTowardStartSettingName =>
+        MusicSongRowSwipeAction.fromStorage(value) != null,
+      musicNowPlayingStyleSettingName =>
+        MusicNowPlayingStyle.fromStorage(value) != null,
+      musicPlayerBackgroundSettingName =>
+        MusicPlayerBackground.fromStorage(value) != null,
+      musicScrubberStyleSettingName =>
+        MusicScrubberStyle.fromStorage(value) != null,
       musicCoverCornersSettingName =>
         MusicCoverCorners.fromStorage(value) != null,
+      deviceMusicArtworkSourceSettingName =>
+        DeviceMusicArtworkSource.fromStorage(value) != null,
+      deviceMusicArtworkQualitySettingName =>
+        DeviceMusicArtworkQuality.fromStorage(value) != null,
+      deviceMusicArtworkCropSettingName =>
+        DeviceMusicArtworkCrop.fromStorage(value) != null,
       musicDownloadFormatSettingName =>
         const {'mp3', 'opus', 'm4a'}.contains(value),
       musicDownloadOrderSettingName =>

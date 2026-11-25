@@ -18,6 +18,7 @@ import 'package:clipious/network/nerdvpn_access.dart';
 import 'package:clipious/network/socks_proxy.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
@@ -437,6 +438,170 @@ void main() {
     expect(manager.state.downloadProgresses, isEmpty);
     expect(manager.state.pausedVideoIds, isEmpty);
     expect(metadataRequests, isEmpty);
+  });
+
+  group('Keep playlist offline', () {
+    Video song(String id) => Video(
+        videoId: id, musicMetadata: MusicMetadata(title: id, artist: 'Artist'));
+
+    Playlist playlist(String id) => service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == id);
+
+    test('reconciles local membership changes live and across restart',
+        () async {
+      final id = (await service.createPlayList('Trip', 'local'))!;
+      final first = song('offline0001');
+      final added = song('offline0002');
+      final afterRestart = song('offline0003');
+      await service.addVideoToPlaylist(id, first.videoId, video: first);
+      const policy = MusicOfflinePolicy(
+          quality: MusicOfflineQuality.balanced, wifiOnly: true);
+      expect(await manager.setPlaylistKeptOffline(id, true, policy: policy),
+          isTrue);
+      expect(manager.isMusicDownloadPlaylistOnly(first.videoId), isTrue);
+
+      await service.addVideoToPlaylist(id, added.videoId, video: added);
+      await waitFor((state) =>
+          state.videos.any((download) => download.videoId == added.videoId));
+      final pending = manager.playlistOfflineProgress(playlist(id))!;
+      expect(pending.total, 2);
+      expect(pending.complete, 0);
+      expect(pending.needsAttention, 0);
+      expect(pending.waitingForWifi, isTrue);
+      expect(pending.progress, 0);
+
+      final download = db.getDownloadByVideoId(first.videoId)!;
+      final partial = File('${await download.stagingPath}.audio.part');
+      await partial.writeAsString('partial audio');
+      await db.upsertDownload(download.copyWith(downloadFailed: true));
+      manager.setVideos();
+      final failure = manager.playlistOfflineProgress(playlist(id))!;
+      expect(failure.complete, 0);
+      expect(failure.needsAttention, 1);
+
+      await service.deleteUserPlaylistVideo(id, first.videoId);
+      await waitFor((state) =>
+          state.videos.every((download) => download.videoId != first.videoId));
+      expect(await partial.exists(), isFalse);
+
+      await manager.close();
+      await service.addVideoToPlaylist(id, afterRestart.videoId,
+          video: afterRestart);
+      await service.deleteUserPlaylistVideo(id, added.videoId);
+      await openManager();
+      await waitFor((state) {
+        final ids = state.videos.map((download) => download.videoId).toSet();
+        return ids.contains(afterRestart.videoId) &&
+            !ids.contains(added.videoId);
+      });
+      expect(manager.isMusicDownloadPlaylistOnly(afterRestart.videoId), isTrue);
+      expect(
+          db.getDownloadByVideoId(afterRestart.videoId)!.musicPolicy, policy);
+      expect(manager.playlistOfflineProgress(playlist(id))!.total, 1);
+      expect(manager.state.waitingForWifi, isTrue);
+    });
+
+    test('deduplicates overlapping pins and retains explicit download files',
+        () async {
+      final firstId = (await service.createPlayList('Trip', 'local'))!;
+      final secondId = (await service.createPlayList('Commute', 'local'))!;
+      final shared = song('offline0011');
+      final explicit = song('offline0012');
+      final legacy = song('offline0013');
+      final legacyRecord = video.copyWith(
+          videoId: legacy.videoId,
+          audioOnly: true,
+          musicMetadata: legacy.musicMetadata,
+          downloadComplete: true);
+      await db.upsertDownload(legacyRecord);
+      for (final track in [shared, explicit, legacy]) {
+        await service.addVideoToPlaylist(firstId, track.videoId, video: track);
+      }
+      await service.addVideoToPlaylist(secondId, shared.videoId, video: shared);
+      await db.saveSetting(SettingsValue(
+          localPlaylistsSetting,
+          jsonEncode([
+            for (final stored in service.getLocalPlaylists())
+              if (stored.playlistId == firstId)
+                stored.copyWith(videos: [
+                  ...stored.videos,
+                  shared.copyWith(indexId: 'duplicate-occurrence'),
+                ], videoCount: stored.videoCount + 1).toJson()
+              else
+                stored.toJson(),
+          ])));
+
+      expect(await manager.setPlaylistKeptOffline(firstId, true), isTrue);
+      expect(await manager.setPlaylistKeptOffline(secondId, true), isTrue);
+      expect(manager.playlistOfflineProgress(playlist(firstId))!.total, 3);
+      expect(manager.playlistOfflineProgress(playlist(secondId))!.total, 1);
+      expect(db.getPlaylistOwnedMusicDownloadIds(),
+          {shared.videoId, explicit.videoId});
+
+      final sharedRecord = db.getDownloadByVideoId(shared.videoId)!;
+      final explicitRecord = db.getDownloadByVideoId(explicit.videoId)!;
+      expect(
+          await manager.addDownload(explicit.videoId,
+              audioOnly: true,
+              quality: highestAudioDownloadQuality,
+              video: explicit),
+          isTrue);
+      expect(db.getDownloadByVideoId(explicit.videoId)!.toJson(),
+          explicitRecord.toJson());
+      expect(manager.isMusicDownloadPlaylistOnly(explicit.videoId), isFalse);
+      expect(manager.isMusicDownloadPlaylistOnly(legacy.videoId), isFalse);
+
+      final sharedFile = File(await sharedRecord.downloadPath);
+      final explicitFile = File(await explicitRecord.downloadPath);
+      final legacyFile = File(await legacyRecord.downloadPath);
+      await sharedFile.writeAsString('shared');
+      await explicitFile.writeAsString('explicit');
+      await legacyFile.writeAsString('legacy');
+      await db.upsertDownload(sharedRecord.copyWith(downloadComplete: true));
+      await db.upsertDownload(explicitRecord.copyWith(downloadComplete: true));
+      await manager.deleteVideo(sharedRecord);
+      expect(await sharedFile.readAsString(), 'shared');
+      expect(await manager.setPlaylistKeptOffline(firstId, false), isTrue);
+      expect(await sharedFile.readAsString(), 'shared');
+      expect(await manager.setPlaylistKeptOffline(secondId, false), isTrue);
+      expect(db.getDownloadByVideoId(shared.videoId), isNull);
+      expect(await sharedFile.exists(), isFalse);
+      expect(await explicitFile.readAsString(), 'explicit');
+      expect(await legacyFile.readAsString(), 'legacy');
+      expect(db.getPlaylistOwnedMusicDownloadIds(), isEmpty);
+    });
+
+    test('retries failed owned-document cleanup after restart', () async {
+      final id = (await service.createPlayList('Trip', 'local'))!;
+      final track = song('offline0021');
+      await service.addVideoToPlaylist(id, track.videoId, video: track);
+      expect(await manager.setPlaylistKeptOffline(id, true), isTrue);
+      final row = db.getDownloadByVideoId(track.videoId)!;
+      await db.upsertDownload(row.copyWith(
+          folderUri: folder, storageUri: document, downloadComplete: true));
+      var allowDeletion = false;
+      final deletedUris = <String>[];
+      messenger.setMockMethodCallHandler(storageChannel, (call) async {
+        expect(call.method, 'deleteDocument');
+        deletedUris.add(call.arguments['uri'] as String);
+        if (!allowDeletion) throw PlatformException(code: 'DOWNLOAD_STORAGE');
+        return null;
+      });
+
+      expect(await manager.setPlaylistKeptOffline(id, false), isTrue);
+      expect(deletedUris, isNotEmpty);
+      expect(db.isPlaylistOwnedMusicDownload(track.videoId), isTrue);
+
+      await manager.close();
+      allowDeletion = true;
+      await openManager();
+      await waitFor((state) =>
+          state.videos.every((download) => download.videoId != track.videoId));
+      expect(db.getDownloadByVideoId(track.videoId), isNull);
+      expect(deletedUris.toSet(), {document});
+      expect(manager.playlistOfflineProgress(playlist(id)), isNull);
+    });
   });
 
   test(

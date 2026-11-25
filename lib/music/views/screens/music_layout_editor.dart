@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:videre_proxy/videre_proxy.dart';
 
 import '../../../app/states/app.dart';
 import '../../../globals.dart';
@@ -80,8 +81,11 @@ class _MusicLayoutEditorState extends State<MusicLayoutEditor> {
   bool _shortcutAvailable(MusicShortcut item) =>
       widget.includeSearchShortcut || item != MusicShortcut.search;
 
-  bool _categoryAvailable(MusicLibraryCategory item) =>
-      item.isAvailable(tv: isTv, deviceFolders: supportsLocalMusicFolders);
+  bool _categoryAvailable(MusicLibraryCategory item) => item.isAvailable(
+        tv: isTv,
+        deviceFolders: supportsLocalMusicFolders,
+        playbackCache: PlaybackCache.supported,
+      );
 
   List<T> _reorderAvailable<T>(
       List<T> current, List<T> reordered, bool Function(T) available) {
@@ -183,6 +187,101 @@ class _MusicLayoutEditorState extends State<MusicLayoutEditor> {
               _save((value) => value.copyWith(libraryCategories: reordered));
             },
           ),
+          if (!onlyCategories) ...[
+            const Divider(),
+            Text(locals.musicLayoutPresentation, style: heading),
+            ListTile(
+              title: Text(locals.musicLayoutGridSize),
+              subtitle: DropdownButton<MusicGridSize>(
+                key: const ValueKey('music-layout-grid-size'),
+                isExpanded: true,
+                value: layout.gridSize,
+                onChanged: current
+                    ? (size) {
+                        if (size == null) return;
+                        _save((current) => current.copyWith(gridSize: size));
+                      }
+                    : null,
+                items: [
+                  for (final size in MusicGridSize.values)
+                    DropdownMenuItem(
+                      value: size,
+                      child: Text(switch (size) {
+                        MusicGridSize.small => locals.musicLayoutGridSmall,
+                        MusicGridSize.medium => locals.musicLayoutGridMedium,
+                        MusicGridSize.large => locals.musicLayoutGridLarge,
+                      }),
+                    ),
+                ],
+              ),
+            ),
+            ListTile(
+              title: Text(locals.musicLayoutSongTitles),
+              subtitle: DropdownButton<MusicSongTitleLines>(
+                key: const ValueKey('music-layout-title-lines'),
+                isExpanded: true,
+                value: layout.songTitleLines,
+                onChanged: current
+                    ? (lines) {
+                        if (lines == null) return;
+                        _save((current) =>
+                            current.copyWith(songTitleLines: lines));
+                      }
+                    : null,
+                items: [
+                  for (final lines in MusicSongTitleLines.values)
+                    DropdownMenuItem(
+                      value: lines,
+                      child: Text(switch (lines) {
+                        MusicSongTitleLines.automatic =>
+                          locals.musicLayoutTitleAutomatic,
+                        MusicSongTitleLines.one =>
+                          locals.musicLayoutTitleOneLine,
+                        MusicSongTitleLines.two =>
+                          locals.musicLayoutTitleTwoLines,
+                      }),
+                    ),
+                ],
+              ),
+            ),
+            SwitchListTile(
+              key: const ValueKey('music-layout-compact-rows'),
+              title: Text(locals.musicLayoutCompactRows),
+              value: layout.compactRows,
+              onChanged: current
+                  ? (value) =>
+                      _save((current) => current.copyWith(compactRows: value))
+                  : null,
+            ),
+            if (!widget.includeSearchShortcut)
+              SwitchListTile(
+                key: const ValueKey('music-layout-slim-navigation'),
+                title: Text(locals.musicLayoutSlimNavigation),
+                value: layout.slimNavigation,
+                onChanged: current
+                    ? (value) => _save(
+                        (current) => current.copyWith(slimNavigation: value))
+                    : null,
+              ),
+            SwitchListTile(
+              key: const ValueKey('music-layout-show-home-shortcuts'),
+              title: Text(locals.musicLayoutShowHomeShortcuts),
+              value: layout.showHomeShortcuts,
+              onChanged: current
+                  ? (value) => _save(
+                      (current) => current.copyWith(showHomeShortcuts: value))
+                  : null,
+            ),
+            SwitchListTile(
+              key: const ValueKey('music-layout-show-recent-activity'),
+              title: Text(locals.musicLayoutShowRecentActivity),
+              value: layout.showRecentActivity,
+              onChanged: current
+                  ? (value) => _save(
+                      (current) => current.copyWith(showRecentActivity: value))
+                  : null,
+            ),
+          ],
           Align(
             alignment: AlignmentDirectional.centerStart,
             child: TextButton(

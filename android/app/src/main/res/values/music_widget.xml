@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="music_widget_corner_radius">20dp</dimen>
+    <string name="music_widget_name">Videre Music</string>
+    <string name="music_widget_open">Open Videre</string>
+    <string name="music_widget_unknown_title">Unknown song</string>
+    <string name="music_widget_track_artist">%1$s, %2$s</string>
+    <string name="music_widget_idle">No music playing</string>
+    <string name="music_widget_loading">Loading</string>
+    <string name="music_widget_buffering">Buffering</string>
+    <string name="music_widget_playing">Playing</string>
+    <string name="music_widget_paused">Paused</string>
+    <string name="music_widget_ended">Ended</string>
+    <string name="music_widget_unavailable">Unavailable</string>
+    <string name="music_widget_previous">Previous track</string>
+    <string name="music_widget_next">Next track</string>
+    <string name="music_widget_play">Play</string>
+    <string name="music_widget_pause">Pause</string>
+    <string name="music_widget_save">Save to playlist</string>
+
+    <style name="MusicWidgetControl">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:background">?android:attr/selectableItemBackgroundBorderless</item>
+        <item name="android:focusable">true</item>
+        <item name="android:importantForAccessibility">yes</item>
+        <item name="android:padding">12dp</item>
+        <item name="android:scaleType">centerInside</item>
+        <item name="android:tint">#F8F3FF</item>
+    </style>
+</resources>

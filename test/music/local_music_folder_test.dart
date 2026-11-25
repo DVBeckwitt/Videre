@@ -12,6 +12,7 @@ import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/on_device_music_downloads.dart';
+import 'package:clipious/music/views/components/device_music_artwork.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/settings.dart';
@@ -58,7 +59,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle}) async {
+      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
     queue = tracks;
     index = startIndex;
     source = queueTitle;
@@ -68,7 +69,8 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
   Future<void> playOnDeviceMusic(List<OnDeviceMusicEntry> tracks,
       {int startIndex = 0,
       String? queueTitle,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      bool songTap = false}) async {
     expect(isCurrent?.call(), isNot(false));
     mixedQueue = tracks;
     index = startIndex;
@@ -150,14 +152,18 @@ void main() {
   late _Player player;
   late _Settings preferences;
   late List<String> calls;
+  late List<Object?> sharedFiles;
+  bool canLaunchShare = true;
   Map<String, String>? consent;
   bool cancelled = false;
   bool revoked = false;
   bool pickerUnavailable = false;
   bool denied = false;
+  bool automaticScan = false;
   Completer<List<Object?>>? pendingScan;
   Completer<bool>? pendingAccess;
   int? scanId;
+  bool? forceScan;
   String? renamedTo;
   FutureOr<Map<String, Object?>?> Function(MethodCall)? matchDownloadTracks;
 
@@ -168,21 +174,30 @@ void main() {
     player = _Player();
     preferences = _Settings(database);
     calls = [];
+    sharedFiles = [];
+    canLaunchShare = true;
     consent = null;
     cancelled = false;
     revoked = false;
     pickerUnavailable = false;
     denied = false;
+    automaticScan = false;
     pendingScan = null;
     pendingAccess = null;
     scanId = null;
+    forceScan = null;
     renamedTo = null;
     matchDownloadTracks = null;
     messenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call.method);
       switch (call.method) {
         case 'getFolder':
-          return consent;
+          return call.arguments?['includeScanPreference'] == true
+              ? {'folder': consent, 'automaticScan': automaticScan}
+              : consent;
+        case 'setAutomaticScan':
+          automaticScan = call.arguments['enabled'] as bool;
+          return null;
         case 'pickFolder':
           if (pickerUnavailable) {
             throw PlatformException(code: 'PICKER_UNAVAILABLE');
@@ -197,6 +212,7 @@ void main() {
           expect(call.arguments['treeUri'], consent?['uri']);
           if (revoked) throw PlatformException(code: 'FOLDER_UNAVAILABLE');
           scanId = call.arguments['scanId'] as int?;
+          forceScan = call.arguments['force'] as bool?;
           if (pendingScan != null) return pendingScan!.future;
           if (consent == systemSelection) {
             return [
@@ -204,6 +220,9 @@ void main() {
             ];
           }
           return [first, second];
+        case 'cancelScan':
+          expect(call.arguments['scanId'], scanId);
+          return null;
         case 'matchDownloadTracks':
           return await matchDownloadTracks?.call(call);
         case 'checkFolderAccess':
@@ -219,6 +238,9 @@ void main() {
             'uri': '$tree/document/Renamed',
             'fileName': renamedTo,
           };
+        case 'shareTrack':
+          sharedFiles.add(call.arguments);
+          return canLaunchShare;
         case 'forgetFolder':
           consent = null;
           return null;
@@ -267,7 +289,7 @@ void main() {
   testWidgets('settings asks before reading music and cancel keeps it off',
       (tester) async {
     await show(tester, settings: true);
-    final switchTile = find.byType(SwitchListTile);
+    final switchTile = find.byKey(const ValueKey('local-music-setting'));
     expect(tester.widget<SwitchListTile>(switchTile).value, isFalse);
     expect(calls, ['getFolder']);
     cancelled = true;
@@ -285,6 +307,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<SwitchListTile>(switchTile).value, isFalse);
     expect(calls.last, 'forgetFolder');
+  });
+
+  testWidgets('settings shows and updates the saved refresh preference',
+      (tester) async {
+    automaticScan = true;
+    await show(tester, settings: true);
+    final toggle = find.widgetWithText(
+        SwitchListTile, 'Automatically refresh device music');
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(automaticScan, isFalse);
+    expect(calls, ['getFolder', 'setAutomaticScan']);
   });
 
   testWidgets('remote Select opens the picker and handles its absence',
@@ -423,6 +460,127 @@ void main() {
     expect(calls.last, 'forgetFolder');
   });
 
+  testWidgets('folder navigation keeps duplicate filenames and exact queues',
+      (tester) async {
+    consent = picked;
+    Map<String, String> folder(String key, String label) =>
+        {'key': key * 64, 'label': label};
+    final root = folder('a', 'My albums');
+    final discs = folder('b', 'My albums / Discs');
+    final copies = folder('c', 'My albums / Copies');
+    final discMix = folder('d', 'My albums / Discs / Mix');
+    final copyMix = folder('e', 'My albums / Copies / Mix');
+    const original = '$tree/document/take-a';
+    const another = '$tree/document/take-b';
+    const copy = '$tree/document/copy';
+    Map<String, Object> duplicate(String uri, List<Map<String, String>> path) =>
+        {
+          'title': 'Same song',
+          'fileName': 'same.mp3',
+          'uri': uri,
+          'folderLocations': path,
+        };
+    pendingScan = Completer<List<Object?>>()
+      ..complete([
+        {
+          ...first,
+          'folderLocations': [root]
+        },
+        {...second, 'title': 'Unlocated song'},
+        duplicate(original, [root, discs, discMix]),
+        duplicate(another, [root, discs, discMix]),
+        duplicate(copy, [root, copies, copyMix]),
+      ]);
+    await show(tester, settings: false);
+    expect(find.text('Unlocated song'), findsOneWidget);
+
+    Future<void> tap(Finder finder) async {
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    Finder row(String title) => find.widgetWithText(ListTile, title);
+    await tap(find.text('Browse folders'));
+    await tap(row('My albums'));
+    expect(find.text('Unlocated song'), findsNothing);
+    await tap(row('First'));
+    expect(player.queue.map((track) => track.uri), [first['uri']]);
+    expect(player.source, 'My albums');
+
+    await tap(row('Discs'));
+    await tap(row('Mix'));
+    expect(find.text('same.mp3'), findsNWidgets(2));
+    final secondId =
+        library.tracks.singleWhere((track) => track.uri == another).playbackId;
+    await tap(find.byKey(ValueKey(secondId)));
+    expect(player.queue.map((track) => track.uri),
+        unorderedEquals([original, another]));
+    expect(player.queue[player.index!].uri, another);
+    expect(player.source, 'My albums / Discs / Mix');
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(row('Mix'), findsOneWidget);
+    expect(row('Same song'), findsNothing);
+    await tap(find.byTooltip('Back'));
+    await tap(row('Copies'));
+    await tap(row('Mix'));
+    await tap(row('Same song'));
+    expect(player.queue.single.uri, copy);
+    expect(player.source, 'My albums / Copies / Mix');
+  });
+
+  testWidgets('MediaStore folders distinguish volumes and clear on access loss',
+      (tester) async {
+    consent = systemSelection;
+    const internal = 'content://media/external_primary/audio/media/1';
+    const removable = 'content://media/ABCD-1234/audio/media/1';
+    Map<String, Object> entry(String uri, String key, String volume) => {
+          'title': 'Same song',
+          'fileName': 'same.mp3',
+          'uri': uri,
+          'visibilityKey': key * 64,
+          'folderLocations': [
+            {'key': key * 64, 'label': '$volume / Music'},
+          ],
+        };
+    pendingScan = Completer<List<Object?>>()
+      ..complete([
+        entry(internal, 'a', 'Internal storage'),
+        entry(removable, 'b', 'Storage SD'),
+      ]);
+    await show(tester, settings: false);
+    await tester.tap(find.text('Browse folders'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'Music'), findsNWidgets(2));
+    await tester.tap(find.text('Storage SD'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Same song'));
+    await tester.pumpAndSettle();
+    expect(player.queue.single.uri, removable);
+
+    await tester.tap(find.byTooltip('Actions for Same song'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Hide from this library'));
+    await tester.pumpAndSettle();
+    expect(find.text('Same song'), findsNothing);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.text('Storage SD'), findsNothing);
+    await tester.tap(find.text('Internal storage'));
+    await tester.pumpAndSettle();
+    expect(find.text('Same song'), findsOneWidget);
+
+    revoked = true;
+    await tester.tap(find.byTooltip('Refresh'));
+    await tester.pumpAndSettle();
+    expect(find.text('Same song'), findsNothing);
+    expect(find.text('Internal storage'), findsNothing);
+    expect(find.textContaining('Music and audio access is unavailable'),
+        findsOneWidget);
+    expect(player.queue.single.uri, removable);
+  });
+
   testWidgets('permission denial preserves the folder and lets users retry',
       (tester) async {
     consent = picked;
@@ -443,10 +601,11 @@ void main() {
     expect(find.text('First'), findsNothing);
   });
 
-  testWidgets('manage locations adds, reconnects and removes one folder',
+  testWidgets('browsing and managing roots handles one lost grant',
       (tester) async {
     const demosTree = 'content://provider/tree/demos';
     const demos = {'uri': demosTree, 'name': 'Demos'};
+    const demoUri = '$demosTree/document/Demo';
     var added = false;
     var lostAccess = false;
     Map<String, Object> selection() => {
@@ -468,9 +627,22 @@ void main() {
         case 'listTracks':
           return call.arguments['treeUri'] == demosTree
               ? [
-                  {'title': 'Demo track', 'uri': '$demosTree/document/Demo'}
+                  {
+                    'title': 'Demo track',
+                    'uri': demoUri,
+                    'folderLocations': [
+                      {'key': 'a' * 64, 'label': 'Demos'},
+                    ],
+                  },
                 ]
-              : [first];
+              : [
+                  {
+                    ...first,
+                    'folderLocations': [
+                      {'key': 'b' * 64, 'label': 'My albums'},
+                    ],
+                  },
+                ];
         case 'forgetFolder':
           expect(call.arguments['treeUri'], demosTree);
           added = false;
@@ -492,10 +664,32 @@ void main() {
     expect(find.text('Demos'), findsOneWidget);
     expect(library.tracks.map((track) => track.title), ['First', 'Demo track']);
 
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Browse folders'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'My albums'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ListTile, 'Demos'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Demo track'));
+    await tester.pumpAndSettle();
+    expect(player.queue.single.uri, demoUri);
+
     lostAccess = true;
     await library.revalidate();
     await tester.pumpAndSettle();
     expect(library.tracks.map((track) => track.title), ['First']);
+    expect(find.text('Demo track'), findsNothing);
+    expect(find.text('No visible audio files.'), findsOneWidget);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ListTile, 'My albums'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, 'Demos'), findsNothing);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(manage);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Reconnect to restore access'));
     await tester.pumpAndSettle();
     expect(find.text('Reconnect to restore access'), findsNothing);
@@ -535,6 +729,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Second'), findsOneWidget);
     expect(player.queue.map((track) => track.title), ['First']);
+  });
+
+  testWidgets('device library can force a rescan and cancel it',
+      (tester) async {
+    consent = picked;
+    await show(tester, settings: false);
+    expect(forceScan, isFalse);
+
+    pendingScan = Completer<List<Object?>>();
+    calls.clear();
+    final rescan = find.text('Rescan music files');
+    await tester.tap(rescan);
+    await tester.pump();
+    expect(forceScan, isTrue);
+    expect(rescan, findsNothing);
+    expect(find.text('First'), findsOneWidget);
+
+    final cancel = find.text('Cancel scan');
+    await tester.tap(cancel);
+    await tester.pump();
+    expect(calls, ['listTracks', 'cancelScan']);
+    pendingScan!.complete([
+      {...first, 'title': 'Late scan result'}
+    ]);
+    await tester.pumpAndSettle();
+    expect(cancel, findsNothing);
+    expect(rescan, findsOneWidget);
+    expect(find.text('First'), findsOneWidget);
+    expect(find.text('Second'), findsOneWidget);
+    expect(find.text('Late scan result'), findsNothing);
   });
 
   testWidgets('sort changes new playback order without rescanning',
@@ -1166,6 +1390,7 @@ void main() {
           'albumKey': compilation,
           'albumArtist': 'Compilation credit',
           'trackNumber': 12,
+          'adjacentArtPath': '/data/cache/compilation.jpg',
         },
         {
           ...second,
@@ -1187,11 +1412,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(ValueKey(compilation)), findsOneWidget);
     expect(find.byKey(ValueKey(otherEdition)), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byKey(ValueKey(compilation)),
+            matching: find.byType(DeviceMusicArtwork)),
+        findsOneWidget);
     await tester.tap(find.byKey(ValueKey(compilation)));
     await tester.pumpAndSettle();
     expect(find.text('Compilation credit'), findsOneWidget);
     expect(find.text('Guest performer'), findsOneWidget);
     expect(find.text('Distinct edition'), findsNothing);
+    expect(find.byType(DeviceMusicArtwork), findsOneWidget);
     await tester.tap(find.text('Play all'));
     await tester.pumpAndSettle();
     expect(player.queue.map((track) => track.title), ['Second', 'First']);
@@ -1269,6 +1500,39 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Second'), findsOneWidget);
   });
+
+  testWidgets('device row shares one audio URI and keeps its source selected',
+      (tester) async {
+    consent = {...picked, 'selectionId': 'music-share-selection'};
+    await show(tester, settings: false);
+    calls.clear();
+
+    Future<void> shareFirst() async {
+      await tester.tap(find.byTooltip('Actions for First'));
+      await tester.pumpAndSettle();
+      expect(find.text('Share song link'), findsNothing);
+      await tester.tap(find.text('Share audio file'));
+      await tester.pumpAndSettle();
+    }
+
+    await shareFirst();
+    expect(sharedFiles, [
+      {
+        'treeUri': tree,
+        'selectionId': 'music-share-selection',
+        'uri': first['uri'],
+        'trackId': library.tracks.first.playbackId,
+      },
+    ]);
+    expect(calls, ['shareTrack']);
+    expect(library.enabled, isTrue);
+    expect(library.tracks.length, 2);
+
+    canLaunchShare = false;
+    await shareFirst();
+    expect(find.text('Could not share this audio file.'), findsOneWidget);
+    expect(calls, ['shareTrack', 'shareTrack']);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets('rename uses the actual filename and retains its suffix',
       (tester) async {

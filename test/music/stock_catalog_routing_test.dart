@@ -171,12 +171,59 @@ void main() {
     expect(album.tracks.single.toVideo().musicMetadata!.album, 'Album');
     expect(
         album.tracks.single.toVideo().musicMetadata!.albumPlaylistId, albumId);
+    expect(album.playlistAuthor?.name, 'Artist');
+    expect(album.playlistAuthor?.id, isNull);
+    expect(album.description, isNull);
     expect(calls.map((uri) => uri.path), [
       '/api/v1/channels/$channelId/releases',
       '/api/v1/channels/$channelId/releases',
       '/api/v1/playlists/$albumId',
     ]);
     expect(calls.every((uri) => uri.origin == instance), isTrue);
+  });
+
+  test('a release keeps its exact identity and supplied playlist byline',
+      () async {
+    const otherEdition = 'OLAK5uy_otherEdition';
+    final success = respond;
+    respond =
+        (request) async => request.url.path == '/api/v1/playlists/$otherEdition'
+            ? json(request, {
+                ...playlist,
+                'playlistId': otherEdition,
+                'title': 'Album',
+                'authorId': channelId,
+                'description': '  Provider description  ',
+                'videoCount': 1,
+                'videos': [song],
+              })
+            : await success(request);
+    final music = InvidiousMusicCatalogService(api: api);
+    final original = await music.getPlaylist(albumId);
+    final edition = await music.getPlaylist(otherEdition);
+    expect(edition.title, original.title);
+    expect(edition.tracks.single.albumPlaylistId, otherEdition);
+    expect(edition.playlistAuthor?.name, 'Artist');
+    expect(edition.playlistAuthor?.id, channelId);
+    expect(edition.description, 'Provider description');
+    expect(original.playlistAuthor?.id, isNull);
+    expect(original.description, isNull);
+  });
+
+  test('artist overview returns without requesting uploads', () async {
+    final success = respond;
+    respond = (request) async =>
+        request.url.path == '/api/v1/channels/$channelId'
+            ? json(request, {...channel, 'description': '  '})
+            : await success(request);
+    final music = InvidiousMusicCatalogService(api: api);
+    final page = await music.getArtistOverview(channelId);
+    expect(page.loadsUploadsSeparately, isTrue);
+    expect(page.songs, isEmpty);
+    expect(page.description, isNull);
+    expect(calls.single.path, '/api/v1/channels/$channelId');
+    expect((await music.getArtistUploads(channelId)).single.videoId, videoId);
+    expect(calls.last.path, '/api/v1/channels/$channelId/videos');
   });
 
   test('ordinary playlists, mixes and searches do not invent release IDs',

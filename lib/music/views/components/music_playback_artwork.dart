@@ -13,6 +13,8 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 
+import 'device_music_artwork.dart';
+
 /// Artwork for the mounted Music source across mini and expanded playback.
 class MusicPlaybackArtwork extends StatelessWidget {
   final MusicMetadata? music;
@@ -62,10 +64,10 @@ class MusicPlaybackArtwork extends StatelessWidget {
       return ListenableBuilder(
           listenable: LocalMusicLibrary.instance,
           builder: (context, _) {
-            final path = localMusicTrackForPlayback(deviceId)?.artPath;
-            return path == null || path.isEmpty
+            final track = localMusicTrackForPlayback(deviceId);
+            return track == null
                 ? placeholder
-                : _fileArtwork(File(path), placeholder);
+                : DeviceMusicArtwork(track: track, placeholder: placeholder);
           });
     }
     final local = offline != null || video?.downloadPlaybackOnly == true;

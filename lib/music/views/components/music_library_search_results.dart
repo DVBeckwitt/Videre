@@ -226,7 +226,9 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
             if (index < 0) return;
             searchFocus?.unfocus();
             await MusicScreen.playTracks(context, songs,
-                startIndex: index, queueTitle: locals.musicSavedSongs);
+                startIndex: index,
+                queueTitle: locals.musicSavedSongs,
+                songTap: true);
           } else {
             searchFocus?.unfocus();
             await Navigator.of(context).push<void>(MaterialPageRoute(
@@ -259,6 +261,7 @@ class _MusicLibrarySearchResultsState extends State<MusicLibrarySearchResults>
               context, [for (final file in files) file.entry],
               startIndex: index,
               queueTitle: locals.onDevice,
+              songTap: true,
               isCurrent: () =>
                   current() &&
                   _hits(owner)

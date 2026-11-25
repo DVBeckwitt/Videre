@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import androidx.media3.common.C;
+import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.container.Mp4TimestampData;
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl;
 import androidx.media3.exoplayer.DefaultLoadControl;
@@ -31,6 +32,10 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.NoSampleRenderer;
 import androidx.media3.exoplayer.Renderer;
 import androidx.media3.exoplayer.RenderersFactory;
+import androidx.media3.exoplayer.audio.AudioCapabilities;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioOffloadSupportProvider;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.common.Metadata;
 import androidx.media3.exoplayer.metadata.MetadataOutput;
@@ -106,6 +111,14 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     private LoadControl loadControl;
     private boolean offloadSchedulingEnabled;
     private AudioOffloadPreferences audioOffloadPreferences;
+    private final MusicGainProcessor musicGainProcessor;
+    private boolean musicOffloadPreferred;
+    private static final AudioOffloadPreferences MUSIC_OFFLOAD_PREFERENCES =
+            new AudioOffloadPreferences.Builder()
+                    .setAudioOffloadMode(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED)
+                    .setIsGaplessSupportRequired(true)
+                    .setIsSpeedChangeSupportRequired(true)
+                    .build();
     private boolean useLazyPreparation;
     private LivePlaybackSpeedControl livePlaybackSpeedControl;
     private List<Object> rawAudioEffects;
@@ -157,14 +170,20 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         List<Object> rawAudioEffects,
         Map<?, ?> audioOffloadPreferences,
         Boolean offloadSchedulingEnabled,
-        boolean useLazyPreparation
+        boolean useLazyPreparation,
+        Double musicGain
     ) {
         this.context = applicationContext;
         this.rawAudioEffects = rawAudioEffects;
         this.offloadSchedulingEnabled = offloadSchedulingEnabled != null ? offloadSchedulingEnabled : false;
         this.useLazyPreparation = useLazyPreparation;
+        this.musicGainProcessor = musicGain == null ? null : new MusicGainProcessor(musicGain);
 
-        if (audioOffloadPreferences != null) {
+        if (musicGainProcessor != null) {
+            this.audioOffloadPreferences = new AudioOffloadPreferences.Builder()
+                .setAudioOffloadMode(AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED)
+                .build();
+        } else if (audioOffloadPreferences != null) {
             this.audioOffloadPreferences = new AudioOffloadPreferences.Builder()
                 .setIsGaplessSupportRequired((Boolean)audioOffloadPreferences.get("isGaplessSupportRequired"))
                 .setIsSpeedChangeSupportRequired((Boolean)audioOffloadPreferences.get("isSpeedChangeSupportRequired"))
@@ -279,6 +298,29 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     }
                 }
             }
+        }
+    }
+
+    private static final class MusicCacheTag {
+        final String sourceId;
+        final Runnable confirmation;
+
+        MusicCacheTag(String sourceId, Runnable confirmation) {
+            this.sourceId = sourceId;
+            this.confirmation = confirmation;
+        }
+    }
+
+    @Override
+    public void onEvents(Player player, Player.Events events) {
+        if (!(events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) || events.contains(Player.EVENT_TRACKS_CHANGED))
+                || player.getPlaybackState() != Player.STATE_READY) return;
+        final MediaItem item = player.getCurrentMediaItem();
+        final MediaItem.LocalConfiguration local = item == null ? null : item.localConfiguration;
+        if (local == null || !(local.tag instanceof MusicCacheTag)) return;
+        final Tracks tracks = player.getCurrentTracks();
+        if (tracks.isTypeSelected(C.TRACK_TYPE_AUDIO) && !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) {
+            ((MusicCacheTag) local.tag).confirmation.run();
         }
     }
 
@@ -462,6 +504,17 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                     : null);
             return;
         }
+        if ("setAndroidMusicGain".equals(call.method)) {
+            Double gain = call.argument("gain");
+            if (musicGainProcessor == null || gain == null || !MusicGainProcessor.isValidGain(gain)) {
+                result.error("invalid_music_gain", "No music stage or invalid gain", null);
+            } else {
+                if (gain != 1.0) requireMusicPcm();
+                musicGainProcessor.setGain(gain);
+                result.success(null);
+            }
+            return;
+        }
         ensurePlayerInitialized();
 
         try {
@@ -498,6 +551,10 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             case "setSkipSilence":
                 setSkipSilenceEnabled((Boolean) call.argument("enabled"));
                 result.success(new HashMap<String, Object>());
+                break;
+            case "preferMusicOffload":
+                preferMusicOffload();
+                result.success(null);
                 break;
             case "setLoopMode":
                 setLoopMode((Integer) call.argument("loopMode"));
@@ -664,13 +721,16 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         Map<?, ?> map = (Map<?, ?>)json;
         String id = (String)map.get("id");
         switch ((String)map.get("type")) {
-        case "progressive":
-            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(map, PlaybackCacheRequest.PROGRESSIVE),
+        case "progressive": {
+            final DataSource.Factory dataSource = buildDataSourceFactory(map, PlaybackCacheRequest.PROGRESSIVE);
+            final Runnable confirmation = PlaybackMediaCache.musicConfirmation(dataSource);
+            return new ProgressiveMediaSource.Factory(dataSource,
                     buildExtractorsFactory(mapGet(map, "options")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
-                            .setTag(id)
+                            .setTag(confirmation == null ? id : new MusicCacheTag(id, confirmation))
                             .build());
+        }
         case "dash":
             return new DashMediaSource.Factory(
                     new DefaultDashChunkSource.Factory(buildDataSourceFactory(map, PlaybackCacheRequest.ADAPTIVE_MEDIA)),
@@ -772,6 +832,14 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private DataSource.Factory buildDataSourceFactory(Map<?, ?> source, PlaybackCacheRequest request) {
         final String sourceUri = (String) source.get("uri");
+        final Map<?, ?> playbackCache = mapGet(source, "playbackCache");
+        final Object cachedMusic = playbackCache == null ? null : playbackCache.get("cachedMusic");
+        if (cachedMusic != null || "videre-cache".equalsIgnoreCase(Uri.parse(sourceUri).getScheme())) {
+            if (request != PlaybackCacheRequest.PROGRESSIVE) {
+                throw new IllegalArgumentException("Cached Music requires a progressive audio source.");
+            }
+            return PlaybackMediaCache.cachedMusicFactory(context, sourceUri, cachedMusic);
+        }
         if (request == PlaybackCacheRequest.PROGRESSIVE && Boolean.TRUE.equals(source.get("podcast"))) {
             // Podcast mode is a source DTO property, never an HTTP header or
             // a mutable player flag. Instance credentials cannot opt into it.
@@ -792,7 +860,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         final Map<?, ?> companions = mapGet(source, "mediaCompanions");
         HttpDataSource.Factory http = ProxyDataSource.factory(userAgent, stringHeaders, sourceUri, companions);
         return PlaybackMediaCache.factory(context, ProxyDataSource.withLocalSources(context, http),
-                sourceUri, mapGet(source, "playbackCache"), request, companions);
+                sourceUri, playbackCache, request, companions);
     }
 
     private void load(final List<MediaSource> mediaSources, ShuffleOrder shuffleOrder, final long initialPosition, final Integer initialIndex, final Result result) {
@@ -809,6 +877,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             player.stop();
             break;
         }
+        requireMusicPcm();
         prepareResult = result;
         updatePosition();
         processingState = ProcessingState.loading;
@@ -823,8 +892,24 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
 
     private void ensurePlayerInitialized() {
         if (player == null) {
+            DefaultRenderersFactory baseRenderersFactory = musicGainProcessor == null
+                ? new DefaultRenderersFactory(context)
+                : new DefaultRenderersFactory(context) {
+                    @Override
+                    protected AudioSink buildAudioSink(Context context, boolean enableFloatOutput,
+                                                        boolean enableAudioTrackPlaybackParams) {
+                        return new DefaultAudioSink.Builder()
+                            .setAudioCapabilities(AudioCapabilities.DEFAULT_AUDIO_CAPABILITIES)
+                            // Keep the PCM sink's passthrough policy while allowing
+                            // offload capability checks on the actual Android output.
+                            .setAudioOffloadSupportProvider(new DefaultAudioOffloadSupportProvider(context))
+                            .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                            .setAudioProcessors(new AudioProcessor[] {musicGainProcessor})
+                            .build();
+                    }
+                };
             RenderersFactory renderersFactory = (eventHandler, videoListener, audioListener, textOutput, metadataOutput) -> {
-                Renderer[] defaultRenderers = new DefaultRenderersFactory(context)
+                Renderer[] defaultRenderers = baseRenderersFactory
                     .createRenderers(eventHandler, videoListener, audioListener, textOutput, metadataOutput);
                 Renderer[] allRenderers = Arrays.copyOf(defaultRenderers, defaultRenderers.length + 1);
                 allRenderers[defaultRenderers.length] = new ObserverRenderer();
@@ -839,15 +924,36 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 builder.setLivePlaybackSpeedControl(livePlaybackSpeedControl);
             }
             player = builder.build();
-            player.setTrackSelectionParameters(
-                player.getTrackSelectionParameters()
-                    .buildUpon()
-                    .setAudioOffloadPreferences(audioOffloadPreferences)
-                    .build()
-            );
+            setOffloadPreferences(audioOffloadPreferences);
             setAudioSessionId(player.getAudioSessionId());
             player.addListener(this);
         }
+    }
+
+    private void preferMusicOffload() {
+        if (musicOffloadPreferred || player.getSkipSilenceEnabled() ||
+                player.getPlaybackParameters().pitch != 1 || player.getVolume() != 1 ||
+                (musicGainProcessor != null && musicGainProcessor.requiresPcm())) {
+            return;
+        }
+        for (final AudioEffect effect : audioEffects) {
+            if (effect.getEnabled()) return;
+        }
+        setOffloadPreferences(MUSIC_OFFLOAD_PREFERENCES);
+        musicOffloadPreferred = true;
+    }
+
+    // Software effects and mixing must stay available for the rest of this source.
+    private void requireMusicPcm() {
+        if (musicOffloadPreferred) {
+            setOffloadPreferences(audioOffloadPreferences);
+            musicOffloadPreferred = false;
+        }
+    }
+
+    private void setOffloadPreferences(AudioOffloadPreferences preferences) {
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters()
+                .buildUpon().setAudioOffloadPreferences(preferences).build());
     }
 
     private void setAudioAttributes(int contentType, int flags, int usage) {
@@ -867,6 +973,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     private void audioEffectSetEnabled(String type, boolean enabled) {
+        if (enabled) requireMusicPcm();
         audioEffectsMap.get(type).setEnabled(enabled);
     }
 
@@ -890,6 +997,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 }
                 Boolean enabled = call.argument("enabled");
                 if (enabled == null) throw new IllegalArgumentException("Enabled is required.");
+                if (enabled) requireMusicPcm();
                 Equalizer existing = (Equalizer)audioEffectsMap.get("AndroidEqualizer");
                 if (enabled || existing != null) {
                     Equalizer equalizer = getLazyEqualizer();
@@ -1017,7 +1125,9 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 || player.getPlayerError() != null) return null;
         final MediaItem item = player.getCurrentMediaItem();
         final MediaItem.LocalConfiguration local = item == null ? null : item.localConfiguration;
-        if (local == null || !sourceId.equals(local.tag)) return null;
+        if (local == null) return null;
+        final Object tag = local.tag;
+        if (!sourceId.equals(tag instanceof MusicCacheTag ? ((MusicCacheTag) tag).sourceId : tag)) return null;
         final String scheme = local.uri.getScheme();
         if (!"file".equals(scheme) && !"content".equals(scheme)) return null;
 
@@ -1211,6 +1321,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     public void setVolume(final float volume) {
+        if (volume != 1) requireMusicPcm();
         player.setVolume(volume);
     }
 
@@ -1226,11 +1337,13 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     public void setPitch(final float pitch) {
         PlaybackParameters params = player.getPlaybackParameters();
         if (params.pitch == pitch) return;
+        if (pitch != 1) requireMusicPcm();
         player.setPlaybackParameters(new PlaybackParameters(params.speed, pitch));
         enqueuePlaybackEvent();
     }
 
     public void setSkipSilenceEnabled(final boolean enabled) {
+        if (enabled) requireMusicPcm();
         player.setSkipSilenceEnabled(enabled);
     }
 

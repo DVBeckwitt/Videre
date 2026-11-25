@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:clipious/music/models/device_playlist_track.dart';
+import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast_memory.dart';
 
@@ -30,6 +33,7 @@ void main() {
     'album': 'Album',
     'durationMs': 12345,
     'artPath': '/data/cache/art.jpg',
+    'adjacentArtPath': '/data/cache/adjacent.jpg',
   };
   Map<String, Object> selection(List<Map<String, String>> roots) => {
         'roots': roots,
@@ -41,10 +45,14 @@ void main() {
   late List<String> calls;
   Map<String, String>? saved;
   Map<String, String>? choice;
-  late Future<List<Object?>> Function() scan;
+  late Future<Object?> Function() scan;
   late Future<bool?> Function() checkAccess;
   Future<void> Function()? pickerWait;
   int? scanId;
+  int? watchId;
+  int? cancelledScanId;
+  bool forceScan = false;
+  bool savedAutomaticScan = false;
   Object? renamed;
   bool denySystem = false;
   Future<void> emitBatch(List<Object?> documents, {int? id}) async {
@@ -58,6 +66,15 @@ void main() {
     );
   }
 
+  Future<void> emitChange(int id) async {
+    await messenger.handlePlatformMessage(
+      channel.name,
+      codec.encodeMethodCall(
+          MethodCall('libraryChanged', {'watchId': id, 'treeUri': tree})),
+      null,
+    );
+  }
+
   setUp(() {
     library = LocalMusicLibrary();
     calls = [];
@@ -65,6 +82,10 @@ void main() {
     choice = null;
     pickerWait = null;
     scanId = null;
+    watchId = null;
+    cancelledScanId = null;
+    forceScan = false;
+    savedAutomaticScan = false;
     renamed = null;
     denySystem = false;
     scan = () async => [doc];
@@ -73,6 +94,9 @@ void main() {
       calls.add(call.method);
       switch (call.method) {
         case 'getFolder':
+          if (call.arguments?['includeScanPreference'] == true) {
+            return {'folder': saved, 'automaticScan': savedAutomaticScan};
+          }
           return saved;
         case 'pickFolder' || 'pickSystem':
           if (call.method == 'pickSystem' && denySystem) {
@@ -84,7 +108,17 @@ void main() {
         case 'listTracks':
           expect(call.arguments['treeUri'], saved?['uri']);
           scanId = call.arguments['scanId'] as int?;
+          forceScan = call.arguments['force'] == true;
           return scan();
+        case 'cancelScan':
+          cancelledScanId = call.arguments['scanId'] as int?;
+          return null;
+        case 'setAutomaticScan':
+          savedAutomaticScan = call.arguments['enabled'] as bool;
+          return null;
+        case 'watchLibrary':
+          watchId = call.arguments['watchId'] as int?;
+          return null;
         case 'renameTrack':
           expect(call.arguments['treeUri'], saved?['uri']);
           return renamed;
@@ -102,6 +136,153 @@ void main() {
   tearDown(() {
     library.dispose();
     messenger.setMockMethodCallHandler(channel, null);
+  });
+
+  test('forced refresh rereads tags and retains a partial result', () async {
+    saved = folder;
+    await library.refresh();
+    expect(forceScan, isFalse);
+    final original = library.tracks.single;
+
+    scan = () async => {
+          'tracks': [
+            {...doc, 'title': 'Retagged'},
+          ],
+          'partial': true,
+        };
+    await library.refresh(force: true);
+    expect(forceScan, isTrue);
+    expect(library.loaded, isTrue);
+    expect(library.error, 'SCAN_PARTIAL');
+    expect(library.tracks.single.title, 'Retagged');
+    expect(library.tracks.single.playbackId, original.playbackId);
+
+    scan = () async => {
+          'tracks': [doc],
+          'partial': false
+        };
+    await library.refresh();
+    expect(forceScan, isFalse);
+    expect(library.error, isNull);
+  });
+
+  test('cancel restores the previous catalog and ignores late batches',
+      () async {
+    saved = folder;
+    await library.refresh();
+    final completed = Completer<Object?>();
+    final started = Completer<void>();
+    scan = () {
+      started.complete();
+      return completed.future;
+    };
+    final refresh = library.refresh();
+    await started.future;
+    await emitBatch([
+      {...doc, 'title': 'Provisional'},
+    ]);
+    expect(library.tracks.single.title, 'Provisional');
+    expect(library.canCancelScan, isTrue);
+
+    await library.cancelScan();
+    expect(cancelledScanId, scanId);
+    expect(library.canCancelScan, isFalse);
+    await emitBatch([
+      {...doc, 'title': 'Late'},
+    ]);
+    expect(library.tracks.single.title, 'Provisional');
+    completed.complete([
+      {...doc, 'title': 'Ignored'},
+    ]);
+    await refresh;
+    expect(library.tracks.single.title, 'Title');
+    expect(library.scanning, isFalse);
+    expect(library.error, isNull);
+  });
+
+  test('revocation supersedes cancellation and clears playable membership',
+      () async {
+    saved = folder;
+    await library.refresh();
+    final playbackId = library.tracks.single.playbackId;
+    final completed = Completer<Object?>();
+    final started = Completer<void>();
+    scan = () {
+      started.complete();
+      return completed.future;
+    };
+    final refresh = library.refresh(force: true);
+    await started.future;
+    await library.cancelScan();
+    checkAccess = () async => false;
+    await library.revalidate();
+    completed.complete([doc]);
+    await refresh;
+    expect(library.unavailable, isTrue);
+    expect(library.error, 'FOLDER_UNAVAILABLE');
+    expect(library.trackById(playbackId), isNull);
+    expect(library.acceptsSessionSelection(null), isFalse);
+  });
+
+  testWidgets('automatic scanning follows changes and foreground access',
+      (tester) async {
+    saved = folder;
+    await library.initialize();
+    expect(library.automaticScan, isFalse);
+    await tester.pump(const Duration(seconds: 1));
+    expect(calls, isNot(contains('listTracks')));
+
+    expect(await library.setAutomaticScan(true), isTrue);
+    final foregroundWatch = watchId!;
+    expect(savedAutomaticScan, isTrue);
+    await emitChange(foregroundWatch);
+    await emitChange(foregroundWatch);
+    await tester.pump(const Duration(seconds: 1));
+    expect(calls.where((call) => call == 'listTracks'), hasLength(1));
+    expect(forceScan, isFalse);
+
+    library.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await tester.pump();
+    expect(watchId, isNull);
+    await emitChange(foregroundWatch);
+    await tester.pump(const Duration(seconds: 2));
+    expect(calls.where((call) => call == 'listTracks'), hasLength(1));
+
+    library.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(watchId, isNot(foregroundWatch));
+    await tester.pump(const Duration(seconds: 1));
+    expect(calls.where((call) => call == 'listTracks'), hasLength(2));
+
+    expect(await library.setAutomaticScan(false), isTrue);
+    expect(savedAutomaticScan, isFalse);
+    expect(watchId, isNull);
+    checkAccess = () async => false;
+    library.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await tester.pump(const Duration(seconds: 1));
+    expect(library.unavailable, isTrue);
+    expect(calls.where((call) => call == 'listTracks'), hasLength(2));
+  });
+
+  test('device ReplayGain is optional and filters invalid numeric values', () {
+    final source = Uri.parse(tree);
+    final legacy = LocalMusicTrack.fromDocument(doc, source)!;
+    final tagged = LocalMusicTrack.fromDocument({
+      ...doc,
+      'replayGain': {
+        'trackGainDb': -7.25,
+        'albumGainDb': double.nan,
+        'trackPeak': 0.825,
+        'albumPeak': 0,
+      },
+    }, source)!;
+
+    expect(legacy.replayGain, isNull);
+    expect(tagged.playbackId, legacy.playbackId);
+    expect(tagged.replayGain?.trackGainDb, -7.25);
+    expect(tagged.replayGain?.trackPeak, 0.825);
+    expect(tagged.replayGain?.albumGainDb, isNull);
+    expect(tagged.replayGain?.albumPeak, isNull);
   });
 
   test(
@@ -182,10 +363,15 @@ void main() {
 
     await library.refresh();
     expect(library.visibleTracks.single.sourceUri, Uri.parse(tree));
+    final playlistId =
+        devicePlaylistVideo(library.visibleTracks.single)!.videoId;
     final hidden = await library.hideTrack(library.visibleTracks.single);
     expect(hidden, isNotNull);
     expect(await library.removeRoot(library.roots.first), isTrue);
     expect(library.tracks.single.sourceUri, Uri.parse(nestedTree));
+    expect(devicePlaylistVideo(library.tracks.single)!.videoId, playlistId);
+    expect(library.playlistTrackById(playlistId)?.sourceUri,
+        Uri.parse(nestedTree));
     expect(library.visibleTracks, isEmpty);
     expect(library.hiddenTracks.single.isAvailable, isTrue);
     expect(await library.restoreTrack(library.hiddenTracks.single), isTrue);
@@ -206,6 +392,7 @@ void main() {
     expect(track.album, 'Album');
     expect(track.durationMs, 12345);
     expect(track.artPath, '/data/cache/art.jpg');
+    expect(track.adjacentArtPath, '/data/cache/adjacent.jpg');
     choice = null;
     expect(await library.chooseFolder(), isFalse);
     expect(library.trackById(track.playbackId), same(track));
@@ -228,6 +415,77 @@ void main() {
     expect(saved, isNull);
   });
 
+  test('device playlist metadata persists a file proof without storage paths',
+      () {
+    final proof = 'a' * 64;
+    final track = LocalMusicTrack.fromDocument(
+        {...doc, 'visibilityKey': proof}, Uri.parse(tree))!;
+    final entry = devicePlaylistVideo(track)!;
+
+    expect(entry.videoId, 'device:playlist:$proof');
+    expect(entry.title, 'Title');
+    expect(entry.author, 'Artist');
+    expect(entry.lengthSeconds, 12);
+    expect(entry.musicMetadata?.album, 'Album');
+    expect(jsonEncode(entry.toJson()),
+        allOf(isNot(contains('content://')), isNot(contains(track.artPath!))));
+  });
+
+  test('device playlist lookup rejects missing and replaced files', () async {
+    final proof = 'a' * 64;
+    saved = folder;
+    scan = () async => [
+          {...doc, 'visibilityKey': proof},
+        ];
+    await library.refresh();
+    final original = library.tracks.single;
+    final id = devicePlaylistVideo(original)!.videoId;
+    expect(library.playlistTrackById(id), same(original));
+
+    scan = () async => [];
+    await library.refresh();
+    expect(library.playlistTrackById(id), isNull);
+
+    scan = () async => [
+          {...doc, 'visibilityKey': 'b' * 64},
+        ];
+    await library.refresh();
+    final replacement = library.tracks.single;
+    expect(replacement.uri, original.uri);
+    expect(replacement.playbackId, original.playbackId);
+    expect(library.playlistTrackById(id), isNull);
+    expect(library.playlistTrackById(devicePlaylistVideo(replacement)!.videoId),
+        same(replacement));
+
+    scan = () async => [doc];
+    await library.refresh();
+    final unverified = library.tracks.single;
+    expect(devicePlaylistVideo(unverified), isNull);
+    expect(library.playlistTrackById(unverified.playbackId), isNull);
+    expect(library.playlistTrackById(id), isNull);
+  });
+
+  test('device playlist lookup requires a live grant and reconnects by proof',
+      () async {
+    final proof = 'a' * 64;
+    saved = {...folder, 'selectionId': 'original-grant'};
+    scan = () async => [
+          {...doc, 'visibilityKey': proof},
+        ];
+    await library.refresh();
+    final id = devicePlaylistVideo(library.tracks.single)!.videoId;
+
+    checkAccess = () async => false;
+    await library.revalidate();
+    expect(library.playlistTrackById(id), isNull);
+
+    checkAccess = () async => true;
+    choice = {...folder, 'selectionId': 'new-grant'};
+    expect(await library.chooseFolder(), isTrue);
+    expect(library.selectionId, 'new-grant');
+    expect(library.playlistTrackById(id), same(library.tracks.single));
+  });
+
   test('only valid documents in the granted tree enter the library', () async {
     saved = folder;
     scan = () async => [
@@ -236,12 +494,76 @@ void main() {
           {...doc, 'uri': 'https://example.org/song'},
           {...doc, 'uri': 'content://other/tree/primary%3AMusic/document/song'},
           {...doc, 'uri': 'content://documents/tree/other/document/song'},
-          {...doc, 'uri': '$tree/document/other', 'artPath': 'https://x/y.jpg'},
+          {
+            ...doc,
+            'uri': '$tree/document/other',
+            'artPath': 'https://x/y.jpg',
+            'adjacentArtPath': '//example.org/cover.jpg',
+          },
           7,
         ];
     await library.refresh();
     expect(library.tracks.length, 2);
     expect(library.tracks.last.artPath, isNull);
+    expect(library.tracks.last.adjacentArtPath, isNull);
+  });
+
+  test('granted CUE tracks retain separate clip identities on one document',
+      () async {
+    final first = {
+      ...doc,
+      'title': 'Opening',
+      'identityKey': 'a' * 64,
+      'visibilityKey': '1' * 64,
+      'cueStartUs': 13333,
+      'cueEndUs': 1026666,
+      'canRename': true,
+    };
+    final last = {
+      ...doc,
+      'title': 'Finale',
+      'identityKey': 'b' * 64,
+      'cueStartUs': 1026666,
+    };
+    saved = folder;
+    scan = () async => [
+          doc,
+          first,
+          last,
+          {...first, 'identityKey': null},
+          {...first, 'identityKey': 'c' * 64, 'cueEndUs': 13333},
+          {...first, 'identityKey': 'd' * 64, 'cueStartUs': -1},
+          {...first, 'identityKey': 'e' * 64, 'cueStartUs': null},
+          {...last, 'identityKey': 'f' * 64, 'uri': 'content://elsewhere/file'},
+        ];
+    await library.initialize();
+    await library.refresh();
+
+    expect(library.tracks.map((track) => track.title), [
+      'Title',
+      'Opening',
+      'Finale',
+    ]);
+    expect(library.tracks.every((track) => track.uri == uri), isTrue);
+    expect(library.tracks.first.isCueTrack, isFalse);
+    final opening = library.trackById('device:${'a' * 64}')!;
+    expect(opening.cueStartUs, 13333);
+    expect(opening.cueEndUs, 1026666);
+    expect(opening.canRename, isFalse);
+    expect(opening.documentIdentity, isNull);
+    expect(opening.documentVisibilityKey, isNull);
+    final playlistTrack = devicePlaylistVideo(opening)!;
+    expect(library.playlistTrackById(playlistTrack.videoId), same(opening));
+    expect(await library.shareTrack(opening), isFalse);
+    expect(await library.readTrackLyrics(opening), isNull);
+    expect(library.trackById('device:${'b' * 64}')!.cueEndUs, isNull);
+    expect(
+      LocalMusicTrack.fromDocument(
+        {...first, 'uri': 'content://media/external/audio/media/1'},
+        LocalMusicTrack.systemSource,
+      ),
+      isNull,
+    );
   });
 
   test('lost permission clears membership and picker can reconnect', () async {
@@ -639,7 +961,13 @@ void main() {
         case 'listTracks':
           final source = call.arguments['treeUri'] as String;
           scans.add(source);
-          if (source == tree) return [doc];
+          if (source == tree) {
+            return pauseSecond
+                ? [
+                    {...doc, 'title': 'Refreshed'}
+                  ]
+                : [doc];
+          }
           expect(source, secondTree);
           if (pauseSecond) {
             scanId = call.arguments['scanId'] as int;
@@ -651,6 +979,19 @@ void main() {
           ];
         case 'checkFolderAccess':
           return !(revokeSecond && call.arguments['treeUri'] == secondTree);
+        case 'cancelScan':
+          expect(call.arguments['scanId'], scanId);
+          return null;
+        case 'shareTrack' || 'readTrackLyrics':
+          expect(call.arguments['treeUri'], secondTree);
+          expect(call.arguments['selectionId'], 'albums-grant');
+          expect(call.arguments['trackId'], library.tracks.last.playbackId);
+          if (call.method == 'shareTrack') {
+            expect(call.arguments['uri'], secondUri);
+            return true;
+          }
+          expect(call.arguments['trackUri'], secondUri);
+          return {'sidecar': 'Approved lyrics'};
         case 'forgetFolder':
           expect(call.arguments['treeUri'], secondTree);
           configured.remove(secondFolder);
@@ -679,10 +1020,15 @@ void main() {
     expect(library.tracks.map((track) => track.sourceUri.toString()),
         [tree, secondTree]);
     expect(scans, [tree, tree, secondTree]);
+    final secondTrack = library.tracks.last;
+    expect(await library.shareTrack(secondTrack), isTrue);
+    expect((await library.readTrackLyrics(secondTrack))?.sidecar,
+        'Approved lyrics');
 
     pauseSecond = true;
     final refresh = library.refresh();
     await secondScanStarted.future;
+    await library.cancelScan();
     revokeSecond = true;
     await library.revalidate();
     final secondRoot = library.roots.last;
@@ -697,6 +1043,9 @@ void main() {
     pending.complete([staleDocument]);
     await refresh;
     expect(library.tracks.map((track) => track.uri), [uri]);
+    expect(library.tracks.single.title, 'Refreshed');
+    expect(await library.shareTrack(secondTrack), isFalse);
+    expect(await library.readTrackLyrics(secondTrack), isNull);
 
     expect(await library.removeRoot(secondRoot), isTrue);
     expect(library.roots.map((root) => root.uri.toString()), [tree]);
@@ -845,8 +1194,11 @@ void main() {
         ];
     await library.refresh();
     final original = library.tracks.first;
+    final playlistId = devicePlaylistVideo(original)!.videoId;
     expect(library.tracks.map((track) => track.title), ['Title', 'Title']);
     final hidden = (await library.hideTrack(original))!;
+    expect(library.playlistTrackById(playlistId), same(original));
+    expect(library.playlistTrackById(playlistId, visibleOnly: true), isNull);
     expect(library.visibleTracks.map((track) => track.uri), [copyUri]);
     expect(library.hiddenTracks.single.title, 'Title');
     expect(library.trackById(original.playbackId), same(original));
@@ -865,6 +1217,7 @@ void main() {
     final storedHidden = library.hiddenTracks.single;
     await database.useProfile(other.id);
     library.visibilityProfileChanged();
+    expect(library.playlistTrackById(playlistId, visibleOnly: true)?.uri, uri);
     expect(library.visibleTracks.map((track) => track.uri), [uri, copyUri]);
     expect(library.hiddenTracks, isEmpty);
     expect(await library.restoreTrack(storedHidden), isFalse);

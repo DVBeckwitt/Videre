@@ -23,6 +23,7 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/http_overrides.dart';
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/notifications/notifications.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/podcasts/services/podcast_downloads.dart';
@@ -37,6 +38,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'settings/models/db/app_logs.dart';
 import 'settings/models/theme_palette.dart';
 import 'feedback/views/feedback_screenshot.dart';
+import 'music/views/components/music_screen_privacy.dart';
 
 final scaffoldKey = GlobalKey<ScaffoldMessengerState>();
 bool isTv = false;
@@ -138,6 +140,19 @@ class MyApp extends StatelessWidget {
     final player = context.read<PlayerCubit>();
     final downloads = context.read<DownloadManagerCubit>();
     final settings = context.read<SettingsCubit>();
+    player.saveMusicHomeWidgetSong = (entry, isCurrent) {
+      // The widget's Activity can be resuming a retained playback engine.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final context = appRouter.navigatorKey.currentState?.overlay?.context;
+        if (context != null && context.mounted && isCurrent()) {
+          unawaited(MusicLibraryActions.savePlayingSong(context, entry,
+              isCurrent: isCurrent));
+        }
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    };
+    MusicPlaylistSaveNotification.onOpen = player.musicMediaSave.open;
+    MusicPlaylistSaveNotification.onDismiss = player.musicMediaSave.dismiss;
     NotificationController.canHandleActions = () =>
         !app.isClosed &&
         !app.state.globalLoading &&
@@ -185,6 +200,8 @@ class MyApp extends StatelessWidget {
               context.select((SettingsCubit value) => value.state.locale);
           final motionPreference = context
               .select((SettingsCubit value) => value.state.motionPreference);
+          final musicScreenPrivacy = context
+              .select((SettingsCubit value) => value.state.musicScreenPrivacy);
           ThemeMode themeMode =
               context.select((SettingsCubit value) => value.state.themeMode);
 
@@ -244,9 +261,11 @@ class MyApp extends StatelessWidget {
                         blocked: state.globalLoading ||
                             state.sessionRecoveryRequired,
                         restoreFocus: isTv,
-                        child: KeyedSubtree(
-                            key: ValueKey(state.sessionRevision),
-                            child: child!)),
+                        child: MusicScreenPrivacyScope(
+                            enabled: musicScreenPrivacy,
+                            child: KeyedSubtree(
+                                key: ValueKey(state.sessionRevision),
+                                child: child!))),
                     if (state.sessionRecoveryRequired)
                       Positioned.fill(
                         child: Material(

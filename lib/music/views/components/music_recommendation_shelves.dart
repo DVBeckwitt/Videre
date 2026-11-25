@@ -11,6 +11,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_starter_artists.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/recommendations/candidate_sources.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
@@ -40,6 +41,7 @@ typedef _LocalShelf = ({String id, String title, List<MusicTrack> tracks});
 
 final _recordingId = RegExp(r'^[A-Za-z0-9_-]{11}$');
 const _maxQuickPicks = 12;
+const _maxSpeedDialTracks = 6;
 
 List<String> _trackIds(Object? value, int limit) => value is List
     ? value
@@ -111,14 +113,17 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
   late final RecommendationService _recommendations;
   late final MusicLibraryService _library;
   late final RecommendationCandidates _candidates;
+  late final MusicStarterArtists _starterArtists;
   late final SubscriptionRecommendationSource _subscriptionSource;
   Map<String, String> _subscriptionChannels = const {};
   List<MusicTrack> _subscribedMusic = const [];
   bool _active = false;
   bool _pageVisible = false;
+  bool _openingSpeedDial = false;
   int _subscriptionLoad = 0;
   late int _tasteGeneration;
   List<RecommendedItem<MusicTrack>> _picks = const [];
+  List<MusicTrack> _localTracks = const [];
   List<MusicTrack> _history = const [];
   List<MusicTrack> _onRepeat = const [];
   List<MusicTrack> _rotation = const [];
@@ -137,6 +142,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
   int _generation = 0;
   late Future<void> _ranking;
   final _pickFocus = <int, FocusNode>{};
+  final _random = math.Random();
 
   bool get _current {
     if (!mounted || !identical(widget.database, db)) return false;
@@ -161,11 +167,14 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
         widget.database, widget.session.profileId);
     _candidates =
         RecommendationCandidates(widget.database, isCurrent: () => _current);
+    _starterArtists =
+        MusicStarterArtists(widget.database, widget.session.profileId);
     _subscriptionSource = SubscriptionRecommendationSource(widget.database);
     _tasteGeneration = _recommendations.generation(RecommendationDomain.music);
     _recommendations.changes.addListener(_recommendationsChanged);
     recommendationSubscriptionRevision.addListener(_subscriptionsChanged);
     _library.changes.addListener(_refresh);
+    _starterArtists.changes.addListener(_starterArtistsChanged);
     communityFilters.changes.addListener(_refresh);
     playbackHistoryRevision.addListener(_historyChanged);
     _refresh();
@@ -209,6 +218,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     _recommendations.changes.removeListener(_recommendationsChanged);
     recommendationSubscriptionRevision.removeListener(_subscriptionsChanged);
     _library.changes.removeListener(_refresh);
+    _starterArtists.changes.removeListener(_starterArtistsChanged);
     communityFilters.changes.removeListener(_refresh);
     playbackHistoryRevision.removeListener(_historyChanged);
     for (final node in _pickFocus.values) {
@@ -283,6 +293,10 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     _refresh();
   }
 
+  void _starterArtistsChanged() {
+    if (_current) setState(() {});
+  }
+
   Future<void> _refresh() => _ranking = _refreshShelves();
 
   Future<void> _refreshShelves() async {
@@ -290,9 +304,11 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     if (!_current) return;
     final history =
         _recommendations.eligibleMusic(_candidates.listeningHistory(limit: 12));
-    final candidates = [..._subscribedMusic, ..._candidates.localMusic()];
+    final localTracks = _candidates.localMusic();
+    final candidates = [..._subscribedMusic, ...localTracks];
     setState(() {
       _history = history;
+      _localTracks = localTracks;
       _picks = const [];
     });
     final ranked = await _recommendations.rankMusic(candidates,
@@ -408,7 +424,31 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
           .toList()
       : const [];
 
-  Future<void> _playShelf(_LocalShelf shelf, {String? from}) async {
+  Future<void> _openSpeedDial({String? videoId}) async {
+    if (!_active || !_current || _openingSpeedDial) return;
+    // Resolve the recording from the current profile's pool at activation.
+    final tracks = _eligible(_candidates.localMusic());
+    if (tracks.isEmpty) return;
+    final random = videoId == null;
+    final queue = random
+        ? [tracks[_random.nextInt(tracks.length)]]
+        : tracks.take(_maxSpeedDialTracks).toList();
+    final track = random
+        ? queue.single
+        : queue.where((track) => track.videoId == videoId).firstOrNull;
+    if (track == null) return;
+    final locals = AppLocalizations.of(context)!;
+    _openingSpeedDial = true;
+    try {
+      await _open(track, queue,
+          random ? locals.musicRandomPick : locals.musicSpeedDial);
+    } finally {
+      _openingSpeedDial = false;
+    }
+  }
+
+  Future<void> _playShelf(_LocalShelf shelf,
+      {String? from, bool songTap = false}) async {
     final songs = _eligible(shelf.tracks);
     if (songs.isEmpty) return;
     final index =
@@ -417,7 +457,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     try {
       await MusicScreen.playTracks(
           context, [for (final track in songs) track.toVideo()],
-          queueTitle: shelf.title, startIndex: index);
+          queueTitle: shelf.title, startIndex: index, songTap: songTap);
     } catch (_) {
       if (mounted && _current) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -582,7 +622,7 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             badge: MusicLibraryActions(
                 videos: [song.toVideo()],
                 onPlay: () => _playShelf(shelf, from: song.videoId)),
-            onOpen: () => _playShelf(shelf, from: song.videoId),
+            onOpen: () => _playShelf(shelf, from: song.videoId, songTap: true),
             onLongPress: () => MusicLibraryActions.showSongMenu(
                 context, song.toVideo(),
                 onPlay: () => _playShelf(shelf, from: song.videoId)),
@@ -609,6 +649,18 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
   @override
   Widget build(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
+    final starterKeys =
+        _starterArtists.picks?.map(MusicStarterArtists.artistKey).toSet();
+    final starterMatches = starterKeys == null || starterKeys.isEmpty
+        ? const <MusicTrack>[]
+        : _eligible(_localTracks.where(
+                (track) => MusicStarterArtists.matches(track, starterKeys)))
+            .take(_maxQuickPicks)
+            .toList();
+    final speedDial =
+        _eligible(_localTracks).take(_maxSpeedDialTracks).toList();
+    final showRecentActivity = context.select((SettingsCubit? settings) =>
+        settings?.state.musicLayout.showRecentActivity ?? true);
     final onRepeat = _eligible(_onRepeat);
     final rediscover = _eligible(_rediscover);
     final rotation = _eligible(_rotation);
@@ -622,6 +674,12 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (starterMatches.isNotEmpty)
+          _shelf(context, (
+            id: 'starter-artist-matches',
+            title: locals.musicStarterArtistMatches,
+            tracks: starterMatches,
+          )),
         if (_picks.isNotEmpty) ...[
           _ShelfHeading(
             title: locals.musicQuickPicks,
@@ -642,7 +700,43 @@ class _ProfileMusicShelvesState extends State<_ProfileMusicShelves>
             isCurrent: () => _current,
           ),
         ],
-        if (_history.isNotEmpty) ...[
+        if (_current) ...[
+          _ShelfHeading(
+            title: locals.musicSpeedDial,
+            action: speedDial.isEmpty
+                ? null
+                : Flexible(
+                    child: Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: TextButton.icon(
+                        key: const ValueKey('music-random-pick'),
+                        icon: const Icon(Icons.casino_outlined),
+                        label: Text(locals.musicRandomPick),
+                        onPressed: _openSpeedDial,
+                      ),
+                    ),
+                  ),
+          ),
+          if (speedDial.isEmpty)
+            Text(locals.musicSpeedDialEmpty)
+          else
+            MusicCatalogShelf(
+              key: const ValueKey('music-speed-dial'),
+              itemCount: speedDial.length,
+              itemBuilder: (_, index) {
+                final track = speedDial[index];
+                return MusicCatalogCard(
+                  key: ValueKey('music-speed-dial-${track.videoId}'),
+                  title: track.title,
+                  subtitle: track.artists.join(', '),
+                  song: track,
+                  showPlayIndicator: true,
+                  onOpen: () => _openSpeedDial(videoId: track.videoId),
+                );
+              },
+            ),
+        ],
+        if (showRecentActivity && _history.isNotEmpty) ...[
           _ShelfHeading(title: locals.musicKeepListening),
           MusicCatalogShelf(
             key: const ValueKey('music-keep-listening'),
@@ -817,8 +911,19 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
 
   @override
   Widget build(BuildContext context) {
+    final (compact, titleLines) = context.select((SettingsCubit? settings) {
+      final layout = settings?.state.musicLayout;
+      return (layout?.compactRows ?? false, layout?.titleLines(1) ?? 1);
+    });
+    final textTheme = Theme.of(context).textTheme;
     final scaler = MediaQuery.textScalerOf(context);
-    final rowHeight = math.max(64.0, 20 + scaler.scale(14) * 1.4 * 2);
+    final title = textTheme.titleSmall!;
+    final subtitle = textTheme.bodyMedium!;
+    final rowHeight = math.max(
+        compact ? 52.0 : 64.0,
+        (compact ? 16 : 20) +
+            titleLines * scaler.scale(title.fontSize!) * (title.height ?? 1.4) +
+            scaler.scale(subtitle.fontSize!) * (subtitle.height ?? 1.4));
     final picks = widget.picks;
     final rows = math.min(4, picks.length);
     final columns = (picks.length / rows).ceil();
@@ -864,6 +969,8 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
                           key:
                               ValueKey('music-quick-pick-${pick.item.videoId}'),
                           pick: pick,
+                          compact: compact,
+                          titleLines: titleLines,
                           focusNode: widget.focusForSlot?.call(slot),
                           onOpen: () => widget.onOpen(pick.item),
                           onFeedback: (feedback) =>
@@ -880,6 +987,8 @@ class _QuickPickRowsState extends State<_QuickPickRows> {
 
 class _QuickPickRow extends StatelessWidget {
   final RecommendedItem<MusicTrack> pick;
+  final bool compact;
+  final int titleLines;
   final FocusNode? focusNode;
   final Future<void> Function() onOpen;
   final ValueChanged<RecommendationFeedback> onFeedback;
@@ -887,6 +996,8 @@ class _QuickPickRow extends StatelessWidget {
   const _QuickPickRow(
       {super.key,
       required this.pick,
+      required this.compact,
+      required this.titleLines,
       required this.focusNode,
       required this.onOpen,
       required this.onFeedback,
@@ -913,7 +1024,7 @@ class _QuickPickRow extends StatelessWidget {
         if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
       },
       leading: SizedBox.square(
-          dimension: 48,
+          dimension: compact ? 40 : 48,
           child: CommunityMusicArtwork(
               videoId: track.videoId,
               music: track.musicMetadata,
@@ -931,7 +1042,7 @@ class _QuickPickRow extends StatelessWidget {
                       decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(6))))),
       title: Text(pick.item.title,
-          maxLines: 1,
+          maxLines: titleLines,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.titleSmall
               ?.copyWith(fontWeight: FontWeight.w700)),

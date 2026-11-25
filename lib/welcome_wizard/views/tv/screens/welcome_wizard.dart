@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/screens/add_server.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/settings/views/tv/components/manage_server_inner.dart';
@@ -62,17 +63,52 @@ class TvWelcomeWizardScreen extends StatelessWidget {
                     ),
                     Padding(
                       padding: const EdgeInsets.only(top: 8),
-                      child: TvButton(
-                        key: const ValueKey('welcome-profiles'),
-                        onPressed: showProfilePicker,
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            const Icon(Icons.people_outline),
-                            const SizedBox(width: 8),
-                            Text(locals.profiles),
-                          ]),
-                        ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: TvButton(
+                              key: const ValueKey('welcome-profiles'),
+                              onPressed: showProfilePicker,
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.people_outline),
+                                    const SizedBox(width: 8),
+                                    Flexible(child: Text(locals.profiles)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: FilledButton.tonalIcon(
+                              onPressed: () => context
+                                  .read<SettingsCubit>()
+                                  .backupLibrary(context, restore: true),
+                              style: ButtonStyle(
+                                backgroundColor:
+                                    WidgetStateProperty.resolveWith(
+                                  (states) =>
+                                      states.contains(WidgetState.focused)
+                                          ? colors.primary
+                                          : null,
+                                ),
+                                foregroundColor:
+                                    WidgetStateProperty.resolveWith(
+                                  (states) =>
+                                      states.contains(WidgetState.focused)
+                                          ? colors.onPrimary
+                                          : null,
+                                ),
+                              ),
+                              icon: const Icon(Icons.restore),
+                              label: Text(locals.welcomeRestoreBackup),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const Expanded(

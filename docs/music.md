@@ -335,6 +335,19 @@ or download eligible audio. Play and queue actions keep playlist order unless
 you choose Shuffle. Back closes selection first and returns to the same query.
 Use **Remove from playlist** in a song's Music actions to remove it from that
 local playlist.
+
+Use **Delete playlist** on a local Music playlist to move it to **Recently
+deleted playlists**. Open that list from the Music Library toolbar in **All**
+or **Playlists**, and choose **Restore** on the playlist you want back. It
+returns to its saved position with the same identity and tracks in their
+original order, including repeat entries.
+
+Deleted playlists are available for 30 days in the same profile on this device.
+Expired copies and their custom covers are cleared on the next local playlist
+write. Portable backups include active playlists. Replacing your library from
+a backup clears the device's recently deleted playlists for that profile.
+Watch Later and server playlists are outside this recovery flow.
+
 These operations belong to the active Videre profile. Switching profiles closes
 an open save dialog and stops any remaining collection operation.
 
@@ -398,6 +411,11 @@ Android music library** asks for audio permission and shows files indexed by
 Android. The selected device source is available across Videre profiles.
 Videre keeps a device-local index and loads tags and artwork in the background.
 You can play songs while the library updates.
+
+To play a concert or album split by a CUE sheet, use **Choose a folder** and
+grant access to the sheet and its audio. Referenced files must be beside the
+sheet or in its subfolders, with matching filenames. Open the sheet's album
+to play its tracks in CUE order. The original audio file is still playable.
 
 If Android verifies that an indexed row and a completed download point to the
 same file, the device row represents both. Separate files with identical tags
@@ -524,6 +542,15 @@ highlight and position update immediately. Select a timed line to seek when
 playback supports it. Coverage depends on the recording match and LRCLIB's
 catalog.
 [LRCLIB API](https://lrclib.net/docs.txt)
+
+For a device song, **Lyrics** reads the file offline. Choose the song's folder
+in the On-device library to give Videre access to sibling lyrics files. For
+`Song.mp3`, place `Song.lrc` beside it, or use `Song.mp3.lrc` to distinguish
+it from another file with the same stem. A readable sidecar takes precedence
+over embedded lyrics. LRC offsets use milliseconds, with positive values
+showing lines earlier. Embedded lyrics also work from Android's system music
+library. If the lyrics file is removed, reopen the sheet to read the embedded
+lyrics if available. Videre keeps device lyrics on the device.
 
 ## Ads and SponsorBlock
 

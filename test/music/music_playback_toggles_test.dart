@@ -4,6 +4,7 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/music/views/components/music_playback_toggles.dart';
+import 'package:clipious/player/models/music_queue_shuffle.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
@@ -30,10 +31,21 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   int playlistGeneration = 1;
+  @override
+  int playbackOccurrenceRevision = 1;
+  @override
+  int musicSelectionRequestRevision = 1;
+  @override
+  bool canShuffleMusicQueueUpcoming = true;
   int regenerations = 0;
+  final upcomingShuffles = <MusicQueueShuffle>[];
 
   @override
   void generatePlayQueue() => regenerations++;
+
+  @override
+  void shuffleMusicQueueUpcoming(MusicQueueShuffle shuffle) =>
+      upcomingShuffles.add(shuffle);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -80,7 +92,8 @@ void main() {
     await app.close();
   });
 
-  Future<void> show(WidgetTester tester) async {
+  Future<void> show(WidgetTester tester,
+      {bool showQueueOptions = false}) async {
     settings.saving = Completer<void>();
     await tester.pumpWidget(MultiBlocProvider(
         providers: [
@@ -97,7 +110,8 @@ void main() {
                   controlKey: compact,
                   selectedBackgroundColor: fill,
                   style: IconButton.styleFrom(foregroundColor: Colors.white)),
-              const MusicShuffleButton(controlKey: full),
+              MusicShuffleButton(
+                  controlKey: full, showQueueOptions: showQueueOptions),
             ])))));
     await tester.pumpAndSettle();
   }
@@ -141,4 +155,52 @@ void main() {
       expect(player.regenerations, 0);
     });
   }
+
+  testWidgets('queue popup exposes three ways to shuffle upcoming songs',
+      (tester) async {
+    await show(tester, showQueueOptions: true);
+    for (final (label, mode) in [
+      ('Shuffle upcoming by album', MusicQueueShuffle.albums),
+      ('Shuffle upcoming by folder', MusicQueueShuffle.folders),
+      ('Shuffle upcoming with fewer repeats', MusicQueueShuffle.fewerRepeats),
+    ]) {
+      await tester.tap(find.byKey(full));
+      await tester.pumpAndSettle();
+      expect(find.text('Turn song shuffle on'), findsOneWidget);
+      await tester.tap(find.text(label));
+      await tester.pumpAndSettle();
+      expect(player.upcomingShuffles.last, mode);
+    }
+    expect(player.upcomingShuffles, MusicQueueShuffle.values);
+    expect(settings.writes, isEmpty);
+  });
+
+  testWidgets('an open queue shuffle popup ignores an occurrence change',
+      (tester) async {
+    await show(tester, showQueueOptions: true);
+    await tester.tap(find.byKey(full));
+    await tester.pumpAndSettle();
+    player.playbackOccurrenceRevision++;
+    await tester.tap(find.text('Shuffle upcoming by album'));
+    await tester.pumpAndSettle();
+    expect(player.upcomingShuffles, isEmpty);
+  });
+
+  testWidgets('queue shuffle waits for a pending song shuffle write',
+      (tester) async {
+    await show(tester, showQueueOptions: true);
+    await tester.tap(find.byKey(compact));
+    await tester.tap(find.byKey(full));
+    await tester.pumpAndSettle();
+    final option = find.widgetWithText(
+        PopupMenuItem<Future<void> Function()>, 'Shuffle upcoming by album');
+    expect(
+        tester.widget<PopupMenuItem<Future<void> Function()>>(option).enabled,
+        isFalse);
+    await tester.tap(option);
+    expect(player.upcomingShuffles, isEmpty);
+    settings.saving.complete();
+    await tester.pumpAndSettle();
+    expect(player.regenerations, 1);
+  });
 }

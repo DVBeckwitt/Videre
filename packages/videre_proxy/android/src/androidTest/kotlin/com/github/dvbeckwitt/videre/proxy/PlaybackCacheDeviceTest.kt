@@ -77,6 +77,23 @@ class PlaybackCacheDeviceTest {
                         source: String = media, manifest: Boolean = false): DataSource.Factory =
         PlaybackMediaCache.factory(context, upstream, source, values, manifest)
 
+    private fun songDescriptor(source: String = media, size: Long = payload.size.toLong(),
+                               id: String = "fixture"): Map<String, Any> {
+        val representation = """["representation","140","$size","100","type",null,"track"]"""
+        return descriptor(listOf(resource(source, representation))) + mapOf(
+            "contentId" to id,
+            "musicSong" to mapOf("title" to "Fixture song", "artist" to "Fixture artist",
+                "lengthSeconds" to 45, "byteLength" to size),
+        )
+    }
+
+    private fun cachedSongFactory(owner: Map<String, Any>, row: Map<String, Any>): Pair<DataSource.Factory, String> {
+        val rendition = row.getValue("rendition")
+        val uri = "videre-cache://music/$rendition"
+        return PlaybackMediaCache.cachedMusicFactory(context, uri,
+            owner + mapOf("contentId" to row.getValue("videoId"), "rendition" to rendition)) to uri
+    }
+
     private data class Read(val bytes: ByteArray, val uri: Uri?)
 
     private fun read(factory: DataSource.Factory, url: String = media,
@@ -130,6 +147,76 @@ class PlaybackCacheDeviceTest {
             read(cached, offset = 1024, length = 3072).bytes)
         assertEquals("Cached replay and rewind opened the upstream", 1, upstream.opens.get())
         assertEquals(payload.size.toLong(), upstream.bytes.get())
+    }
+
+    @Test(timeout = 15000)
+    fun onlyCompleteDecoderConfirmedSongsAreListedAndReadCacheOnly() {
+        val upstream = CountingFactory(mapOf("/videoplayback" to payload))
+        val values = songDescriptor()
+        val source = factory(upstream, values)
+        val partial = source.createDataSource()
+        try {
+            partial.open(DataSpec(Uri.parse(media)))
+            assertEquals(1024, partial.read(ByteArray(1024), 0, 1024))
+        } finally {
+            partial.close()
+        }
+        PlaybackMediaCache.confirmDecodedMusic(source)
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
+        assertArrayEquals(payload, read(source).bytes)
+
+        val rows = PlaybackMediaCache.cachedMusicSongs(values)
+        val row = rows.single()
+        assertEquals("fixture", row["videoId"])
+        assertEquals("Fixture song", row["title"])
+        assertEquals("Fixture artist", row["artist"])
+        assertEquals(45, row["lengthSeconds"])
+        assertEquals(setOf("videoId", "title", "artist", "lengthSeconds", "rendition"), row.keys)
+
+        val (cacheOnly, synthetic) = cachedSongFactory(values, row)
+        val networkOpens = upstream.opens.get()
+        val used = PlaybackMediaCache.status()["usedBytes"]
+        assertArrayEquals(payload, read(cacheOnly, synthetic).bytes)
+        assertArrayEquals(payload.copyOfRange(1024, 4096),
+            read(cacheOnly, synthetic, offset = 1024, length = 3072).bytes)
+        assertEquals(networkOpens, upstream.opens.get())
+        assertEquals(used, PlaybackMediaCache.status()["usedBytes"])
+        assertThrows(CachedMusicUnavailable::class.java) { read(cacheOnly, media) }
+
+        for ((field, other) in mapOf("profileId" to "another-profile", "accountId" to "another-account",
+            "origin" to "https://another.example")) {
+            val another = values + (field to other)
+            assertTrue(PlaybackMediaCache.cachedMusicSongs(another).isEmpty())
+            val (anotherSource, anotherUri) = cachedSongFactory(another, row)
+            assertThrows(CachedMusicUnavailable::class.java) { read(anotherSource, anotherUri) }
+        }
+
+        PlaybackMediaCache.clear()
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
+        assertThrows(IOException::class.java) { read(cacheOnly, synthetic) }
+        val (stale, staleUri) = cachedSongFactory(values, row)
+        assertThrows(CachedMusicUnavailable::class.java) { read(stale, staleUri) }
+        assertEquals(networkOpens, upstream.opens.get())
+    }
+
+    @Test(timeout = 15000)
+    fun completeCacheNeedsDecoderProofAndMatchingRepresentationLength() {
+        val upstream = CountingFactory(mapOf("/videoplayback" to payload))
+        val valid = songDescriptor()
+        val unconfirmed = factory(upstream, valid)
+        assertArrayEquals(payload, read(unconfirmed).bytes)
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(valid).isEmpty())
+
+        val wrongSize = songDescriptor(size = payload.size.toLong() + 1, id = "wrong-size")
+        val short = factory(upstream, wrongSize)
+        assertArrayEquals(payload, read(short).bytes)
+        PlaybackMediaCache.confirmDecodedMusic(short)
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(wrongSize).isEmpty())
+
+        PlaybackMediaCache.confirmDecodedMusic(unconfirmed)
+        assertEquals("fixture", PlaybackMediaCache.cachedMusicSongs(valid).single()["videoId"])
+        PlaybackMediaCache.configure(mapOf("enabled" to false, "maxBytes" to quota))
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(valid).isEmpty())
     }
 
     @Test(timeout = 15000)
@@ -594,6 +681,27 @@ class PlaybackCacheDeviceTest {
         read(cached, first, length = 1024)
         assertTrue("The oldest span should require an upstream read", upstream.opens.get() > opens)
         assertTrue((PlaybackMediaCache.status()["usedBytes"] as Long) <= quota)
+    }
+
+    @Test(timeout = 60000)
+    fun partiallyEvictedSongDisappearsAndItsOldSelectionFailsClosed() {
+        val size = 40L * 1024 * 1024
+        val upstream = PatternFactory(size)
+        val first = "$origin/cached-song"
+        val second = "$origin/uncataloged-media"
+        val values = songDescriptor(first, size)
+        val song = factory(upstream, values, first)
+        assertEquals(size, drain(song, first))
+        PlaybackMediaCache.confirmDecodedMusic(song)
+        val (cacheOnly, synthetic) = cachedSongFactory(values, PlaybackMediaCache.cachedMusicSongs(values).single())
+        assertEquals(1024, read(cacheOnly, synthetic, length = 1024).bytes.size)
+
+        val uncataloged = factory(upstream, descriptor(listOf(resource(second, "eviction-fixture"))), second)
+        assertEquals(size, drain(uncataloged, second))
+        val opens = upstream.opens.get()
+        assertTrue(PlaybackMediaCache.cachedMusicSongs(values).isEmpty())
+        assertThrows(CachedMusicUnavailable::class.java) { read(cacheOnly, synthetic, length = 1024) }
+        assertEquals(opens, upstream.opens.get())
     }
 
     private fun gatewayFixture(origin: String): Pair<GatewayContext, String> {

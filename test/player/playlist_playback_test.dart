@@ -8,7 +8,10 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/device_playlist_track.dart';
 import 'package:clipious/music/models/song_transition.dart';
+import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/media_command.dart';
@@ -29,7 +32,9 @@ import 'package:clipious/videos/models/music_metadata.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter_bloc/flutter_bloc.dart' show Change;
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:just_audio/just_audio.dart' show ProgressiveAudioSource;
 
 import '../test_app_cubit.dart';
 import '../test_player_cubit.dart';
@@ -441,6 +446,42 @@ void main() {
         player.playPlaylist(filtered, reference: reference, startIndex: 0),
         throwsStateError);
     expect(metadata.requests, ['b']);
+  });
+
+  test('whole playlist shuffle retains playable occurrences and source order',
+      () async {
+    final source = [
+      const Video(videoId: 'filtered', filtered: true),
+      for (final entry in entries)
+        entry.copyWith(
+            musicMetadata: MusicMetadata(title: entry.videoId, artist: 'Band')),
+      const Video(videoId: 'hidden', filterHide: true),
+      const Video(videoId: 'upcoming', isUpcoming: true),
+    ];
+    final assigned = assignPlaylistEntryIds(source);
+    final eligible = assigned.skip(1).take(entries.length);
+
+    await player.playPlaylist(source,
+        reference: reference, fromMusic: true, audio: true, shuffleOnce: true);
+
+    final state = player.state;
+    final current = state.currentQueueId!;
+    final traversal = [current, ...state.playQueue];
+    expect(traversal, unorderedEquals(eligible.map(playbackQueueId)));
+    expect(state.videos.map(playbackQueueId), traversal);
+    expect(state.videos.where((entry) => entry.videoId == 'a'), hasLength(2));
+    expect(state.playedVideos, isEmpty);
+    expect(settings.state.playerShuffleMode, isFalse);
+    expect(player.playlistReference, reference);
+
+    await player.saveProgress(4);
+    final checkpoint =
+        PlaylistProgressService.forProfile(db, db.profileId).get(reference)!;
+    final sourceIndex =
+        assigned.indexWhere((entry) => playbackQueueId(entry) == current);
+    expect(checkpoint.entryId, current);
+    expect(checkpoint.indexHint, sourceIndex);
+    expect(checkpoint.resolve(source)!.index, sourceIndex);
   });
 
   test('an invalid index or another profile leaves the queue untouched',
@@ -1293,5 +1334,93 @@ void main() {
         PlaybackSession.decode(jsonEncode(legacy))!.playlistReference, isNull);
     expect(
         PlaybackSession.decode(jsonEncode(legacy))!.playlistComplete, isFalse);
+  });
+
+  test('device playlist occurrences play locally and keep their stored order',
+      () async {
+    const tree = 'content://documents/tree/primary%3AMusic';
+    const uri = '$tree/document/primary%3AMusic%2Ftrack.flac';
+    const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final library = LocalMusicLibrary.instance;
+    var allowed = true;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder' || 'pickFolder':
+          return {'uri': tree, 'name': 'Music', 'selectionId': 'device-grant'};
+        case 'listTracks':
+          return [
+            {'uri': uri, 'title': 'File', 'visibilityKey': 'a' * 64},
+          ];
+        case 'checkFolderAccess':
+          return allowed;
+        case 'forgetFolder':
+          return null;
+      }
+      throw MissingPluginException();
+    });
+    addTearDown(() async {
+      await library.disable();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    expect(await library.chooseFolder(), isTrue);
+    final device = devicePlaylistVideo(library.tracks.single)!;
+    const catalog = Video(
+        videoId: 'catalog0001',
+        musicMetadata: MusicMetadata(title: 'Catalog', artist: 'Artist'));
+    final id = await service
+        .createLocalPlaylistWithEntries('Mixed', [device, catalog, device]);
+    final playlist =
+        service.getLocalPlaylists().singleWhere((row) => row.playlistId == id);
+    final reference = PlaylistReference.forPlaylist(playlist, db);
+    await player.playPlaylist(playlist.videos,
+        reference: reference, startIndex: 2, fromMusic: true, audio: true);
+    final queue = player.state.videos;
+    final selected = player.state.currentlyPlaying!;
+    expect(selected.videoId, device.videoId);
+    expect(playbackQueueId(selected), playbackQueueId(queue.last));
+    expect(playbackQueueId(queue.first), isNot(playbackQueueId(queue.last)));
+    expect(metadata.musicRequests, isEmpty);
+    final audio = await resolveAudioPlaybackSources(
+        video: selected,
+        offlineVideo: null,
+        sessionId: 'test',
+        isCurrent: () => true);
+    expect(
+        (audio!.sources.single as ProgressiveAudioSource).uri, Uri.parse(uri));
+
+    final snapshot = PlaybackSession.decode(PlaybackSession(
+            videos: queue,
+            playlistEntries: queue,
+            playlistReference: reference,
+            localSelectionId: library.selectionId,
+            audio: true,
+            currentId: playbackQueueId(selected),
+            seconds: 12)
+        .encode())!;
+    expect(snapshot.currentDeviceId, device.videoId);
+    expect(snapshot.currentId, playbackQueueId(queue.last));
+
+    await player.skipToVideo(1);
+    expect(metadata.musicRequests, [catalog.videoId]);
+    await player.skipToVideo(0);
+    expect(player.state.currentlyPlaying?.videoId, device.videoId);
+    expect(metadata.musicRequests, [catalog.videoId]);
+
+    allowed = false;
+    await library.revalidate();
+    expect(player.state.videos, isEmpty);
+    expect(player.state.isClosing, isTrue);
+    final retained =
+        service.getLocalPlaylists().singleWhere((row) => row.playlistId == id);
+    expect(jsonEncode(retained.toJson()), jsonEncode(playlist.toJson()));
+    await expectLater(
+        resolveAudioPlaybackSources(
+            video: selected,
+            offlineVideo: null,
+            sessionId: 'test',
+            isCurrent: () => true),
+        throwsStateError);
   });
 }

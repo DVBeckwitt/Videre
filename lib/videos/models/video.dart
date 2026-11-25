@@ -170,12 +170,15 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
   /// Abbreviated search descriptions keep using ordinary upload artwork.
   bool get isStockArtTrack {
     if (genre?.trim().toLowerCase() != 'music' ||
-        author?.trim().endsWith(' - Topic') != true ||
+        author?.trim().endsWith(_topicSuffix) != true ||
         liveNow == true ||
-        isUpcoming == true) return false;
-    final text = description?.trim();
-    if (text == null || !text.startsWith('Provided to YouTube by '))
+        isUpcoming == true) {
       return false;
+    }
+    final text = description?.trim();
+    if (text == null || !text.startsWith('Provided to YouTube by ')) {
+      return false;
+    }
     final firstBreak = text.indexOf('\n');
     if (firstBreak < 0 ||
         text
@@ -192,7 +195,34 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
   /// Known distributor descriptions place a single album line between the
   /// exact recording-title/artist credit and the copyright notice. If that
   /// layout changes, the stock poster remains available without an album label.
-  String? get stockArtTrackAlbum {
+  String? get stockArtTrackAlbum => _stockArtTrackLabels?.album;
+
+  static const _topicSuffix = ' - Topic';
+
+  /// Keep unlinked recording credits as supplied by the distributor. The
+  /// stock topic channel can identify only the matching credited artist.
+  List<MusicArtistCredit> get stockArtTrackCredits {
+    final artists = _stockArtTrackLabels?.artists;
+    if (artists == null || artists.length > 64) return const [];
+    final invalidName = RegExp(r'[\x00-\x1f\x7f]');
+    if (artists.any((name) =>
+        name.isEmpty || name.length > 1024 || invalidName.hasMatch(name))) {
+      return const [];
+    }
+    final topic = author!.trim();
+    final topicName = topic.substring(0, topic.length - _topicSuffix.length);
+    final channel =
+        MusicArtistCredit.forAuthor(author, authorId, authorUrl)?.id;
+    final matchingNames = artists.where((name) => name == topicName).length;
+    return [
+      for (final name in artists)
+        MusicArtistCredit(
+            name: name,
+            id: matchingNames == 1 && name == topicName ? channel : null),
+    ];
+  }
+
+  ({String album, List<String> artists})? get _stockArtTrackLabels {
     if (!isStockArtTrack) return null;
     final blocks =
         description!.trim().replaceAll('\r', '').split(RegExp(r'\n[ \t]*\n'));
@@ -208,7 +238,10 @@ sealed class Video with _$Video implements ShareLinks, IdedVideo {
         !RegExp(r'^[℗©]').hasMatch(blocks[3].trim())) {
       return null;
     }
-    return album;
+    return (
+      album: album,
+      artists: credits.skip(1).map((name) => name.trim()).toList()
+    );
   }
 
   /// Fill missing catalog labels from this recording's instance metadata.

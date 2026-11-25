@@ -28,6 +28,7 @@ internal data class LocalMusicRow(
     val visibilityAlias: String? = null,
     val isRecording: Boolean = false,
     val folderLocations: List<LocalMusicFolderLocation> = emptyList(),
+    val adjacentCover: String? = null,
 ) {
     val visibilityKey get() = visibilityProof?.let { visibilityAlias ?: it }
 
@@ -37,7 +38,8 @@ internal data class LocalMusicRow(
 
     fun needsTagRead(previous: LocalMusicRow?): Boolean {
         val metadata = previous?.metadata ?: return true
-        return !metadata.albumTagsRead || metadata.sortTags == null || !matchesRevision(previous) ||
+        return !metadata.albumTagsRead || !metadata.genreRead || metadata.sortTags == null ||
+            !metadata.replayGainRead || metadata.retryRead || !matchesRevision(previous) ||
             identityKey != previous.identityKey
     }
 
@@ -56,13 +58,13 @@ internal data class LocalMusicRow(
     // MediaStore album IDs belong to a volume. SAF has no album entity: the
     // actual traversed parent plus both album tags identify a local grouping.
     fun albumKey(source: String): String? {
-        val album = localAlbumTag(metadata?.album) ?: return null
+        val album = localCollectionTag(metadata?.album) ?: return null
         val parts = if (source == LocalMusicCatalog.SYSTEM_URI) {
             val id = mediaAlbumId?.takeIf { it > 0 } ?: return null
             listOf(source, uri.substringBeforeLast('/'), id.toString())
         } else {
             val parent = parentDocumentId?.takeIf { it.isNotBlank() } ?: return null
-            val artist = localAlbumTag(metadata?.albumArtist) ?: return null
+            val artist = localCollectionTag(metadata?.albumArtist) ?: return null
             listOf(source, parent, artist, album)
         }
         val input = parts.joinToString("") { "${it.length}:$it" }.toByteArray(Charsets.UTF_8)
@@ -70,7 +72,9 @@ internal data class LocalMusicRow(
         return BigInteger(1, digest).toString(16).padStart(64, '0')
     }
 
-    fun channelValue(artPath: String? = null, source: String? = null): Map<String, Any?> = mapOf(
+    fun channelValue(
+        artPath: String? = null, source: String? = null, adjacentArtPath: String? = null,
+    ): Map<String, Any?> = mapOf(
         "uri" to uri,
         "fileName" to fileName,
         "title" to (metadata?.title ?: LocalMusicCatalog.fallbackTitle(fileName)),
@@ -81,13 +85,16 @@ internal data class LocalMusicRow(
         "artistSort" to metadata?.sortTags?.artist,
         "albumSort" to metadata?.sortTags?.album,
         "albumArtistSort" to metadata?.sortTags?.albumArtist,
+        "genre" to metadata?.genre,
         "albumKey" to source?.let(::albumKey),
         "discNumber" to metadata?.discNumber,
         "trackNumber" to metadata?.trackNumber,
         "releaseDate" to metadata?.releaseDate,
         "originalReleaseDate" to metadata?.originalReleaseDate,
+        "replayGain" to metadata?.replayGain?.channelValue(),
         "durationMs" to (metadata?.durationMs ?: 0L),
         "artPath" to artPath,
+        "adjacentArtPath" to adjacentArtPath,
         "addedMs" to addedMs,
         "modifiedMs" to modifiedMs,
         "sizeBytes" to sizeBytes,
@@ -103,6 +110,7 @@ internal data class LocalMusicRow(
 
     fun toJson(): JSONObject = JSONObject(channelValue()).apply {
         remove("artPath")
+        remove("adjacentArtPath")
         remove("title")
         remove("artist")
         remove("album")
@@ -111,11 +119,13 @@ internal data class LocalMusicRow(
         remove("artistSort")
         remove("albumSort")
         remove("albumArtistSort")
+        remove("genre")
         remove("albumKey")
         remove("discNumber")
         remove("trackNumber")
         remove("releaseDate")
         remove("originalReleaseDate")
+        remove("replayGain")
         remove("durationMs")
         remove("visibilityKey")
         put("metadata", metadata?.toJson())
@@ -123,6 +133,7 @@ internal data class LocalMusicRow(
         put("mediaAlbumId", mediaAlbumId)
         put("visibilityProof", visibilityProof)
         put("visibilityAlias", visibilityAlias)
+        put("adjacentCover", adjacentCover)
         put("folderLocations", JSONArray(folderLocations.map { JSONObject(it.channelValue) }))
     }
 
@@ -145,6 +156,7 @@ internal data class LocalMusicRow(
             visibilityAlias = json.stringOrNull("visibilityAlias"),
             isRecording = json.opt("isRecording") == true,
             folderLocations = LocalMusicFolderLocation.fromJson(json.optJSONArray("folderLocations")),
+            adjacentCover = json.stringOrNull("adjacentCover"),
         )
     }
 }
@@ -163,6 +175,11 @@ internal data class LocalMusicMetadata(
     val albumTagsRead: Boolean = false,
     // Null denotes a legacy row or an interrupted read. An empty result is cached.
     val sortTags: LocalMusicSortTags? = null,
+    val genre: String? = null,
+    val genreRead: Boolean = false,
+    val retryRead: Boolean = false,
+    val replayGain: LocalReplayGain? = null,
+    val replayGainRead: Boolean = true,
 ) {
     fun toJson(): JSONObject = JSONObject()
         .put("title", title).put("artist", artist).put("album", album)
@@ -175,6 +192,13 @@ internal data class LocalMusicMetadata(
             sortTags?.let {
                 put("sortTags", JSONObject().put("title", it.title).put("artist", it.artist)
                     .put("album", it.album).put("albumArtist", it.albumArtist))
+            }
+        }
+        .apply { if (genreRead) put("genre", genre ?: JSONObject.NULL) }
+        .apply { if (retryRead) put("retryRead", true) }
+        .apply {
+            if (replayGainRead) {
+                put("replayGain", replayGain?.let { JSONObject(it.channelValue()) } ?: JSONObject.NULL)
             }
         }
 
@@ -196,11 +220,21 @@ internal data class LocalMusicMetadata(
                 LocalMusicSortTags(it.stringOrNull("title"), it.stringOrNull("artist"),
                     it.stringOrNull("album"), it.stringOrNull("albumArtist"))
             },
+            localCollectionTag(json.stringOrNull("genre")),
+            json.has("genre"),
+            json.optBoolean("retryRead"),
+            json.optJSONObject("replayGain")?.let {
+                LocalReplayGain.fromValues(
+                    it.optDouble("trackGainDb"), it.optDouble("albumGainDb"),
+                    it.optDouble("trackPeak"), it.optDouble("albumPeak"),
+                )
+            },
+            json.has("replayGain"),
         )
     }
 }
 
-internal fun localAlbumTag(text: String?): String? = text?.trim()?.takeIf {
+internal fun localCollectionTag(text: String?): String? = text?.trim()?.takeIf {
     it.isNotEmpty() && it.length <= 1024 && !it.equals("<unknown>", ignoreCase = true) &&
         it.none(Char::isISOControl)
 }

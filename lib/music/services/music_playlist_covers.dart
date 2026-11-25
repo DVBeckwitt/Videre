@@ -30,9 +30,11 @@ class MusicPlaylistCovers {
       id.length > _localPrefix.length &&
       id.length <= 128;
 
+  static String settingName(String playlistId) => '$_settingPrefix$playlistId';
+
   String? encodedCover(String playlistId) {
     if (!supports(playlistId)) return null;
-    final value = _owner.getSettings('$_settingPrefix$playlistId')?.value;
+    final value = _owner.getSettings(settingName(playlistId))?.value;
     if (value == null ||
         value.isEmpty ||
         value.length > _maximumEncodedLength) {
@@ -48,7 +50,7 @@ class MusicPlaylistCovers {
     final cover = await _normalize(source);
     if (!isCurrent()) return false;
     await _owner.saveSetting(
-        SettingsValue('$_settingPrefix$playlistId', base64Encode(cover)));
+        SettingsValue(settingName(playlistId), base64Encode(cover)));
     _library.notifyChanged();
     return true;
   }
@@ -56,7 +58,7 @@ class MusicPlaylistCovers {
   Future<bool> reset(String playlistId, {bool Function()? isCurrent}) async {
     if (!supports(playlistId)) throw ArgumentError('Choose a local playlist');
     if (isCurrent?.call() == false) return false;
-    await _owner.deleteSetting('$_settingPrefix$playlistId');
+    await _owner.deleteSetting(settingName(playlistId));
     _library.notifyChanged();
     return true;
   }

@@ -56,7 +56,8 @@ _DeviceAlbum? _deviceAlbum(PlayerCubit player) {
   final library = LocalMusicLibrary.instance;
   final selection = library.selectionId;
   if (!library.acceptsSessionSelection(selection)) return null;
-  final track = localMusicTrackForPlayback(state.currentQueueId);
+  final id = (state.currentlyPlaying ?? state.offlineCurrentlyPlaying)?.videoId;
+  final track = localMusicTrackForPlayback(id);
   final key = track?.albumKey;
   final title = track?.album?.trim();
   if (track == null || key == null || title == null || title.isEmpty) {

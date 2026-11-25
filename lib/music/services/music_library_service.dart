@@ -12,6 +12,7 @@ const musicPlaylistPinsSettingName = 'music-playlist-pins-v1';
 
 class _ProfileChanges extends ChangeNotifier {
   Future<void> writes = Future.value();
+  final songMetadataRefreshes = <String, Object>{};
   String? storedValue;
   Map<String, dynamic> data = {};
   List<MusicLibraryEntry>? entries;
@@ -24,6 +25,7 @@ class _ProfileChanges extends ChangeNotifier {
 /// A fixed person's local bookmarks, using the application's settings store.
 class MusicLibraryService {
   static final _owners = Expando<Map<String, _ProfileChanges>>();
+  static final _songId = RegExp(r'^[A-Za-z0-9_-]{11}$');
   final IDbClient _database;
   final _ProfileChanges _changes;
 
@@ -158,7 +160,7 @@ class MusicLibraryService {
           savedTitle == clean.savedTitle
               ? clean
               : clean.withSavedTitle(savedTitle));
-    });
+    }, replacedSongId: clean.kind == MusicLibraryKind.song ? clean.id : null);
   }
 
   /// Change a saved song's display title in place. Null restores its metadata
@@ -189,10 +191,9 @@ class MusicLibraryService {
   /// Merge a local song list without replacing bookmarks or fetching metadata.
   Future<int> importSongs(Iterable<MusicLibraryEntry> songs) async {
     final incoming = <String, MusicLibraryEntry>{};
-    final videoId = RegExp(r'^[A-Za-z0-9_-]{11}$');
     for (final song in songs) {
       if (song.kind != MusicLibraryKind.song ||
-          videoId.stringMatch(song.id) != song.id) {
+          _songId.stringMatch(song.id) != song.id) {
         throw ArgumentError('Invalid imported song');
       }
       // Never turn a URL supplied by an import into a request for artwork.
@@ -227,9 +228,92 @@ class MusicLibraryService {
     return imported;
   }
 
-  Future<void> remove(MusicLibraryKind kind, String id) =>
-      _write((entries, _) =>
-          entries.removeWhere((entry) => entry.kind == kind && entry.id == id));
+  Future<void> remove(MusicLibraryKind kind, String id) => _write(
+      (entries, _) =>
+          entries.removeWhere((entry) => entry.kind == kind && entry.id == id),
+      replacedSongId: kind == MusicLibraryKind.song ? id : null);
+
+  bool canRefreshSongMetadata(String id) =>
+      _songId.stringMatch(id) == id && contains(MusicLibraryKind.song, id);
+
+  /// Apply fresh catalog details to the same bookmark, in its saved position.
+  /// Returns false when the request or bookmark was superseded.
+  Future<bool> refreshSongMetadata(String id,
+      {required Future<MusicLibraryEntry?> Function(bool Function()) load,
+      required bool Function() isCurrent}) async {
+    if (!isCurrent() || !canRefreshSongMetadata(id)) return false;
+    final request = Object();
+    final pending = _changes.songMetadataRefreshes;
+    pending[id] = request;
+    bool current() => isCurrent() && identical(pending[id], request);
+
+    try {
+      final response = await load(current);
+      if (!current()) return false;
+      final details = MusicLibraryEntry.tryParse(response?.toJson());
+      if (details == null ||
+          details.kind != MusicLibraryKind.song ||
+          details.id != id) {
+        throw StateError('Song metadata unavailable');
+      }
+
+      var accepted = false;
+      var changed = false;
+      await _write((entries, _) {
+        if (!current()) return;
+        final index = entries.indexWhere(
+            (entry) => entry.kind == MusicLibraryKind.song && entry.id == id);
+        if (index < 0) return;
+
+        final entry = entries[index];
+        final refreshed = _withRefreshedSongMetadata(entry, details);
+        accepted = true;
+        if (jsonEncode(entry.toJson()) == jsonEncode(refreshed.toJson())) {
+          return;
+        }
+        entries[index] = refreshed;
+        changed = true;
+      }, shouldWrite: () => changed);
+      return accepted && current();
+    } catch (_) {
+      if (!current()) return false;
+      rethrow;
+    } finally {
+      if (identical(pending[id], request)) pending.remove(id);
+    }
+  }
+
+  static MusicLibraryEntry _withRefreshedSongMetadata(
+      MusicLibraryEntry entry, MusicLibraryEntry details) {
+    final savedArtist = entry.artistCredits.singleOrNull?.id;
+    // The video endpoint supplies an uploader. Keep richer artist credits
+    // and established links when that response cannot confirm their identity.
+    final useFreshArtist = details.subtitle.isNotEmpty &&
+        entry.artistCredits.length <= 1 &&
+        (savedArtist == null ||
+            savedArtist == details.artistCredits.singleOrNull?.id);
+    final useFreshArtwork =
+        details.thumbnails.isNotEmpty && entry.coverThumbnails.isEmpty;
+    return MusicLibraryEntry(
+      kind: entry.kind,
+      id: entry.id,
+      title: details.title,
+      savedTitle: entry.savedTitle,
+      subtitle: useFreshArtist ? details.subtitle : entry.subtitle,
+      artistCredits:
+          useFreshArtist ? details.artistCredits : entry.artistCredits,
+      album: entry.albumPlaylistId == null
+          ? details.album ?? entry.album
+          : entry.album ?? details.album,
+      albumPlaylistId: entry.albumPlaylistId,
+      durationSeconds: details.durationSeconds ?? entry.durationSeconds,
+      thumbnails: useFreshArtwork ? details.thumbnails : entry.thumbnails,
+      usesVideoThumbnails: useFreshArtwork
+          ? details.usesVideoThumbnails
+          : entry.usesVideoThumbnails,
+      isArtTrack: entry.isArtTrack || details.isArtTrack,
+    );
+  }
 
   /// Fill missing display fields in place using verified catalog details.
   Future<int> fillSongDetails(Iterable<MusicLibraryEntry> details,
@@ -319,7 +403,8 @@ class MusicLibraryService {
 
   Future<void> _write(
       void Function(List<MusicLibraryEntry>, Set<String>) update,
-      {bool Function()? shouldWrite}) {
+      {bool Function()? shouldWrite,
+      String? replacedSongId}) {
     return _enqueueWrite(() async {
       final data = _read();
       final entries = _entries(data);
@@ -338,6 +423,9 @@ class MusicLibraryService {
       }
       await _database
           .saveSetting(SettingsValue(musicLibrarySettingName, value));
+      if (replacedSongId != null) {
+        _changes.songMetadataRefreshes.remove(replacedSongId);
+      }
       _changes.changed();
     });
   }

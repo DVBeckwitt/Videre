@@ -16,9 +16,12 @@ import 'package:clipious/home/models/phone_navigation.dart';
 import 'package:clipious/l10n/app_languages.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app;
+import 'package:clipious/music/models/device_music_artwork_preferences.dart';
+import 'package:clipious/music/models/music_background_playback.dart';
 import 'package:clipious/music/models/music_cover_corners.dart';
 import 'package:clipious/music/models/music_download_order.dart';
 import 'package:clipious/music/models/music_mini_player_preferences.dart';
+import 'package:clipious/music/models/music_song_row_swipe_action.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/music_community_cover_preferences.dart';
 import 'package:clipious/music/services/music_lyrics_preferences.dart';
@@ -120,6 +123,81 @@ Future<void> main() async {
     expect(
         SettingsState.init().songTransitionMode, SongTransitionMode.seamless);
     expect(SettingsState.init().songTransitionSeconds, 3);
+  });
+
+  test('Music interruption choices persist per profile and in backups',
+      () async {
+    final other = await db.createProfile('Other listener');
+    (bool, bool, bool, bool) choices(SettingsState state) => (
+          state.musicResumeAfterAudioFocusLoss,
+          state.musicPauseAtZeroVolume,
+          state.musicAutoReconnect,
+          state.musicSkipAfterRetryExhaustion,
+        );
+    const defaults = (true, false, true, false);
+    const changed = (false, true, false, true);
+    expect(choices(settingsCubit.state), defaults);
+
+    await settingsCubit.setMusicResumeAfterAudioFocusLoss(false);
+    await settingsCubit.setMusicPauseAtZeroVolume(true);
+    await settingsCubit.setMusicAutoReconnect(false);
+    await settingsCubit.setMusicSkipAfterRetryExhaustion(true);
+    expect(choices(settingsCubit.state), changed);
+    expect(choices(SettingsState.init()), changed);
+
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+    await db.useProfile(other.id);
+    expect(choices(SettingsState.init()), defaults);
+    await db.restoreBackup(backup, replace: true);
+    expect(choices(SettingsState.init()), changed);
+
+    for (final key in [
+      musicResumeAfterAudioFocusLossSettingName,
+      musicPauseAtZeroVolumeSettingName,
+      musicAutoReconnectSettingName,
+      musicSkipAfterRetryExhaustionSettingName,
+    ]) {
+      final oldValue = SettingsValue(key, 'unsupported');
+      expect(UserBackup.validSetting(oldValue), isFalse);
+      await db.saveSetting(oldValue);
+    }
+    expect(choices(SettingsState.init()), defaults);
+  });
+
+  test('Music background playback choices persist per profile and in backups',
+      () async {
+    void expectDefaults(SettingsState state) {
+      expect(state.musicTaskRemoval, MusicTaskRemoval.stop);
+      expect(state.musicAudioOffload, MusicAudioOffload.disabled);
+    }
+
+    void expectSelected(SettingsState state) {
+      expect(state.musicTaskRemoval, MusicTaskRemoval.keepPlaying);
+      expect(state.musicAudioOffload, MusicAudioOffload.whenSupported);
+    }
+
+    expectDefaults(settingsCubit.state);
+    final other = await db.createProfile('Other listener');
+    await settingsCubit.setMusicTaskRemoval(MusicTaskRemoval.keepPlaying);
+    await settingsCubit.setMusicAudioOffload(MusicAudioOffload.whenSupported);
+    expectSelected(settingsCubit.state);
+    expectSelected(SettingsState.init());
+
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+    await db.useProfile(other.id);
+    expectDefaults(SettingsState.init());
+    await db.restoreBackup(backup, replace: true);
+    expectSelected(SettingsState.init());
+
+    for (final name in [
+      musicTaskRemovalSettingName,
+      musicAudioOffloadSettingName,
+    ]) {
+      final invalid = SettingsValue(name, 'unknown');
+      expect(UserBackup.validSetting(invalid), isFalse);
+      await db.saveSetting(invalid);
+    }
+    expectDefaults(SettingsState.init());
   });
 
   test('the palette preserves legacy dynamic colors and saves each choice',
@@ -670,6 +748,36 @@ Future<void> main() async {
         'true');
   });
 
+  test('song-row swipe choices default off and round-trip by profile',
+      () async {
+    const next = MusicSongRowSwipeAction.playNext;
+    const append = MusicSongRowSwipeAction.addToQueue;
+    const off = MusicSongRowSwipeAction.off;
+    expect(settingsCubit.state.musicSongSwipeTowardEnd, off);
+    expect(settingsCubit.state.musicSongSwipeTowardStart, off);
+    await settingsCubit.setMusicSongSwipeTowardEnd(next);
+    await settingsCubit.setMusicSongSwipeTowardStart(append);
+    final backup = UserBackup.parse((await db.exportBackup()).encode());
+
+    final other = await db.createProfile('Other');
+    await db.useProfile(other.id);
+    appCubit.advanceSession();
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicSongSwipeTowardEnd, off);
+    expect(settingsCubit.state.musicSongSwipeTowardStart, off);
+    await db.restoreBackup(backup, replace: false);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicSongSwipeTowardEnd, next);
+    expect(settingsCubit.state.musicSongSwipeTowardStart, append);
+
+    final malformed = SettingsValue(musicSongSwipeTowardEndSettingName, 'true');
+    expect(UserBackup.validSetting(malformed), isFalse);
+    await db.saveSetting(malformed);
+    await settingsCubit.reloadForProfile();
+    expect(settingsCubit.state.musicSongSwipeTowardEnd, off);
+    expect(settingsCubit.state.musicSongSwipeTowardStart, append);
+  });
+
   test('mini-player settings follow the profile and round-trip through backup',
       () async {
     final original = db.forProfile(db.profileId);
@@ -1196,6 +1304,64 @@ Future<void> main() async {
       expect(MusicCoverCorners.forDatabase(db), MusicCoverCorners.square);
       expect(find.descendant(of: setting, matching: find.text('Square')),
           findsOneWidget);
+    });
+
+    testWidgets('$name chooses device artwork source, quality and fit',
+        (tester) async {
+      app.isTv = name == 'TV';
+      await showSettings(tester, 'device-music-artwork-source-setting');
+      for (final (choice, title, initial, option, selected) in const [
+        (
+          'source',
+          'Device artwork source',
+          'Prefer folder artwork',
+          'embeddedOnly',
+          'Embedded artwork only',
+        ),
+        (
+          'quality',
+          'Folder artwork quality',
+          'Balanced',
+          'high',
+          'High',
+        ),
+        (
+          'crop',
+          'Device artwork fit',
+          'Fill and crop',
+          'fit',
+          'Fit whole image',
+        ),
+      ]) {
+        final key = 'device-music-artwork-$choice';
+        final tile = find.byKey(ValueKey('$key-setting'));
+        final target = find.byKey(ValueKey('$key-$option'));
+        await tester.ensureVisible(tile);
+        await tester.pumpAndSettle();
+        expect(find.descendant(of: tile, matching: find.text(initial)),
+            findsOneWidget);
+        if (name == 'TV') {
+          Focus.of(tester.element(find.text(title))).requestFocus();
+          await tester.pumpAndSettle();
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+          await tester.pumpAndSettle();
+          expect(target, findsOneWidget);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+          await tester.pumpAndSettle();
+          await tester.sendKeyEvent(LogicalKeyboardKey.select);
+        } else {
+          await tester.tap(tile);
+          await tester.pumpAndSettle();
+          await tester.tap(target);
+        }
+        await tester.pumpAndSettle();
+        expect(find.descendant(of: tile, matching: find.text(selected)),
+            findsOneWidget);
+      }
+      final result = DeviceMusicArtworkPreferences.forDatabase(db);
+      expect(result.source, DeviceMusicArtworkSource.embeddedOnly);
+      expect(result.quality, DeviceMusicArtworkQuality.high);
+      expect(result.crop, DeviceMusicArtworkCrop.fit);
     });
 
     testWidgets('$name selects and cancels the YT Music download format',

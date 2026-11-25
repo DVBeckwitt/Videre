@@ -247,6 +247,8 @@ class VidereProxyPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     result.success(null)
                 }
                 "playbackCacheStatus" -> result.success(PlaybackMediaCache.status())
+                "cachedMusicSongs" -> result.success(PlaybackMediaCache.cachedMusicSongs(
+                    call.arguments as? Map<*, *> ?: throw IllegalArgumentException()))
                 "configurePlaybackCache" -> {
                     PlaybackMediaCache.configure(call.arguments as? Map<*, *> ?: throw IllegalArgumentException())
                     result.success(PlaybackMediaCache.status())

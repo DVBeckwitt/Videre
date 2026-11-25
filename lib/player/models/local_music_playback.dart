@@ -1,4 +1,5 @@
 import '../../downloads/models/downloaded_video.dart';
+import '../../music/models/device_playlist_track.dart';
 import '../../music/models/local_music_track.dart';
 import '../../music/services/local_music_library.dart';
 import '../../videos/models/music_metadata.dart';
@@ -14,23 +15,42 @@ String localMusicTrackId(String occurrenceId) {
   return separator < 0 ? occurrenceId : occurrenceId.substring(0, separator);
 }
 
-LocalMusicTrack? localMusicTrackForPlayback(String? id) =>
-    id != null && isLocalMusicPlaybackId(id)
-        ? LocalMusicLibrary.instance.trackById(localMusicTrackId(id))
-        : null;
+LocalMusicTrack? localMusicTrackForPlayback(String? id) {
+  if (id == null || !isLocalMusicPlaybackId(id)) return null;
+  final trackId = localMusicTrackId(id);
+  final library = LocalMusicLibrary.instance;
+  return devicePlaylistFileProof(trackId) != null
+      ? library.playlistTrackById(trackId)
+      : library.trackById(trackId);
+}
+
+Duration? localMusicCueDuration(LocalMusicTrack? track) {
+  if (track == null || !track.isCueTrack) return null;
+  final end = track.cueEndUs;
+  return end == null
+      ? track.durationMs > 0
+          ? Duration(milliseconds: track.durationMs)
+          : null
+      : Duration(microseconds: end - track.cueStartUs!);
+}
 
 /// Queue/display adapter only. It never enters the downloads database.
 DownloadedVideo localMusicPlaybackEntry(LocalMusicTrack track, String profileId,
-        {String? occurrenceId}) =>
-    DownloadedVideo(
-      videoId: occurrenceId ?? track.playbackId,
-      title: track.title,
-      author: track.artist,
-      profileId: profileId,
-      musicMetadata: MusicMetadata(
-          title: track.title, artist: track.artist ?? '', album: track.album),
-      lengthSeconds: Duration(milliseconds: track.durationMs).inSeconds,
-      audioOnly: true,
-      storageUri: track.uri,
-      quality: '',
-    );
+    {String? occurrenceId}) {
+  final cueDuration = localMusicCueDuration(track);
+  return DownloadedVideo(
+    videoId: occurrenceId ?? track.playbackId,
+    title: track.title,
+    author: track.artist,
+    profileId: profileId,
+    musicMetadata: MusicMetadata(
+        title: track.title, artist: track.artist ?? '', album: track.album),
+    lengthSeconds: cueDuration == null
+        ? Duration(milliseconds: track.durationMs).inSeconds
+        : (cueDuration.inMicroseconds + Duration.microsecondsPerSecond - 1) ~/
+            Duration.microsecondsPerSecond,
+    audioOnly: true,
+    storageUri: track.uri,
+    quality: '',
+  );
+}

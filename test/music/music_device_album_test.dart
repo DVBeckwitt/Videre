@@ -34,7 +34,7 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playLocalMusic(List<LocalMusicTrack> tracks,
-      {int startIndex = 0, String? queueTitle}) async {
+      {int startIndex = 0, String? queueTitle, bool songTap = false}) async {
     queue = tracks;
     start = startIndex;
     source = queueTitle;

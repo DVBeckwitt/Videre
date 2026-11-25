@@ -1,4 +1,5 @@
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:flutter/material.dart';
 
@@ -14,6 +15,7 @@ class MusicSongSelectionBar extends StatelessWidget {
     required this.closeFocus,
     required this.isCurrent,
     required this.onPlay,
+    this.recommendationSource,
     this.selectedCount,
     this.resolveDownloads,
     this.onRemoveDownloads,
@@ -26,6 +28,7 @@ class MusicSongSelectionBar extends StatelessWidget {
   final FocusNode closeFocus;
   final bool Function() isCurrent;
   final Future<void> Function(List<Video> tracks) onPlay;
+  final PlaylistReference? recommendationSource;
   final int? selectedCount;
   final MusicSelectionDownloadResolver? resolveDownloads;
   final Future<void> Function()? onRemoveDownloads;
@@ -53,6 +56,7 @@ class MusicSongSelectionBar extends StatelessWidget {
       ),
       MusicPlaylistSelectionActions(
         videos: selected,
+        recommendationSource: recommendationSource,
         selectedCount: selectedCount,
         resolveDownloads: resolveDownloads,
         onRemoveDownloads: onRemoveDownloads,

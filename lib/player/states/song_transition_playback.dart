@@ -14,28 +14,40 @@ class _SongTransitionPlayback {
   bool _intro = false;
   bool _ducked = false;
   bool muted = false;
+  bool primaryIsMusic = false;
   double _primaryGain = 1;
   double _secondaryGain = 0;
   double? _overlapSpanMs;
 
-  double get startVolume => muted ? 0 : _primaryGain;
+  double get startVolume => _volumeAt(_primaryGain, music: primaryIsMusic);
   SongTransitionMode get _mode => owner.settings.state.songTransitionMode;
 
-  void _gain(AudioPlayer? decoder, double factor) {
+  double _volumeAt(double gain, {required bool music}) =>
+      muted ? 0 : gain * (music ? owner.settings.state.musicPlaybackVolume : 1);
+
+  void _gain(AudioPlayer? decoder, double factor, {bool music = true}) {
     if (decoder == null) return;
-    final volume = muted ? 0.0 : factor.clamp(0.0, 1.0).toDouble();
-    if ((decoder.volume - volume).abs() < 0.001) return;
+    final volume = _volumeAt(factor, music: music);
+    if (decoder.volume == volume ||
+        (volume != 0 && (decoder.volume - volume).abs() < 0.001)) {
+      return;
+    }
     unawaited(decoder.setVolume(volume).catchError((Object _) {
       // A closed decoder can no longer contribute to the mix.
     }));
   }
 
-  void applyStartVolume() => _gain(owner.audioPlayer, _primaryGain);
+  void applyStartVolume() =>
+      _gain(owner.audioPlayer, _primaryGain, music: primaryIsMusic);
+
+  void refreshVolume() {
+    applyStartVolume();
+    _gain(incoming?.decoder, _secondaryGain);
+  }
 
   void setMuted(bool value) {
     muted = value;
-    applyStartVolume();
-    _gain(incoming?.decoder, _secondaryGain);
+    refreshVolume();
   }
 
   void _watch() {
@@ -109,7 +121,21 @@ class _SongTransitionPlayback {
         owner._stage(slot.entry);
       }
     }
-    if (!event.begin && muted) applyStartVolume();
+    if (!event.begin && event.type == AudioInterruptionType.duck) {
+      final decoder = owner.audioPlayer;
+      // just_audio changes its volume on the same event. Restore our gain
+      // after all listeners have handled the focus gain.
+      scheduleMicrotask(() {
+        if (!owner.isClosed &&
+            owner._ownsParentPlayback &&
+            !_ducked &&
+            identical(decoder, owner.audioPlayer)) {
+          applyStartVolume();
+        }
+      });
+    } else if (!event.begin && muted) {
+      applyStartVolume();
+    }
   }
 
   void suspend() {
@@ -283,7 +309,7 @@ class _SongTransitionPlayback {
     try {
       // A manual reservation or an earlier audible overlap may have owned
       // this decoder while the user changed the streaming default.
-      if (entry is Video && entry.explicitMusicDownload == null) {
+      if (entry is Video && !owner._requiresLocalSource(entry)) {
         owner._refreshStandbyQuality(
             slot, MusicStreamingQuality.forDatabase(db));
       }
@@ -302,6 +328,8 @@ class _SongTransitionPlayback {
           decoder.playbackEvent.errorCode != null) {
         return;
       }
+      await owner._setMusicGain(decoder, active.sources.first);
+      if (!current()) return;
       final tuning = owner.player.playbackTuningFor(entry, preview: true);
       final pitch = pitchFactorForSemitones(tuning.pitch);
       if (decoder.speed != tuning.speed) await decoder.setSpeed(tuning.speed);

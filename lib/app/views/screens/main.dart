@@ -1,5 +1,11 @@
+import 'dart:async';
+
+import 'package:audio_service/audio_service.dart';
+import 'package:clipious/music/services/music_media_save.dart';
+import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/utils/motion.dart';
 import 'package:auto_route/auto_route.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -9,6 +15,7 @@ import 'package:clipious/player/views/components/player.dart';
 import 'package:clipious/podcasts/views/podcast_player_controls.dart';
 
 import '../../../player/states/player.dart';
+import '../../../settings/states/settings.dart';
 import '../../../music/views/components/music_selection_feedback.dart';
 import '../../../player/views/components/mini_player_aware.dart';
 import '../../../utils.dart';
@@ -24,9 +31,54 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   final _musicDock = MiniPlayerDockController();
+  MusicMediaSave? _mediaSave;
+  AppLifecycleListener? _mediaSaveLifecycle;
+  StreamSubscription<bool>? _mediaCardTaps;
+
+  @override
+  void initState() {
+    super.initState();
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    final mediaSave = _mediaSave = context.read<PlayerCubit>().musicMediaSave;
+    mediaSave.addListener(_scheduleMediaSave);
+    _mediaSaveLifecycle = AppLifecycleListener(onResume: _scheduleMediaSave);
+    _mediaCardTaps = AudioService.notificationClicked.skip(1).listen((clicked) {
+      if (clicked) mediaSave.open();
+    });
+    _scheduleMediaSave();
+  }
+
+  void _scheduleMediaSave() {
+    final binding = WidgetsBinding.instance;
+    if (_mediaSave?.hasReadyRequest != true ||
+        binding.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
+    binding.addPostFrameCallback((_) {
+      if (mounted && binding.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(_showMediaSave());
+      }
+    });
+    binding.ensureVisualUpdate();
+  }
+
+  Future<void> _showMediaSave() async {
+    final mediaSave = _mediaSave;
+    final request = mediaSave?.take();
+    if (mediaSave == null || request == null) return;
+    try {
+      await MusicLibraryActions.savePlaybackEntry(context, request.entry,
+          deviceTrack: request.deviceTrack, isCurrent: request.isCurrent);
+    } finally {
+      mediaSave.finish();
+    }
+  }
 
   @override
   void dispose() {
+    _mediaSave?.removeListener(_scheduleMediaSave);
+    _mediaSaveLifecycle?.dispose();
+    unawaited(_mediaCardTaps?.cancel());
     _musicDock.dispose();
     super.dispose();
   }
@@ -47,6 +99,8 @@ class _MainScreenState extends State<MainScreen> {
       var colors = Theme.of(context).colorScheme;
       final podcasts = context.read<PlayerCubit>().podcasts;
       final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+      final slimMusicNavigation = context.select((SettingsCubit? cubit) =>
+          cubit?.state.musicLayout.slimNavigation ?? false);
       // Routed pages sit inside MiniPlayerAware's SafeArea. Their AppBars do
       // not cover the status inset, so give that inset a theme-owned fallback
       // when the expanded Music AppBar (with light icons) leaves the viewport.
@@ -67,10 +121,11 @@ class _MainScreenState extends State<MainScreen> {
                         MediaQuery.paddingOf(context).top -
                         keyboardInset <
                     kToolbarHeight + targetHeight + 84;
+            final compact = usesCompactMusicNavigation(context);
             final navigationInset = docked && keyboardInset == 0
-                ? 2 *
+                ? phoneNavigationHeight(context, compact: compact) +
                     phoneNavigationHeight(context,
-                        compact: usesCompactMusicNavigation(context))
+                        compact: compact || slimMusicNavigation)
                 : 0.0;
             return MiniPlayerDock(
               controller: _musicDock,

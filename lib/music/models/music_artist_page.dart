@@ -7,6 +7,7 @@ class MusicArtistPage {
   final MusicArtist artist;
   final String? description;
   final List<MusicTrack> songs;
+  final bool loadsUploadsSeparately;
   final List<MusicAlbum> albums;
   final List<MusicAlbum> singles;
 
@@ -14,6 +15,7 @@ class MusicArtistPage {
     required this.artist,
     this.description,
     this.songs = const [],
+    this.loadsUploadsSeparately = false,
     this.albums = const [],
     this.singles = const [],
   });

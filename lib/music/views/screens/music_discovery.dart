@@ -15,12 +15,14 @@ import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
+import 'package:clipious/music/services/music_starter_artists.dart';
 import 'package:clipious/music/views/components/music_catalog_cards.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_chart_picker.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/music_recommendation_collection.dart';
 import 'package:clipious/music/views/components/music_recommendation_shelves.dart';
+import 'package:clipious/music/views/components/music_starter_artists.dart';
 import 'package:clipious/music/views/components/music_track_results.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/network/socks_proxy.dart';
@@ -97,6 +99,7 @@ class _MusicHomePageState extends State<MusicHomePage> {
                             if (canDiscover()) _showDiscovery();
                           },
                   ),
+                  const MusicStarterArtistsSection(),
                   const MusicRecommendationShelves(),
                   _SavedSongs(onLibrary: widget.onLibrary),
                   freshShelves,
@@ -139,10 +142,12 @@ class _MusicHomeShortcuts extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final layout = context.select((SettingsCubit? settings) =>
+        settings?.state.musicLayout ?? const MusicLayout.defaults());
+    if (!layout.showHomeShortcuts) return const SizedBox.shrink();
+
     final colors = Theme.of(context).colorScheme;
     final locals = AppLocalizations.of(context)!;
-    final order = context.select((SettingsCubit? settings) =>
-        settings?.state.musicLayout.shortcuts ?? MusicShortcut.values);
     final actions = <MusicShortcut, VoidCallback>{
       if (onSearch case final search?) MusicShortcut.search: search,
       MusicShortcut.library: onLibrary,
@@ -150,7 +155,7 @@ class _MusicHomeShortcuts extends StatelessWidget {
       if (onDiscover case final discover?) MusicShortcut.discover: discover,
       MusicShortcut.recommendations: () => showRecommendationSettings(context),
     };
-    final shortcuts = order.where(actions.containsKey);
+    final shortcuts = layout.shortcuts.where(actions.containsKey);
     if (shortcuts.isEmpty) return const SizedBox.shrink();
     final style = TextButton.styleFrom(
       backgroundColor: colors.surfaceContainerHigh,
@@ -271,15 +276,20 @@ class _SavedSongRows extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final (compact, titleLines) = context.select((SettingsCubit? settings) {
+      final layout = settings?.state.musicLayout;
+      return (layout?.compactRows ?? false, layout?.titleLines(1) ?? 1);
+    });
     final textTheme = Theme.of(context).textTheme;
     final scaler = MediaQuery.textScalerOf(context);
     final title = textTheme.titleSmall!;
     final subtitle = textTheme.bodySmall!;
     final rowHeight = math.max(
-        64.0,
-        20 +
-            (scaler.scale(title.fontSize!) * (title.height ?? 1.3))
-                .ceilToDouble() +
+        compact ? 56.0 : 64.0,
+        (compact ? 16 : 20) +
+            titleLines *
+                (scaler.scale(title.fontSize!) * (title.height ?? 1.3))
+                    .ceilToDouble() +
             (scaler.scale(subtitle.fontSize!) * (subtitle.height ?? 1.3))
                 .ceilToDouble());
     final rows = math.min(4, songs.length);
@@ -305,6 +315,8 @@ class _SavedSongRows extends StatelessWidget {
                     child: _SavedSongRow(
                       key: ValueKey('music-home-saved-${song.id}'),
                       song: song,
+                      compact: compact,
+                      titleLines: titleLines,
                       onOpen: () => onOpen(song),
                     ),
                   ),
@@ -319,9 +331,17 @@ class _SavedSongRows extends StatelessWidget {
 
 class _SavedSongRow extends StatelessWidget {
   final MusicLibraryEntry song;
+  final bool compact;
+  final int titleLines;
   final Future<void> Function() onOpen;
 
-  const _SavedSongRow({super.key, required this.song, required this.onOpen});
+  const _SavedSongRow({
+    super.key,
+    required this.song,
+    required this.compact,
+    required this.titleLines,
+    required this.onOpen,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -341,12 +361,13 @@ class _SavedSongRow extends StatelessWidget {
           if (focused) Scrollable.ensureVisible(context, alignment: 0.5);
         },
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+          padding:
+              EdgeInsets.symmetric(vertical: compact ? 4 : 6, horizontal: 2),
           child: Row(
             children: [
               ExcludeSemantics(
                 child: SizedBox.square(
-                  dimension: 48,
+                  dimension: compact ? 40 : 48,
                   child: CommunityMusicArtwork(
                       videoId: song.id,
                       music: song.toVideo().musicMetadata!,
@@ -375,7 +396,7 @@ class _SavedSongRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(song.displayTitle,
-                        maxLines: 1,
+                        maxLines: titleLines,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleSmall
                             ?.copyWith(fontWeight: FontWeight.w600)),
@@ -725,6 +746,9 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
         ? RecommendationService.forProfile(
             session.database, session.app.profileId)
         : null;
+    final starterArtists = session.eligible
+        ? MusicStarterArtists(session.database, session.app.profileId)
+        : null;
     return RefreshIndicator(
       key: const ValueKey('music-home-pull-refresh'),
       notificationPredicate: (notification) =>
@@ -734,19 +758,41 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
         listenable: Listenable.merge([
           communityFilters.changes,
           library?.changes,
-          recommendations?.changes
+          recommendations?.changes,
+          starterArtists?.changes,
         ]),
         builder: (context, _) => library == null || recommendations == null
             ? widget.builder(
                 null, const SizedBox.shrink(), const SizedBox.shrink())
-            : _buildSelection(context, session, library, recommendations),
+            : _buildSelection(context, session, library, recommendations,
+                starterArtists?.picks ?? const []),
       ),
     );
   }
 
-  Widget _buildSelection(BuildContext context, _DiscoverySession session,
-      MusicLibraryService library, RecommendationService recommendations) {
+  Widget _buildSelection(
+      BuildContext context,
+      _DiscoverySession session,
+      MusicLibraryService library,
+      RecommendationService recommendations,
+      List<String> starterArtists) {
     final seeds = <String?>[null, ..._savedArtistNames(library)];
+    final starterKeys =
+        starterArtists.map(MusicStarterArtists.artistKey).toSet();
+    Iterable<MusicTrack> ordered(String? seed, Iterable<MusicTrack> tracks) {
+      if (seed != null || starterKeys.isEmpty) return tracks;
+      final matching = <MusicTrack>[];
+      final remaining = <MusicTrack>[];
+      for (final track in tracks) {
+        if (MusicStarterArtists.matches(track, starterKeys)) {
+          matching.add(track);
+        } else {
+          remaining.add(track);
+        }
+      }
+      return [...matching, ...remaining];
+    }
+
     final savedSongs = {
       for (final entry in library.entries)
         if (entry.kind == MusicLibraryKind.song) entry.id,
@@ -773,7 +819,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
           seed: musicTrackResults(
               recommendations.eligibleMusic(
                   seed == null
-                      ? batch.songs
+                      ? ordered(seed, batch.songs)
                       : batch.songs
                           .where((song) => !savedSongs.contains(song.videoId)),
                   includeCommunityHidden: true),
@@ -797,7 +843,7 @@ class _DiscoverySongsState extends State<_DiscoverySongs>
     List<MusicTrack> playable(String? seed, Iterable<MusicTrack> tracks) =>
         recommendations.eligibleMusic(
             seed == null
-                ? tracks
+                ? ordered(seed, tracks)
                 : tracks.where((song) =>
                     !library.contains(MusicLibraryKind.song, song.videoId)),
             includeCommunityHidden: _showCommunityHidden);

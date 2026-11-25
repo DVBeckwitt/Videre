@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import 'replay_gain.dart';
+
 /// One exact folder or verified ancestor in the authorized device source.
 class LocalMusicFolderLocation {
   final String key;
@@ -31,6 +33,8 @@ class LocalMusicTrack {
   final String? artistSort;
   final String? albumSort;
   final String? albumArtistSort;
+  final String? genre;
+  final ReplayGain? replayGain;
 
   /// Identifies an album grouping only within the authorized device catalog.
   final String? albumKey;
@@ -42,8 +46,19 @@ class LocalMusicTrack {
   final String? originalReleaseDate;
   final int durationMs;
   final int? sizeBytes;
+
+  /// Absolute offset into the backing document of a virtual CUE track.
+  final int? cueStartUs;
+
+  /// Absolute end of the CUE track. The final track may play to EOF.
+  final int? cueEndUs;
+
   final String? artPath;
+
+  /// Private cached image from the same permitted folder as this track.
+  final String? adjacentArtPath;
   final String? fileName;
+  final int? sizeBytes;
   final DateTime? dateAdded;
   final DateTime? dateModified;
   final bool firstSeen;
@@ -71,6 +86,8 @@ class LocalMusicTrack {
     this.artistSort,
     this.albumSort,
     this.albumArtistSort,
+    this.genre,
+    this.replayGain,
     this.albumKey,
     this.discNumber,
     this.trackNumber,
@@ -78,8 +95,12 @@ class LocalMusicTrack {
     this.originalReleaseDate,
     this.durationMs = 0,
     this.sizeBytes,
+    this.cueStartUs,
+    this.cueEndUs,
     this.artPath,
+    this.adjacentArtPath,
     this.fileName,
+    this.sizeBytes,
     this.dateAdded,
     this.dateModified,
     this.firstSeen = false,
@@ -95,6 +116,8 @@ class LocalMusicTrack {
 
   String get playbackId =>
       'device:${_identityKey ?? sha256.convert(utf8.encode(_identityUri ?? uri))}';
+
+  bool get isCueTrack => cueStartUs != null;
 
   static LocalMusicTrack? fromDocument(dynamic value, Uri source) {
     if (value is! Map) return null;
@@ -112,17 +135,31 @@ class LocalMusicTrack {
         (identityKey is! String || !_identityPattern.hasMatch(identityKey))) {
       return null;
     }
+    final cueStart = value['cueStartUs'];
+    final cueEnd = value['cueEndUs'];
+    if (cueStart != null || cueEnd != null) {
+      if (source == systemSource ||
+          identityKey == null ||
+          cueStart is! int ||
+          cueStart < 0 ||
+          (cueEnd != null && (cueEnd is! int || cueEnd <= cueStart))) {
+        return null;
+      }
+    }
     final duration = value['durationMs'];
     final size = value['sizeBytes'];
     final art = value['artPath'];
+    final adjacentArt = value['adjacentArtPath'];
     final name = value['fileName'];
+    final size = value['sizeBytes'];
     final albumKey = value['albumKey'];
+    final genre = value['genre'];
     final visibilityKey = value['visibilityKey'];
     final validVisibilityKey =
         visibilityKey is String && _identityPattern.hasMatch(visibilityKey)
             ? visibilityKey
             : null;
-    final documentIdentity = source == systemSource
+    final documentIdentity = source == systemSource || cueStart != null
         ? null
         : (source.authority, Uri.parse(uri).pathSegments.last);
     return LocalMusicTrack(
@@ -139,6 +176,12 @@ class LocalMusicTrack {
       artistSort: _sortTag(value['artistSort']),
       albumSort: _sortTag(value['albumSort']),
       albumArtistSort: _sortTag(value['albumArtistSort']),
+      genre: genre is String &&
+              genre.trim().isNotEmpty &&
+              genre.trim().toLowerCase() != '<unknown>'
+          ? genre.trim()
+          : null,
+      replayGain: _parseReplayGain(value['replayGain']),
       albumKey: albumKey is String && _identityPattern.hasMatch(albumKey)
           ? albumKey
           : null,
@@ -147,13 +190,21 @@ class LocalMusicTrack {
       releaseDate: _releaseDate(value['releaseDate']),
       originalReleaseDate: _releaseDate(value['originalReleaseDate']),
       durationMs: duration is int && duration > 0 ? duration : 0,
-      sizeBytes: size is int && size >= 0 ? size : null,
+      sizeBytes: cueStart == null && size is int && size >= 0 ? size : null,
+      cueStartUs: cueStart as int?,
+      cueEndUs: cueEnd as int?,
       artPath: art is String && art.startsWith('/') ? art : null,
+      adjacentArtPath: adjacentArt is String &&
+              adjacentArt.startsWith('/') &&
+              !adjacentArt.startsWith('//')
+          ? adjacentArt
+          : null,
       fileName: name is String && name.isNotEmpty ? name : null,
+      sizeBytes: size is int && size > 0 ? size : null,
       dateAdded: _date(value['addedMs']),
       dateModified: _date(value['modifiedMs']),
       firstSeen: value['firstSeen'] == true,
-      canRename: value['canRename'] == true,
+      canRename: cueStart == null && value['canRename'] == true,
       isRecording: source == systemSource && value['isRecording'] == true,
       folderLocations: _parseFolderLocations(value['folderLocations']),
       visibilityKey: validVisibilityKey,
@@ -191,6 +242,31 @@ class LocalMusicTrack {
       '$modified',
       '$size',
     ]);
+  }
+
+  static ReplayGain? _parseReplayGain(Object? value) {
+    if (value is! Map) return null;
+    double? number(Object? field, {bool peak = false}) {
+      if (field is! num || !field.isFinite || (peak && field <= 0)) return null;
+      return field.toDouble();
+    }
+
+    final trackGain = number(value['trackGainDb']);
+    final albumGain = number(value['albumGainDb']);
+    final trackPeak = number(value['trackPeak'], peak: true);
+    final albumPeak = number(value['albumPeak'], peak: true);
+    if (trackGain == null &&
+        albumGain == null &&
+        trackPeak == null &&
+        albumPeak == null) {
+      return null;
+    }
+    return ReplayGain(
+      trackGainDb: trackGain,
+      albumGainDb: albumGain,
+      trackPeak: trackPeak,
+      albumPeak: albumPeak,
+    );
   }
 
   static DateTime? _date(Object? value) =>

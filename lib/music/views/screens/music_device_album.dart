@@ -13,8 +13,10 @@ import 'package:clipious/utils/views/tv/components/tv_overscan.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../components/device_music_artwork.dart';
 import '../components/music_collection_panes.dart';
 import '../components/music_fast_scroll.dart';
+import '../components/music_screen_privacy.dart';
 import 'music.dart';
 import 'music_device_artist.dart';
 
@@ -136,7 +138,7 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
     if (index < 0) return;
     try {
       await MusicScreen.playLocalTracks(context, tracks,
-          startIndex: index, queueTitle: album.title);
+          startIndex: index, queueTitle: album.title, songTap: id != null);
     } catch (_) {
       if (mounted && _album != null) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -146,7 +148,10 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MusicScreenPrivacySurface(child: _buildAlbum(context));
+
+  Widget _buildAlbum(BuildContext context) {
     context.watch<AppCubit>();
     final locals = AppLocalizations.of(context)!;
     return ListenableBuilder(
@@ -193,6 +198,19 @@ class _MusicDeviceAlbumPageState extends State<MusicDeviceAlbumPage> {
                     spacing: 12,
                     runSpacing: 4,
                     children: [
+                      if (tracks.any((track) =>
+                          track.artPath != null ||
+                          track.adjacentArtPath != null))
+                        SizedBox.square(
+                          dimension: 96,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: DeviceMusicArtwork.album(
+                              tracks: tracks,
+                              placeholder: const Icon(Icons.album_outlined),
+                            ),
+                          ),
+                        ),
                       if (artist != null ||
                           releaseDate != null ||
                           originalReleaseDate != null)

@@ -4,9 +4,12 @@ import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/l10n/generated/app_localizations.dart';
+import 'package:clipious/music/models/replay_gain.dart';
+import 'package:clipious/music/services/music_replay_gain_preferences.dart';
 import 'package:clipious/music/services/music_sound_controller.dart';
 import 'package:clipious/music/views/components/music_sound_sheet.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
 import 'package:clipious/videos/models/music_metadata.dart';
@@ -202,6 +205,83 @@ void main() {
     expect(find.byType(SwitchListTile), findsOneWidget);
     expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).onChanged,
         isNull);
+  });
+
+  test(
+    'ReplayGain preferences are profile scoped and sanitize stored values',
+    () async {
+      final firstId = db.profileId;
+      final first = MusicReplayGainPreferences(db.forProfile(firstId));
+      final second = await db.createProfile('Other listener');
+      final secondDb = db.forProfile(second.id);
+      final secondPreferences = MusicReplayGainPreferences(secondDb);
+      await db.useProfile(second.id);
+      try {
+        await first.setMode(ReplayGainMode.album);
+        await first.setPreampDb(-80);
+        await secondDb.saveSetting(
+          SettingsValue(musicReplayGainModeSettingName, 'unknown'),
+        );
+        await secondDb.saveSetting(
+          SettingsValue(musicPreampSettingName, 'NaN'),
+        );
+        expect(first.mode, ReplayGainMode.album);
+        expect(first.preampDb, minimumMusicPreampDb);
+        expect(secondPreferences.mode, ReplayGainMode.off);
+        expect(secondPreferences.preampDb, 0);
+      } finally {
+        await db.useProfile(firstId);
+      }
+    },
+  );
+
+  testWidgets(
+    'ReplayGain and preamp save from the sound sheet when EQ is unavailable',
+    (tester) async {
+      backend.failRead = true;
+      final preferences = MusicReplayGainPreferences(
+        db.forProfile(db.profileId),
+      );
+      await show(tester, fullSheet: true, width: 320, scale: 2.5);
+      final off = find.byKey(const ValueKey('music-replaygain-off'));
+      final album = find.byKey(const ValueKey('music-replaygain-album'));
+      expect(tester.widget<ChoiceChip>(off).selected, isTrue);
+      expect(preferences.preampDb, 0);
+
+      Future<void> save(String key, bool Function() saved) async {
+        final control = find.byKey(ValueKey(key));
+        await tester.ensureVisible(control);
+        await tester.pumpAndSettle();
+        await tester.runAsync(() async {
+          await tester.tap(control);
+          final timeout = Stopwatch()..start();
+          while (!saved() && timeout.elapsed < const Duration(seconds: 2)) {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+          }
+          expect(saved(), isTrue);
+        });
+        await tester.pumpAndSettle();
+      }
+
+      await save('music-replaygain-album',
+          () => preferences.mode == ReplayGainMode.album);
+      expect(tester.widget<ChoiceChip>(album).selected, isTrue);
+
+      await save('music-preamp-increase', () => preferences.preampDb == 1);
+      expect(find.text('+1 dB'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Music volume is adjustable and saved with the profile',
+      (tester) async {
+    await show(tester, fullSheet: true);
+    final slider = find.byKey(const ValueKey('music-playback-volume'));
+    expect(tester.widget<Slider>(slider).value, 1);
+    tester.widget<Slider>(slider).onChanged!(0.35);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Slider>(slider).value, 0.35);
+    expect(SettingsState.init().musicPlaybackVolume, 0.35);
   });
 
   testWidgets('held band drag cannot change a replacement audio session',

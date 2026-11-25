@@ -81,6 +81,8 @@ android {
 
 dependencies {
     implementation 'androidx.media3:media3-extractor:1.4.1'
+    // Keep this in step with the pinned audio_service Android dependency.
+    implementation 'androidx.media:media:1.7.0'
     implementation 'androidx.webkit:webkit:1.12.1'
     testImplementation 'junit:junit:4.13.2'
 }

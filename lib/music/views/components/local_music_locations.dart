@@ -84,6 +84,7 @@ String? localMusicSourceStatus(
   return switch (library.error) {
     'AUDIO_PERMISSION_DENIED' => locals.localMusicAndroidLibraryUnavailable,
     'PICKER_UNAVAILABLE' => locals.localMusicPickerUnavailable,
+    'SCAN_PARTIAL' => locals.localMusicScanPartial,
     'RENAME_FAILED' ||
     'RENAME_CHANGED' ||
     'RENAME_ACCESS' ||

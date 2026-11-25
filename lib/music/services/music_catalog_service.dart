@@ -147,6 +147,15 @@ abstract class MusicCatalogService {
   Future<MusicArtistPage> getArtist(String id) async =>
       throw const MusicCatalogUnsupported();
 
+  /// Loads the channel separately when the adapter can defer its uploads.
+  Future<MusicArtistPage> getArtistOverview(String id) => getArtist(id);
+
+  Future<List<MusicTrack>> getArtistUploads(
+    String id, {
+    bool Function()? isCurrent,
+  }) async =>
+      throw const MusicCatalogUnsupported();
+
   Future<MusicArtistReleases> getArtistReleases(String id,
           {String? continuation, bool Function()? isCurrent}) async =>
       throw const MusicCatalogUnsupported();
@@ -158,4 +167,10 @@ abstract class MusicCatalogService {
 
   Future<MusicCollection> getPlaylist(String id) async =>
       throw const MusicCatalogUnsupported();
+
+  /// Publishes ordered snapshots as validated playlist pages arrive.
+  Future<MusicCollection> getPlaylistProgressively(String id,
+          {required void Function(MusicCollection) onProgress,
+          required bool Function() isCurrent}) =>
+      getPlaylist(id);
 }

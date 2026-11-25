@@ -46,6 +46,10 @@ import 'channels/models/channel.dart';
 import 'channels/models/channel_playlists.dart';
 import 'channels/models/channel_videos.dart';
 import 'comments/models/video_comments.dart';
+import 'music/models/deleted_music_playlist.dart';
+import 'music/services/music_library_service.dart';
+import 'music/services/music_playlist_covers.dart';
+import 'music/models/device_playlist_track.dart';
 import 'notifications/models/db/subscription_notifications.dart';
 import 'network/content_link.dart';
 import 'network/native_proxy_http_client.dart';
@@ -62,6 +66,7 @@ import 'search/models/search_suggestion.dart';
 import 'settings/models/db/server.dart';
 import 'subscription_management/models/subscription.dart';
 import 'videos/models/sponsor_segment_types.dart';
+import 'videos/models/music_metadata.dart';
 import 'videos/services/watch_history.dart';
 import 'utils/interfaces/db.dart';
 import 'utils/sembast_sqflite_database.dart';
@@ -775,6 +780,9 @@ class Service {
       void Function(BackendPlayback request)? onBackendRequest,
       VideoLoadObserver? loadObserver,
       Future<void> Function()? beforeRequest}) async {
+    if (videoId.startsWith('device:')) {
+      throw StateError('Device files have no online playback source');
+    }
     final observer = serverOverride == null ? loadObserver : null;
     final originalDb = db;
     final profileId = originalDb.profileId;
@@ -2881,25 +2889,187 @@ class Service {
   }
 
   Future<void> _updateLocalPlaylists(bool Function(List<Playlist>) update,
-      {IDbClient? database, String? unlockingPlaylistId}) {
-    final owner = database ?? db.forProfile(db.profileId);
-    String? apply(String? stored) {
-      final playlists = _localPlaylistsFromSetting(stored);
-      if (!_applyLocalPlaylistUpdate(playlists, update,
-          unlockingPlaylistId: unlockingPlaylistId)) {
-        return null;
-      }
-      return jsonEncode(playlists.map((p) => p.toJson()).toList());
+          {IDbClient? database, String? unlockingPlaylistId}) =>
+      _updateLocalPlaylistStorage((playlists, _, __) => update(playlists),
+          database: database, unlockingPlaylistId: unlockingPlaylistId);
+
+  Future<void> _updateLocalPlaylistStorage(
+      bool Function(List<Playlist>, List<DeletedMusicPlaylist>, DateTime)
+          update,
+      {IDbClient? database,
+      bool Function()? isCurrent,
+      String? unlockingPlaylistId}) async {
+    final root = db;
+    final owner = database ?? root.forProfile(root.profileId);
+    var recoveryChanged = false;
+    Map<String, String?> apply(String? storedPlaylists, String? storedDeleted) {
+      if (isCurrent?.call() == false) return {};
+      final playlists = _localPlaylistsFromSetting(storedPlaylists);
+      final activeIds =
+          playlists.map((playlist) => playlist.playlistId).toSet();
+      final now = _now().toUtc();
+      final stored = DeletedMusicPlaylist.decode(storedDeleted);
+      final deleted = _retainedMusicPlaylists(stored, activeIds, now);
+      final playlistsChanged = _applyLocalPlaylistUpdate(
+          playlists, (items) => update(items, deleted, now),
+          unlockingPlaylistId: unlockingPlaylistId);
+      recoveryChanged = !listEquals(stored, deleted);
+
+      final purged = {
+        for (final entry in stored)
+          if (!now.isBefore(entry.expiresAt) &&
+              !activeIds.contains(entry.playlist.playlistId))
+            entry.playlist.playlistId,
+        if (playlistsChanged)
+          ...activeIds.difference({
+            for (final playlist in playlists) playlist.playlistId,
+            for (final entry in deleted) entry.playlist.playlistId,
+          }),
+      };
+      return {
+        if (playlistsChanged) localPlaylistsSetting: jsonEncode(playlists),
+        if (recoveryChanged) deletedMusicPlaylistsSetting: jsonEncode(deleted),
+        for (final id in purged.where(MusicPlaylistCovers.supports))
+          MusicPlaylistCovers.settingName(id): null,
+      };
     }
 
-    if (owner is SembastSqfDb) return owner.updateLocalPlaylistSetting(apply);
-    // Other database adapters do not expose transactions.
-    return _localPlaylistWrite =
-        _localPlaylistWrite.catchError((_) {}).then((_) async {
-      final value = apply(owner.getSettings(localPlaylistsSetting)?.value);
-      if (value == null) return;
-      await owner.saveSetting(SettingsValue(localPlaylistsSetting, value));
-    });
+    if (owner is SembastSqfDb) {
+      await owner.updateLocalPlaylistStorage(apply);
+    } else {
+      await (_localPlaylistWrite =
+          _localPlaylistWrite.catchError((_) {}).then((_) async {
+        final values = apply(owner.getSettings(localPlaylistsSetting)?.value,
+            owner.getSettings(deletedMusicPlaylistsSetting)?.value);
+        final saved = <SettingsValue>[];
+        for (final entry in values.entries) {
+          if (entry.value case final value?) {
+            saved.add(SettingsValue(entry.key, value));
+          }
+        }
+        if (saved.length == 1) await owner.saveSetting(saved.single);
+        if (saved.length > 1) await owner.saveSettings(saved);
+        for (final entry in values.entries) {
+          if (entry.value == null && owner.getSettings(entry.key) != null) {
+            await owner.deleteSetting(entry.key);
+          }
+        }
+      }));
+    }
+    if (recoveryChanged) {
+      MusicLibraryService.forProfile(root, owner.profileId).notifyChanged();
+    }
+  }
+
+  List<DeletedMusicPlaylist> _retainedMusicPlaylists(
+      List<DeletedMusicPlaylist> stored, Set<String> activeIds, DateTime now) {
+    if (stored.isEmpty) return [];
+    final retained = <DeletedMusicPlaylist>[];
+    var dropped = 0;
+    for (final entry in stored) {
+      if (!now.isBefore(entry.expiresAt) ||
+          activeIds.contains(entry.playlist.playlistId)) {
+        dropped++;
+      } else {
+        retained.add(dropped == 0
+            ? entry
+            : entry.atPosition(
+                (entry.position - dropped).clamp(0, entry.position)));
+      }
+    }
+    return retained;
+  }
+
+  List<DeletedMusicPlaylist> getRecentlyDeletedMusicPlaylists(
+      {IDbClient? database}) {
+    final owner = database ?? db.forProfile(db.profileId);
+    final deleted = DeletedMusicPlaylist.decode(
+        owner.getSettings(deletedMusicPlaylistsSetting)?.value);
+    if (deleted.isEmpty) return deleted;
+    final activeIds = getLocalPlaylists(database: owner)
+        .map((playlist) => playlist.playlistId)
+        .toSet();
+    return _retainedMusicPlaylists(deleted, activeIds, _now())
+      ..sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
+  }
+
+  bool _isRecoverableMusicPlaylist(Playlist playlist, IDbClient owner) =>
+      playlist.playlistId != localWatchLaterId &&
+      MusicLibraryService.forProfile(owner, owner.profileId)
+          .isMusicPlaylist(playlist);
+
+  bool canRecoverMusicPlaylist(String playlistId, {IDbClient? database}) {
+    if (!playlistId.startsWith('local:') || playlistId == localWatchLaterId) {
+      return false;
+    }
+    final owner = database ?? db.forProfile(db.profileId);
+    return getLocalPlaylists(database: owner).any((playlist) =>
+        playlist.playlistId == playlistId &&
+        _isRecoverableMusicPlaylist(playlist, owner));
+  }
+
+  Future<bool> deleteMusicPlaylist(String playlistId,
+          {required bool Function() isCurrent}) =>
+      _deleteLocalPlaylist(playlistId,
+          database: db.forProfile(db.profileId),
+          requireMusic: true,
+          isCurrent: isCurrent);
+
+  Future<bool> _deleteLocalPlaylist(String playlistId,
+      {required IDbClient database,
+      bool requireMusic = false,
+      bool Function()? isCurrent}) async {
+    if (!playlistId.startsWith('local:') || playlistId == localWatchLaterId) {
+      return false;
+    }
+    var removed = false;
+    await _updateLocalPlaylistStorage((playlists, deleted, now) {
+      final index = playlists.indexWhere((p) => p.playlistId == playlistId);
+      if (index < 0) return false;
+      final playlist = playlists[index];
+      final recoverable = _isRecoverableMusicPlaylist(playlist, database);
+      if (requireMusic && !recoverable) return false;
+      var position = index;
+      var slot = 0;
+      while (slot < deleted.length && deleted[slot].position <= position) {
+        position++;
+        slot++;
+      }
+      if (recoverable) {
+        deleted.insert(
+            slot,
+            DeletedMusicPlaylist(
+                playlist: playlist,
+                deletionId: const Uuid().v4(),
+                deletedAt: now,
+                position: position));
+      } else {
+        // Permanent deletion closes this slot for later restorations.
+        for (var i = slot; i < deleted.length; i++) {
+          deleted[i] = deleted[i].atPosition(deleted[i].position - 1);
+        }
+      }
+      playlists.removeAt(index);
+      removed = true;
+      return true;
+    }, database: database, isCurrent: isCurrent);
+    return removed;
+  }
+
+  Future<bool> restoreMusicPlaylist(DeletedMusicPlaylist selection,
+      {required bool Function() isCurrent}) async {
+    var restored = false;
+    await _updateLocalPlaylistStorage((playlists, deleted, _) {
+      final index = deleted
+          .indexWhere((entry) => entry.deletionId == selection.deletionId);
+      if (index < 0) return false;
+      final entry = deleted.removeAt(index);
+      final position = (entry.position - index).clamp(0, playlists.length);
+      playlists.insert(position, entry.playlist);
+      restored = true;
+      return true;
+    }, isCurrent: isCurrent);
+    return restored;
   }
 
   static bool _applyLocalPlaylistUpdate(
@@ -3109,20 +3279,42 @@ class Service {
   }
 
   // Persist display metadata only. Obtain transport URLs at playback.
-  static Video _newLocalPlaylistEntry(Video video) => Video(
+  static Video _newLocalPlaylistEntry(Video video) {
+    if (video.videoId.startsWith('device:')) {
+      final music = video.musicMetadata;
+      if (devicePlaylistFileProof(video.videoId) == null ||
+          music == null ||
+          music.title.trim().isEmpty) {
+        throw ArgumentError('Invalid device playlist entry');
+      }
+      return Video(
         videoId: video.videoId,
         indexId: const Uuid().v4(),
-        title: video.title,
-        author: video.author,
-        authorId: video.authorId,
-        authorUrl: video.authorUrl,
+        title: music.title,
+        author: music.artist,
         lengthSeconds: video.lengthSeconds,
-        videoThumbnails: video.videoThumbnails,
-        musicMetadata: video.musicMetadata,
+        musicMetadata: MusicMetadata(
+            title: music.title, artist: music.artist, album: music.album),
       );
+    }
+    return Video(
+      videoId: video.videoId,
+      indexId: const Uuid().v4(),
+      title: video.title,
+      author: video.author,
+      authorId: video.authorId,
+      authorUrl: video.authorUrl,
+      lengthSeconds: video.lengthSeconds,
+      videoThumbnails: video.videoThumbnails,
+      musicMetadata: video.musicMetadata,
+    );
+  }
 
   Future<void> addVideoToServerPlaylist(
       String playListId, String videoId, Server server) async {
+    if (videoId.startsWith('device:')) {
+      throw ArgumentError('Device files can only be saved in local playlists');
+    }
     var req = await buildRequest(urlPostUserPlaylistVideo,
         pathParams: {":id": playListId},
         authenticated: true,
@@ -3142,11 +3334,7 @@ class Service {
       {IDbClient? database, Server? serverOverride}) async {
     final owner = database ?? db.forProfile(db.profileId);
     if (playListId.startsWith('local:')) {
-      if (playListId == localWatchLaterId) return;
-      await _updateLocalPlaylists((playlists) {
-        playlists.removeWhere((p) => p.playlistId == playListId);
-        return true;
-      }, database: owner);
+      await _deleteLocalPlaylist(playListId, database: owner);
       return;
     }
     var req = await buildRequest(urlDeleteUserPlaylist,
@@ -3548,7 +3736,13 @@ class Service {
         serverOverride: serverOverride);
 
     final response = await _get(req, beforeRequest: beforeRequest);
-    var playlist = Playlist.fromJson(handleResponse(response));
+    final data = handleResponse(response);
+    var playlist = Playlist.fromJson(data);
+    // The public endpoint writes authorId. Keep the model's older internal
+    // spelling for persisted playlists and decode this endpoint's wire key.
+    if (data['authorId'] case final String authorId) {
+      playlist = playlist.copyWith(authordId: authorId);
+    }
     var oldLength = playlist.videos.length;
     final videos =
         await postProcessVideos(playlist.videos, enrichResults: enrichResults);

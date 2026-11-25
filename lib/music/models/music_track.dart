@@ -19,10 +19,13 @@ class MusicTrack {
       : _savedCredits;
   final String? uploaderChannelId;
   final String? uploaderChannelUrl;
+  final String? uploaderName;
   final String? albumId;
   String? get albumPlaylistId => validMusicAlbumPlaylistId(albumId);
   final String? albumTitle;
   final int? durationSeconds;
+  final int? playlistIndex;
+  final String? playlistIndexId;
 
   /// Catalog art and stock video images have different display roles.
   final List<ImageObject> thumbnails;
@@ -60,10 +63,13 @@ class MusicTrack {
     List<MusicArtistCredit> artistCredits = const [],
     this.uploaderChannelId,
     this.uploaderChannelUrl,
+    this.uploaderName,
     String? albumId,
     String? albumPlaylistId,
     this.albumTitle,
     this.durationSeconds,
+    this.playlistIndex,
+    this.playlistIndexId,
     this.thumbnails = const [],
     this.videoThumbnails = const [],
     this.isArtTrack = false,
@@ -76,10 +82,12 @@ class MusicTrack {
   Video toVideo() => Video(
         videoId: videoId,
         title: title,
-        author: artists.join(', '),
+        author: uploaderName ?? artists.join(', '),
         authorId: uploaderChannelId,
         authorUrl: uploaderChannelUrl,
         lengthSeconds: durationSeconds,
+        index: playlistIndex,
+        indexId: playlistIndexId,
         videoThumbnails: videoThumbnails.isEmpty ? thumbnails : videoThumbnails,
         musicMetadata: musicMetadata,
       );

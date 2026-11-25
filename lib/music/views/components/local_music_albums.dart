@@ -6,6 +6,7 @@ import '../../../utils.dart' show selectKeys;
 import '../../models/local_music_album.dart';
 import '../../services/local_music_library.dart';
 import '../screens/music_device_album.dart';
+import 'device_music_artwork.dart';
 
 Future<void> showLocalMusicAlbums(
     BuildContext context, LocalMusicLibrary library) async {
@@ -70,7 +71,17 @@ Future<void> showLocalMusicAlbums(
                   return ListTile(
                     key: ValueKey(album.key),
                     autofocus: isTv && index == 0,
-                    leading: const Icon(Icons.album_outlined),
+                    leading: SizedBox.square(
+                      dimension: 44,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: DeviceMusicArtwork.album(
+                          tracks: album.tracks,
+                          placeholder: const Icon(Icons.album_outlined),
+                          thumbnail: true,
+                        ),
+                      ),
+                    ),
                     title: Text(album.title),
                     subtitle: Text(subtitles.join(' · ')),
                     onTap: () => Navigator.of(context).pop(album.key),

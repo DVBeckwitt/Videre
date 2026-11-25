@@ -20,13 +20,16 @@ import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_playlist.dart';
 import 'package:clipious/music/models/music_track.dart';
+import 'package:clipious/music/models/music_song_row_swipe_action.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_online_recents.dart';
+import 'package:clipious/music/views/components/music_playlist_recommendation_toggle.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_collection_sort_menu.dart';
+import 'package:clipious/player/models/named_music_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -102,9 +105,11 @@ class _Catalog extends MusicCatalogService {
   final releaseRequests = <String?>[];
   final releasePages = <String?, MusicArtistReleases>{};
   Object? releaseFailure;
+  final uploadRequests = <Completer<List<MusicTrack>>>[];
   final playlistRequests = <String>[];
   Completer<MusicArtistPage>? pendingArtist;
   Completer<MusicCollection>? pendingPlaylist;
+  void Function(MusicCollection)? playlistProgress;
   MusicCollection collection = const MusicCollection(
       id: 'PLpublic',
       title: 'Public playlist',
@@ -156,6 +161,14 @@ class _Catalog extends MusicCatalogService {
   }
 
   @override
+  Future<MusicCollection> getPlaylistProgressively(String id,
+      {required void Function(MusicCollection) onProgress,
+      required bool Function() isCurrent}) {
+    playlistProgress = onProgress;
+    return getPlaylist(id);
+  }
+
+  @override
   Future<List<MusicArtist>> searchArtists(String query) async {
     artistSearches.add(query);
     return artistResults;
@@ -179,6 +192,14 @@ class _Catalog extends MusicCatalogService {
           description: 'Artist description',
           songs: [first, second],
         ));
+  }
+
+  @override
+  Future<List<MusicTrack>> getArtistUploads(String id,
+      {bool Function()? isCurrent}) {
+    final request = Completer<List<MusicTrack>>();
+    uploadRequests.add(request);
+    return request.future;
   }
 
   @override
@@ -208,7 +229,8 @@ class _Player extends TestPlayerCubit {
     bool? audio,
     Duration? startAt,
     String? queueTitle,
-    int? startIndex
+    int? startIndex,
+    bool songTap
   })>[];
 
   _Player(super.initialState, super.settings);
@@ -217,6 +239,7 @@ class _Player extends TestPlayerCubit {
   bool? resumedFromMusic;
   int shows = 0;
   bool? sponsorFailureIsAsync;
+  bool shuffledPlaylist = false;
   Completer<void>? playbackStartup;
   bool holdSelections = false;
   final pendingSelections = <Completer<void>>[];
@@ -267,14 +290,17 @@ class _Player extends TestPlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      bool fromMusic = false,
+      bool songTap = false,
+      PlaylistReference? recommendationSource}) async {
     _selectionRevision++;
     calls.add((
       videos: videos,
       audio: audio,
       startAt: startAt,
       queueTitle: queueTitle,
-      startIndex: startIndex
+      startIndex: startIndex,
+      songTap: songTap
     ));
     if (holdSelections) {
       final pending = Completer<void>();
@@ -293,14 +319,18 @@ class _Player extends TestPlayerCubit {
       Duration? startAt,
       bool? audio,
       bool? playing,
+      bool shuffleOnce = false,
       PlaylistLoadSession? playlistLoader,
-      bool fromMusic = false}) async {
+      bool fromMusic = false,
+      bool songTap = false}) async {
+    shuffledPlaylist = shuffleOnce;
     calls.add((
       videos: entries,
       audio: audio,
       startAt: startAt,
       queueTitle: reference.displayTitle,
-      startIndex: startIndex
+      startIndex: startIndex,
+      songTap: songTap
     ));
   }
 }
@@ -336,6 +366,9 @@ void main() {
     previousService = service;
     service = Service();
     db = await SembastSqfDb.createInMemory();
+    // Run the profile's queue setup on the real database clock.
+    await db.saveSetting(SettingsValue(
+        namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
     previousCatalog = musicCatalogService;
     musicCatalogService = catalog = _Catalog();
     app = TestAppCubit(AppState(0, null, HomeLayout()));
@@ -865,6 +898,29 @@ void main() {
       expect(draft(tester), 'online draft');
       expect(catalog.searches, isEmpty);
     });
+  });
+
+  testWidgets('swiping an Online song uses the song queue command',
+      (tester) async {
+    await tester.runAsync(() =>
+        settings.setMusicSongSwipeTowardEnd(MusicSongRowSwipeAction.playNext));
+    await show(tester, screen: const MusicScreen(initialQuery: 'two songs'));
+    catalog.responses.single.complete([first, second]);
+    await tester.pumpAndSettle();
+    final row = find.byKey(ValueKey('music-song-search-0-${first.videoId}'));
+
+    await tester.drag(row, const Offset(100, 0));
+    await tester.pumpAndSettle();
+    expect(player.calls.single.videos.map((song) => song.videoId),
+        [first.videoId]);
+    expect(player.calls.single.audio, isTrue);
+
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(player.calls.last.videos.map((song) => song.videoId), [
+      first.videoId,
+      second.videoId,
+    ]);
   });
 
   testWidgets('only explicit music search submissions produce learning signals',
@@ -2141,6 +2197,24 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('public playlist Shuffle sends all occurrences to playback',
+      (tester) async {
+    catalog.collection = const MusicCollection(
+        id: 'PLplaylist', title: 'Playlist', tracks: [first, second, first]);
+    await show(tester, screen: const MusicScreen(playlistId: 'PLplaylist'));
+    final actions = find.byKey(const ValueKey('music-whole-playlist-actions'));
+    await tester.ensureVisible(actions);
+    await tester.tap(actions);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shuffle'));
+    await tester.pumpAndSettle();
+
+    expect(player.shuffledPlaylist, isTrue);
+    expect(player.calls.single.queueTitle, 'Playlist');
+    expect(player.calls.single.videos.map((entry) => entry.videoId),
+        [first.videoId, second.videoId, first.videoId]);
+  });
+
   testWidgets('profile switching closes open save and create dialogs',
       (tester) async {
     await show(tester);
@@ -2662,6 +2736,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('music-song-play')));
     await tester.pumpAndSettle();
     expect(player.calls, hasLength(3));
+    expect(player.calls.map((call) => call.songTap), [true, false, false]);
     expect(player.calls.last.videos.map((v) => v.videoId),
         [first.videoId, hidden.videoId, first.videoId, second.videoId]);
     expect(player.calls.last.startIndex, 2);
@@ -2689,10 +2764,197 @@ void main() {
     await tester.tap(find.text('Public playlist'));
     await tester.pumpAndSettle();
     expect(catalog.playlistRequests, ['PLpublic']);
+    final toggle = tester.widget<MusicPlaylistRecommendationToggle>(
+        find.byType(MusicPlaylistRecommendationToggle));
+    expect(
+        toggle.reference,
+        PlaylistReference(
+            kind: PlaylistSourceKind.public,
+            playlistId: 'PLpublic',
+            profileId: db.profileId));
     await tester.tap(find.byKey(const ValueKey('music-play-all')));
     await tester.pumpAndSettle();
     expect(player.calls.single.videos.map((v) => v.videoId),
         [first.videoId, second.videoId]);
+  });
+
+  testWidgets('public playlist Find plays the exact duplicate in source order',
+      (tester) async {
+    const duplicate = MusicTrack(
+        videoId: 'duplicates1',
+        title: 'Café Session',
+        artists: ['Zoë'],
+        playlistIndex: 1,
+        playlistIndexId: 'early');
+    const laterDuplicate = MusicTrack(
+        videoId: 'duplicates1',
+        title: 'Café Session',
+        artists: ['Zoë'],
+        playlistIndex: 5,
+        playlistIndexId: 'late');
+    catalog.collection = const MusicCollection(
+        id: 'PLpublic',
+        title: 'Public playlist',
+        tracks: [first, duplicate, second, laterDuplicate]);
+    await show(tester, screen: const Scaffold(body: Text('Origin')));
+    final navigator = Navigator.of(tester.element(find.text('Origin')));
+    unawaited(navigator.push<void>(MaterialPageRoute(
+        builder: (_) => const MusicScreen(playlistId: 'PLpublic'))));
+    await tester.pumpAndSettle();
+
+    final findButton = find.byKey(const ValueKey('music-public-playlist-find'));
+    final query = find.byKey(const ValueKey('music-public-playlist-query'));
+    await tester.tap(findButton);
+    await tester.pumpAndSettle();
+    await tester.enterText(query, '  ZOE   cafe ');
+    await tester.pumpAndSettle();
+
+    expect(find.text(first.title), findsNothing);
+    expect(find.text(duplicate.title), findsNWidgets(2));
+    final later = find.byKey(const ValueKey('music-song-3-duplicates1'));
+    expect(
+        find.descendant(of: later, matching: find.text('6')), findsOneWidget);
+    await tester.tap(later);
+    await tester.pumpAndSettle();
+    final call = player.calls.single;
+    expect(call.startIndex, 3);
+    expect(call.videos.map((video) => video.videoId),
+        [first.videoId, duplicate.videoId, second.videoId, duplicate.videoId]);
+    expect(call.videos.map((video) => video.indexId),
+        [null, 'early', null, 'late']);
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(query, findsNothing);
+    expect(find.text('Public playlist'), findsOneWidget);
+    expect(catalog.playlistRequests, ['PLpublic']);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Origin'), findsOneWidget);
+  });
+
+  testWidgets(
+      'public playlist Find stays active through partial load and Retry',
+      (tester) async {
+    final request = catalog.pendingPlaylist = Completer<MusicCollection>();
+    await show(tester, screen: const MusicScreen(playlistId: 'PLpublic'));
+    await tester.pump();
+    catalog.playlistProgress!(const MusicCollection(
+        id: 'PLpublic',
+        title: 'Public playlist',
+        tracks: [first],
+        loadingComplete: false));
+    await tester.pumpAndSettle();
+
+    final query = find.byKey(const ValueKey('music-public-playlist-query'));
+    await tester.tap(find.byKey(const ValueKey('music-public-playlist-find')));
+    await tester.pumpAndSettle();
+    await tester.enterText(query, 'second');
+    await tester.pumpAndSettle();
+    expect(find.text('Searching the tracks loaded so far.'), findsOneWidget);
+    expect(find.text('No results found.'), findsNothing);
+
+    request.completeError(StateError('Page failed'));
+    await tester.pumpAndSettle();
+    expect(
+        find.text(
+            'Could not load the rest of this playlist. Loaded videos are still available.'),
+        findsOneWidget);
+    final retry = catalog.pendingPlaylist = Completer<MusicCollection>();
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    catalog.playlistProgress!(const MusicCollection(
+        id: 'PLpublic',
+        title: 'Public playlist',
+        tracks: [first, second],
+        loadingComplete: false));
+    await tester.pumpAndSettle();
+    expect(find.text(second.title), findsOneWidget);
+    expect(find.text(first.title), findsNothing);
+    await tester.tap(find.text(second.title));
+    await tester.pumpAndSettle();
+    expect(player.calls.single.startIndex, 1);
+    expect(player.calls.single.videos.map((video) => video.videoId),
+        [first.videoId, second.videoId]);
+
+    retry.complete(catalog.collection);
+    await tester.pumpAndSettle();
+    expect(find.text('Searching the tracks loaded so far.'), findsNothing);
+    expect(tester.widget<TextField>(query).controller!.text, 'second');
+    await tester.enterText(query, 'missing');
+    await tester.pumpAndSettle();
+    expect(find.text('No results found.'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('music-browser-up')));
+    await tester.pumpAndSettle();
+    expect(query, findsNothing);
+    expect(find.text('Public playlist'), findsOneWidget);
+    expect(catalog.playlistRequests, ['PLpublic', 'PLpublic']);
+  });
+
+  testWidgets('artist uploads can retry independently of releases and bio',
+      (tester) async {
+    const release = MusicCollection(id: 'OLAK5uy_release', title: 'A release');
+    final bio =
+        List.generate(10, (index) => 'Biography line $index').join('\n');
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(MusicArtistPage(
+        artist: artist,
+        description: bio,
+        loadsUploadsSeparately: true,
+      ));
+    catalog.releasePages[null] = const MusicArtistReleases(releases: [release]);
+    await show(tester, screen: const MusicScreen(artistId: 'UCartist'));
+    await tester.pump();
+    expect(find.text(bio), findsOneWidget);
+    expect(find.text(release.title), findsOneWidget);
+    expect(find.bySemanticsLabel('Popular uploads'), findsWidgets);
+    expect(catalog.uploadRequests, hasLength(1));
+    catalog.uploadRequests.single.completeError(StateError('Unavailable'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('About'));
+    await tester.pumpAndSettle();
+    expect(
+        find.descendant(of: find.byType(AlertDialog), matching: find.text(bio)),
+        findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    final retry = find.byKey(const ValueKey('music-retry-artist-uploads'));
+    await tester.ensureVisible(retry);
+    await tester.tap(retry);
+    await tester.pump();
+    expect(catalog.uploadRequests, hasLength(2));
+    expect(catalog.releaseRequests, [null]);
+    catalog.uploadRequests.last.complete([first]);
+    await tester.pumpAndSettle();
+    expect(find.text(first.title), findsOneWidget);
+  });
+
+  testWidgets('artist saved songs match catalog identity rather than names',
+      (tester) async {
+    const identity = 'UCabcdefghijklmnopqrstuv';
+    const other = 'UCzyxwvutsrqponmlkjihgfe';
+    catalog.pendingArtist = Completer<MusicArtistPage>()
+      ..complete(const MusicArtistPage(
+        artist: MusicArtist(id: identity, name: 'Artist'),
+      ));
+    final library = MusicLibraryService.forProfile(db, db.profileId);
+    await library.save(const MusicLibraryEntry(
+      kind: MusicLibraryKind.song,
+      id: 'matched0001',
+      title: 'Matching saved song',
+      artistCredits: [MusicArtistCredit(name: 'Artist', id: identity)],
+    ));
+    await library.save(const MusicLibraryEntry(
+      kind: MusicLibraryKind.song,
+      id: 'notmatch001',
+      title: 'Different saved song',
+      artistCredits: [MusicArtistCredit(name: 'Artist', id: other)],
+    ));
+    await show(tester, screen: const MusicScreen(artistId: identity));
+    await tester.pumpAndSettle();
+    expect(find.text('Saved songs'), findsOneWidget);
+    expect(find.text('Matching saved song'), findsOneWidget);
+    expect(find.text('Different saved song'), findsNothing);
   });
 
   testWidgets('artist releases page into the existing playlist flow',
@@ -2818,10 +3080,12 @@ void main() {
     tester.view.physicalSize = const Size(800, 1100);
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.view.resetPhysicalSize);
+    const unrelated = MusicTrack(
+        videoId: 'unrelated01', title: 'Interlude', artists: ['Artist']);
     catalog.collection = const MusicCollection(
         id: 'PLpublic',
         title: 'Public playlist',
-        tracks: [first, second, first]);
+        tracks: [first, second, first, unrelated]);
     await show(tester, screen: const MusicScreen(playlistId: 'PLpublic'));
     await tester.pumpAndSettle();
 
@@ -2861,10 +3125,19 @@ void main() {
     expect(top(firstRow), lessThan(top(duplicateRow)));
     expect(player.calls, isEmpty);
 
+    await tester.tap(find.byKey(const ValueKey('music-public-playlist-find')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('music-public-playlist-query')), 'song');
+    await tester.pumpAndSettle();
+    expect(find.text(unrelated.title), findsNothing);
+    expect(top(secondRow), lessThan(top(firstRow)));
+    expect(top(firstRow), lessThan(top(duplicateRow)));
+
     await tester.tap(duplicateRow);
     await tester.pumpAndSettle();
     expect(player.calls.single.videos.map((video) => video.videoId),
-        [first.videoId, second.videoId, first.videoId]);
+        [first.videoId, second.videoId, first.videoId, unrelated.videoId]);
     expect(player.calls.single.startIndex, 2);
   });
 
@@ -2934,8 +3207,10 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await show(tester, screen: const MusicScreen(playlistId: 'PLpublic'));
     await tester.pumpAndSettle();
-    expect(Focus.of(tester.element(find.byIcon(Icons.search))).hasPrimaryFocus,
-        isTrue);
+    final catalogSearch = find.descendant(
+        of: find.byKey(const ValueKey('music-search')),
+        matching: find.byIcon(Icons.search));
+    expect(Focus.of(tester.element(catalogSearch)).hasPrimaryFocus, isTrue);
     expect(tester.testTextInput.isVisible, isFalse);
   });
 

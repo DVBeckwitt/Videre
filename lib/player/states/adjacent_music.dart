@@ -136,7 +136,9 @@ class _AdjacentMusicPreparation {
         } else {
           resolved = entry;
         }
-      } else if (entry is Video && entry.explicitMusicDownload != null) {
+      } else if (entry is Video &&
+          (entry.explicitMusicDownload != null ||
+              CachedMusicPlayback.of(entry) != null)) {
         resolved = await player._resolvePlaybackVideo(entry,
             audio: true, active: current);
       } else if (entry is Video && !isLocalMusicPlaybackId(entry.videoId)) {

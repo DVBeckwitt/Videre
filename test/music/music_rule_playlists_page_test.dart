@@ -10,6 +10,7 @@ import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_rule_playlist_store.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
 import 'package:clipious/player/states/player.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -44,7 +45,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      PlaylistReference? recommendationSource,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     expect(audio, isTrue);
     expect(fromMusic, isTrue);
     requests.add((

@@ -24,9 +24,12 @@ import '../../home/models/phone_navigation.dart';
 import '../../home/models/content_mode.dart';
 import '../../home/models/home_tabs_layout.dart';
 import '../../music/models/music_collection_order.dart';
+import '../../music/models/music_background_playback.dart';
 import '../../music/models/music_download_order.dart';
 import '../../music/models/music_layout.dart';
 import '../../music/models/music_mini_player_preferences.dart';
+import '../../music/models/music_song_row_swipe_action.dart';
+import '../../music/models/music_song_tap_queue_scope.dart';
 import '../../music/models/song_transition.dart';
 import '../../player/models/music_audio_quality.dart';
 import '../../player/models/playback_pitch.dart';
@@ -47,6 +50,8 @@ const String searchHistoryDefaultLength = '12';
 const skipSteps = [5, 10, 15, 20, 30, 60];
 const defaultStep = 10;
 const _backgroundRestartDebounce = 'restarting-background-service';
+
+enum MusicPreviousTrackPolicy { previousTrack, restartCurrentAfterThreshold }
 
 enum EnableBackGroundNotificationResponse {
   ok,
@@ -212,7 +217,8 @@ class SettingsCubit extends Cubit<SettingsState> {
     appCubit.rebuildApp();
   }
 
-  Future<void> setShuffle(bool value) => _set(playerShuffle, value);
+  Future<void> setShuffle(bool value) =>
+      _saveSettingInOrder(playerShuffle, value.toString);
 
   Future<void> setRepeatMode(PlayerRepeat repeat) =>
       _saveSettingInOrder(playerRepeat, () => repeat.index.toString());
@@ -305,6 +311,7 @@ class SettingsCubit extends Cubit<SettingsState> {
           animationStyle: AppMotion.dialogStyle(context),
           context: context,
           builder: (context) => AlertDialog(
+                scrollable: true,
                 title: Text(locals.importBackup),
                 content: Text(locals.backupPreview(backup.itemCount)),
                 actions: [
@@ -554,6 +561,26 @@ class SettingsCubit extends Cubit<SettingsState> {
   Future<void> setMusicStreamingQuality(MusicStreamingQuality quality) =>
       _saveSettingInOrder(musicStreamingQualitySettingName, () => quality.name);
 
+  Future<void> setMusicResumeAfterAudioFocusLoss(bool enabled) =>
+      _saveSettingInOrder(
+          musicResumeAfterAudioFocusLossSettingName, enabled.toString);
+
+  Future<void> setMusicPauseAtZeroVolume(bool enabled) =>
+      _saveSettingInOrder(musicPauseAtZeroVolumeSettingName, enabled.toString);
+
+  Future<void> setMusicAutoReconnect(bool enabled) =>
+      _saveSettingInOrder(musicAutoReconnectSettingName, enabled.toString);
+
+  Future<void> setMusicSkipAfterRetryExhaustion(bool enabled) =>
+      _saveSettingInOrder(
+          musicSkipAfterRetryExhaustionSettingName, enabled.toString);
+
+  Future<void> setMusicTaskRemoval(MusicTaskRemoval behavior) =>
+      _saveSettingInOrder(musicTaskRemovalSettingName, () => behavior.name);
+
+  Future<void> setMusicAudioOffload(MusicAudioOffload mode) =>
+      _saveSettingInOrder(musicAudioOffloadSettingName, () => mode.name);
+
   Future<void> setSongTransitionSeconds(int seconds) {
     RangeError.checkValueInInterval(
         seconds, minSongTransitionSeconds, maxSongTransitionSeconds, 'seconds');
@@ -602,12 +629,44 @@ class SettingsCubit extends Cubit<SettingsState> {
       _saveSettingInOrder(
           musicArtworkDoubleTapSeekSettingName, enabled.toString);
 
+  Future<void> setMusicSongSwipeTowardEnd(MusicSongRowSwipeAction action) =>
+      _saveSettingInOrder(
+          musicSongSwipeTowardEndSettingName, () => action.name);
+
+  Future<void> setMusicSongSwipeTowardStart(MusicSongRowSwipeAction action) =>
+      _saveSettingInOrder(
+          musicSongSwipeTowardStartSettingName, () => action.name);
+
+  Future<void> setMusicPreviousTrackPolicy(MusicPreviousTrackPolicy policy) =>
+      _saveSettingInOrder(
+          musicPreviousTrackPolicySettingName, () => policy.name);
+
+  Future<void> setMusicPauseAtRepeat(bool enabled) =>
+      _saveSettingInOrder(musicPauseAtRepeatSettingName, enabled.toString);
+
+  Future<void> setMusicKeepPausedOnSkip(bool enabled) =>
+      _saveSettingInOrder(musicKeepPausedOnSkipSettingName, enabled.toString);
+
+  Future<void> setMusicPlaybackVolume(double volume) => _saveSettingInOrder(
+      musicPlaybackVolumeSettingName,
+      () => (volume.isFinite ? volume.clamp(0.0, 1.0) : 1.0).toString());
+
+  Future<void> setMusicScreenPrivacy(bool enabled) =>
+      _saveSettingInOrder(musicScreenPrivacySettingName, enabled.toString);
+
   Future<void> setMusicMiniPlayerLayout(MusicMiniPlayerLayout layout) =>
       _saveSettingInOrder(musicMiniPlayerLayoutSettingName, () => layout.name);
 
   Future<void> setMusicMiniPlayerShortcut(MusicMiniPlayerShortcut shortcut) =>
       _saveSettingInOrder(
           musicMiniPlayerShortcutSettingName, () => shortcut.name);
+
+  Future<void> setMusicSongTapQueueScope(MusicSongTapQueueScope scope) =>
+      _saveSettingInOrder(musicSongTapQueueScopeSettingName, () => scope.name);
+
+  Future<void> setMusicRetainShuffleOnSongTap(bool enabled) =>
+      _saveSettingInOrder(
+          musicRetainShuffleOnSongTapSettingName, enabled.toString);
 
   Future<void> setHomeTabsLayout(HomeTabsLayout layout) async {
     final owner = db.forProfile(db.profileId);
@@ -890,6 +949,27 @@ sealed class SettingsState with _$SettingsState {
           _get(musicStreamingQualitySettingName)?.value) ??
       MusicStreamingQuality.auto;
 
+  bool get musicResumeAfterAudioFocusLoss =>
+      _get(musicResumeAfterAudioFocusLossSettingName)?.value != 'false';
+
+  bool get musicPauseAtZeroVolume =>
+      _get(musicPauseAtZeroVolumeSettingName)?.value == 'true';
+
+  bool get musicAutoReconnect =>
+      _get(musicAutoReconnectSettingName)?.value != 'false';
+
+  bool get musicSkipAfterRetryExhaustion =>
+      _get(musicSkipAfterRetryExhaustionSettingName)?.value == 'true';
+
+  MusicTaskRemoval get musicTaskRemoval =>
+      MusicTaskRemoval.fromStorage(_get(musicTaskRemovalSettingName)?.value) ??
+      MusicTaskRemoval.stop;
+
+  MusicAudioOffload get musicAudioOffload =>
+      MusicAudioOffload.fromStorage(
+          _get(musicAudioOffloadSettingName)?.value) ??
+      MusicAudioOffload.disabled;
+
   int get songTransitionSeconds {
     final saved =
         int.tryParse(_get(songTransitionSecondsSettingName)?.value ?? '');
@@ -914,6 +994,37 @@ sealed class SettingsState with _$SettingsState {
   bool get musicArtworkDoubleTapSeek =>
       _get(musicArtworkDoubleTapSeekSettingName)?.value == 'true';
 
+  MusicSongRowSwipeAction get musicSongSwipeTowardEnd =>
+      MusicSongRowSwipeAction.fromStorage(
+          _get(musicSongSwipeTowardEndSettingName)?.value) ??
+      MusicSongRowSwipeAction.off;
+
+  MusicSongRowSwipeAction get musicSongSwipeTowardStart =>
+      MusicSongRowSwipeAction.fromStorage(
+          _get(musicSongSwipeTowardStartSettingName)?.value) ??
+      MusicSongRowSwipeAction.off;
+
+  MusicPreviousTrackPolicy get musicPreviousTrackPolicy =>
+      _get(musicPreviousTrackPolicySettingName)?.value ==
+              MusicPreviousTrackPolicy.restartCurrentAfterThreshold.name
+          ? MusicPreviousTrackPolicy.restartCurrentAfterThreshold
+          : MusicPreviousTrackPolicy.previousTrack;
+
+  bool get musicPauseAtRepeat =>
+      _get(musicPauseAtRepeatSettingName)?.value == 'true';
+
+  bool get musicKeepPausedOnSkip =>
+      _get(musicKeepPausedOnSkipSettingName)?.value == 'true';
+
+  double get musicPlaybackVolume {
+    final saved =
+        double.tryParse(_get(musicPlaybackVolumeSettingName)?.value ?? '');
+    return saved != null && saved.isFinite ? saved.clamp(0.0, 1.0) : 1.0;
+  }
+
+  bool get musicScreenPrivacy =>
+      _get(musicScreenPrivacySettingName)?.value == 'true';
+
   MusicMiniPlayerLayout get musicMiniPlayerLayout =>
       MusicMiniPlayerLayout.fromStorage(
           _get(musicMiniPlayerLayoutSettingName)?.value) ??
@@ -923,6 +1034,13 @@ sealed class SettingsState with _$SettingsState {
       MusicMiniPlayerShortcut.fromStorage(
           _get(musicMiniPlayerShortcutSettingName)?.value) ??
       MusicMiniPlayerShortcut.automatic;
+
+  MusicSongTapQueueScope get musicSongTapQueueScope =>
+      MusicSongTapQueueScope.fromStorage(
+          _get(musicSongTapQueueScopeSettingName)?.value);
+
+  bool get musicRetainShuffleOnSongTap =>
+      _get(musicRetainShuffleOnSongTapSettingName)?.value != 'false';
 
   HomeContentMode get homeContentMode =>
       _get(homeContentModeSettingName)?.value == HomeContentMode.music.name

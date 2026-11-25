@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import '../../downloads/models/downloaded_video.dart';
 import '../../downloads/services/explicit_music_download.dart';
+import '../../music/models/device_playlist_track.dart';
+import '../../music/services/cached_music.dart';
 import '../../utils/invidious_image.dart';
 import '../../utils/models/image_object.dart';
 import '../../videos/models/video.dart';
@@ -29,22 +31,49 @@ class PlaybackSession {
   /// Only explicit saved-file selections are pinned, by queue occurrence.
   final Map<String, String> offlineFingerprints;
   final String currentId;
-  bool get hasDeviceEntries => offlineIds.any(isLocalMusicPlaybackId);
+  bool get hasDeviceEntries =>
+      offlineIds.any(isLocalMusicPlaybackId) ||
+      videos.any((video) => isLocalMusicPlaybackId(video.videoId));
+  String? get currentDeviceId => isLocalMusicPlaybackId(currentId)
+      ? currentId
+      : videos
+          .where((video) =>
+              playbackQueueId(video) == currentId &&
+              isLocalMusicPlaybackId(video.videoId))
+          .firstOrNull
+          ?.videoId;
+  Iterable<String> get deviceTrackIds => [
+        ...offlineIds.where(isLocalMusicPlaybackId).map(localMusicTrackId),
+        for (final video in videos)
+          if (isLocalMusicPlaybackId(video.videoId)) video.videoId,
+      ];
   String? get currentSavedDownloadId =>
       offlineIds.contains(currentId) ? savedDownloadSourceId(currentId) : null;
   final int seconds;
+  final int positionFractionUs;
+  final int? positionMilliseconds;
+  Duration get position =>
+      positionFractionUs == 0 && positionMilliseconds != null
+          ? Duration(milliseconds: positionMilliseconds!)
+          : Duration(seconds: seconds, microseconds: positionFractionUs);
+  final String? namedQueueId;
+  final String? ownerProfileId;
   final String? localSelectionId;
   final bool audio;
 
   /// Snapshots predating section history have no origin information.
   final Set<String>? musicHistoryEntries;
   final bool musicHistoryPlaylist;
+
+  /// Opaque playlist source digests by queue occurrence, for taste learning.
+  final Map<String, String> musicRecommendationSources;
   final List<String> played;
   final List<String> next;
   final PlaylistReference? playlistReference;
   final List<Video> playlistEntries;
   final bool playlistComplete;
   final String? queueTitle;
+  final String? passageQueueId;
 
   const PlaybackSession({
     this.videos = const [],
@@ -52,34 +81,45 @@ class PlaybackSession {
     this.offlineFingerprints = const {},
     required this.currentId,
     required this.seconds,
+    this.positionFractionUs = 0,
+    this.positionMilliseconds,
+    this.namedQueueId,
+    this.ownerProfileId,
     this.localSelectionId,
     this.audio = false,
     this.musicHistoryEntries = const {},
     this.musicHistoryPlaylist = false,
+    this.musicRecommendationSources = const {},
     this.played = const [],
     this.next = const [],
     this.playlistReference,
     this.playlistEntries = const [],
     this.playlistComplete = false,
     this.queueTitle,
+    this.passageQueueId,
   });
 
   int get _version {
+    if (videos.any((video) => CachedMusicPlayback.of(video) != null)) return 5;
     if (offlineFingerprints.isNotEmpty ||
-        (hasDeviceEntries &&
+        (offlineIds.any(isLocalMusicPlaybackId) &&
             offlineIds.any((id) => !isLocalMusicPlaybackId(id))) ||
+        [...videos, ...playlistEntries]
+            .any((v) => devicePlaylistFileProof(v.videoId) != null) ||
         videos.any((v) => v.explicitMusicDownload != null)) {
       return 4;
     }
     return offlineIds.any(_isSavedCopy) ? 3 : 2;
   }
 
-  String encode() {
+  String encode({bool portableArtwork = false}) {
     final version = _version;
     return jsonEncode({
       'version': version,
       // Stream URLs expire. Save enough to show the queue, then fetch on play.
-      'videos': (version == 4 ? videos.map(_portableArtwork) : videos)
+      'videos': (version >= 4 || portableArtwork
+              ? videos.map(_portableArtwork)
+              : videos)
           .map((v) => {
                 'videoId': v.videoId,
                 'title': v.title,
@@ -88,6 +128,8 @@ class PlaybackSession {
                 if (v.queueEntryId != null) 'queueEntryId': v.queueEntryId,
                 if (v.explicitMusicDownload != null)
                   'explicitMusicDownload': v.explicitMusicDownload,
+                if (CachedMusicPlayback.of(v) case final cache?)
+                  'cachedMusic': cache.toJson(),
                 if (v.index != null) 'index': v.index,
                 if (v.indexId != null) 'indexId': v.indexId,
                 if (v.musicMetadata != null)
@@ -101,21 +143,31 @@ class PlaybackSession {
         'offlineFingerprints': offlineFingerprints,
       'currentId': currentId,
       'seconds': seconds,
-      if (hasDeviceEntries && (version == 4 || localSelectionId != null))
+      if (positionFractionUs != 0) 'positionFractionUs': positionFractionUs,
+      if (positionMilliseconds != null)
+        'positionMilliseconds': positionMilliseconds,
+      if (namedQueueId != null) 'namedQueueId': namedQueueId,
+      if (ownerProfileId != null) 'ownerProfileId': ownerProfileId,
+      if (hasDeviceEntries && (version >= 4 || localSelectionId != null))
         'localSelectionId': localSelectionId,
       'audio': audio,
       if (musicHistoryEntries != null)
         'musicHistoryEntries': musicHistoryEntries!.toList(),
       if (musicHistoryPlaylist) 'musicHistoryPlaylist': true,
+      if (musicRecommendationSources.isNotEmpty)
+        'musicRecommendationSources': musicRecommendationSources,
       'played': played,
       'next': next,
       if (queueTitle != null) 'queueTitle': queueTitle,
+      if (passageQueueId != null) 'passageQueueId': passageQueueId,
       if (playlistReference != null)
         'playlistReference': playlistReference!.toJson(),
       if (playlistReference != null) 'playlistComplete': playlistComplete,
       if (playlistReference != null)
         'playlistEntries': playlistEntries
-            .where((v) => v.explicitMusicDownload == null)
+            .where((v) =>
+                v.explicitMusicDownload == null &&
+                CachedMusicPlayback.of(v) == null)
             .map((video) => {
                   'videoId': video.videoId,
                   'queueEntryId': video.queueEntryId,
@@ -176,10 +228,11 @@ class PlaybackSession {
 
   static bool _validCatalogKey(Video video) {
     final key = playbackQueueId(video);
-    return DownloadedVideo.isSafeFileId(video.videoId) &&
+    final deviceEntry = devicePlaylistFileProof(video.videoId) != null;
+    return (DownloadedVideo.isSafeFileId(video.videoId) || deviceEntry) &&
         key.trim().isNotEmpty &&
         !_control.hasMatch(key) &&
-        !isLocalMusicPlaybackId(key);
+        (deviceEntry || !isLocalMusicPlaybackId(key));
   }
 
   static PlaybackSession? decode(String? value) {
@@ -187,9 +240,7 @@ class PlaybackSession {
     try {
       final json = jsonDecode(value) as Map<String, dynamic>;
       final version = json['version'];
-      if (version != 1 && version != 2 && version != 3 && version != 4) {
-        return null;
-      }
+      if (version is! int || version < 1 || version > 5) return null;
       final playlistReference =
           PlaylistReference.tryParse(json['playlistReference']);
       if (json['playlistReference'] != null && playlistReference == null) {
@@ -200,10 +251,15 @@ class PlaybackSession {
         final marked = entry.containsKey('explicitMusicDownload');
         final fingerprint = entry['explicitMusicDownload'];
         if (marked &&
-            (version != 4 || source || !_validFingerprint(fingerprint))) {
+            (version < 4 || source || !_validFingerprint(fingerprint))) {
           throw const FormatException('Invalid saved Music fingerprint');
         }
-        if (version == 4) {
+        final cache = CachedMusicPlayback.tryParse(entry['cachedMusic']);
+        if (entry.containsKey('cachedMusic') &&
+            (version != 5 || source || marked || cache == null)) {
+          throw const FormatException('Invalid cached Music rendition');
+        }
+        if (version >= 4) {
           // Playback transports and local file locations are never session data.
           entry.removeWhere((key, _) => !const {
                 'videoId',
@@ -219,8 +275,9 @@ class PlaybackSession {
         }
         final video = Video.fromJson(entry).copyWith(
             queueEntryId: entry['queueEntryId'] as String?,
-            explicitMusicDownload: fingerprint as String?);
-        return version == 4 ? _portableArtwork(video) : video;
+            explicitMusicDownload: fingerprint as String?,
+            playbackSourceId: cache);
+        return version >= 4 ? _portableArtwork(video) : video;
       }
 
       final videos = (json['videos'] as List).map(decodeVideo).toList();
@@ -229,7 +286,7 @@ class PlaybackSession {
       final fingerprints = <String, String>{};
       if (json.containsKey('offlineFingerprints')) {
         final stored = json['offlineFingerprints'];
-        if (version != 4 || stored is! Map || stored.isEmpty) return null;
+        if (version < 4 || stored is! Map || stored.isEmpty) return null;
         for (final entry in stored.entries) {
           final id = entry.key;
           final digest = entry.value;
@@ -249,12 +306,23 @@ class PlaybackSession {
       final hasDevice = offlineIds.any(isLocalMusicPlaybackId);
       final mixedOffline =
           hasDevice && offlineIds.any((id) => !isLocalMusicPlaybackId(id));
+      final hasDeviceVideos =
+          videos.any((v) => isLocalMusicPlaybackId(v.videoId));
+      final devicePlaylist = [...videos, ...playlistEntries]
+          .where((v) => isLocalMusicPlaybackId(v.videoId));
       final marked =
           videos.where((v) => v.explicitMusicDownload != null).toList();
-      final needsVersion4 =
-          mixedOffline || marked.isNotEmpty || fingerprints.isNotEmpty;
-      if ((version == 4) != needsVersion4) return null;
-      if (version != 4 && ((version == 3) != savedCopies)) return null;
+      final cached = videos.where((v) => CachedMusicPlayback.of(v) != null);
+      if ((version == 5) != cached.isNotEmpty ||
+          cached.any((v) => v.musicMetadata?.title.trim().isNotEmpty != true)) {
+        return null;
+      }
+      final needsVersion4 = mixedOffline ||
+          devicePlaylist.isNotEmpty ||
+          marked.isNotEmpty ||
+          fingerprints.isNotEmpty;
+      if (version < 5 && (version == 4) != needsVersion4) return null;
+      if (version < 4 && ((version == 3) != savedCopies)) return null;
       if (version == 3 &&
           (playlistReference != null ||
               playlistEntries.isNotEmpty ||
@@ -263,19 +331,25 @@ class PlaybackSession {
               offlineIds.any((id) => savedDownloadSourceId(id) == null))) {
         return null;
       }
-      if ([...videos, ...playlistEntries]
-              .any((v) => isLocalMusicPlaybackId(v.videoId)) ||
+      if (devicePlaylist.any((v) =>
+              devicePlaylistFileProof(v.videoId) == null ||
+              v.explicitMusicDownload != null) ||
+          (hasDeviceVideos && offlineIds.isNotEmpty) ||
+          (devicePlaylist.isNotEmpty &&
+              playlistReference != null &&
+              playlistReference.kind != PlaylistSourceKind.local) ||
           ((hasDevice || fingerprints.isNotEmpty) &&
               (offlineMembership.length != offlineIds.length ||
                   playlistReference != null ||
                   playlistEntries.isNotEmpty))) {
         return null;
       }
-      if (version == 4) {
+      if (version >= 4) {
         final markedIds = marked.map(playbackQueueId).toSet();
         final selection = json['localSelectionId'];
         if (json['audio'] != true ||
-            json.containsKey('localSelectionId') != mixedOffline ||
+            json.containsKey('localSelectionId') !=
+                (mixedOffline || hasDeviceVideos) ||
             (selection != null &&
                 (selection is! String ||
                     _selectionId.stringMatch(selection) != selection)) ||
@@ -297,6 +371,19 @@ class PlaybackSession {
       }
       final currentId = json['currentId'] as String;
       final seconds = json['seconds'] as int;
+      final fraction = json['positionFractionUs'];
+      if (json.containsKey('positionFractionUs') &&
+          (fraction is! int ||
+              fraction <= 0 ||
+              fraction >= Duration.microsecondsPerSecond ||
+              (!isLocalMusicPlaybackId(currentId) &&
+                  !videos.any((video) =>
+                      playbackQueueId(video) == currentId &&
+                      isLocalMusicPlaybackId(video.videoId))))) {
+        return null;
+      }
+      final milliseconds = json['positionMilliseconds'];
+      final namedQueueId = json['namedQueueId'];
       if (seconds < 0 ||
           (videos.isNotEmpty && offlineIds.isNotEmpty) ||
           !(videos.any((v) => playbackQueueId(v) == currentId) ||
@@ -304,10 +391,17 @@ class PlaybackSession {
         return null;
       }
       final ids = {...videos.map(playbackQueueId), ...offlineIds};
+      final sources = json['musicRecommendationSources'];
+      final musicRecommendationSources = <String, String>{
+        if (sources is Map)
+          for (final entry in sources.entries)
+            if (ids.contains(entry.key) && _validFingerprint(entry.value))
+              entry.key as String: entry.value as String,
+      };
       final played = List<String>.from(json['played'] ?? []);
       final next = List<String>.from(json['next'] ?? []);
       final history = json['musicHistoryEntries'] as List?;
-      if ((savedCopies || version == 4) &&
+      if ((savedCopies || version >= 4) &&
           (!played.every(ids.contains) ||
               !next.every(ids.contains) ||
               (history != null && !history.every(ids.contains)))) {
@@ -319,17 +413,30 @@ class PlaybackSession {
         offlineFingerprints: fingerprints,
         currentId: currentId,
         seconds: seconds,
+        positionFractionUs: fraction as int? ?? 0,
+        positionMilliseconds: milliseconds is int &&
+                milliseconds >= 0 &&
+                milliseconds ~/ 1000 == seconds
+            ? milliseconds
+            : null,
+        namedQueueId: namedQueueId is String &&
+                _selectionId.stringMatch(namedQueueId) == namedQueueId
+            ? namedQueueId
+            : null,
+        ownerProfileId: normalizedQueueTitle(json['ownerProfileId']),
         localSelectionId:
             hasDevice ? json['localSelectionId'] as String? : null,
         audio: json['audio'] == true,
         musicHistoryEntries:
             history?.whereType<String>().where(ids.contains).toSet(),
         musicHistoryPlaylist: json['musicHistoryPlaylist'] == true,
+        musicRecommendationSources: musicRecommendationSources,
         played: played.where(ids.contains).toList(),
         next: next.where(ids.contains).toList(),
         playlistReference: playlistReference,
         playlistComplete: json['playlistComplete'] == true,
         queueTitle: normalizedQueueTitle(json['queueTitle']),
+        passageQueueId: _passageQueueId(json['passageQueueId']),
         playlistEntries: playlistEntries,
       );
     } catch (_) {
@@ -338,3 +445,11 @@ class PlaybackSession {
     }
   }
 }
+
+String? _passageQueueId(Object? value) => value is String &&
+        RegExp(
+              r'^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$',
+            ).stringMatch(value) ==
+            value
+    ? value
+    : null;

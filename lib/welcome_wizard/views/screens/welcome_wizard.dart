@@ -5,6 +5,7 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/settings/states/server_list_settings.dart';
+import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/settings/views/components/manager_server_inner.dart';
 import 'package:clipious/settings/views/components/profile_picker.dart';
 import 'package:clipious/utils/views/components/app_icon.dart';
@@ -37,6 +38,35 @@ class WelcomeWizardScreen extends StatelessWidget {
         child: BlocBuilder<WelcomeWizardCubit, Server?>(
           builder: (context, server) {
             var cubit = context.read<WelcomeWizardCubit>();
+            final welcomeHeader = Column(
+              children: [
+                const SizedBox(width: 72, height: 72, child: AppIcon()),
+                Text(
+                  'Videre',
+                  textAlign: TextAlign.center,
+                  style:
+                      textTheme.displaySmall?.copyWith(color: colors.primary),
+                ),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  children: [
+                    TextButton.icon(
+                      key: const ValueKey('welcome-profiles'),
+                      onPressed: () => showProfilePicker(context),
+                      icon: const Icon(Icons.people_outline),
+                      label: Text(locals.profiles),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => context
+                          .read<SettingsCubit>()
+                          .backupLibrary(context, restore: true),
+                      icon: const Icon(Icons.restore),
+                      label: Text(locals.welcomeRestoreBackup),
+                    ),
+                  ],
+                ),
+              ],
+            );
             return Scaffold(
               resizeToAvoidBottomInset: false,
               extendBodyBehindAppBar: true,
@@ -46,23 +76,15 @@ class WelcomeWizardScreen extends StatelessWidget {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const SizedBox(width: 72, height: 72, child: AppIcon()),
-                        Text(
-                          'Videre',
-                          style: textTheme.displaySmall
-                              ?.copyWith(color: colors.primary),
-                        ),
-                        TextButton.icon(
-                          key: const ValueKey('welcome-profiles'),
-                          onPressed: () => showProfilePicker(context),
-                          icon: const Icon(Icons.people_outline),
-                          label: Text(locals.profiles),
-                        ),
+                        if (server != null) welcomeHeader,
                         Expanded(
                           child: server == null
                               ? ListView(
-                                  padding: const EdgeInsets.all(16),
+                                  padding:
+                                      const EdgeInsets.fromLTRB(16, 0, 16, 16),
                                   children: [
+                                    welcomeHeader,
+                                    const SizedBox(height: 16),
                                     Text(locals.setupConnectionTitle,
                                         style: textTheme.titleLarge),
                                     const SizedBox(height: 12),

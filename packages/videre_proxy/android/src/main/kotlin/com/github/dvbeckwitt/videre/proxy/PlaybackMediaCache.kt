@@ -15,6 +15,9 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** Request roles are supplied by Media3's source factories, never inferred from an opaque child URL. */
@@ -40,6 +43,9 @@ object PlaybackMediaCache {
     private val accountGenerations = mutableMapOf<String, Long>()
     private var cache: SimpleCache? = null
     private val readers = mutableSetOf<GuardedSource>()
+    private val musicProofWriter = ThreadPoolExecutor(0, 1, 15L, TimeUnit.SECONDS,
+        ArrayBlockingQueue(32), { task -> Thread(task, "Videre Music cache proof") },
+        ThreadPoolExecutor.DiscardPolicy())
 
     internal fun initialize(context: Context) = synchronized(lock) {
         if (application != null) return@synchronized
@@ -95,21 +101,61 @@ object PlaybackMediaCache {
         val rendition = downloaded?.let { DownloadedRendition(context.applicationContext, checkNotNull(identity), it) }
         val admittedRequest = admittedRequest(request, values?.get("adaptiveVod"))
         val gateway = companions?.gateway ?: identity?.gateway
-        val gatewayRevision = gateway?.let(GatewaySessions::cacheAdmissionRevision)
-        requireLocalAuthorization(gateway)
-        val (admittedGeneration, profileGeneration) = synchronized(lock) {
-            if (transitioning) throw IOException("Playback cache is changing.")
-            generation to (profileGenerations[identity?.profileKey] ?: 0L)
+        val admission = ReaderAdmission(identity?.profileKey, gateway)
+        val metadata = values?.get("musicSong")
+        val proof = if (identity != null && downloaded == null && companions == null &&
+            admittedRequest == PlaybackCacheRequest.PROGRESSIVE && metadata != null) {
+            CachedMusicSong.fromSource(metadata, identity, sourceUri)?.let { MusicProof(it, admission) }
+        } else null
+        val sources = DataSource.Factory {
+            GuardedSource(upstream, identity, admission, sourceUri, admittedRequest, rendition, companions,
+                musicProof = proof)
         }
-        val accountGeneration = synchronized(lock) { accountGenerations[gateway?.key] ?: 0L }
-        return DataSource.Factory { GuardedSource(upstream, identity, admittedGeneration, profileGeneration,
-            accountGeneration, gatewayRevision, sourceUri, admittedRequest, rendition, companions) }
+        return if (proof == null) sources else MusicAudioFactory(sources, proof)
     }
 
     /** Compatibility for callers without a typed adaptive request boundary. */
     @JvmStatic
     fun factory(context: Context, upstream: DataSource.Factory, sourceUri: String, values: Map<*, *>?, manifestSource: Boolean): DataSource.Factory =
         factory(context, upstream, sourceUri, values, if (manifestSource) PlaybackCacheRequest.ADAPTIVE_UNTYPED else PlaybackCacheRequest.PROGRESSIVE)
+
+    /** Confirmation comes from Media3 after it selects audio and reaches READY. */
+    @JvmStatic
+    fun musicConfirmation(factory: DataSource.Factory): Runnable? =
+        (factory as? MusicAudioFactory)?.let {
+            Runnable { if (!it.proof.recorded) musicProofWriter.execute { confirmDecodedMusic(it) } }
+        }
+
+    internal fun confirmDecodedMusic(factory: DataSource.Factory) {
+        (factory as? MusicAudioFactory)?.proof?.confirm()
+    }
+
+    /** Cache misses can only fail. There is no HTTP source or byte writer here. */
+    @JvmStatic
+    fun cachedMusicFactory(context: Context, sourceUri: String, value: Any?): DataSource.Factory {
+        initialize(context)
+        val selection = CachedMusicSelection.parse(value as? Map<*, *> ?: throw CachedMusicUnavailable(), sourceUri)
+        val admission = ReaderAdmission(selection.owner.profileKey, selection.owner.gateway)
+        return DataSource.Factory {
+            GuardedSource(null, null, admission, sourceUri, PlaybackCacheRequest.PROGRESSIVE, null, null,
+                cachedMusic = selection)
+        }
+    }
+
+    internal fun cachedMusicSongs(values: Map<*, *>): List<Map<String, Any>> {
+        val owner = PlaybackCacheOwner.parse(values)
+        val admission = ReaderAdmission(owner.profileKey, owner.gateway)
+        admission.requireCurrent()
+        return synchronized(lock) {
+            admission.requireEpochLocked()
+            if (!enabled) return@synchronized emptyList()
+            val current = cacheLocked()
+            val prefix = "p:${owner.profileKey}:"
+            current.keys.asSequence().filter { it.startsWith(prefix) }.sorted()
+                .mapNotNull { CachedMusicSong.complete(current, owner, it) }
+                .distinctBy { it.selection.contentId }.map(CachedMusicSong::toMap).toList()
+        }
+    }
 
     /** HLS playlists, encryption keys and every non-media request bypass the byte cache. */
     @JvmStatic
@@ -207,21 +253,82 @@ object PlaybackMediaCache {
             "usedBytes" to cacheLocked().cacheSpace)
     }
 
+    private class ReaderAdmission(val profileKey: String?, val gateway: GatewayContext?) {
+        val accountKey = gateway?.key
+        private val gatewayRevision = gateway?.let(GatewaySessions::cacheAdmissionRevision)
+        private val epochs: Triple<Long, Long, Long>
+
+        init {
+            requireLocalAuthorization(gateway)
+            epochs = synchronized(lock) {
+                if (transitioning) throw IOException("Playback cache is changing.")
+                currentEpochs()
+            }
+        }
+
+        private fun currentEpochs() = Triple(generation, profileGenerations[profileKey] ?: 0L,
+            accountGenerations[accountKey] ?: 0L)
+
+        fun requireEpochLocked() {
+            if (transitioning || epochs.first != generation || epochs.second != (profileGenerations[profileKey] ?: 0L) ||
+                epochs.third != (accountGenerations[accountKey] ?: 0L)) throw IOException("Playback context changed.")
+        }
+
+        fun requireCurrent() {
+            // A cache hit must not evade failed startup/configuration admission.
+            ProxyDataSource.configuration()
+            gateway?.let {
+                if (GatewaySessions.cacheAdmissionRevision(it) != gatewayRevision)
+                    throw GatewayAuthenticationRequired()
+            }
+            synchronized(lock) { requireEpochLocked() }
+        }
+    }
+
+    private class MusicAudioFactory(
+        private val delegate: DataSource.Factory,
+        val proof: MusicProof,
+    ) : DataSource.Factory by delegate
+
+    private class MusicProof(private val song: CachedMusicSong, private val admission: ReaderAdmission) {
+        @Volatile private var opened: SimpleCache? = null
+        @Volatile var recorded = false
+            private set
+
+        fun openedFrom(sourceCache: SimpleCache, key: String) {
+            if (key == song.selection.key) opened = sourceCache
+        }
+
+        // The ordinary player is unaffected by optional catalog persistence.
+        @Synchronized fun confirm() {
+            val usedCache = opened ?: return
+            if (recorded) return
+            try {
+                admission.requireCurrent()
+                synchronized(lock) {
+                    admission.requireEpochLocked()
+                    if (enabled && usedCache === cache) {
+                        song.recordIn(usedCache)
+                        recorded = true
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     private class GuardedSource(
-        private val upstream: DataSource.Factory,
+        private val upstream: DataSource.Factory?,
         private val identity: PlaybackCacheIdentity?,
-        private val epoch: Long,
-        private val profileEpoch: Long,
-        private val accountEpoch: Long,
-        private val gatewayRevision: Long?,
+        private val admission: ReaderAdmission,
         private val sourceUri: String,
         private val request: PlaybackCacheRequest,
         private val downloaded: DownloadedRendition?,
         private val companions: MediaCompanions?,
+        private val musicProof: MusicProof? = null,
+        private val cachedMusic: CachedMusicSelection? = null,
     ) : DataSource {
-        val profileKey: String? get() = identity?.profileKey
-        private val gateway = companions?.gateway ?: identity?.gateway
-        val accountKey: String? get() = gateway?.key
+        val profileKey: String? get() = admission.profileKey
+        val accountKey: String? get() = admission.accountKey
         @Volatile private var delegate: DataSource? = null
         private val listeners = mutableListOf<TransferListener>()
 
@@ -230,24 +337,16 @@ object PlaybackMediaCache {
 
         private fun admit() {
             companions?.let(MediaCompanionGrants::requireCurrent)
-            // A cache hit must not evade failed startup/configuration admission.
-            ProxyDataSource.configuration()
-            gateway?.let {
-                if (GatewaySessions.cacheAdmissionRevision(it) != gatewayRevision)
-                    throw GatewayAuthenticationRequired()
-            }
-            synchronized(lock) {
-                if (transitioning || epoch != generation || profileEpoch != (profileGenerations[profileKey] ?: 0L) ||
-                    accountEpoch != (accountGenerations[accountKey] ?: 0L))
-                    throw IOException("Playback context changed.")
-            }
+            admission.requireCurrent()
         }
 
         @Synchronized override fun open(dataSpec: DataSpec): Long {
             admit()
-            requireLocalAuthorization(gateway)
+            requireLocalAuthorization(admission.gateway)
             val uri = dataSpec.uri.toString()
             if (downloaded != null && uri != sourceUri) throw LocalDownloadUnavailable()
+            if (cachedMusic != null && (uri != sourceUri || dataSpec.httpMethod != DataSpec.HTTP_METHOD_GET ||
+                dataSpec.httpBody != null)) throw CachedMusicUnavailable()
             // An in-origin URL may redirect to a companion. Bypass byte storage
             // for the entire opted-in source, including manifests and local URL
             // cache hits, but retain session admission on every open and read.
@@ -261,12 +360,13 @@ object PlaybackMediaCache {
                 PlaybackCacheRequest.ADAPTIVE_UNTYPED -> if (uri == sourceUri || identity?.knownMediaResource(uri) != true) null else admittedKey
                 PlaybackCacheRequest.PROGRESSIVE, PlaybackCacheRequest.ADAPTIVE_MEDIA -> admittedKey
             }
+            var writingCache: SimpleCache? = null
             val selected = try { synchronized(lock) {
-                if (transitioning || epoch != generation || profileEpoch != (profileGenerations[profileKey] ?: 0L) ||
-                    accountEpoch != (accountGenerations[accountKey] ?: 0L))
-                    throw IOException("Playback context changed.")
+                admission.requireEpochLocked()
                 readers.add(this)
-                if (downloaded != null) {
+                if (cachedMusic != null) {
+                    cachedSource(cachedMusic, dataSpec)
+                } else if (downloaded != null) {
                     // A muxed saved rendition has its own byte offsets. It is
                     // always a complete progressive source, never cache spans
                     // under an original network representation's key.
@@ -275,16 +375,17 @@ object PlaybackMediaCache {
                     // Evictable storage is optional. A disk/index failure may
                     // use only the same guarded upstream, after admission above.
                     val localCache = try { cacheLocked() } catch (_: Exception) { null }
-                    if (localCache == null) upstream.createDataSource() else {
+                    if (localCache == null) checkNotNull(upstream).createDataSource() else {
+                        writingCache = localCache
                         CacheDataSource.Factory().setCache(withoutRedirectMetadata(localCache))
-                            .setUpstreamDataSourceFactory(upstream)
+                            .setUpstreamDataSourceFactory(checkNotNull(upstream))
                             .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(localCache)
                                 .setFragmentSize(2L * 1024 * 1024))
                             .setCacheKeyFactory { key }
                             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
                             .createDataSource()
                     }
-                } else upstream.createDataSource()
+                } else checkNotNull(upstream).createDataSource()
             } } catch (error: Exception) {
                 synchronized(lock) { readers.remove(this) }
                 throw error
@@ -293,12 +394,27 @@ object PlaybackMediaCache {
             delegate = selected
             return try {
                 admit()
-                selected.open(if (selected is CacheDataSource) dataSpec.buildUpon()
+                val length = selected.open(if (selected is CacheDataSource && cachedMusic == null) dataSpec.buildUpon()
                     .setFlags(dataSpec.flags or DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION).build() else dataSpec)
+                if (key != null && uri == sourceUri) writingCache?.let { musicProof?.openedFrom(it, key) }
+                length
             } catch (error: Exception) {
                 close()
                 throw error
             }
+        }
+
+        private fun cachedSource(selection: CachedMusicSelection, dataSpec: DataSpec): DataSource {
+            if (!enabled) throw CachedMusicUnavailable()
+            val local = cacheLocked()
+            val song = CachedMusicSong.complete(local, selection.owner, selection.key) ?: throw CachedMusicUnavailable()
+            if (dataSpec.position !in 0..song.byteLength ||
+                (dataSpec.length != C.LENGTH_UNSET.toLong() && dataSpec.length > song.byteLength - dataSpec.position)) {
+                throw CachedMusicUnavailable()
+            }
+            return CacheDataSource.Factory().setCache(withoutRedirectMetadata(local))
+                .setUpstreamDataSourceFactory(null).setCacheWriteDataSinkFactory(null)
+                .setCacheKeyFactory { selection.key }.createDataSource()
         }
 
         @Synchronized override fun read(buffer: ByteArray, offset: Int, length: Int): Int {

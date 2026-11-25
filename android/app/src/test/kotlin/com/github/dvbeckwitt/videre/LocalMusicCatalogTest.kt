@@ -87,14 +87,26 @@ class LocalMusicCatalogTest {
     }
 
     @Test fun legacyTagRecordsRefreshOnceEvenWhenTheNewTagsAreAbsent() {
-        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true,
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true, genreRead = true,
             sortTags = LocalMusicSortTags())
         val row = track().copy(metadata = tags)
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(albumTagsRead = false))))
         assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(sortTags = null))))
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(genreRead = false))))
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(retryRead = true))))
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(replayGainRead = false))))
         assertFalse(row.needsTagRead(row))
         assertTrue(row.copy(sizeBytes = 50L).needsTagRead(row))
         assertTrue(row.copy(identityKey = "replacement").needsTagRead(row))
+    }
+
+    @Test fun legacyTagRecordsRefreshOnceEvenWhenTheGenreTagIsAbsent() {
+        val tags = LocalMusicMetadata("Title", "Artist", "Album", 12, albumTagsRead = true, genreRead = true)
+        val row = track().copy(metadata = tags)
+        assertTrue(row.needsTagRead(row.copy(metadata = tags.copy(genreRead = false))))
+        assertFalse(row.needsTagRead(row))
+        assertEquals(null, row.channelValue()["genre"])
+        assertEquals("Jazz", row.copy(metadata = tags.copy(genre = "Jazz")).channelValue()["genre"])
     }
 
     @Test fun onlyAnUninterruptedFolderSelectionRetainsItsSessions() {

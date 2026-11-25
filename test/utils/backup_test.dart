@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:clipious/home/models/home_tabs_layout.dart';
 import 'package:clipious/home/models/phone_navigation.dart';
+import 'package:clipious/music/models/device_music_artwork_preferences.dart';
 import 'package:clipious/music/models/music_artwork_cache.dart';
 import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
@@ -498,6 +499,35 @@ void main() {
                 ]
               })),
           throwsFormatException);
+    }
+  });
+
+  test('device artwork choices restore to the selected profile', () async {
+    final person = await target.createProfile('Listener');
+    final destination = target.forProfile(person.id);
+    await DeviceMusicArtworkPreferences.setSource(
+        source, DeviceMusicArtworkSource.embeddedOnly);
+    await DeviceMusicArtworkPreferences.setQuality(
+        source, DeviceMusicArtworkQuality.high);
+    await DeviceMusicArtworkPreferences.setCrop(
+        source, DeviceMusicArtworkCrop.fit);
+
+    final backup = UserBackup.parse((await source.exportBackup()).encode());
+    await destination.restoreBackup(backup, replace: true);
+    final restored = DeviceMusicArtworkPreferences.forDatabase(destination);
+    expect(restored.source, DeviceMusicArtworkSource.embeddedOnly);
+    expect(restored.quality, DeviceMusicArtworkQuality.high);
+    expect(restored.crop, DeviceMusicArtworkCrop.fit);
+    final defaults = DeviceMusicArtworkPreferences.forDatabase(target);
+    expect(defaults.source, DeviceMusicArtworkSource.preferAdjacent);
+    expect(defaults.quality, DeviceMusicArtworkQuality.balanced);
+    expect(defaults.crop, DeviceMusicArtworkCrop.crop);
+    for (final key in [
+      deviceMusicArtworkSourceSettingName,
+      deviceMusicArtworkQualitySettingName,
+      deviceMusicArtworkCropSettingName,
+    ]) {
+      expect(UserBackup.validSetting(SettingsValue(key, 'unknown')), isFalse);
     }
   });
 

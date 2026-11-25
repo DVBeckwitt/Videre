@@ -12,17 +12,23 @@ import 'package:clipious/globals.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
 import 'package:clipious/main.dart' as app_main;
 import 'package:clipious/media_handler.dart';
+import 'package:clipious/music/models/music_mix.dart';
+import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/player/models/manual_music_preparation.dart';
+import 'package:clipious/player/models/media_command.dart';
 import 'package:clipious/player/models/media_event.dart';
 import 'package:clipious/player/models/backend_playback.dart';
+import 'package:clipious/player/models/music_queue_shuffle.dart';
 import 'package:clipious/player/models/playback_queue.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
+import 'package:clipious/recommendations/music_playlist_recommendation_exclusions.dart';
 import 'package:clipious/service.dart';
 import 'package:clipious/settings/models/backend_selector.dart';
 import 'package:clipious/settings/models/db/server.dart';
 import 'package:clipious/settings/models/db/settings.dart';
+import 'package:clipious/settings/models/db/video_filter.dart';
 import 'package:clipious/settings/states/settings.dart';
 import 'package:clipious/utils/request_cookies.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
@@ -33,6 +39,7 @@ import 'package:clipious/videos/models/sponsor_segment_types.dart';
 import 'package:clipious/videos/models/video.dart';
 import 'package:easy_debounce/easy_throttle.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -169,6 +176,131 @@ void main() {
     await settings.close();
     await app.close();
     await db.close();
+  });
+
+  const requestAlbumSong = Video(
+    videoId: 'albumSong',
+    musicMetadata: MusicMetadata(title: 'Album song', artist: 'Artist'),
+    formatStreams: [],
+    adaptiveFormats: [],
+  );
+  const requestAlbumCloser = Video(
+    videoId: 'albumCloser',
+    musicMetadata: MusicMetadata(title: 'Closer', artist: 'Artist'),
+    formatStreams: [],
+    adaptiveFormats: [],
+  );
+  const requestedSong = Video(
+    videoId: 'requestedSong',
+    musicMetadata: MusicMetadata(title: 'Requested song', artist: 'Guest'),
+    formatStreams: [],
+    adaptiveFormats: [],
+  );
+
+  test('requests play in order and return to the same album occurrence',
+      () async {
+    final previousService = service;
+    service = _AdjacentService();
+    addTearDown(() => service = previousService);
+    final source = PlaylistReference(
+      kind: PlaylistSourceKind.local,
+      playlistId: 'local:queue-taste',
+      profileId: db.profileId,
+    );
+    await player.playVideo(
+        [requestAlbumSong, requestAlbumSong, requestAlbumCloser],
+        startIndex: 1,
+        queueTitle: 'Album',
+        fromMusic: true,
+        recommendationSource: source);
+    const position = Duration(milliseconds: 24321);
+    await player.onProgress(position);
+    final albumId = player.state.currentQueueId;
+    final played = List.of(player.state.playedVideos);
+    final next = player.state.playQueue.toList();
+
+    expect(
+        player.addMusicRequest(player.state.currentlyPlaying!,
+            inheritCurrentRecommendationSource: true),
+        isTrue);
+    expect(player.addMusicRequest(requestedSong, recommendationSource: source),
+        isTrue);
+    expect(player.addMusicRequest(requestedSong), isTrue);
+    final requests = player.musicRequests.map(playbackQueueId).toList();
+    expect(requests.toSet(), hasLength(3));
+    expect(requests, isNot(contains(albumId)));
+    expect(player.state.currentQueueId, albumId);
+    expect(player.state.playQueue.toList(), next);
+
+    expect(await player.playMusicRequests(), isTrue);
+    expect(player.state.currentQueueId, requests[0]);
+    expect(player.captureMusicPlaybackCheckpoint()?.musicRecommendationSources,
+        {requests[0]: musicPlaylistRecommendationKey(source)});
+    expect(player.hasMusicRequestSuccessor, isTrue);
+
+    final second = player.stream
+        .firstWhere((state) => state.currentQueueId == requests[1]);
+    player.setEvent(
+        const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+    player.setEvent(const MediaEvent(state: MediaState.completed));
+    await second.timeout(const Duration(seconds: 2));
+    expect(player.captureMusicPlaybackCheckpoint()?.musicRecommendationSources,
+        {requests[1]: musicPlaylistRecommendationKey(source)});
+
+    final third = player.stream
+        .firstWhere((state) => state.currentQueueId == requests[2]);
+    await handler.skipToNext();
+    await third.timeout(const Duration(seconds: 2));
+    expect(player.captureMusicPlaybackCheckpoint()?.musicRecommendationSources,
+        isEmpty);
+
+    final returned =
+        player.stream.firstWhere((state) => state.currentQueueId == albumId);
+    player.setEvent(
+        const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+    player.setEvent(const MediaEvent(state: MediaState.completed));
+    await returned.timeout(const Duration(seconds: 2));
+    expect(player.state.position, position);
+    expect(player.state.playedVideos, played);
+    expect(player.state.playQueue.toList(), next);
+    expect(player.musicQueueTitle, 'Album');
+    expect(player.musicRequests, isEmpty);
+    expect(player.playingMusicRequests, isFalse);
+  });
+
+  test('a resumed request retains its separate order and return checkpoint',
+      () async {
+    final previousService = service;
+    service = _AdjacentService();
+    addTearDown(() => service = previousService);
+    await player
+        .playVideo([requestAlbumSong, requestAlbumCloser], fromMusic: true);
+    const position = Duration(milliseconds: 18462);
+    await player.onProgress(position);
+    final albumId = player.state.currentQueueId;
+    expect(player.addMusicRequest(requestedSong), isTrue);
+    expect(player.addMusicRequest(requestAlbumCloser), isTrue);
+    expect(await player.playMusicRequests(), isTrue);
+    final requestId = player.state.currentQueueId;
+    await player.close();
+
+    player = _SessionPlayer(PlayerState.init(null), settings);
+    player.audioSession = await AudioSession.instance;
+    app_main.mediaHandler = handler = MediaHandler(player);
+    player.restoreSession();
+    expect(player.state.isHidden, isTrue);
+    expect(player.state.hasVideo, isFalse);
+    expect(player.playingMusicRequests, isTrue);
+    expect(player.musicRequests.single.videoId, requestAlbumCloser.videoId);
+    await player.resumeSession(fromMusic: true);
+    expect(player.state.currentQueueId, requestId);
+
+    player.pause();
+    expect(await player.returnFromMusicRequests(), isTrue);
+    expect(player.state.currentQueueId, albumId);
+    expect(player.state.position, position);
+    expect(player.requestedPlaying, isFalse);
+    expect(player.musicRequests.single.videoId, requestAlbumCloser.videoId);
   });
 
   test(
@@ -864,6 +996,50 @@ void main() {
     }
   });
 
+  test('car queue IDs select occurrences and expire on queue replacement',
+      () async {
+    const channel = MethodChannel('videre/car_media');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    var rows = <Map<Object?, Object?>>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'setMusicQueue') {
+        rows = [
+          for (final row in call.arguments as List)
+            Map<Object?, Object?>.from(row as Map),
+        ];
+        return true;
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    final songs = [
+      for (final video in [videos.first, videos.first, videos.last])
+        video.copyWith(
+          lengthSeconds: 120,
+          musicMetadata: MusicMetadata(title: video.videoId, artist: 'Artist'),
+        ),
+    ];
+    await player.playVideo(songs, fromMusic: true);
+    await Future<void>.delayed(Duration.zero);
+    final firstId = rows[0]['id']! as int;
+    final duplicateId = rows[1]['id']! as int;
+    expect(firstId, isNot(duplicateId));
+    expect(handler.playbackState.value.queueIndex, firstId);
+
+    await handler.skipToQueueItem(duplicateId);
+    await Future<void>.delayed(Duration.zero);
+    expect(player.state.currentQueueId, 'a#1');
+    expect(handler.playbackState.value.queueIndex, duplicateId);
+
+    await player.playVideo(songs, fromMusic: true, startIndex: 2);
+    await Future<void>.delayed(Duration.zero);
+    expect(rows[1]['id'], isNot(duplicateId));
+    await handler.skipToQueueItem(duplicateId);
+    expect(player.state.currentQueueId, 'c');
+  });
+
   test('notification artwork failures do not stop a playable video', () async {
     await player.close();
     player = _ArtworkFailurePlayer(PlayerState.init(null), settings);
@@ -978,6 +1154,102 @@ void main() {
     expect(next.playQueue, [...expected.skip(1), appended]);
   });
 
+  test('steering a seeded mix preserves the active track and manual edits',
+      () async {
+    const seed = Video(
+        videoId: 'MixSeed0001',
+        musicMetadata: MusicMetadata(title: 'Seed', artist: 'Seed Artist'),
+        adaptiveFormats: [],
+        formatStreams: []);
+    const pool = [
+      MusicTrack(videoId: 'MixTrack001', title: 'One', artists: ['Other']),
+      MusicTrack(videoId: 'MixTrack002', title: 'Two', artists: ['Second']),
+      MusicTrack(videoId: 'MixTrack003', title: 'Three', artists: ['Third']),
+      MusicTrack(videoId: 'MixTrack004', title: 'Four', artists: ['Fourth']),
+      MusicTrack(
+          videoId: 'MixTrack005', title: 'Five', artists: ['Seed Artist']),
+      MusicTrack(videoId: 'MixTrack006', title: 'Six', artists: ['Sixth']),
+      MusicTrack(
+          videoId: 'MixTrack007', title: 'Seven', artists: ['Seed Artist']),
+    ];
+    expect(
+        await player.playMusicMix(seed,
+            queueTitle: 'Mix from Seed',
+            loadCandidates: (_) async => pool,
+            isCurrent: () => true),
+        isTrue);
+    expect(player.state.currentQueueId, seed.videoId);
+    expect(player.state.playQueue, pool.take(4).map((track) => track.videoId));
+
+    player.enqueueQueueCopies([
+      pool.first.toVideo(),
+      const Video(
+          videoId: 'MixManual01', adaptiveFormats: [], formatStreams: [])
+    ], next: true);
+    final duplicate = player.state.playQueue.first;
+    expect(duplicate, isNot(pool.first.videoId));
+    player.moveMusicQueueOccurrence('MixTrack004', beforeId: 'MixTrack002');
+    player.removeInactiveQueueOccurrences({'MixTrack003'});
+    await db.saveFilter(VideoFilter(value: 'Five')..hideFromFeed = true);
+    player.seek(const Duration(seconds: 17));
+    final before = player.state;
+
+    expect(player.steerMusicMix(MusicMixSteering.moreFromSeedArtist), isTrue);
+    expect(player.state.playQueue, [
+      duplicate,
+      'MixManual01',
+      'MixTrack007',
+      'MixTrack004',
+      'MixTrack002'
+    ]);
+    expect(player.state.currentlyPlaying, same(before.currentlyPlaying));
+    expect(player.state.playedVideos, before.playedVideos);
+    expect(player.state.position, before.position);
+    expect(player.state.mediaCommand, same(before.mediaCommand));
+    expect(player.state.videos.map(playbackQueueId), [
+      seed.videoId,
+      duplicate,
+      'MixManual01',
+      'MixTrack007',
+      'MixTrack004',
+      'MixTrack002',
+    ]);
+
+    await player.selectQueueOccurrence('MixManual01');
+    expect(player.state.playedVideos, [seed.videoId, duplicate]);
+    expect(player.steerMusicMix(MusicMixSteering.moreVariety), isTrue);
+    expect(
+        player.state.playQueue, ['MixTrack006', 'MixTrack004', 'MixTrack002']);
+    expect(player.state.currentQueueId, 'MixManual01');
+    expect(player.state.playedVideos, [seed.videoId, duplicate]);
+    await player.playVideo(videos);
+    expect(player.hasActiveMusicMix, isFalse);
+  });
+
+  test('starting a seeded mix cannot replace a newer queue', () async {
+    const seed = Video(
+        videoId: 'MixSeed0001',
+        musicMetadata: MusicMetadata(title: 'Seed', artist: 'Seed Artist'),
+        adaptiveFormats: [],
+        formatStreams: []);
+    final result = Completer<List<MusicTrack>>();
+    late bool Function() current;
+    final pending = player.playMusicMix(seed,
+        queueTitle: 'Mix from Seed',
+        loadCandidates: (isCurrent) {
+          current = isCurrent;
+          return result.future;
+        },
+        isCurrent: () => true);
+    expect(current(), isTrue);
+    await player.playVideo(videos.reversed.toList());
+    expect(current(), isFalse);
+    result.complete([const MusicTrack(videoId: 'MixTrack001', title: 'One')]);
+    expect(await pending, isNull);
+    expect(player.state.currentQueueId, 'c');
+    expect(player.hasActiveMusicMix, isFalse);
+  });
+
   test('sorting while the next song opens leaves its transition intact',
       () async {
     final previousService = service;
@@ -1014,6 +1286,111 @@ void main() {
     final next = await advanced.timeout(const Duration(seconds: 2));
     expect(next.playedVideos, ['a']);
     expect(next.playQueue, ['b', 'c']);
+  });
+
+  test('album shuffle groups the upcoming songs in source order for Next',
+      () async {
+    Video track(String id, {String? album}) => Video(
+          videoId: id,
+          formatStreams: const [],
+          adaptiveFormats: const [],
+          lengthSeconds: 120,
+          musicMetadata: MusicMetadata(
+            title: id,
+            artist: 'Artist',
+            albumPlaylistId: album,
+          ),
+        );
+    await player.playVideo([
+      track('previous'),
+      track('current'),
+      track('a1', album: 'OLAK5uy_a'),
+      track('b1', album: 'OLAK5uy_b'),
+      track('a2', album: 'OLAK5uy_a'),
+      track('b2', album: 'OLAK5uy_b'),
+    ], audio: true, fromMusic: true, startIndex: 1);
+    player.seek(const Duration(seconds: 17));
+    final before = player.state;
+    final generation = player.backendPlaybackGeneration;
+    expect(before.playQueue, ['a1', 'b1', 'a2', 'b2']);
+
+    player.shuffleMusicQueueUpcoming(MusicQueueShuffle.albums);
+
+    final shuffled = player.state;
+    final upcoming = shuffled.playQueue.toList();
+    expect(
+        upcoming,
+        anyOf(equals(['a1', 'a2', 'b1', 'b2']),
+            equals(['b1', 'b2', 'a1', 'a2'])));
+    expect(shuffled.videos.map(playbackQueueId),
+        before.videos.map(playbackQueueId));
+    expect(shuffled.playedVideos, ['previous']);
+    expect(shuffled.currentQueueId, 'current');
+    expect(shuffled.currentlyPlaying, same(before.currentlyPlaying));
+    expect(shuffled.position, const Duration(seconds: 17));
+    expect(shuffled.mediaCommand, same(before.mediaCommand));
+    expect(player.backendPlaybackGeneration, generation);
+    expect(settings.state.playerShuffleMode, isFalse);
+
+    final advanced = player.stream
+        .firstWhere((state) => state.currentQueueId == upcoming.first);
+    player.playNext();
+    final next = await advanced.timeout(const Duration(seconds: 2));
+    expect(next.playedVideos, ['previous', 'current']);
+    expect(next.playQueue, upcoming.skip(1));
+  });
+
+  test('fewer repeats preserves the explicitly queued next occurrence',
+      () async {
+    const music = MusicMetadata(title: 'Song', artist: 'Artist');
+    final repeat = videos[0].copyWith(musicMetadata: music);
+    await player.playVideo([
+      repeat,
+      repeat,
+      videos[1].copyWith(musicMetadata: music),
+      videos[2].copyWith(musicMetadata: music),
+    ], audio: true, fromMusic: true);
+    final duplicate = player.state.playQueue.first;
+    expect(await player.enqueueMusicSongs([repeat], next: true), isTrue);
+    final explicit = player.state.playQueue.first;
+    final before = player.state.playQueue.toList();
+    expect(duplicate, isNot(explicit));
+    expect(explicit, isNot(player.state.currentQueueId));
+
+    await settings
+        .saveSetting(SettingsValue(musicQueueLockedSettingName, 'true'));
+    player.shuffleMusicQueueUpcoming(MusicQueueShuffle.fewerRepeats);
+    expect(player.state.playQueue, before);
+
+    await settings
+        .saveSetting(SettingsValue(musicQueueLockedSettingName, 'false'));
+    player.shuffleMusicQueueUpcoming(MusicQueueShuffle.fewerRepeats);
+    final shuffled = player.state.playQueue.toList();
+    expect(shuffled, unorderedEquals(before));
+    expect(shuffled.first, explicit);
+    expect(shuffled[1], isNot(duplicate));
+
+    player.moveMusicQueueOccurrence(duplicate, beforeId: shuffled[1]);
+    expect(player.state.playQueue.take(2), [explicit, duplicate]);
+    player.removeVideoFromQueue(duplicate);
+    expect(player.state.playQueue, shuffled.where((id) => id != duplicate));
+    expect(
+        player.state.videos.map(playbackQueueId), isNot(contains(duplicate)));
+
+    final advanced =
+        player.stream.firstWhere((state) => state.currentQueueId == explicit);
+    player.playNext();
+    final next = await advanced.timeout(const Duration(seconds: 2));
+    expect(next.currentlyPlaying?.videoId, repeat.videoId);
+    expect(next.playedVideos, [playbackQueueId(repeat)]);
+
+    final returned = player.stream
+        .firstWhere((state) => state.currentQueueId == playbackQueueId(repeat));
+    player.playPrevious();
+    await returned.timeout(const Duration(seconds: 2));
+    expect(player.state.playQueue.first, explicit);
+    player.shuffleMusicQueueUpcoming(MusicQueueShuffle.fewerRepeats);
+    expect(player.state.playQueue.first, explicit);
   });
 
   test('repeated playlist songs advance and go back by queue occurrence',
@@ -1150,6 +1527,141 @@ void main() {
       service = original;
     });
 
+    group('Music transport preferences', () {
+      const completed = MediaEvent(state: MediaState.completed);
+      const playing = MediaEvent(
+        state: MediaState.playing,
+        type: MediaEventType.play,
+      );
+      const paused = MediaEvent(
+        state: MediaState.pause,
+        type: MediaEventType.pause,
+      );
+
+      for (final restartFirst in [false, true]) {
+        test(
+          'Previous applies the track policy (restart first=$restartFirst)',
+          () async {
+            if (restartFirst) {
+              await settings.setMusicPreviousTrackPolicy(
+                MusicPreviousTrackPolicy.restartCurrentAfterThreshold,
+              );
+            }
+            await open(['a', 'b', 'c'], index: 1);
+            await player.onProgress(const Duration(seconds: 4));
+
+            await handler.skipToPrevious();
+            if (restartFirst) {
+              expect(player.state.currentQueueId, 'b');
+              expect(player.state.position, Duration.zero);
+              expect(player.state.playedVideos, ['a']);
+              expect(player.state.playQueue, ['c']);
+              player.playPrevious();
+            }
+            await until(() => player.state.currentQueueId == 'a');
+            expect(player.state.playQueue, ['b', 'c']);
+          },
+        );
+      }
+
+      for (final keepPaused in [false, true]) {
+        test(
+          'manual next respects keep-paused setting ($keepPaused)',
+          () async {
+            await settings.setMusicKeepPausedOnSkip(keepPaused);
+            await open(['a', 'b', 'c']);
+            await handler.pause();
+            player.setEvent(paused);
+
+            await handler.skipToNext();
+            await until(() => player.state.currentQueueId == 'b');
+            expect(player.intendsPlayback, !keepPaused);
+            expect(player.state.position, Duration.zero);
+            if (keepPaused) {
+              player.setEvent(const MediaEvent(state: MediaState.ready));
+              expect(handler.playbackState.value.playing, isFalse);
+            }
+          },
+        );
+      }
+
+      test(
+        'Previous and both queue selectors preserve a Music pause',
+        () async {
+          await settings.setMusicKeepPausedOnSkip(true);
+          await open(['a', 'b', 'c'], index: 1);
+          player.pause();
+          player.setEvent(paused);
+
+          player.playPrevious();
+          await until(() => player.state.currentQueueId == 'a');
+          expect(player.intendsPlayback, isFalse);
+          await player.selectQueueOccurrence('c');
+          expect(player.state.currentQueueId, 'c');
+          expect(player.intendsPlayback, isFalse);
+          await handler.skipToQueueItem(1);
+          expect(player.state.currentQueueId, 'b');
+          expect(player.intendsPlayback, isFalse);
+          player.setEvent(const MediaEvent(state: MediaState.ready));
+          expect(handler.playbackState.value.playing, isFalse);
+        },
+      );
+
+      test(
+        'repeat-one cues the same song and waits for explicit Play',
+        () async {
+          await settings.setRepeatMode(PlayerRepeat.repeatOne);
+          await settings.setMusicPauseAtRepeat(true);
+          await open(['a', 'b']);
+          await player.onProgress(const Duration(seconds: 8));
+
+          player.setEvent(completed);
+          await until(
+            () =>
+                player.state.position == Duration.zero &&
+                !player.intendsPlayback,
+          );
+          expect(player.state.currentQueueId, 'a');
+          expect(player.state.playQueue, ['b']);
+          expect(handler.playbackState.value.playing, isFalse);
+
+          await handler.play();
+          player.setEvent(playing);
+          expect(handler.playbackState.value.playing, isTrue);
+          expect(player.state.currentQueueId, 'a');
+        },
+      );
+
+      test(
+        'repeat-all advances normally and pauses only at the queue wrap',
+        () async {
+          await settings.setRepeatMode(PlayerRepeat.repeatAll);
+          await settings.setMusicPauseAtRepeat(true);
+          await settings.setSongTransitionMode(SongTransitionMode.crossfade);
+          await open(['a', 'b']);
+          expect(player.automaticMusicSuccessor?.videoId, 'b');
+
+          player.setEvent(completed);
+          await until(() => player.state.currentQueueId == 'b');
+          expect(player.intendsPlayback, isTrue);
+          player.setEvent(playing);
+          expect(player.automaticMusicSuccessor, isNull);
+
+          player.setEvent(completed);
+          await until(
+            () =>
+                player.state.currentQueueId == 'a' &&
+                player.state.playQueue.isNotEmpty,
+          );
+          expect(player.state.position, Duration.zero);
+          expect(player.state.playedVideos, isEmpty);
+          expect(player.state.playQueue, ['b']);
+          expect(player.intendsPlayback, isFalse);
+          expect(handler.playbackState.value.playing, isFalse);
+        },
+      );
+    });
+
     group('manual Music selection while a song is playing', () {
       late HeldMusicPreparer preparer;
 
@@ -1174,10 +1686,40 @@ void main() {
             () async {
           player.manualMusicPreparer = null;
           await settings.setShuffle(true);
+          final firstSource = PlaylistReference(
+            kind: PlaylistSourceKind.local,
+            playlistId: 'local:first-source',
+            profileId: db.profileId,
+          );
+          final secondSource = PlaylistReference(
+            kind: PlaylistSourceKind.local,
+            playlistId: 'local:second-source',
+            profileId: db.profileId,
+          );
           final tracks = [song('a'), song('b'), song('a'), song('c')];
+          final originalIds =
+              assignPlaybackQueueIds(tracks).map(playbackQueueId).toList();
+          final expectedSources = {
+            originalIds.first: musicPlaylistRecommendationKey(firstSource),
+            originalIds[2]: musicPlaylistRecommendationKey(secondSource),
+          };
 
-          await player.playMusicCollectionQueue(tracks,
-              queueTitle: 'Selected collections', shuffle: shuffle);
+          await player.playMusicCollectionQueue(
+            [
+              tracks.first,
+              song('filtered').copyWith(filtered: true),
+              ...tracks.skip(1),
+            ],
+            queueTitle: 'Selected collections',
+            shuffle: shuffle,
+            recommendationSources: [
+              firstSource,
+              secondSource,
+              null,
+              secondSource,
+              null,
+            ],
+          );
 
           final ordered = player.state.videos;
           final ids = ordered.map(playbackQueueId).toList();
@@ -1190,6 +1732,33 @@ void main() {
           expect(ids.toSet(), hasLength(tracks.length));
           expect(player.state.currentQueueId, ids.first);
           expect(player.state.playQueue, ids.skip(1).toList());
+          expect(
+              player
+                  .captureMusicPlaybackCheckpoint()
+                  ?.musicRecommendationSources,
+              expectedSources);
+
+          expect(
+              await player.enqueueMusicCollectionQueue([song('a'), song('a')],
+                  recommendationSources: [secondSource, firstSource]),
+              isTrue);
+          final appended = player.state.videos
+              .skip(ids.length)
+              .map(playbackQueueId)
+              .toList();
+          expect(appended.toSet(), hasLength(2));
+          expect(appended.toSet().intersection(ids.toSet()), isEmpty);
+          expect(player.state.currentQueueId, ids.first);
+          expect(player.state.playQueue, [...ids.skip(1), ...appended]);
+          expect(
+              player
+                  .captureMusicPlaybackCheckpoint()
+                  ?.musicRecommendationSources,
+              {
+                ...expectedSources,
+                appended.first: musicPlaylistRecommendationKey(secondSource),
+                appended.last: musicPlaylistRecommendationKey(firstSource),
+              });
         });
       }
 
@@ -1322,6 +1891,52 @@ void main() {
         expectOldQueue();
         expect(player.state.mediaEvent.state, isNot(MediaState.error));
         expect(player.musicSelectionFailureRevision.value, failure + 1);
+      });
+
+      test('a song tap resets shuffle only after its selection commits',
+          () async {
+        await settings.setShuffle(true);
+        player.generatePlayQueue();
+        final current = player.state.currentQueueId;
+        final upcoming = player.state.playQueue.toList();
+        expect(settings.state.musicRetainShuffleOnSongTap, isTrue);
+        await settings.setMusicRetainShuffleOnSongTap(false);
+        expect(settings.state.playerShuffleMode, isTrue);
+        expect(player.state.playQueue, upcoming);
+
+        final failed = player.playVideo([song('failed')],
+            audio: true, fromMusic: true, songTap: true);
+        await until(() => preparer.requests.containsKey('failed'));
+        expect(settings.state.playerShuffleMode, isTrue);
+        preparer.requests['failed']!.complete(false);
+        await failed;
+        expect(settings.state.playerShuffleMode, isTrue);
+        expect(player.state.currentQueueId, current);
+        expect(player.state.playQueue, upcoming);
+
+        final replacement = [song('x'), song('y'), song('z')];
+        final explicit = player.playVideo(replacement,
+            audio: true, fromMusic: true, startIndex: 1);
+        await until(() => preparer.requests.containsKey('y'));
+        preparer.requests['y']!.complete(true);
+        await explicit;
+        expect(settings.state.playerShuffleMode, isTrue);
+        expect(player.state.currentQueueId, 'y');
+        expect(player.state.playedVideos, isEmpty);
+        expect(player.state.playQueue, unorderedEquals(['x', 'z']));
+
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        final tapped = player.playVideo([song('d'), song('e'), song('f')],
+            audio: true, fromMusic: true, startIndex: 1, songTap: true);
+        await until(() => preparer.requests.containsKey('e'));
+        expect(settings.state.playerShuffleMode, isTrue);
+        preparer.requests['e']!.complete(true);
+        await tapped;
+        expect(settings.state.playerShuffleMode, isFalse);
+        expect(player.state.currentQueueId, 'e');
+        expect(player.state.playedVideos, ['d']);
+        expect(player.state.playQueue, ['f']);
       });
 
       test('two queue-row taps publish only the last admitted occurrence',
@@ -1755,6 +2370,84 @@ void main() {
       expect(player.state.currentQueueId, 'b');
       expect(player.state.playedVideos, ['a']);
       expect(player.state.playQueue, ['c']);
+    });
+
+    test('track sleep counts natural completions across manual navigation',
+        () async {
+      await open(['a', 'b', 'c', 'd']);
+      player.sleepAfterTracks(2);
+      await until(() => readyIds().contains('b'));
+      player.playNext();
+      await until(() => player.state.currentQueueId == 'b');
+      expect(player.state.sleepTracksRemaining, 2);
+      player.playPrevious();
+      await until(() => player.state.currentQueueId == 'a');
+      expect(player.state.sleepTracksRemaining, 2);
+      await player.selectQueueOccurrence('b');
+      expect(player.state.sleepTracksRemaining, 2);
+
+      const started =
+          MediaEvent(state: MediaState.playing, type: MediaEventType.play);
+      const completed = MediaEvent(state: MediaState.completed);
+      player.setEvent(started);
+      expect(player.automaticMusicSuccessor?.videoId, 'c');
+      player.setEvent(completed);
+      player.setEvent(completed);
+      await until(() => player.state.currentQueueId == 'c');
+      expect(player.state.sleepTracksRemaining, 1);
+
+      player.setEvent(started);
+      expect(player.automaticMusicSuccessor, isNull);
+      player.setEvent(completed);
+      expect(player.state.hasTimer, isFalse);
+      expect(player.state.sleepTracksRemaining, isNull);
+      expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+      expect(player.state.currentQueueId, 'c');
+      expect(player.state.playQueue, ['d']);
+      expect(handler.playbackState.value.playing, isFalse);
+    });
+
+    for (final repeat in [PlayerRepeat.repeatOne, PlayerRepeat.repeatAll]) {
+      test(
+          'track sleep counts finished playthroughs of the same song ($repeat)',
+          () async {
+        await settings.setRepeatMode(repeat);
+        await open(['a']);
+        player.sleepAfterTracks(2);
+
+        const completed = MediaEvent(state: MediaState.completed);
+        final original = player.state.mediaCommand;
+        player.setEvent(completed);
+        expect(player.state.sleepTracksRemaining, 1);
+        await until(() => player.state.mediaCommand != original);
+        expect(player.state.currentQueueId, 'a');
+        expect(handler.playbackState.value.playing, isTrue);
+
+        player.setEvent(const MediaEvent(state: MediaState.ready));
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        player.setEvent(completed);
+        expect(player.state.sleepTracksRemaining, isNull);
+        expect(player.state.hasTimer, isFalse);
+        expect(player.state.mediaCommand?.type, MediaCommandType.pause);
+        expect(handler.playbackState.value.playing, isFalse);
+      });
+    }
+
+    test('track sleep ignores repeated EOF when autoplay is disabled',
+        () async {
+      await settings.setAutoplayQueue(false);
+      await open(['a', 'b']);
+      player.sleepAfterTracks(2);
+
+      const completed = MediaEvent(state: MediaState.completed);
+      player.setEvent(completed);
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.miniDisplayChanged));
+      player.setEvent(completed);
+      expect(player.state.sleepTracksRemaining, 1);
+      expect(player.state.currentQueueId, 'a');
+      expect(player.state.playQueue, ['b']);
     });
 
     test('a missing saved-only neighbor never starts an online lookup',

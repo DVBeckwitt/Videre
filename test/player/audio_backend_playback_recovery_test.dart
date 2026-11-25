@@ -91,6 +91,8 @@ class _RecordingPlayer extends TestPlayerCubit {
   Video? refreshedVideo;
   Object? refreshError;
   Completer<void>? refreshGate;
+  bool refreshBudgetExhausted = false;
+  int exhaustionSkipCalls = 0;
   bool interrupted = false;
   int requestedSwitches = 0;
   final recoveryProgress = <Duration>[];
@@ -104,6 +106,15 @@ class _RecordingPlayer extends TestPlayerCubit {
   @override
   int get backendPlaybackGeneration =>
       super.backendPlaybackGeneration + requestedSwitches;
+
+  @override
+  bool get playbackRefreshExhausted => refreshBudgetExhausted;
+
+  @override
+  bool trySkipMusicAfterRetryExhaustion() {
+    exhaustionSkipCalls++;
+    return true;
+  }
 
   @override
   Future<Video?> refreshCurrentPlayback(Video video,
@@ -894,6 +905,92 @@ void main() {
     expect(audio.state.video!.backendPlayback, isNull);
     expect(native.nativePlaying, isTrue);
   });
+
+  for (final stalled in [false, true]) {
+    test('manual Music reconnect retains the native playhead, stalled=$stalled',
+        () async {
+      await settings.setMusicAutoReconnect(false);
+      await settings.setMusicSkipAfterRetryExhaustion(true);
+      final source = _video('song', preferred).copyWith(
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'),
+          queueEntryId: 'song-occurrence');
+      final native = _NativeAudio();
+      final audio = create(native, video: source);
+      await audio.playVideo(false);
+      native.nativePosition = const Duration(seconds: 80);
+      if (stalled) {
+        for (final sample in [
+          _progress(0, 10),
+          _progress(2, 37),
+          for (var time = 4; time <= 24; time += 2) _progress(time, 37),
+        ]) {
+          native.progressSamples.add(sample);
+          await audio.checkForStalledPlayback();
+        }
+      } else {
+        native.progressSamples.add(_progress(2, 37));
+        audio.onPlaybackError(_retryable());
+      }
+      await _flush();
+
+      expect(player.refreshCalls, 0);
+      expect(retryService.retryCalls, 0);
+      expect(player.exhaustionSkipCalls, 0);
+      expect(native.sources, hasLength(1));
+      expect(native.nativePlaying, isFalse);
+      expect(audio.state.audioPosition, const Duration(seconds: 37));
+      final progress = player.events
+          .lastWhere((event) => event.type == MediaEventType.progress);
+      expect(progress.value, const Duration(seconds: 37));
+      expect(player.state.currentlyPlaying!.queueEntryId, 'song-occurrence');
+      expect(player.state.mediaEvent.state, MediaState.error);
+    });
+  }
+
+  test('Music reconnect setting leaves initial source fallback intact',
+      () async {
+    await settings.setMusicAutoReconnect(false);
+    await settings.setMusicSkipAfterRetryExhaustion(true);
+    final source = _video('song', preferred).copyWith(
+        musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+    final native = _NativeAudio()..errors.add(_retryable());
+    final audio = create(native, video: source);
+    await audio.playVideo(false);
+
+    expect(retryService.retryCalls, 1);
+    expect(player.exhaustionSkipCalls, 0);
+    expect(native.sources, hasLength(2));
+    expect(native.nativePlaying, isTrue);
+  });
+
+  for (final outcome in ['exhausted', 'paused', 'unauthorized']) {
+    test('Music automatic retry exhaustion handles $outcome', () async {
+      await settings.setMusicSkipAfterRetryExhaustion(true);
+      final source = _video('song', preferred).copyWith(
+          backendPlayback: null,
+          playbackConnection: BackendPlayback(preferred),
+          musicMetadata: const MusicMetadata(title: 'Song', artist: 'Artist'));
+      final native = _NativeAudio();
+      final audio = create(native, video: source);
+      await audio.playVideo(false);
+      player.refreshGate = Completer<void>();
+      player.refreshBudgetExhausted = true;
+      player.refreshError = outcome == 'unauthorized'
+          ? InvidiousServiceError('Refused', statusCode: 401)
+          : InvidiousServiceError('Temporary upstream failure',
+              statusCode: 500);
+      audio.onPlaybackError(_retryable());
+      await _flush();
+      if (outcome == 'paused') player.pause();
+      player.refreshGate!.complete();
+      await _flush();
+
+      expect(player.refreshCalls, 1);
+      expect(native.nativePlaying, isFalse);
+      expect(player.exhaustionSkipCalls, outcome == 'exhausted' ? 1 : 0);
+      expect(audio.state.error, outcome == 'exhausted' ? isNull : isNotNull);
+    });
+  }
 
   for (final refusal in <Object>[
     InvidiousServiceError('Refused', statusCode: 401),

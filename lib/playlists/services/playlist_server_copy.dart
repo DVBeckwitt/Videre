@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../globals.dart' as globals;
+import '../../player/models/local_music_playback.dart';
 import '../../service.dart';
 import '../../settings/models/db/server.dart';
 import '../../settings/models/db/settings.dart';
@@ -134,6 +135,9 @@ class PlaylistServerCopy {
       await previous;
       await _assertCurrent();
       final ids = playlist.videos.map((video) => video.videoId).toList();
+      if (ids.any(isLocalMusicPlaybackId)) {
+        throw StateError('Device files can only be saved in local playlists');
+      }
       if (ids.length != playlist.videoCount) {
         throw StateError('Load every playlist video before saving a copy');
       }

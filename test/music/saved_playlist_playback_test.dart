@@ -33,8 +33,10 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       Duration? startAt,
       bool? audio,
       bool? playing,
+      bool shuffleOnce = false,
       PlaylistLoadSession? playlistLoader,
-      bool fromMusic = false}) async {
+      bool fromMusic = false,
+      bool songTap = false}) async {
     calls.add((
       videos: entries,
       audio: audio,

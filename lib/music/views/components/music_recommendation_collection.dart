@@ -9,6 +9,8 @@ import 'community_music_artwork.dart';
 import 'music_collection_panes.dart';
 import 'music_library_actions.dart';
 import 'music_status_title.dart';
+import 'music_song_row_swipe.dart';
+import 'music_screen_privacy.dart';
 
 /// A recommendation shelf opens as a playable collection, following Muzza's
 /// LocalPlaylistScreen queue behavior. Tracks form a normal Videre queue and
@@ -46,7 +48,8 @@ class _MusicRecommendationCollectionState
   List<MusicTrack> get _tracks =>
       widget.isCurrent() ? widget.eligible(widget.tracks) : const [];
 
-  Future<void> _play({String? from, bool shuffle = false}) async {
+  Future<void> _play(
+      {String? from, bool shuffle = false, bool songTap = false}) async {
     if (!_current) return;
     final tracks = _tracks;
     if (tracks.isEmpty) return;
@@ -58,7 +61,7 @@ class _MusicRecommendationCollectionState
     final request = ++_playRequest;
     try {
       await MusicScreen.playTracks(context, videos,
-          queueTitle: widget.title, startIndex: index);
+          queueTitle: widget.title, startIndex: index, songTap: songTap);
     } catch (_) {
       if (mounted && request == _playRequest && _current) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -96,7 +99,10 @@ class _MusicRecommendationCollectionState
   }
 
   @override
-  Widget build(BuildContext context) => Shortcuts(
+  Widget build(BuildContext context) =>
+      MusicScreenPrivacySurface(child: _buildCollection(context));
+
+  Widget _buildCollection(BuildContext context) => Shortcuts(
         shortcuts: {
           LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
         },
@@ -149,9 +155,8 @@ class _MusicRecommendationCollectionState
                     final song = tracks[index];
                     final video = song.toVideo();
                     final artists = song.artists.join(', ');
-                    return ListTile(
-                      key: ValueKey('music-collection-${song.videoId}'),
-                      onTap: () => _play(from: song.videoId),
+                    final tile = ListTile(
+                      onTap: () => _play(from: song.videoId, songTap: true),
                       onLongPress: () => MusicLibraryActions.showSongMenu(
                           context, video,
                           onPlay: () => _play(from: song.videoId)),
@@ -167,6 +172,12 @@ class _MusicRecommendationCollectionState
                       trailing: MusicLibraryActions(
                           videos: [video],
                           onPlay: () => _play(from: song.videoId)),
+                    );
+                    return MusicSongRowSwipe(
+                      key: ValueKey('music-collection-${song.videoId}'),
+                      onAction: (action) =>
+                          MusicLibraryActions.queueSong(context, video, action),
+                      child: tile,
                     );
                   },
                 );

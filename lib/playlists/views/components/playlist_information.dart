@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../l10n/generated/app_localizations.dart';
+import '../../../player/models/local_music_playback.dart';
 import '../../models/playlist.dart';
 import '../../models/playlist_reference.dart';
 import '../../states/playlist.dart';
@@ -78,6 +79,8 @@ class PlaylistInformation extends StatelessWidget {
             ...details.map(Text.new),
           if (showServerCopy &&
               reference != null &&
+              !playlist.videos
+                  .any((video) => isLocalMusicPlaybackId(video.videoId)) &&
               (playlist.isLocal || reference.kind == PlaylistSourceKind.public))
             PlaylistServerSaveButton(
                 playlist: playlist,

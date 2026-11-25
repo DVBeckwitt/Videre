@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/globals.dart';
@@ -122,7 +123,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
 
   @override
   Future<void> playOfflineVideos(List<DownloadedVideo> videos,
-      {int startIndex = 0, bool fromMusic = false}) async {
+      {int startIndex = 0,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     offline.add((id: videos[startIndex].videoId, music: fromMusic));
   }
 
@@ -133,7 +136,9 @@ class _Player extends Cubit<PlayerState> implements PlayerCubit {
       bool? playing,
       int? startIndex,
       String? queueTitle,
-      bool fromMusic = false}) async {
+      PlaylistReference? recommendationSource,
+      bool fromMusic = false,
+      bool songTap = false}) async {
     if (failPlayback) throw StateError('Playback unavailable');
     calls.add((videos: videos, audio: audio, startAt: startAt));
   }

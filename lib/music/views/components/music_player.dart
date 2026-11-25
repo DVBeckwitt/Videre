@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/downloads/models/downloaded_video.dart';
+import 'package:clipious/downloads/states/download_manager.dart';
 import 'package:clipious/globals.dart' show db;
 import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' show isTv;
@@ -12,6 +13,8 @@ import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/music_content_advisory.dart';
 import 'package:clipious/music/models/music_library_entry.dart';
 import 'package:clipious/music/models/music_lyrics.dart';
+import 'package:clipious/music/models/music_mix.dart';
+import 'package:clipious/music/models/music_player_appearance.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_lyrics_service.dart';
@@ -45,9 +48,12 @@ import 'music_audio_quality_button.dart';
 import 'music_duration_label.dart';
 import 'music_library_actions.dart';
 import 'music_player_artwork.dart';
+import 'music_player_scrubber.dart';
 import 'music_playback_artwork.dart';
 import 'music_playing_device_artists.dart';
 import 'music_playing_source.dart';
+import 'music_saved_queues.dart';
+import 'music_screen_privacy.dart';
 import 'music_sound_sheet.dart';
 import 'music_sponsor_notice.dart';
 import 'music_wide_player_layout.dart';
@@ -143,7 +149,10 @@ class _MusicPlayerSurface extends StatelessWidget {
   );
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      MusicScreenPrivacySurface(child: _buildPlayerSurface(context));
+
+  Widget _buildPlayerSurface(BuildContext context) {
     final appTheme = Theme.of(context);
     final palette =
         context.select((SettingsCubit cubit) => cubit.state.themePalette);
@@ -215,7 +224,7 @@ class _MusicPlayerState extends State<MusicPlayer>
   final _queueScope = FocusScopeNode(debugLabel: 'Music queue overlay');
   double? _seekPosition;
   String? _queueId;
-  int? _layoutMode;
+  (int, MusicNowPlayingStyle)? _layoutMode;
   int _layoutRevision = 0;
 
   @override
@@ -288,13 +297,30 @@ class _MusicPlayerState extends State<MusicPlayer>
   @override
   Widget build(BuildContext context) {
     return _MusicPlayerSurface(
-        child: MusicPlaybackTitles(builder: _buildPlayer));
+      child: ListenableBuilder(
+        listenable: MusicPlayerAppearance.revision,
+        builder: (_, __) => MusicPlaybackTitles(builder: _buildPlayer),
+      ),
+    );
   }
 
   Widget _buildPlayer(
       BuildContext context, String? Function(IdedVideo?) savedTitle) {
     final app = context.watch<AppCubit>();
     final session = app.state;
+    final database = db;
+    final activeProfile = session.profileId == database.profileId &&
+        !session.globalLoading &&
+        !session.sessionRecoveryRequired;
+    final style = activeProfile
+        ? MusicNowPlayingStyle.forDatabase(database)
+        : MusicNowPlayingStyle.classic;
+    final background = activeProfile
+        ? MusicPlayerBackground.forDatabase(database)
+        : MusicPlayerBackground.artwork;
+    final scrubber = activeProfile
+        ? MusicScrubberStyle.forDatabase(database)
+        : MusicScrubberStyle.gapped;
     final player = context.read<PlayerCubit>();
     final state = context.watch<PlayerCubit>().state;
     final pending = player.openingMusicEntry;
@@ -365,11 +391,12 @@ class _MusicPlayerState extends State<MusicPlayer>
           constraints.maxWidth >= 480 &&
           constraints.maxWidth > constraints.maxHeight;
       final portraitPhone = !wide && !shortLandscape && !widget.television;
-      final mode = shortLandscape
+      final viewportMode = shortLandscape
           ? 1
           : wide
               ? 2
               : 0;
+      final mode = (viewportMode, style);
       if (_layoutMode != mode) {
         _layoutMode = mode;
         _layoutRevision++;
@@ -380,12 +407,16 @@ class _MusicPlayerState extends State<MusicPlayer>
           _queueMotion.value = _queueVisibility == true ? 1 : 0;
         }
       }
+      final compactArtwork = style == MusicNowPlayingStyle.compact;
+      final largeArtwork = style == MusicNowPlayingStyle.largeArtwork;
+      final horizontalPadding = largeArtwork ? 10.0 : 18.0;
       final nowPlaying = LayoutBuilder(
           builder: (context, viewport) => SingleChildScrollView(
                 key: const ValueKey('music-now-playing-scroll'),
                 padding: shortLandscape
                     ? const EdgeInsets.symmetric(horizontal: 12, vertical: 8)
-                    : EdgeInsets.fromLTRB(18, 10, 18, portraitPhone ? 6 : 16),
+                    : EdgeInsets.fromLTRB(horizontalPadding, 10,
+                        horizontalPadding, portraitPhone ? 6 : 16),
                 child: Center(
                     child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 510),
@@ -460,8 +491,24 @@ class _MusicPlayerState extends State<MusicPlayer>
                                   ? controlBudget
                                   : 356 + metadataHeight * 2 + sourceBudget) -
                               artworkSpacing;
-                          final artworkSize = math.min(
-                              panel.maxWidth, heightBudget.clamp(116.0, 480.0));
+                          final artworkBudget = switch (style) {
+                            MusicNowPlayingStyle.classic => heightBudget.clamp(
+                                116.0,
+                                480.0,
+                              ),
+                            MusicNowPlayingStyle.largeArtwork =>
+                              (heightBudget + (textScale <= 24 ? 64 : 24))
+                                  .clamp(
+                                116.0,
+                                510.0,
+                              ),
+                            MusicNowPlayingStyle.compact =>
+                              heightBudget.clamp(116.0, 480.0) * 0.68,
+                          };
+                          final artworkWidth =
+                              panel.maxWidth * (compactArtwork ? 0.68 : 1);
+                          final artworkSize =
+                              math.min(artworkWidth, artworkBudget);
                           final artwork = !shortLandscape
                               ? SizedBox(
                                   height: artworkSize + artworkSpacing,
@@ -582,6 +629,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                                   ),
                                 ],
                                 _progress(context, player, state,
+                                    style: scrubber,
                                     length: video?.lengthSeconds ??
                                         offline?.lengthSeconds,
                                     live: video?.liveNow == true),
@@ -678,18 +726,23 @@ class _MusicPlayerState extends State<MusicPlayer>
                           // Muzza centers the cover in the space above a bottom-aligned
                           // control group. Keep that composition scrollable on short
                           // screens and when large text or a retry notice needs room.
-                          final artworkTop = math.max(
-                              0.0,
-                              (viewport.maxHeight -
-                                      16 -
-                                      controlBudget -
-                                      artworkSize -
-                                      artworkSpacing) /
-                                  2);
+                          final artworkTop = compactArtwork
+                              ? 0.0
+                              : math.max(
+                                  0.0,
+                                  (viewport.maxHeight -
+                                          16 -
+                                          controlBudget -
+                                          artworkSize -
+                                          artworkSpacing) /
+                                      2,
+                                );
                           return ConstrainedBox(
                               constraints: BoxConstraints(
-                                  minHeight:
-                                      math.max(0.0, viewport.maxHeight - 16)),
+                                minHeight: compactArtwork
+                                    ? 0
+                                    : math.max(0.0, viewport.maxHeight - 16),
+                              ),
                               child: Column(
                                   mainAxisAlignment:
                                       MainAxisAlignment.spaceBetween,
@@ -786,8 +839,15 @@ class _MusicPlayerState extends State<MusicPlayer>
                       music,
                       video,
                       offline,
-                      math.min(constraints.maxWidth * 0.34,
-                          math.max(1, constraints.maxHeight - 32)),
+                      math.min(
+                        constraints.maxWidth *
+                            (switch (style) {
+                              MusicNowPlayingStyle.classic => 0.34,
+                              MusicNowPlayingStyle.largeArtwork => 0.375,
+                              MusicNowPlayingStyle.compact => 0.26,
+                            }),
+                        math.max(1, constraints.maxHeight - 32),
+                      ),
                       allowOnlineArtwork: allowOnlineArtwork,
                       interactive: interactiveArtwork,
                       onSeekStep: widget.television ? null : seekStep)),
@@ -936,50 +996,68 @@ class _MusicPlayerState extends State<MusicPlayer>
         ],
       ]);
     });
-    return Stack(fit: StackFit.expand, children: [
-      // The same guarded artwork loader supplies Muzza's blurred backdrop.
-      ExcludeSemantics(
-        child: RepaintBoundary(
-          child: ClipRect(
-            child: Stack(fit: StackFit.expand, children: [
-              ColoredBox(color: colors.surface),
-              ImageFiltered(
-                imageFilter: ui.ImageFilter.blur(sigmaX: 52, sigmaY: 52),
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox.square(
-                    dimension: 180,
-                    child: MusicPlaybackArtwork(
-                        music: music,
-                        video: video,
-                        offline: offline,
-                        showPlaceholder: false),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (background == MusicPlayerBackground.artwork)
+          IgnorePointer(
+            key: const ValueKey('music-player-artwork-background'),
+            child: ExcludeSemantics(
+              child: RepaintBoundary(
+                child: ClipRect(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      ColoredBox(color: colors.surface),
+                      ImageFiltered(
+                        imageFilter: ui.ImageFilter.blur(
+                          sigmaX: 52,
+                          sigmaY: 52,
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox.square(
+                            dimension: 180,
+                            child: MusicPlaybackArtwork(
+                              music: music,
+                              video: video,
+                              offline: offline,
+                              showPlaceholder: false,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Keep controls and secondary text legible over vivid covers.
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              colors.surface,
+                              colors.surface.withAlpha(0xbc),
+                              colors.surface.withAlpha(0xcf),
+                              colors.surface,
+                            ],
+                            stops: const [0, 0.27, 0.76, 1],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-              DecoratedBox(
-                  decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    colors.surface,
-                    colors.surface.withAlpha(0x6b),
-                    colors.surface.withAlpha(0x99),
-                    colors.surface
-                  ],
-                  stops: const [0, 0.27, 0.76, 1],
-                ),
-              )),
-            ]),
+            ),
           ),
+        Column(
+          key: const ValueKey('music-player-content'),
+          children: [
+            if (!onDevice && pending == null) const MusicSponsorNotice(),
+            Expanded(child: view),
+          ],
         ),
-      ),
-      Column(children: [
-        if (!onDevice && pending == null) const MusicSponsorNotice(),
-        Expanded(child: view),
-      ]),
-    ]);
+      ],
+    );
   }
 
   double _songActionsLabelWidth(BuildContext context) =>
@@ -1222,10 +1300,16 @@ class _MusicPlayerState extends State<MusicPlayer>
           videoSurfaceBuilder: widget.videoSurfaceBuilder);
 
   Widget _progress(BuildContext context, PlayerCubit player, PlayerState state,
-      {required int? length, required bool live}) {
+      {required MusicScrubberStyle style,
+      required int? length,
+      required bool live}) {
     final locals = AppLocalizations.of(context)!;
-    final duration = math.max(0, length ?? 0) * 1000;
     final opening = player.openingMusicEntry != null;
+    final duration = math.max(
+        0,
+        opening || length == null
+            ? (length ?? 0) * 1000
+            : player.duration.inMilliseconds);
     final canSeek = !opening && duration > 0 && !live;
     final queueId = _queueId;
     final layoutRevision = _layoutRevision;
@@ -1239,46 +1323,26 @@ class _MusicPlayerState extends State<MusicPlayer>
     final position =
         (_seekPosition ?? elapsed.toDouble()).clamp(0.0, maxPosition);
     return Column(children: [
-      Semantics(
-        // Retire the slider's gesture state with its owner. Flutter replaces
-        // callbacks on a mounted Slider, so callback guards alone cannot stop
-        // a held drag from ending on the next song after a rebuild.
+      MusicPlayerScrubber(
+        // Flutter replaces callbacks on a mounted slider. Retire its gesture
+        // state with the queue occurrence or layout that accepted the drag.
         key: ValueKey((queueId, layoutRevision)),
-        label: locals.musicPosition,
-        child: SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-              trackHeight: 12,
-              trackShape: const GappedSliderTrackShape(),
-              thumbShape: const HandleThumbShape(),
-              thumbSize: const WidgetStatePropertyAll(Size(4, 32)),
-              trackGap: 6,
-              activeTrackColor: Theme.of(context).colorScheme.onSurface,
-              inactiveTrackColor: Theme.of(context)
-                  .colorScheme
-                  .onSurface
-                  .withValues(alpha: 0.16),
-              thumbColor: Theme.of(context).colorScheme.onSurface),
-          child: Slider(
-            key: const ValueKey('music-player-progress'),
-            min: 0,
-            max: maxPosition,
-            value: position,
-            semanticFormatterCallback: (value) =>
-                prettyDurationCustom(Duration(milliseconds: value.round())),
-            onChanged: !canSeek
-                ? null
-                : (value) {
-                    if (isCurrent()) setState(() => _seekPosition = value);
-                  },
-            onChangeEnd: !canSeek
-                ? null
-                : (value) {
-                    if (!isCurrent()) return;
-                    player.seek(Duration(milliseconds: value.round()));
-                    setState(() => _seekPosition = null);
-                  },
-          ),
-        ),
+        style: style,
+        semanticLabel: locals.musicPosition,
+        maxPosition: maxPosition,
+        position: position,
+        onChanged: !canSeek
+            ? null
+            : (value) {
+                if (isCurrent()) setState(() => _seekPosition = value);
+              },
+        onChangeEnd: !canSeek
+            ? null
+            : (value) {
+                if (!isCurrent()) return;
+                player.seek(Duration(milliseconds: value.round()));
+                setState(() => _seekPosition = null);
+              },
       ),
       SizedBox(
           width: double.infinity,
@@ -1305,10 +1369,12 @@ class _MusicPlayerState extends State<MusicPlayer>
     final generation = player.playlistGeneration;
     final seconds =
         context.select((SettingsCubit settings) => settings.state.skipStep);
-    final length = state.currentlyPlaying?.lengthSeconds ??
-        state.offlineCurrentlyPlaying?.lengthSeconds ??
-        0;
+    final hasDuration = (state.currentlyPlaying?.lengthSeconds ??
+            state.offlineCurrentlyPlaying?.lengthSeconds) !=
+        null;
+    final length = player.duration.inMilliseconds;
     if (player.openingMusicEntry != null ||
+        !hasDuration ||
         length <= 0 ||
         state.currentlyPlaying?.liveNow == true) {
       return null;
@@ -1330,7 +1396,7 @@ class _MusicPlayerState extends State<MusicPlayer>
       final offset = Duration(seconds: previous ? -seconds : seconds);
       final target = (player.state.position + offset)
           .inMilliseconds
-          .clamp(0, length * 1000)
+          .clamp(0, length)
           .toInt();
       player.seek(Duration(milliseconds: target));
     };
@@ -1362,13 +1428,18 @@ class _MusicPlayerState extends State<MusicPlayer>
         child: Tooltip(
           message: label,
           triggerMode: TooltipTriggerMode.manual,
-          child: IconButton(
-            key: ValueKey('music-player-$name'),
-            iconSize: 26,
-            onPressed: state.hasQueue
-                ? (previous ? player.playPrevious : player.playNext)
-                : null,
-            icon: Icon(previous
+          child: ValueListenableBuilder<int>(
+            valueListenable: player.musicRequestRevision,
+            builder: (context, _, icon) => IconButton(
+              key: ValueKey('music-player-$name'),
+              iconSize: 26,
+              onPressed: state.hasQueue ||
+                      (!previous && player.hasMusicRequestSuccessor)
+                  ? (previous ? player.playPrevious : player.playNext)
+                  : null,
+              icon: icon!,
+            ),
+            child: Icon(previous
                 ? Icons.skip_previous_rounded
                 : Icons.skip_next_rounded),
           ),
@@ -1385,6 +1456,13 @@ class _MusicPlayerState extends State<MusicPlayer>
     final opening = player.openingMusicEntry != null;
     final locals = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
+    final sleepTracksRemaining = state.sleepTracksRemaining;
+    final sleepTrackLabel = sleepTracksRemaining == null
+        ? null
+        : locals.musicSleepTracksRemaining(sleepTracksRemaining);
+    final sleepCancelLabel = sleepTrackLabel == null
+        ? locals.cancelSleepTimer
+        : '${locals.cancelSleepTimer}. $sleepTrackLabel';
     final actionStyle = TextButton.styleFrom(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       textStyle: theme.textTheme.labelMedium,
@@ -1429,7 +1507,7 @@ class _MusicPlayerState extends State<MusicPlayer>
                 active: showQueue, focusNode: _queueButtonFocus),
           action(
               'sleep',
-              state.hasTimer ? locals.cancelSleepTimer : locals.sleepTimer,
+              state.hasTimer ? sleepCancelLabel : locals.sleepTimer,
               Icons.bedtime_outlined,
               opening && !state.hasTimer
                   ? null
@@ -1441,10 +1519,15 @@ class _MusicPlayerState extends State<MusicPlayer>
                       await _showMusicSleepTimer(context, player);
                     },
               active: state.hasTimer,
-              labelWidget: state.hasTimer
-                  ? _MusicSleepCountdown(
-                      player: player, cancelLabel: locals.cancelSleepTimer)
-                  : null),
+              labelWidget: sleepTrackLabel != null
+                  ? Text(sleepTrackLabel,
+                      semanticsLabel: sleepCancelLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis)
+                  : state.hasTimer
+                      ? _MusicSleepCountdown(
+                          player: player, cancelLabel: sleepCancelLabel)
+                      : null),
           action('sound', locals.musicSound, Icons.tune,
               () => showMusicSoundSheet(context, player)),
           if (portraitPhone && !onDevice && !opening)
@@ -1470,8 +1553,9 @@ class _MusicPlayerState extends State<MusicPlayer>
   }
 }
 
-// Dart port of Muzza Queue.kt / PlayerMenu.kt sleep dialog. The engine receives
-// an explicit end-of-item mode or a wall-clock duration in five-minute steps.
+enum _MusicSleepMode { timed, endOfSong, trackCount }
+
+// The duration and end-of-song options follow Muzza's sleep dialog.
 Future<void> _showMusicSleepTimer(
     BuildContext context, PlayerCubit player) async {
   final app = context.read<AppCubit>();
@@ -1485,46 +1569,76 @@ Future<void> _showMusicSleepTimer(
   final canEnd = duration > 0 &&
       video?.liveNow != true &&
       player.playbackStatus != MediaState.completed;
-  var minutes = 30.0;
-  final selected = await showDialog<int>(
+  final canCount = player.canSleepAfterTracks;
+  var minutes = 30;
+  var tracks = 3;
+  var byTrackCount = false;
+  final selected = await showDialog<({_MusicSleepMode mode, int value})>(
     context: context,
     useRootNavigator: false,
     builder: (context) {
       final locals = AppLocalizations.of(context)!;
-      return PlayerModalBackHandler(
-          child: StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          scrollable: true,
-          icon: const Icon(Icons.bedtime_outlined),
-          title: Text(locals.sleepTimer),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(locals.musicSleepMinutes(minutes.round())),
-            Slider(
-              key: const ValueKey('music-sleep-duration'),
-              min: 5,
-              max: 120,
-              divisions: 23,
-              value: minutes,
-              label: locals.musicSleepMinutes(minutes.round()),
-              onChanged: (value) => setState(() => minutes = value),
-            ),
-            if (canEnd)
-              OutlinedButton(
-                key: const ValueKey('music-sleep-end-of-song'),
-                onPressed: () => Navigator.of(context).pop(-1),
-                child: Text(locals.musicSleepEndOfSong),
+      return PlayerModalBackHandler(child: StatefulBuilder(
+        builder: (context, setState) {
+          final label = byTrackCount
+              ? locals.musicSleepTracks(tracks)
+              : locals.musicSleepMinutes(minutes);
+          return AlertDialog(
+            scrollable: true,
+            icon: const Icon(Icons.bedtime_outlined),
+            title: Text(byTrackCount
+                ? locals.musicSleepStopAfterTracks
+                : locals.sleepTimer),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(label),
+              Slider(
+                key: ValueKey(byTrackCount
+                    ? 'music-sleep-track-count'
+                    : 'music-sleep-duration'),
+                min: byTrackCount ? 1 : 5,
+                max: byTrackCount ? 30 : 120,
+                divisions: byTrackCount ? 29 : 23,
+                value: (byTrackCount ? tracks : minutes).toDouble(),
+                label: label,
+                semanticFormatterCallback: (value) => byTrackCount
+                    ? locals.musicSleepTracks(value.round())
+                    : locals.musicSleepMinutes(value.round()),
+                onChanged: (value) => setState(() {
+                  if (byTrackCount) {
+                    tracks = value.round();
+                  } else {
+                    minutes = value.round();
+                  }
+                }),
               ),
-          ]),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text(locals.cancel)),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(minutes.round()),
-              child: Text(locals.setTimer),
-            ),
-          ],
-        ),
+              if (byTrackCount) Text(locals.musicSleepTrackCountExplanation),
+              if (!byTrackCount && canEnd)
+                OutlinedButton(
+                  key: const ValueKey('music-sleep-end-of-song'),
+                  onPressed: () => Navigator.of(context)
+                      .pop((mode: _MusicSleepMode.endOfSong, value: 1)),
+                  child: Text(locals.musicSleepEndOfSong),
+                ),
+              if (!byTrackCount && canCount)
+                OutlinedButton(
+                  key: const ValueKey('music-sleep-stop-after-tracks'),
+                  onPressed: () => setState(() => byTrackCount = true),
+                  child: Text(locals.musicSleepStopAfterTracks),
+                ),
+            ]),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(locals.cancel)),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(byTrackCount
+                    ? (mode: _MusicSleepMode.trackCount, value: tracks)
+                    : (mode: _MusicSleepMode.timed, value: minutes)),
+                child: Text(locals.setTimer),
+              ),
+            ],
+          );
+        },
       ));
     },
   );
@@ -1541,11 +1655,14 @@ Future<void> _showMusicSleepTimer(
       player.state.isClosing) {
     return;
   }
-  if (selected < 0) {
-    player.sleepAtEndOfTrack();
-  } else {
-    player.sleep(
-        SleepTimer(duration: Duration(minutes: selected), stopVideo: false));
+  switch (selected.mode) {
+    case _MusicSleepMode.timed:
+      player.sleep(SleepTimer(
+          duration: Duration(minutes: selected.value), stopVideo: false));
+    case _MusicSleepMode.endOfSong:
+      player.sleepAtEndOfTrack();
+    case _MusicSleepMode.trackCount:
+      player.sleepAfterTracks(selected.value);
   }
 }
 
@@ -1756,6 +1873,114 @@ class MusicQueue extends StatefulWidget {
   State<MusicQueue> createState() => _MusicQueueState();
 }
 
+Future<void> _showMusicRequests(BuildContext context, PlayerCubit player,
+    {required bool Function() isCurrent}) {
+  var busy = false;
+  var failed = false;
+  return showDialog<void>(
+    context: context,
+    useRootNavigator: false,
+    builder: (context) => PlayerModalBackHandler(
+      child: StatefulBuilder(builder: (context, setState) {
+        final locals = AppLocalizations.of(context)!;
+        Future<void> perform(Future<bool> Function() action) async {
+          if (busy || !isCurrent()) return;
+          setState(() {
+            busy = true;
+            failed = false;
+          });
+          var succeeded = false;
+          try {
+            succeeded = await action();
+          } catch (_) {
+            // An unavailable source can leave the requests available to retry.
+          }
+          if (!context.mounted || ModalRoute.of(context)?.isCurrent != true) {
+            return;
+          }
+          if (succeeded && isCurrent()) {
+            Navigator.of(context).pop();
+          } else {
+            setState(() {
+              busy = false;
+              failed = true;
+            });
+          }
+        }
+
+        return BlocBuilder<PlayerCubit, PlayerState>(
+          bloc: player,
+          builder: (context, _) => ValueListenableBuilder<int>(
+            valueListenable: player.musicRequestRevision,
+            builder: (context, _, __) {
+              final current = isCurrent();
+              final requests = current ? player.musicRequests : <IdedVideo>[];
+              return AlertDialog(
+                scrollable: true,
+                title: Text(locals.musicRequests),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (requests.isEmpty) Text(locals.musicRequestsEmpty),
+                    for (final request in requests)
+                      ListTile(
+                        key: ObjectKey(request),
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(musicQueueLabels(request).title),
+                        subtitle: Text(musicQueueLabels(request).artist),
+                        trailing: IconButton(
+                          tooltip: locals.musicRemoveRequest(
+                              musicQueueLabels(request).title),
+                          onPressed: busy
+                              ? null
+                              : () {
+                                  if (isCurrent()) {
+                                    player.removeMusicRequest(request);
+                                  }
+                                },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ),
+                    if (failed)
+                      Semantics(
+                        liveRegion: true,
+                        child: Text(locals.musicRequestActionError),
+                      ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: Text(
+                        MaterialLocalizations.of(context).closeButtonLabel),
+                  ),
+                  if (current && player.playingMusicRequests)
+                    FilledButton(
+                      key: const ValueKey('music-return-to-collection'),
+                      onPressed: busy
+                          ? null
+                          : () => perform(player.returnFromMusicRequests),
+                      child: Text(locals.musicReturnToCollection),
+                    )
+                  else if (requests.isNotEmpty)
+                    FilledButton(
+                      key: const ValueKey('music-play-requests'),
+                      onPressed: busy || !player.canPlayMusicRequests
+                          ? null
+                          : () => perform(player.playMusicRequests),
+                      child: Text(locals.musicPlayRequests),
+                    ),
+                ],
+              );
+            },
+          ),
+        );
+      }),
+    ),
+  );
+}
+
 enum _QueueSelectionAction {
   play,
   shuffle,
@@ -1771,6 +1996,7 @@ enum _QueueRowAction {
   pause,
   next,
   append,
+  request,
   saveSong,
   removeSavedSong,
   save,
@@ -1848,7 +2074,11 @@ class _MusicQueueState extends State<MusicQueue> {
         !song.downloadPlaybackOnly &&
         song.explicitMusicDownload == null &&
         !playingSavedCopy &&
-        db.getDownloadByVideoId(song.videoId) == null;
+        (db.getDownloadByVideoId(song.videoId) == null ||
+            context
+                    .read<DownloadManagerCubit?>()
+                    ?.isMusicDownloadPlaylistOnly(song.videoId) ==
+                true);
   }
 
   List<LocalMusicTrack>? _localTracks(List<IdedVideo> entries) {
@@ -2013,7 +2243,7 @@ class _MusicQueueState extends State<MusicQueue> {
     final selection = _selection?..retainAll(ids);
     final allSelected = ids.isNotEmpty && selection?.length == ids.length;
     final editing = !locked && selection == null;
-    bool current() =>
+    bool sessionCurrent() =>
         mounted &&
         !player.isClosed &&
         !app.isClosed &&
@@ -2022,8 +2252,9 @@ class _MusicQueueState extends State<MusicQueue> {
         app.state.profileId == session.profileId &&
         app.state.sessionRevision == session.sessionRevision &&
         app.state.server == session.server &&
-        player.playlistGeneration == playlistGeneration &&
         !player.state.isClosing;
+    bool current() =>
+        sessionCurrent() && player.playlistGeneration == playlistGeneration;
     // Muzza Queue.kt binds selection to Timeline.Window UIDs. Local occurrence
     // IDs have the same role and make repeat uploads independently selectable.
     void toggle(String id) {
@@ -2124,6 +2355,8 @@ class _MusicQueueState extends State<MusicQueue> {
         case _QueueRowAction.append:
           await _enqueueCopies(player, [item],
               next: action == _QueueRowAction.next);
+        case _QueueRowAction.request:
+          MusicLibraryActions.addRequest(context, player, item);
         case _QueueRowAction.saveSong:
         case _QueueRowAction.removeSavedSong:
           if (song == null || song.musicMetadata == null || library == null) {
@@ -2364,6 +2597,9 @@ class _MusicQueueState extends State<MusicQueue> {
                                   _QueueRowAction.next: locals.playNext,
                                   _QueueRowAction.append: locals.addToQueueList,
                                 },
+                                if (player.canAddMusicRequest(item))
+                                  _QueueRowAction.request:
+                                      locals.musicAddToRequests,
                                 if (bookmark != null)
                                   if (saved)
                                     _QueueRowAction.removeSavedSong:
@@ -2465,29 +2701,101 @@ class _MusicQueueState extends State<MusicQueue> {
                   ),
                 ),
         );
+    Widget steerMixButton() => PopupMenuButton<_QueueMenuCommand>(
+          key: const ValueKey('music-queue-steer-mix'),
+          tooltip: locals.musicSteerMix,
+          enabled: current() && player.canSteerMusicMix,
+          onSelected: (command) => unawaited(command()),
+          itemBuilder: (_) {
+            final generation = player.playlistGeneration;
+            return _menuItems(
+              {
+                MusicMixSteering.balanced: locals.musicMixBalanced,
+                if (player.musicMixCanFocusSeedArtist)
+                  MusicMixSteering.moreFromSeedArtist:
+                      locals.musicMixMoreFromSeedArtist,
+                MusicMixSteering.moreVariety: locals.musicMixMoreVariety,
+              },
+              (steering) async {
+                if (!current() ||
+                    _selection != null ||
+                    player.playlistGeneration != generation ||
+                    !player.canSteerMusicMix) {
+                  return;
+                }
+                if (!player.steerMusicMix(steering) && context.mounted) {
+                  ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                      SnackBar(content: Text(locals.musicMixNoChange)));
+                }
+              },
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.tune, size: 18),
+                const SizedBox(width: 6),
+                Flexible(child: Text(locals.musicSteerMix)),
+              ]),
+            ),
+          ),
+        );
+
     Widget queueToolbar(BoxConstraints constraints) {
       final compact = constraints.maxWidth < 340 ||
           scaler.scale(text.labelLarge?.fontSize ?? 14) > 21;
       final sort =
           state.playQueue.length > 1 ? sortButton(compact: compact) : null;
-      return ValueListenableBuilder<int>(
-          valueListenable: player.playlistLoadingRevision,
-          builder: (context, _, actions) {
+      final requests = IconButton(
+        key: const ValueKey('music-queue-requests'),
+        tooltip: locals.musicRequests,
+        onPressed: () {
+          if (current()) {
+            unawaited(
+                _showMusicRequests(context, player, isCurrent: sessionCurrent));
+          }
+        },
+        icon: const Icon(Icons.playlist_play_rounded),
+      );
+      return ListenableBuilder(
+          listenable: Listenable.merge([
+            player.playlistLoadingRevision,
+            player.namedMusicQueuesRevision,
+          ]),
+          builder: (context, actions) {
             String? source = player.musicQueueTitle;
             if (hasDevice && !hasSaved) {
               source ??= locals.onDevice;
             } else if (hasSaved && !hasDevice) {
               source ??= locals.downloads;
             }
+            final namedQueueId = player.activeNamedMusicQueueId;
+            final activeQueue = namedQueueId == null
+                ? null
+                : player.namedMusicQueues
+                    .where((queue) => queue.id == namedQueueId)
+                    .firstOrNull;
+            final activeName = activeQueue == null
+                ? null
+                : musicSavedQueueLabel(locals, activeQueue);
             final count = locals.musicTrackCount(videos.length);
-            final title = source ?? (locked ? locals.musicQueueLocked : count);
+            final hasTitle = activeName != null || source != null;
+            final title = activeName ??
+                source ??
+                (locked ? locals.musicQueueLocked : count);
             final summary = DefaultTextStyle(
               style: text.bodySmall!.copyWith(color: colors.onSurfaceVariant),
               child: Wrap(spacing: 12, children: [
-                if (source != null || locked) Text(count),
+                if (source != null &&
+                    activeName != null &&
+                    source != activeName)
+                  Text(source, maxLines: 1, overflow: TextOverflow.ellipsis),
+                if (hasTitle || locked) Text(count),
                 Text(_durationLabel(locals, videos,
                     complete: player.playlistComplete)),
-                if (source != null && locked) Text(locals.musicQueueLocked),
+                if (hasTitle && locked) Text(locals.musicQueueLocked),
               ]),
             );
             return Column(
@@ -2508,14 +2816,26 @@ class _MusicQueueState extends State<MusicQueue> {
                     actions!,
                   ]),
                   Padding(
-                    padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 12, 4),
-                    child: compact || sort == null
-                        ? summary
-                        : Row(children: [
-                            Expanded(child: summary),
-                            Flexible(child: sort),
-                          ]),
+                    padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 0, 4),
+                    child: Row(children: [
+                      Expanded(child: summary),
+                      if (!compact && sort != null) Flexible(child: sort),
+                      requests,
+                      IconButton(
+                        key: const ValueKey('music-queue-saved-queues'),
+                        tooltip: locals.musicSavedQueues,
+                        onPressed: current()
+                            ? () => showMusicSavedQueues(context)
+                            : null,
+                        icon: const Icon(Icons.bookmarks_outlined),
+                      ),
+                    ]),
                   ),
+                  if (player.hasActiveMusicMix)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(start: 8),
+                      child: steerMixButton(),
+                    ),
                 ]);
           },
           child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -2531,7 +2851,8 @@ class _MusicQueueState extends State<MusicQueue> {
               icon: const Icon(Icons.my_location),
             ),
             const MusicShuffleButton(
-                controlKey: ValueKey('music-queue-shuffle')),
+                controlKey: ValueKey('music-queue-shuffle'),
+                showQueueOptions: true),
             if (compact && sort != null) sort,
             IconButton(
               key: const ValueKey('music-queue-select-mode'),
