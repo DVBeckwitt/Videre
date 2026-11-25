@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clipious/app/states/app.dart';
 import 'package:clipious/globals.dart';
@@ -8,6 +9,7 @@ import 'package:clipious/main.dart' show isTv;
 import 'package:clipious/music/models/music_collection.dart';
 import 'package:clipious/music/models/music_track.dart';
 import 'package:clipious/music/services/music_catalog_service.dart';
+import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/music/views/screens/music_library.dart';
@@ -253,5 +255,79 @@ void main() {
     expect(player.calls.last.startAt, const Duration(seconds: 95));
     expect(player.calls.last.audio, isTrue);
     expect(player.calls.last.videos, hasLength(3));
+  });
+
+  testWidgets(
+      'renaming a local Music playlist keeps its queue and resume point',
+      (tester) async {
+    await tester.runAsync(() => MusicLibrarySession(app)
+        .createPlaylist('Old title', [_first.toVideo(), _second.toVideo()]));
+    final original = service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.title == 'Old title');
+    final reference = PlaylistReference.forPlaylist(original, db);
+    await saveCheckpoint(tester,
+        reference: reference, videos: original.videos, index: 1);
+
+    await show(tester, const MusicLibraryPage());
+    await tester.tap(find.text('Old title'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Second song'));
+    await tester.pumpAndSettle();
+    final queued = player.calls.single;
+
+    final rename = find.text('Rename playlist');
+    await tester.tap(rename);
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    final input = find.descendant(of: dialog, matching: find.byType(TextField));
+    final save = find.widgetWithText(TextButton, 'Save');
+    expect(tester.widget<TextField>(input).controller!.text, 'Old title');
+    await tester.enterText(input, '   ');
+    await tester.pump();
+    expect(tester.widget<TextButton>(save).onPressed, isNull);
+    await tester.enterText(input, 'Discarded title');
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Old title'), findsOneWidget);
+
+    await tester.tap(rename);
+    await tester.pumpAndSettle();
+    await tester.enterText(input, '  New title  ');
+    await tester.pump();
+    await tester.runAsync(() async {
+      final changes = MusicLibraryService.forProfile(db, db.profileId).changes;
+      final changed = Completer<void>();
+      changes.addListener(changed.complete);
+      try {
+        await tester.tap(save);
+        await changed.future.timeout(const Duration(seconds: 5));
+      } finally {
+        changes.removeListener(changed.complete);
+      }
+    });
+    await tester.pumpAndSettle();
+    expect(dialog, findsNothing);
+    expect(find.text('New title'), findsOneWidget);
+    expect(find.text('Old title'), findsNothing);
+    final renamed = service
+        .getLocalPlaylists()
+        .singleWhere((playlist) => playlist.playlistId == original.playlistId);
+    expect(renamed.title, 'New title');
+    expect(jsonEncode(renamed.videos), jsonEncode(original.videos));
+    expect(renamed.videoCount, original.videoCount);
+    expect(renamed.updated, original.updated);
+    expect(player.calls, [queued]);
+    expect(player.standaloneCalls, 0);
+
+    await tester.tap(find.byKey(const ValueKey('music-playlist-resume')));
+    await tester.pumpAndSettle();
+    final resumed = player.calls.last;
+    expect(resumed.reference, queued.reference);
+    expect(resumed.reference.displayTitle, 'New title');
+    expect(resumed.startIndex, queued.startIndex);
+    expect(resumed.startAt, const Duration(seconds: 95));
+    expect(resumed.videos.map((video) => (video.videoId, video.queueEntryId)),
+        queued.videos.map((video) => (video.videoId, video.queueEntryId)));
   });
 }

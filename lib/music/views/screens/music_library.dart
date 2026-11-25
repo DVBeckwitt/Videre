@@ -22,6 +22,7 @@ import 'package:clipious/music/views/components/music_duration_label.dart';
 import 'package:clipious/music/views/components/music_library_actions.dart';
 import 'package:clipious/music/views/components/local_music_folder.dart';
 import 'package:clipious/music/views/components/music_playlist_edit_actions.dart';
+import 'package:clipious/music/views/components/music_playlist_rename.dart';
 import 'package:clipious/music/views/components/music_playlist_resume.dart';
 import 'package:clipious/music/views/components/music_song_selection_bar.dart';
 import 'package:clipious/music/views/components/music_status_title.dart';
@@ -765,6 +766,11 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               showServerCopy: !_playlistSearching,
             ),
           ),
+          if (!_playlistSelecting &&
+              !_playlistSearching &&
+              !playlist.isEditLocked &&
+              playlist.playlistId != localWatchLaterId)
+            MusicPlaylistRenameButton(reference: reference, title: title),
           if (!_playlistSelecting && !_playlistSearching)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),

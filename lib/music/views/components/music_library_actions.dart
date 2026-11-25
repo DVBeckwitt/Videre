@@ -118,6 +118,14 @@ class MusicLibrarySession {
     await saveToPlaylist(id, videos);
   }
 
+  Future<bool> renamePlaylist(PlaylistReference source, String name) async {
+    _requireCurrent();
+    final renamed = await _service.renameLocalPlaylist(source, name,
+        isCurrent: () => isCurrent);
+    if (renamed) library.notifyChanged();
+    return renamed;
+  }
+
   Future<void> removeFromPlaylist(String playlistId, Video entry) async {
     _requireCurrent();
     if (!playlistId.startsWith('local:')) {

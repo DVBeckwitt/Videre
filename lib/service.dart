@@ -3161,6 +3161,31 @@ class Service {
     handleResponse(response);
   }
 
+  Future<bool> renameLocalPlaylist(PlaylistReference source, String name,
+      {required bool Function() isCurrent}) async {
+    final title = name.trim();
+    if (title.isEmpty) throw ArgumentError('Enter a playlist name');
+    if (source.kind != PlaylistSourceKind.local ||
+        source.playlistId == localWatchLaterId ||
+        !source.matchesOwner(db)) {
+      return false;
+    }
+    final owner = db.forProfile(source.profileId);
+    var found = false;
+    await _updateLocalPlaylists((playlists) {
+      if (!source.matchesOwner(db) || !isCurrent()) return false;
+      final index =
+          playlists.indexWhere((item) => item.playlistId == source.playlistId);
+      if (index < 0) return false;
+      found = true;
+      final playlist = playlists[index];
+      if (playlist.title == title) return false;
+      playlists[index] = playlist.copyWith(title: title);
+      return true;
+    }, database: owner);
+    return found;
+  }
+
   Future<void> deleteUserPlaylistVideo(String playListId, String indexId,
       {IDbClient? database, Server? serverOverride}) async {
     final owner = database ?? db.forProfile(db.profileId);

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:clipious/globals.dart';
 import 'package:clipious/playlists/models/playlist.dart';
+import 'package:clipious/playlists/models/playlist_reference.dart';
 import 'package:clipious/playlists/states/playlist.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/player/models/backend_playback.dart';
@@ -239,6 +240,54 @@ void main() {
     expect(otherPlaylists.single.playlistId, localWatchLaterId);
     expect(otherPlaylists.single.videos.single.videoId, 'other');
     expect(db.profileId, person.id);
+  });
+
+  test('queued playlist renames use the latest list and current owner',
+      () async {
+    final source = db;
+    final owner = source.forProfile(source.profileId);
+    final id = (await library.createPlayList('Original', 'local'))!;
+    final original = await library.getUserPlaylist(id);
+    final reference = PlaylistReference.forPlaylist(original, owner);
+    final adding = library.addVideoToPlaylist(id, 'first',
+        video: const Video(videoId: 'first'));
+    final renaming = library.renameLocalPlaylist(reference, ' First ',
+        isCurrent: () => true);
+    await adding;
+    expect(await renaming, isTrue);
+    final renamed = await library.getUserPlaylist(id);
+    expect(renamed.title, 'First');
+    expect(renamed.videos.single.indexId, isNotEmpty);
+    expect(renamed.videos.single.videoId, 'first');
+
+    final watchLater = await library.getUserPlaylist(localWatchLaterId);
+    expect(
+        await library.renameLocalPlaylist(
+            PlaylistReference.forPlaylist(watchLater, owner), 'Unavailable',
+            isCurrent: () => true),
+        isFalse);
+
+    final gate = _PlaylistWriteGate();
+    db = _DelayedSettingsDb(source, gate);
+    addTearDown(() {
+      if (!gate.release.isCompleted) gate.release.complete();
+    });
+    final held = library.addVideoToPlaylist(id, 'second',
+        video: const Video(videoId: 'second'));
+    await gate.started.future;
+    final stale =
+        library.renameLocalPlaylist(reference, 'Stale', isCurrent: () => true);
+    final next = await source.createProfile('Another person');
+    await source.useProfile(next.id);
+    gate.release.complete();
+    await held;
+    expect(await stale, isFalse);
+    final stored = library
+        .getLocalPlaylists(database: owner)
+        .singleWhere((playlist) => playlist.playlistId == id);
+    expect(stored.title, 'First');
+    expect(stored.videos.map((video) => video.videoId), ['first', 'second']);
+    expect(library.getLocalPlaylists().single.playlistId, localWatchLaterId);
   });
 
   test(
