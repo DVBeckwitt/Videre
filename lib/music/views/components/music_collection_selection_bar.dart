@@ -128,7 +128,7 @@ class _MusicCollectionSelectionBarState
         return;
       }
       final tracks = await source.loadTracks();
-      if (!current()) return;
+      if (!mounted || !current()) return;
       if (tracks.isEmpty) {
         show(locals.musicEmptyCollection);
         return;

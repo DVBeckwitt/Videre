@@ -93,7 +93,7 @@ class MusicCollectionSortMenu extends StatelessWidget {
                 field: field, descending: descending);
             if (canApply()) onChanged?.call();
           } catch (_) {
-            if (canApply()) {
+            if (context.mounted && canApply()) {
               ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text(locals.musicLibraryActionError)));
             }

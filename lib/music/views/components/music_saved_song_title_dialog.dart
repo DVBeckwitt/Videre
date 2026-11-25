@@ -22,8 +22,9 @@ Future<void> showSavedSongTitleEditor(
       listenWhen: (_, __) => !isCurrent(),
       listener: (context, _) {
         final route = ModalRoute.of(context);
-        if (route != null && route.isActive)
+        if (route != null && route.isActive) {
           route.navigator?.removeRoute(route);
+        }
       },
       child: Shortcuts(
         shortcuts: {

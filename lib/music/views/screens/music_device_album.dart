@@ -361,7 +361,7 @@ class _AlbumTracksState extends State<_AlbumTracks> {
       );
     });
     return MusicFastScroll(
-      scope: widget.anchorId,
+      scope: (widget.key, anchorId),
       sections: musicFastScrollSectionsFor(context, widget.tracks),
       child: view,
     );
