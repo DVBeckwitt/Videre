@@ -966,7 +966,7 @@ void main() {
     await tester.runAsync(() async {
       final font = FontLoader(family)
         ..addFont(File('submodules/flutter/bin/cache/artifacts/material_fonts/'
-                'roboto-regular.ttf')
+                'Roboto-Regular.ttf')
             .readAsBytes()
             .then(ByteData.sublistView));
       await font.load();
