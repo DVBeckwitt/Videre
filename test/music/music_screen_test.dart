@@ -76,6 +76,11 @@ class _Catalog extends MusicCatalogService {
   final searches = <String>[];
   final artistSearches = <String>[];
   final playlistSearches = <String>[];
+  final suggestionRequests = <({
+    String query,
+    bool Function()? isCurrent,
+    Completer<List<String>> response,
+  })>[];
   final pageRequests = <({
     String query,
     MusicCatalogSearchType type,
@@ -108,6 +113,15 @@ class _Catalog extends MusicCatalogService {
     searches.add(query);
     final response = Completer<List<MusicTrack>>();
     responses.add(response);
+    return response.future;
+  }
+
+  @override
+  Future<List<String>> searchSuggestions(String query,
+      {bool Function()? isCurrent}) {
+    final response = Completer<List<String>>();
+    suggestionRequests
+        .add((query: query, isCurrent: isCurrent, response: response));
     return response.future;
   }
 
@@ -363,6 +377,225 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
   }
+
+  group('online search suggestions', () {
+    const debounce = Duration(milliseconds: 500);
+    final field = find.byKey(const ValueKey('music-search'));
+    const screen = MusicScreen(embedded: true);
+
+    testWidgets(
+        'debounces typing and submits a suggestion to the active filter',
+        (tester) async {
+      catalog.paginate = true;
+      await show(tester, screen: screen);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Channels'));
+      await tester.pump();
+      await tester.enterText(field, 'night');
+      await tester.pump(const Duration(milliseconds: 499));
+      expect(catalog.suggestionRequests, isEmpty);
+      await tester.pump(const Duration(milliseconds: 1));
+      final request = catalog.suggestionRequests.single;
+      expect(request.query, 'night');
+      expect(catalog.pageRequests, isEmpty);
+      request.response.complete(['night jazz radio']);
+      await tester.pump();
+
+      await tester.tap(find.text('night jazz radio'));
+      await tester.pump();
+      final results = catalog.pageRequests.single;
+      expect(results.query, 'night jazz radio');
+      expect(results.type, MusicCatalogSearchType.channels);
+      expect(results.page, 1);
+      results.response.complete(_page(const [MusicCatalogChannelHit(artist)]));
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(field).controller!.text, results.query);
+      expect(tester.widget<TextField>(field).focusNode!.hasFocus, isFalse);
+      expect(find.text(artist.name), findsOneWidget);
+      await tester.pump(debounce);
+      expect(catalog.suggestionRequests, hasLength(1));
+    });
+
+    testWidgets('fill puts the suggestion in the field without submitting',
+        (tester) async {
+      await show(tester, screen: screen);
+      await tester.enterText(field, 'brass');
+      await tester.pump(debounce);
+      catalog.suggestionRequests.single.response.complete(['brass ensemble']);
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('Fill search field'));
+      await tester.pump();
+      final input = tester.widget<TextField>(field);
+      expect(input.controller!.text, 'brass ensemble');
+      expect(input.controller!.selection,
+          TextSelection.collapsed(offset: 'brass ensemble'.length));
+      expect(input.focusNode!.hasFocus, isTrue);
+      expect(catalog.searches, isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('keeps newer suggestions and skips blank or pasted addresses',
+        (tester) async {
+      await show(tester, screen: screen);
+      await tester.enterText(field, 'night');
+      await tester.pump(debounce);
+      final older = catalog.suggestionRequests.single;
+      await tester.enterText(field, 'night jazz');
+      await tester.pump(debounce);
+      final newer = catalog.suggestionRequests.last;
+      expect(newer.query, 'night jazz');
+      expect(older.isCurrent!(), isFalse);
+      newer.response.complete(['night jazz live']);
+      await tester.pump();
+      older.response.complete(['night rock']);
+      await tester.pump();
+      expect(find.text('night jazz live'), findsOneWidget);
+      expect(find.text('night rock'), findsNothing);
+
+      await tester.enterText(field, ' ');
+      await tester.pump(debounce);
+      expect(find.text('night jazz live'), findsNothing);
+      await tester.enterText(
+          field, 'https://music-instance.test/watch?v=firstsong01');
+      await tester.pump(debounce);
+      expect(catalog.suggestionRequests.map((request) => request.query),
+          ['night', 'night jazz']);
+    });
+
+    testWidgets('waits for the IME to commit composing text', (tester) async {
+      await show(tester, screen: screen);
+      await tester.showKeyboard(field);
+      tester.testTextInput.updateEditingValue(const TextEditingValue(
+          text: 'cafe',
+          selection: TextSelection.collapsed(offset: 4),
+          composing: TextRange(start: 0, end: 4)));
+      await tester.pump();
+      await tester.pump(debounce);
+      expect(catalog.suggestionRequests, isEmpty);
+
+      tester.testTextInput.updateEditingValue(const TextEditingValue(
+          text: 'cafe', selection: TextSelection.collapsed(offset: 4)));
+      await tester.pump();
+      await tester.pump(debounce);
+      final request = catalog.suggestionRequests.single;
+      expect(request.query, 'cafe');
+      request.response.complete(['Café live']);
+      await tester.pumpAndSettle();
+      expect(find.text('Café live'), findsOneWidget);
+    });
+
+    testWidgets('dismissing suggestions restores the same Online viewport',
+        (tester) async {
+      addTearDown(tester.view.resetViewInsets);
+      await show(tester, screen: screen);
+      await search(tester, 'existing results');
+      catalog.responses.single.complete([
+        for (var i = 0; i < 30; i++)
+          MusicTrack(
+              videoId: 'song${i.toString().padLeft(7, '0')}',
+              title: 'Existing song $i'),
+      ]);
+      await tester.pumpAndSettle();
+      final viewport =
+          find.byKey(const ValueKey('music-search-online-viewport'));
+      final scrollable =
+          find.descendant(of: viewport, matching: find.byType(Scrollable));
+      await tester.drag(viewport, const Offset(0, -420));
+      await tester.pumpAndSettle();
+      final scroll = tester.state<ScrollableState>(scrollable);
+      final offset = scroll.position.pixels;
+      expect(offset, greaterThan(180));
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 200);
+      await tester.pump();
+      await tester.enterText(field, 'music offer');
+      await tester.pump(debounce);
+      catalog.suggestionRequests.single.response
+          .complete(['Music offer result']);
+      await tester.pumpAndSettle();
+      expect(find.text('Music offer result'), findsOneWidget);
+      expect(viewport, findsNothing);
+
+      await tester.enterText(field, 'outdated keyboard');
+      await tester.pump(debounce);
+      final pending = catalog.suggestionRequests.last;
+      tester.testTextInput.hide();
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      expect(pending.isCurrent!(), isFalse);
+      pending.response.complete(['Hidden keyboard result']);
+      await tester.pumpAndSettle();
+      expect(find.text('Hidden keyboard result'), findsNothing);
+      expect(tester.widget<TextField>(field).focusNode!.hasFocus, isFalse);
+      expect(tester.state<ScrollableState>(scrollable), same(scroll));
+      expect(scroll.position.pixels, closeTo(offset, 1));
+
+      await tester.enterText(field, 'hardware editing');
+      await tester.pump(debounce);
+      catalog.suggestionRequests.last.response.complete(['Hardware result']);
+      await tester.pumpAndSettle();
+      expect(find.text('Hardware result'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('Hardware result'), findsNothing);
+      expect(scroll.position.pixels, closeTo(offset, 1));
+    }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+    testWidgets(
+        'retires in-flight suggestions across source and session changes',
+        (tester) async {
+      await show(tester, screen: screen);
+      final online = find.byKey(const ValueKey('music-search-source-online'));
+      final library = find.byKey(const ValueKey('music-search-source-library'));
+      await tester.enterText(field, 'provider draft');
+      await tester.pump(debounce);
+      final oldSource = catalog.suggestionRequests.single;
+      await tester.tap(library);
+      await tester.pump();
+      await tester.enterText(field, 'private library draft');
+      await tester.pump(debounce);
+      expect(oldSource.isCurrent!(), isFalse);
+      expect(catalog.suggestionRequests, hasLength(1));
+      oldSource.response.complete(['old source suggestion']);
+      await tester.pump();
+      expect(find.text('old source suggestion'), findsNothing);
+
+      await tester.tap(online);
+      await tester.pump();
+      expect(
+          tester.widget<TextField>(field).controller!.text, 'provider draft');
+      expect(find.text('old source suggestion'), findsNothing);
+      await tester.enterText(field, 'another draft');
+      await tester.pump(debounce);
+      expect(catalog.suggestionRequests, hasLength(2));
+      final oldSession = catalog.suggestionRequests.last;
+      app.setGlobalLoading(true);
+      await tester.pump();
+      expect(oldSession.isCurrent!(), isFalse);
+      oldSession.response.complete(['old session suggestion']);
+      await tester.pump();
+      expect(find.text('old session suggestion'), findsNothing);
+      expect(tester.widget<TextField>(field).controller!.text, isEmpty);
+    });
+
+    testWidgets('a suggestion error leaves manual search usable',
+        (tester) async {
+      await show(tester, screen: screen);
+      await tester.enterText(field, 'manual jazz');
+      await tester.pump(debounce);
+      catalog.suggestionRequests.single.response.completeError(
+          const MusicCatalogException('Suggestions unavailable'));
+      await tester.pump();
+
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      expect(catalog.searches, ['manual jazz']);
+      catalog.responses.single.complete([first]);
+      await tester.pumpAndSettle();
+      expect(find.text(first.title), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
 
   testWidgets('only explicit music search submissions produce learning signals',
       (tester) async {

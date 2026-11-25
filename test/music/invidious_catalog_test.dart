@@ -28,6 +28,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:logging/logging.dart';
 
 const _songId = 'dQw4w9WgXcQ';
 const _channelId = 'UC0123456789012345678901';
@@ -285,6 +286,148 @@ void main() {
       expect(requests.last.url, requests.first.url);
       expect(requests.last.url.queryParameters['page'], '2');
       expect(requests.last.url.host, 'invidious.example');
+    });
+  });
+
+  group('stock Music search suggestions', () {
+    test('uses the selected instance and preserves clean provider order',
+        () async {
+      const account = Server(
+        url: 'https://music-instance.example',
+        id: 'suggestions-account',
+        customHeaders: {'X-Instance-Access': 'fixture-access'},
+      );
+      await db.upsertServer(account);
+      await db.useServer(account);
+      const query = 'Café & live';
+      respond = (request) async => _json({
+            'query': query,
+            'suggestions': [
+              '  Céline &amp; Friends ',
+              'céline & friends',
+              '  ',
+              'https://example.com/watch?v=$_songId',
+              'Café Live <Acoustic>',
+            ],
+          }, request);
+
+      expect(await catalog.searchSuggestions(' $query '), [
+        'Céline & Friends',
+        'Café Live <Acoustic>',
+      ]);
+      final request = requests.single;
+      expect(request.url.origin, account.url);
+      expect(request.url.path, '/api/v1/search/suggestions');
+      expect(request.url.queryParameters, {'q': query, 'local': 'true'});
+      expect(request.headers['X-Instance-Access'], 'fixture-access');
+    });
+
+    test('never requests suggestions for blank text or a pasted address',
+        () async {
+      expect(await catalog.searchSuggestions('  '), isEmpty);
+      expect(await catalog.searchSuggestions('https://local-instance:3000/api'),
+          isEmpty);
+      expect(requests, isEmpty);
+    });
+
+    test('ignores suggestions for a different echoed query', () async {
+      respond = (request) async => _json({
+            'query': 'old query',
+            'suggestions': ['old result'],
+          }, request);
+
+      expect(await catalog.searchSuggestions('new query'), isEmpty);
+      expect(requests, hasLength(1));
+    });
+
+    test('discards a delayed response when the selected instance changes',
+        () async {
+      respond = (request) async {
+        const other = Server(url: 'https://other.example');
+        await db.upsertServer(other);
+        await db.useServer(other);
+        return _json({
+          'query': 'music',
+          'suggestions': ['old instance result'],
+        }, request);
+      };
+
+      await expectLater(catalog.searchSuggestions('music'),
+          throwsA(isA<MusicCatalogException>()));
+      expect(requests.single.url.origin, 'https://invidious.example');
+    });
+
+    test('a cancelled request does not retry after a rate limit', () async {
+      var current = true;
+      catalog = InvidiousMusicCatalogService(
+          api: Service(
+              httpClient: client,
+              wait: (_) async {
+                current = false;
+              }));
+      respond = (request) async => http.Response('Rate limited', 429,
+          request: request, headers: {'retry-after': '1'});
+
+      await expectLater(
+          catalog.searchSuggestions('music', isCurrent: () => current),
+          throwsA(isA<MusicCatalogException>()));
+      expect(requests, hasLength(1));
+      expect(current, isFalse);
+    });
+
+    test('does not follow a redirect off the selected instance', () async {
+      respond =
+          (request) async => http.Response('', 302, request: request, headers: {
+                'location':
+                    'https://other.example/api/v1/search/suggestions?q=music',
+              });
+
+      await expectLater(catalog.searchSuggestions('music'),
+          throwsA(isA<InvidiousServiceError>()));
+      expect(requests.single.url.origin, 'https://invidious.example');
+    });
+
+    test('logs and status errors redact the query and provider messages',
+        () async {
+      const query = 'test-private-prefix & live';
+      const providerMessage = 'test-private-provider-detail';
+      final originalLevel = Logger.root.level;
+      Logger.root.level = Level.ALL;
+      addTearDown(() => Logger.root.level = originalLevel);
+      final logs = <LogRecord>[];
+      final subscription = Logger.root.onRecord.listen(logs.add);
+      addTearDown(subscription.cancel);
+
+      respond = (request) async => requests.length == 1
+          ? http.Response('', 302, request: request, headers: {
+              'location': '/redirect/${Uri.encodeComponent(query)}',
+            })
+          : http.Response(jsonEncode({'error': '$providerMessage $query'}), 503,
+              request: request, headers: {'content-type': 'application/json'});
+
+      await expectLater(
+          catalog.searchSuggestions(query),
+          throwsA(isA<InvidiousServiceError>()
+              .having((error) => error.statusCode, 'status', 503)
+              .having((error) => error.errorCode, 'provider code', isNull)
+              .having((error) => error.message, 'message',
+                  'Request failed with HTTP 503')));
+      expect(requests, hasLength(2));
+      final logged =
+          logs.map((log) => '${log.message} ${log.error}').join('\n');
+      expect(logged, contains('$urlSearchSuggestions, status: 503'));
+      expect(logged, isNot(contains('test-private-prefix')));
+      expect(logged, isNot(contains(providerMessage)));
+    });
+
+    test('transport failures cannot expose the suggestion request URL',
+        () async {
+      respond = (request) async =>
+          throw http.ClientException('test diagnostic', request.url);
+      await expectLater(
+          catalog.searchSuggestions('test-private-prefix'),
+          throwsA(isA<InvidiousServiceError>().having((error) => error.message,
+              'message', 'Search suggestions are unavailable.')));
     });
   });
 

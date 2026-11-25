@@ -16,6 +16,7 @@ import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_video_match.dart';
 import 'package:clipious/music/services/music_video_source.dart';
+import 'package:clipious/network/content_link.dart';
 import 'package:clipious/network/network_proxy.dart';
 import 'package:clipious/player/models/backend_playback.dart';
 import 'package:clipious/playlists/models/playlist.dart';
@@ -130,6 +131,33 @@ class InvidiousMusicCatalogService extends MusicCatalogService {
       isArtTrack: video.isStockArtTrack,
       playbackVideo: playbackVideo,
     );
+  }
+
+  @override
+  Future<List<String>> searchSuggestions(String query,
+      {bool Function()? isCurrent}) async {
+    final text = query.trim();
+    if (text.isEmpty || ContentLink.completeWebAddress(text) != null) {
+      return const [];
+    }
+    _requireCurrentDiscovery(isCurrent);
+    final suggestions = await _inSession((api, server, checkSession) async {
+      final result = await api.getMusicSearchSuggestion(text,
+          server: server,
+          beforeRequest: () => _checkDiscovery(checkSession, isCurrent));
+      if (result.query != text) return const <String>[];
+
+      final seen = <String>{};
+      return [
+        for (final suggestion in result.suggestions.map((item) => item.trim()))
+          if (suggestion.isNotEmpty &&
+              ContentLink.completeWebAddress(suggestion) == null &&
+              seen.add(suggestion.toLowerCase()))
+            suggestion,
+      ];
+    });
+    _requireCurrentDiscovery(isCurrent);
+    return suggestions;
   }
 
   @override

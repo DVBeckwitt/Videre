@@ -41,6 +41,11 @@ class MusicCatalogUnsupported extends MusicCatalogException {
 /// unsupported or forgotten override must fail without contacting another host.
 /// Historical direct-catalog parsing fixtures live under test/, not in the app.
 abstract class MusicCatalogService {
+  /// Optional suggestions for a draft in Online Search.
+  Future<List<String>> searchSuggestions(String query,
+          {bool Function()? isCurrent}) async =>
+      const [];
+
   Future<List<MusicTrack>> searchSongs(String query) async =>
       throw const MusicCatalogUnsupported();
 

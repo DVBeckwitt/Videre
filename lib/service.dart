@@ -392,6 +392,9 @@ class Service {
   }
 
   String urlFormatForLog(Uri? uri) {
+    if (uri?.path.endsWith(urlSearchSuggestions) == true) {
+      return urlSearchSuggestions;
+    }
     return kDebugMode ? uri.toString() : '${uri?.replace(host: 'xxxxxxxxxx')}';
   }
 
@@ -431,7 +434,9 @@ class Service {
     return 'Request failed with HTTP $statusCode';
   }
 
-  dynamic handleResponse(Response response) {
+  dynamic handleResponse(Response response) => _handleResponse(response);
+
+  dynamic _handleResponse(Response response, {bool privateSuggestion = false}) {
     final body = utf8
         .decode(response.bodyBytes, allowMalformed: response.statusCode == 429)
         .trim();
@@ -440,8 +445,10 @@ class Service {
         response.statusCode >= 200 && response.statusCode < 300;
     final isHtml = contentType.contains('html') || body.startsWith('<');
 
-    log.info(
-        "Response from ${response.request?.method} ${urlFormatForLog(response.request?.url)}, status: ${response.statusCode}");
+    final routeForLog = privateSuggestion
+        ? 'GET $urlSearchSuggestions'
+        : '${response.request?.method} ${urlFormatForLog(response.request?.url)}';
+    log.info('Response from $routeForLog, status: ${response.statusCode}');
 
     final json = _decodeJsonResponse(
       body,
@@ -449,7 +456,9 @@ class Service {
       response.statusCode,
     );
     final errorCode =
-        json is Map && json['error'] is String ? json['error'] as String : null;
+        !privateSuggestion && json is Map && json['error'] is String
+            ? json['error'] as String
+            : null;
     final isGatewayResponse = response.request != null &&
         isNerdVpnUrl(response.request!.url.toString());
     final retryAfter = _retryAfter(response);
@@ -473,7 +482,8 @@ class Service {
     }
 
     if (!isSuccessful) {
-      final message = _errorMessage(json, isHtml, response.statusCode);
+      final message = _errorMessage(
+          privateSuggestion ? null : json, isHtml, response.statusCode);
 
       log.severe(message);
       throw InvidiousServiceError(
@@ -499,10 +509,11 @@ class Service {
     }
 
     throw InvidiousServiceError(
-      'Expected JSON but received '
-      '${contentType.isEmpty ? 'an unknown content type' : contentType}',
-      statusCode: response.statusCode,
-    );
+        privateSuggestion
+            ? 'Expected a JSON response.'
+            : 'Expected JSON but received '
+                '${contentType.isEmpty ? 'an unknown content type' : contentType}',
+        statusCode: response.statusCode);
   }
 
   Future<ServerRequest> buildRequest(String baseUrl,
@@ -569,7 +580,8 @@ class Service {
               headers: headers),
           server: server);
     } catch (err) {
-      log.severe('Couldn\'t build url', err);
+      log.severe(
+          'Couldn\'t build url', baseUrl == urlSearchSuggestions ? null : err);
       rethrow;
     }
   }
@@ -2285,21 +2297,48 @@ class Service {
     }
   }
 
-  Future<SearchSuggestion> getSearchSuggestion(String query) async {
-    if (query.isEmpty) return SearchSuggestion(query, []);
-    var request = await buildRequest(urlSearchSuggestions, query: {"q": query});
-    final response = await _get(request);
-    SearchSuggestion search =
-        SearchSuggestion.fromJson(handleResponse(response));
-    // Suggestions are text. Escape literal markup before decoding entities.
-    search.suggestions = search.suggestions
-        .map((suggestion) => suggestion.contains('&')
-            ? html.parseFragment(suggestion.replaceAll('<', '&lt;')).text ??
-                suggestion
-            : suggestion)
-        .toList();
+  Future<SearchSuggestion> getSearchSuggestion(String query) =>
+      _getSearchSuggestion(query);
 
-    return search;
+  Future<SearchSuggestion> getMusicSearchSuggestion(String query,
+      {required Server server,
+      required Future<void> Function() beforeRequest}) {
+    final owner = db;
+    final revision = _sessionRevision;
+    return _getSearchSuggestion(query, server: server, beforeRequest: () async {
+      await beforeRequest();
+      if (revision != _sessionRevision || !identical(db, owner)) {
+        throw StateError('The music search connection changed.');
+      }
+    });
+  }
+
+  Future<SearchSuggestion> _getSearchSuggestion(String query,
+      {Server? server, Future<void> Function()? beforeRequest}) async {
+    if (query.isEmpty) return SearchSuggestion(query, []);
+    await beforeRequest?.call();
+    try {
+      final request = await buildRequest(urlSearchSuggestions,
+          query: {'q': query}, serverOverride: server);
+      final response = await _get(request, beforeRequest: beforeRequest);
+      await beforeRequest?.call();
+      final search = SearchSuggestion.fromJson(
+          _handleResponse(response, privateSuggestion: true));
+      // Suggestions are text. Escape literal markup before decoding entities.
+      search.suggestions = search.suggestions
+          .map((suggestion) => suggestion.contains('&')
+              ? html.parseFragment(suggestion.replaceAll('<', '&lt;')).text ??
+                  suggestion
+              : suggestion)
+          .toList();
+      return search;
+    } on InvidiousServiceError {
+      rethrow;
+    } catch (_) {
+      await beforeRequest?.call();
+      // Transport and parsing errors can contain the draft in a URI or body.
+      throw InvidiousServiceError('Search suggestions are unavailable.');
+    }
   }
 
   Future<void> validateServer(

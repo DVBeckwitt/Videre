@@ -51,6 +51,7 @@ import 'package:clipious/recommendations/candidate_sources.dart';
 import 'package:clipious/recommendations/recommendation_service.dart';
 import 'package:clipious/router.dart';
 import 'package:clipious/search/views/components/pasted_link_dialog.dart';
+import 'package:clipious/search/views/components/search_suggestions_panel.dart';
 import 'package:clipious/service.dart' show VideoLoadObserver;
 import 'package:clipious/settings/models/db/settings.dart' show browsingCountry;
 import 'package:clipious/settings/models/errors/invidious_service_error.dart';
@@ -66,7 +67,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:clipious/videos/views/components/offline_video_thumbnail.dart';
 import 'package:clipious/videos/views/components/video_watch_progress.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, listEquals;
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -390,7 +391,7 @@ class MusicScreen extends StatefulWidget {
   State<MusicScreen> createState() => MusicScreenState();
 }
 
-class MusicScreenState extends State<MusicScreen> {
+class MusicScreenState extends State<MusicScreen> with WidgetsBindingObserver {
   final _onlineSearch = TextEditingController();
   final _librarySearch = TextEditingController();
   final _queryFocus = FocusNode();
@@ -406,6 +407,12 @@ class MusicScreenState extends State<MusicScreen> {
   MusicCatalogSearchType _type = MusicCatalogSearchType.songs;
   MusicLibrarySearchType _libraryType = MusicLibrarySearchType.all;
   _OnlineSearchListing? _onlineListing;
+  Timer? _suggestionTimer;
+  int _suggestionRequest = 0;
+  var _suggestionDraft = (text: '', composing: false);
+  ({List<String> items, bool Function() isCurrent})? _onlineSuggestions;
+  bool _foreground = true;
+  bool _androidKeyboardVisible = false;
   MusicCollection? _collection;
   MusicArtistPage? _artistPage;
   _ArtistReleaseListing? _artistReleases;
@@ -453,6 +460,7 @@ class MusicScreenState extends State<MusicScreen> {
 
   void _selectSearchSource(_MusicSearchSource source) {
     if (source == _searchSource) return;
+    _clearOnlineSuggestions();
     _searchIntentRevision++;
     setState(() {
       _searchSource = source;
@@ -503,6 +511,98 @@ class MusicScreenState extends State<MusicScreen> {
     }
   }
 
+  bool get _canSuggestOnline =>
+      _foreground &&
+      !_searchingLibrary &&
+      !_hasBrowsePage &&
+      !(_browseRequest && (_loading || _failure != null)) &&
+      isPastedLinkSourceActive(context) &&
+      context.read<SettingsCubit?>()?.state.distractionFreeMode != true;
+
+  void _clearOnlineSuggestions() {
+    _suggestionTimer?.cancel();
+    _suggestionRequest++;
+    if (_onlineSuggestions != null) {
+      setState(() => _onlineSuggestions = null);
+    }
+  }
+
+  void _onlineDraftChanged() {
+    final value = _onlineSearch.value;
+    final draft = (
+      text: value.text,
+      composing: value.isComposingRangeValid && !value.composing.isCollapsed,
+    );
+    if (draft == _suggestionDraft) return;
+    _suggestionDraft = draft;
+    _clearOnlineSuggestions();
+    final query = draft.text.trim();
+    if (draft.composing ||
+        query.isEmpty ||
+        ContentLink.completeWebAddress(query) != null ||
+        !_canSuggestOnline) {
+      return;
+    }
+    final request = _suggestionRequest;
+    final session = context.read<AppCubit>().state;
+    final database = db;
+    final proxy = NetworkProxy.instance;
+    final connection = proxy.config;
+    bool current() =>
+        request == _suggestionRequest &&
+        _sameSession(session) &&
+        identical(database, db) &&
+        database.profileId == session.profileId &&
+        _canSuggestOnline &&
+        _onlineSearch.text.trim() == query &&
+        !proxy.isChanging &&
+        identical(connection, proxy.config);
+    bool canRequest() => current() && _queryFocus.hasFocus;
+
+    _suggestionTimer = Timer(const Duration(milliseconds: 500), () async {
+      if (!canRequest()) return;
+      try {
+        final suggestions = await musicCatalogService.searchSuggestions(query,
+            isCurrent: canRequest);
+        if (suggestions.isNotEmpty && canRequest()) {
+          setState(() => _onlineSuggestions = (
+                items: suggestions,
+                isCurrent: current,
+              ));
+        }
+      } catch (_) {
+        // Suggestions are optional. The user can still submit the draft.
+      }
+    });
+  }
+
+  void _useOnlineSuggestion(String suggestion, {required bool submit}) {
+    final suggestions = _onlineSuggestions;
+    if (suggestions == null ||
+        !suggestions.isCurrent() ||
+        !suggestions.items.contains(suggestion)) {
+      return;
+    }
+    _fillOnlineQuery(suggestion, refreshSuggestions: !submit);
+    if (submit) {
+      _submitActiveSearch();
+    } else {
+      _queryFocus.requestFocus();
+    }
+  }
+
+  // Stored queries stay local until the next edit or an explicit submission.
+  void _fillOnlineQuery(String query, {bool refreshSuggestions = false}) {
+    if (!refreshSuggestions) {
+      _clearOnlineSuggestions();
+      _suggestionDraft = (text: query, composing: false);
+    }
+    _onlineSearch.value = TextEditingValue(
+      text: query,
+      selection: TextSelection.collapsed(offset: query.length),
+    );
+  }
+
   void focusSearch({VoidCallback? onBack}) {
     if (onBack != null) setState(() => _shortcutBack = onBack);
     if (_hasBrowsePage || _browseRequest) {
@@ -517,6 +617,7 @@ class MusicScreenState extends State<MusicScreen> {
   }
 
   void leaveSearch() {
+    _clearOnlineSuggestions();
     _searchIntentRevision++;
     if (_shortcutBack != null || _onlineListing?.pending != null) {
       setState(() {
@@ -540,13 +641,36 @@ class MusicScreenState extends State<MusicScreen> {
   @override
   void initState() {
     super.initState();
-    NetworkProxy.instance.addBeforeApply(_retireOnlinePagination);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
+    _onlineSearch.addListener(_onlineDraftChanged);
+    NetworkProxy.instance.addBeforeApply(_retireOnlineConnection);
     _loading = widget.videoId != null &&
         widget.playlistId == null &&
         _sameSession(context.read<AppCubit>().state);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _openInitial();
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final keyboardVisible = defaultTargetPlatform == TargetPlatform.android &&
+        (MediaQuery.maybeViewInsetsOf(context)?.bottom ?? 0) > 0;
+    final keyboardClosed = _androidKeyboardVisible && !keyboardVisible;
+    _androidKeyboardVisible = keyboardVisible;
+    if (keyboardClosed && !_searchingLibrary) _queryFocus.unfocus();
+    if (keyboardClosed || !isPastedLinkSourceActive(context)) {
+      _clearOnlineSuggestions();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (!_foreground) _clearOnlineSuggestions();
   }
 
   @override
@@ -561,6 +685,7 @@ class MusicScreenState extends State<MusicScreen> {
         oldWidget.initialQuery != widget.initialQuery) {
       // Clearing every route argument has no replacement request to invalidate
       // the old one. Revoke it before opening the new destination either way.
+      _clearOnlineSuggestions();
       _generation++;
       _onlineListing?.pending = null;
       _tvSong = null;
@@ -576,8 +701,11 @@ class MusicScreenState extends State<MusicScreen> {
   @override
   void dispose() {
     _generation++;
-    NetworkProxy.instance.removeBeforeApply(_retireOnlinePagination);
+    WidgetsBinding.instance.removeObserver(this);
+    NetworkProxy.instance.removeBeforeApply(_retireOnlineConnection);
     _artistReleaseCooldown?.cancel();
+    _suggestionTimer?.cancel();
+    _onlineSearch.removeListener(_onlineDraftChanged);
     _onlineSearch.dispose();
     _librarySearch.dispose();
     _librarySearchScroll.dispose();
@@ -599,6 +727,7 @@ class MusicScreenState extends State<MusicScreen> {
       mounted && generation == _generation && _sameSession(initial);
 
   void _clearForSession() {
+    _clearOnlineSuggestions();
     _generation++;
     _searchIntentRevision++;
     _searchSessionRevision++;
@@ -637,7 +766,7 @@ class MusicScreenState extends State<MusicScreen> {
     } else if (widget.initialQuery?.trim().isNotEmpty == true) {
       _searchIntentRevision++;
       _searchSource = _MusicSearchSource.online;
-      _onlineSearch.text = widget.initialQuery!.trim();
+      _fillOnlineQuery(widget.initialQuery!.trim());
       _type = MusicCatalogSearchType.songs;
       await _submit();
     }
@@ -648,6 +777,7 @@ class MusicScreenState extends State<MusicScreen> {
       {bool browse = false}) async {
     final session = context.read<AppCubit>().state;
     if (!_sameSession(session)) return;
+    if (browse) _clearOnlineSuggestions();
     final generation = ++_generation;
     setState(() {
       if (browse) _onlineListing?.pending = null;
@@ -688,6 +818,7 @@ class MusicScreenState extends State<MusicScreen> {
   Future<void> _submit({bool learn = false, String? retryQuery}) async {
     final query = retryQuery ?? _onlineSearch.text.trim();
     if (_searchingLibrary || query.isEmpty) return;
+    _clearOnlineSuggestions();
     final app = context.read<AppCubit>();
     final session = app.state;
     if (!_sameSession(session)) return;
@@ -763,6 +894,12 @@ class MusicScreenState extends State<MusicScreen> {
               .toList(),
         MusicCatalogSearchType.all => throw const MusicCatalogUnsupported(),
       };
+
+  Future<void> _retireOnlineConnection() async {
+    if (!mounted) return;
+    _clearOnlineSuggestions();
+    await _retireOnlinePagination();
+  }
 
   Future<void> _retireOnlinePagination() async {
     final listing = _onlineListing;
@@ -1348,12 +1485,7 @@ class MusicScreenState extends State<MusicScreen> {
   }
 
   Widget _results() {
-    final online = _searchingLibrary
-        ? null
-        : KeyedSubtree(
-            key: const ValueKey('music-search-online-viewport'),
-            child: _onlineResults(),
-          );
+    final online = _searchingLibrary ? null : _onlineResultsWithSuggestions();
     if (!_canSwitchSearchSource || !_visitedLibrarySearch) return online!;
     // Keep verified file results ready when returning to Library. The inactive
     // adapter has no attached list that navigation reselect could scroll.
@@ -1367,6 +1499,41 @@ class MusicScreenState extends State<MusicScreen> {
           child: _libraryResults(),
         ),
       ),
+    ]);
+  }
+
+  Widget _onlineResultsWithSuggestions() {
+    final suggestions = _onlineSuggestions;
+    final showSuggestions = suggestions != null && suggestions.isCurrent();
+    // Cover results while editing and retain their scroll position for Back.
+    return Stack(fit: StackFit.expand, children: [
+      Offstage(
+        offstage: showSuggestions,
+        child: ExcludeFocus(
+          excluding: showSuggestions,
+          child: TickerMode(
+            enabled: !showSuggestions,
+            child: KeyedSubtree(
+              key: const ValueKey('music-search-online-viewport'),
+              child: _onlineResults(),
+            ),
+          ),
+        ),
+      ),
+      if (showSuggestions)
+        ListView.builder(
+          key: const ValueKey('music-search-suggestions'),
+          primary: false,
+          itemCount: suggestions.items.length,
+          itemBuilder: (context, index) {
+            final suggestion = suggestions.items[index];
+            return SearchSuggestionTile(
+              suggestion: suggestion,
+              onSubmit: () => _useOnlineSuggestion(suggestion, submit: true),
+              onFill: () => _useOnlineSuggestion(suggestion, submit: false),
+            );
+          },
+        ),
     ]);
   }
 
@@ -1828,6 +1995,7 @@ class MusicScreenState extends State<MusicScreen> {
         if (context.read<SettingsCubit?>() != null)
           BlocListener<SettingsCubit, SettingsState>(
             listener: (context, state) {
+              if (state.distractionFreeMode) _clearOnlineSuggestions();
               if (_onlineListing?.country != _searchCountry) {
                 unawaited(_retireOnlinePagination());
               }
@@ -1937,15 +2105,20 @@ class MusicScreenState extends State<MusicScreen> {
   Widget _browser(BuildContext context) {
     final locals = AppLocalizations.of(context)!;
     final colors = Theme.of(context).colorScheme;
+    final showingSuggestions = _onlineSuggestions?.isCurrent() == true;
     final searchOutline = OutlineInputBorder(
         borderRadius: BorderRadius.circular(32), borderSide: BorderSide.none);
     return PopScope(
       canPop: !TickerMode.of(context) ||
-          (_shortcutBack == null &&
+          (!showingSuggestions &&
+              _shortcutBack == null &&
               (!_hasBrowsePage || _returnToOrigin || _returningToOrigin)),
       onPopInvokedWithResult: (didPop, _) {
         if (didPop || _returningToOrigin || !TickerMode.of(context)) return;
-        if (_hasBrowsePage && !_returnToOrigin) {
+        if (showingSuggestions) {
+          _clearOnlineSuggestions();
+          _queryFocus.unfocus();
+        } else if (_hasBrowsePage && !_returnToOrigin) {
           _backToSearch();
         } else {
           _shortcutBack?.call();
@@ -1978,6 +2151,7 @@ class MusicScreenState extends State<MusicScreen> {
                       key: const ValueKey('music-search'),
                       controller: _search,
                       focusNode: _queryFocus,
+                      enableIMEPersonalizedLearning: !_searchingLibrary,
                       textInputAction: TextInputAction.search,
                       onChanged: _searchInputChanged,
                       onSubmitted: (_) => _submitActiveSearch(),

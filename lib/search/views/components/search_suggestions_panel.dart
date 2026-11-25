@@ -111,17 +111,37 @@ class _SearchSuggestionsPanelState extends State<SearchSuggestionsPanel> {
             ),
           ),
         for (final item in suggestions)
-          ListTile(
-            leading: const Icon(Icons.search_rounded),
-            title: Text(item, maxLines: 2, overflow: TextOverflow.ellipsis),
-            onTap: () => widget.onSubmit(item),
-            trailing: IconButton(
-              tooltip: locals.searchFillSuggestion,
-              onPressed: () => widget.onFill(item),
-              icon: const Icon(Icons.north_west_rounded, size: 20),
-            ),
+          SearchSuggestionTile(
+            suggestion: item,
+            onSubmit: () => widget.onSubmit(item),
+            onFill: () => widget.onFill(item),
           ),
       ],
     );
   }
+}
+
+class SearchSuggestionTile extends StatelessWidget {
+  final String suggestion;
+  final VoidCallback onSubmit;
+  final VoidCallback onFill;
+
+  const SearchSuggestionTile({
+    super.key,
+    required this.suggestion,
+    required this.onSubmit,
+    required this.onFill,
+  });
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: const Icon(Icons.search_rounded),
+        title: Text(suggestion, maxLines: 2, overflow: TextOverflow.ellipsis),
+        onTap: onSubmit,
+        trailing: IconButton(
+          tooltip: AppLocalizations.of(context)!.searchFillSuggestion,
+          onPressed: onFill,
+          icon: const Icon(Icons.north_west_rounded, size: 20),
+        ),
+      );
 }
