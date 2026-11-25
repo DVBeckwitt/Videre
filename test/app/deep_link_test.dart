@@ -9,6 +9,8 @@ import 'package:clipious/l10n/generated/app_localizations.dart';
 import 'package:clipious/main.dart' as app_globals;
 import 'package:clipious/music/views/screens/music.dart';
 import 'package:clipious/network/content_link.dart';
+import 'package:clipious/player/models/named_music_queue.dart';
+import 'package:clipious/settings/models/db/settings.dart';
 import 'package:clipious/player/states/player.dart';
 import 'package:clipious/playlists/models/playlist.dart';
 import 'package:clipious/playlists/models/playlist_reference.dart';
@@ -222,6 +224,8 @@ void main() {
     service = _IncomingLinkService();
     originalTv = app_globals.isTv;
     db = await SembastSqfDb.createInMemory();
+    await db.saveSetting(SettingsValue(
+        namedMusicQueuesSetting, NamedMusicQueue.encodeAll(const [])));
     await db.upsertServer(
         const Server(url: 'https://instance.example', inUse: true));
     app_globals.isTv = true;
