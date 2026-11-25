@@ -36,6 +36,7 @@ import '../../music/models/music_content_advisory.dart';
 import '../../music/models/on_device_music_entry.dart';
 import '../../music/models/song_transition.dart';
 import '../../music/services/local_music_library.dart';
+import '../../music/services/music_listening_history.dart';
 import '../../playlists/models/playlist.dart';
 import '../../playlists/models/playlist_reference.dart';
 import '../../playlists/services/playlist_load_session.dart';
@@ -1973,7 +1974,11 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       case MediaEventType.play:
         _setPlaying(_requestedPlaying != false);
         // Source setup can autoplay after a notification or PiP pause request.
-        if (_requestedPlaying == false) pause();
+        if (_requestedPlaying == false) {
+          pause();
+        } else if (event.state == MediaState.playing && !playbackInterrupted) {
+          _recordMusicListeningStart();
+        }
         break;
       case MediaEventType.pause:
         _setPlaying(false);
@@ -2847,6 +2852,12 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     _waitingForPlaylistUserSkip = false;
     if (settings.state.playerRepeatMode == PlayerRepeat.repeatOne &&
         (!userInitiated || !_inMusicQueue || state.playQueue.isEmpty)) {
+      final IdedVideo? entry =
+          state.currentlyPlaying ?? state.offlineCurrentlyPlaying;
+      if (entry != null && _isMusicHistoryEntry(entry)) {
+        _activeHistoryWrite?.cancel();
+        _activeHistoryWrite = _beginHistoryWrite(entry, fromMusic: true);
+      }
       seek(Duration.zero);
       play();
     } else if (state.videos.isNotEmpty || state.offlineVideos.isNotEmpty) {
@@ -2989,13 +3000,52 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       !state.isClosing &&
       (state.isPlaying || _musicHandoff != null || _musicEndWait != null);
 
+  bool _isMusicHistoryEntry(IdedVideo entry) =>
+      isLocalMusicPlaybackId(entry.videoId) ||
+      _musicHistoryEntries.contains(playbackQueueId(entry));
+
   PlaybackHistoryWrite? _beginHistoryWrite(IdedVideo entry, {bool? fromMusic}) {
-    if (isLocalMusicPlaybackId(entry.videoId)) return null;
-    final music =
-        fromMusic ?? _musicHistoryEntries.contains(playbackQueueId(entry));
+    if (fromMusic ?? _isMusicHistoryEntry(entry)) {
+      return _profileDatabase
+          .beginMusicListening(musicListeningTrackId(entry.videoId));
+    }
     return _profileDatabase.beginPlaybackHistory(
-        music ? PlaybackHistoryOrigin.music : PlaybackHistoryOrigin.video,
-        entry.videoId);
+        PlaybackHistoryOrigin.video, entry.videoId);
+  }
+
+  void _recordMusicListeningStart() {
+    final write = _activeHistoryWrite;
+    if (write == null || write.origin != PlaybackHistoryOrigin.music) return;
+    final online = state.currentlyPlaying;
+    final offline = state.offlineCurrentlyPlaying;
+    final id = online?.videoId ?? offline?.videoId;
+    if (id == null || musicListeningTrackId(id) != write.videoId) return;
+
+    // Consume this occurrence before storage yields. Native acknowledgments,
+    // seek and ordinary pause/resume can all produce another play event.
+    _activeHistoryWrite = null;
+    final saved = isLocalMusicPlaybackId(id)
+        ? null
+        : offline ?? (online == null ? null : _explicitDownload(online));
+    final entry = HistoryVideoCache(
+      write.videoId,
+      online?.title ?? offline?.title ?? '',
+      online?.author ?? offline?.author,
+      ImageObject.getBestThumbnail(online?.videoThumbnails ?? const [])?.url ??
+          '',
+      authorId: online?.authorId,
+      lengthSeconds: online?.lengthSeconds ?? offline?.lengthSeconds,
+      musicMetadata: online?.musicMetadata ?? offline?.musicMetadata,
+      playedFromDownload: saved != null,
+      downloadAccountId: saved?.accountId,
+    );
+    final playlist = _playlistEntries.containsKey(state.currentQueueId)
+        ? _playlistReference
+        : null;
+    unawaited(
+        write.record(entry, playlist: playlist).catchError((Object error) {
+      log.fine('Could not record Music history (${error.runtimeType})');
+    }));
   }
 
   Future<_PreparedMusicSelection?> _prepareMusicSelection(
@@ -3659,7 +3709,9 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
 
       final historyVideo = _learningVideo;
       final historyWrite = _activeHistoryWrite;
-      if (historyWrite != null && historyVideo != null) {
+      if (historyWrite != null &&
+          historyWrite.origin == PlaybackHistoryOrigin.video &&
+          historyVideo != null) {
         final saved = offlineCurrentlyPlaying ??
             (currentlyPlaying == null
                 ? null

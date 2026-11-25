@@ -5,6 +5,7 @@ import 'package:clipious/videos/models/video.dart';
 import 'package:json_annotation/json_annotation.dart';
 
 import '../../../globals.dart';
+import '../../../playlists/models/playlist_reference.dart';
 import '../../../utils/models/image_object.dart';
 
 part 'history_video_cache.g.dart';
@@ -17,7 +18,8 @@ class PlaybackHistoryWrite {
   final String profileId;
   final PlaybackHistoryOrigin origin;
   final String videoId;
-  final Future<void> Function(HistoryVideoCache, bool Function()) _store;
+  final Future<void> Function(
+      HistoryVideoCache, PlaylistReference?, bool Function()) _store;
   final void Function(PlaybackHistoryWrite)? _onFinish;
   bool _cancelled = false;
   bool _started = false;
@@ -26,14 +28,15 @@ class PlaybackHistoryWrite {
       {void Function(PlaybackHistoryWrite)? onFinish})
       : _onFinish = onFinish;
 
-  Future<void> record(HistoryVideoCache entry) async {
+  Future<void> record(HistoryVideoCache entry,
+      {PlaylistReference? playlist}) async {
     if (_cancelled || _started) return;
     _started = true;
     try {
       if (entry.videoId != videoId) {
         throw ArgumentError('Playback history belongs to another video.');
       }
-      await _store(entry, () => !_cancelled);
+      await _store(entry, playlist, () => !_cancelled);
     } finally {
       cancel();
     }

@@ -16,6 +16,7 @@ import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/models/on_device_music_entry.dart';
 import 'package:clipious/music/models/song_transition.dart';
 import 'package:clipious/music/services/local_music_library.dart';
+import 'package:clipious/music/services/music_listening_history.dart';
 import 'package:clipious/player/audio_playback_sources.dart';
 import 'package:clipious/player/models/playback_session.dart';
 import 'package:clipious/player/models/playback_queue.dart';
@@ -118,6 +119,9 @@ class _SessionPlayer extends TestPlayerCubit {
 
   void seedAudioStart(Duration startAt) =>
       emit(state.copyWith(startAt: startAt, isAudio: true));
+
+  void reportDecoderPlay() => setEvent(
+      const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
 }
 
 class _AudioStartRecorder extends AudioPlayerCubit {
@@ -207,6 +211,29 @@ Future<void> waitForSavedPosition(int seconds, {String? videoId}) async {
         (videoId == null || session?.currentId == videoId);
   }).timeout(const Duration(seconds: 5));
 }
+
+Future<void> waitForMusicEvents(
+    MusicListeningHistory history, int count) async {
+  final saved = Completer<void>();
+  void check() {
+    if (!saved.isCompleted && history.events().length >= count) {
+      saved.complete();
+    }
+  }
+
+  final changes = history.changes;
+  changes.addListener(check);
+  try {
+    check();
+    await saved.future.timeout(const Duration(seconds: 5));
+    expect(history.events(), hasLength(count));
+  } finally {
+    changes.removeListener(check);
+  }
+}
+
+Future<void> flushPlaybackWrites() =>
+    (db as SembastSqfDb).db.transaction((_) async {});
 
 Future<List<LocalMusicTrack>> openDeviceFolder(
     {bool legacy = false,
@@ -1815,6 +1842,13 @@ void main() {
         player.restoreSession();
         expect(db.getLocalHistory(), isEmpty);
         await player.resumeSession(fromMusic: true);
+        player.reportDecoderPlay();
+        if (legacy) {
+          await waitForMusicEvents(
+              MusicListeningHistory.forProfile(db, db.profileId), 1);
+        } else {
+          await flushPlaybackWrites();
+        }
         expect(
             db
                 .getPlaybackHistory(PlaybackHistoryOrigin.music)
@@ -1838,18 +1872,27 @@ void main() {
           musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
       const music = PlaybackHistoryOrigin.music;
       const video = PlaybackHistoryOrigin.video;
+      final listening = MusicListeningHistory.forProfile(db, db.profileId);
       // An audio-only watch from Videos can have Music metadata too.
       await player.playVideo([song], audio: true);
+      player.reportDecoderPlay();
+      await flushPlaybackWrites();
       expect(db.getPlaybackHistory(video).single.videoId, song.videoId);
       expect(db.getPlaybackHistory(music), isEmpty);
       expect(await player.enqueueMusicSongs([song], next: true), isTrue);
       await player.skipToVideo(1);
+      player.reportDecoderPlay();
+      await waitForMusicEvents(listening, 1);
       expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
       await db.clearPlaybackHistory(music);
       await player.retryCurrentVideo();
+      player.reportDecoderPlay();
+      await flushPlaybackWrites();
       expect(db.getPlaybackHistory(music), isEmpty);
       expect(db.getPlaybackHistory(video).single.videoId, song.videoId);
       await player.playVideo([song], fromMusic: true, audio: true);
+      player.reportDecoderPlay();
+      await waitForMusicEvents(listening, 1);
       expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
       await waitForSavedPosition(0, videoId: song.videoId);
       expect(player.savedSession!.musicHistoryEntries, {song.videoId});
@@ -1865,6 +1908,9 @@ void main() {
             videoId: 'shared-song',
             musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
         await player.playVideo([song], fromMusic: true, audio: true);
+        player.reportDecoderPlay();
+        final listening = MusicListeningHistory.forProfile(db, db.profileId);
+        await waitForMusicEvents(listening, 1);
         const watch = Video(videoId: 'shared-song');
         for (var attempt = 0; attempt < 2; attempt++) {
           if (playNext) {
@@ -1891,6 +1937,8 @@ void main() {
             .timeout(const Duration(seconds: 5));
         expect(player.savedSession!.musicHistoryEntries, {ids.first});
         await player.resumeSession();
+        player.reportDecoderPlay();
+        await waitForMusicEvents(listening, 2);
         expect(player.state.currentQueueId, ids.first);
         expect(db.getPlaybackHistory(PlaybackHistoryOrigin.video), isEmpty);
         await player.skipToVideo(1);
@@ -1914,7 +1962,10 @@ void main() {
           videoId: 'slow',
           musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
       const music = PlaybackHistoryOrigin.music;
+      final listening = MusicListeningHistory.forProfile(db, db.profileId);
       await player.playVideo([song], audio: true, fromMusic: true);
+      player.reportDecoderPlay();
+      await waitForMusicEvents(listening, 1);
       expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
       api.metadataRequested = Completer<void>();
       api.releaseMetadata = Completer<void>();
@@ -1923,9 +1974,67 @@ void main() {
       await db.deletePlaybackHistory(music, song.videoId);
       api.releaseMetadata!.complete();
       await replay;
+      player.reportDecoderPlay();
+      await flushPlaybackWrites();
       expect(db.getPlaybackHistory(music), isEmpty);
       await player.playVideo([song], audio: true, fromMusic: true);
+      player.reportDecoderPlay();
+      await waitForMusicEvents(listening, 1);
       expect(db.getPlaybackHistory(music).single.videoId, song.videoId);
+    });
+
+    test('Music records one event per started play and honors recording pause',
+        () async {
+      player.audioSession = await AudioSession.instance;
+      app_main.mediaHandler = MediaHandler(player);
+      const song = Video(
+          videoId: 'history-song',
+          musicMetadata: MusicMetadata(title: 'Song', artist: 'Artist'));
+      final listening = MusicListeningHistory.forProfile(db, db.profileId);
+
+      Future<void> selectSong() =>
+          player.playVideo([song], audio: true, fromMusic: true);
+
+      await selectSong();
+      player.setEvent(const MediaEvent(
+          state: MediaState.buffering, type: MediaEventType.play));
+      await flushPlaybackWrites();
+      expect(listening.events(), isEmpty);
+      player.reportDecoderPlay();
+      player.reportDecoderPlay();
+      await waitForMusicEvents(listening, 1);
+
+      player.pause();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      player.play();
+      player.reportDecoderPlay();
+      await player.retryCurrentVideo();
+      player.reportDecoderPlay();
+      await flushPlaybackWrites();
+      expect(listening.events(trackId: song.videoId), hasLength(1));
+
+      await listening.setRecordingPaused(true);
+      expect(listening.recordingPaused, isTrue);
+      await selectSong();
+      player.reportDecoderPlay();
+      await flushPlaybackWrites();
+      expect(player.state.isPlaying, isTrue);
+      expect(listening.events(trackId: song.videoId), hasLength(1));
+
+      await listening.setRecordingPaused(false);
+      player.pause();
+      player.setEvent(const MediaEvent(
+          state: MediaState.playing, type: MediaEventType.pause));
+      player.play();
+      player.reportDecoderPlay();
+      await flushPlaybackWrites();
+      expect(listening.events(trackId: song.videoId), hasLength(1));
+
+      await selectSong();
+      player.reportDecoderPlay();
+      await waitForMusicEvents(listening, 2);
+      expect(listening.events(trackId: song.videoId), hasLength(2));
     });
 
     test('restoring a repeated final song retains its occurrence and real ID',

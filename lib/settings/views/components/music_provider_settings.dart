@@ -12,6 +12,7 @@ import '../../../music/models/music_mini_player_preferences.dart';
 import '../../../music/models/song_transition.dart';
 import '../../../music/services/music_community_cover_preferences.dart';
 import '../../../music/services/music_lyrics_preferences.dart';
+import '../../../music/views/components/music_history_privacy.dart';
 import '../../../player/models/music_audio_quality.dart';
 import '../../../utils.dart' show selectKeys;
 import '../../states/settings.dart';
@@ -70,6 +71,7 @@ class MusicProviderSettings extends StatelessWidget {
           SongTransitionMode.crossfade => locals.musicTransitionCrossfade,
         };
     return Column(mainAxisSize: MainAxisSize.min, children: [
+      const MusicHistoryPrivacy(),
       _MusicChoice<MusicStreamingQuality>(
         tileKey: const ValueKey('music-streaming-quality-setting'),
         icon: Icons.high_quality_outlined,

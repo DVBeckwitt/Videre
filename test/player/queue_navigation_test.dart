@@ -507,6 +507,12 @@ void main() {
   for (final shuffle in [false, true]) {
     test('Shuffle all downloads follows its one-shot order (global=$shuffle)',
         () async {
+      Future<void> reportDecoderPlay() async {
+        player.setEvent(const MediaEvent(
+            state: MediaState.playing, type: MediaEventType.play));
+        await (db as SembastSqfDb).db.transaction((_) async {});
+      }
+
       final files = await storeMusicDownloads();
       final original = files.map((file) => file.videoId).toList();
       await settings.setShuffle(shuffle);
@@ -520,9 +526,12 @@ void main() {
       expect(settings.state.playerShuffleMode, shuffle);
       expect(player.state.videos, isEmpty);
       expect(player.state.isAudio, isTrue);
+      expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music), isEmpty);
+      await reportDecoderPlay();
       expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music).single.videoId,
           order.first);
       await player.selectQueueOccurrence(order.last);
+      await reportDecoderPlay();
       expect(
           db
               .getPlaybackHistory(PlaybackHistoryOrigin.music)

@@ -4,6 +4,7 @@ import 'package:clipious/offline_subscriptions/models/offline_subscription.dart'
 
 import '../../downloads/models/downloaded_video.dart';
 import '../../home/models/db/home_layout.dart';
+import '../../music/models/music_listening_event.dart';
 import '../../search/models/db/search_history_item.dart';
 import '../../settings/models/db/app_logs.dart';
 import '../../settings/models/db/server.dart';
@@ -172,10 +173,27 @@ abstract class IDbClient {
       PlaybackHistoryOrigin origin, String videoId) {
     final owner = forProfile(profileId);
     return PlaybackHistoryWrite(owner.profileId, origin, videoId,
-        (entry, current) async {
+        (entry, _, current) async {
       if (current()) await owner.recordPlaybackHistory(origin, entry);
     });
   }
+
+  bool get musicHistoryRecordingPaused => false;
+
+  Future<void> setMusicHistoryRecordingPaused(bool paused) async =>
+      throw UnsupportedError('Music history requires the app database');
+
+  PlaybackHistoryWrite? beginMusicListening(String trackId) => null;
+
+  List<MusicListeningEvent> getMusicListeningEvents({String? trackId}) =>
+      const [];
+
+  Future<void> removeMusicListeningTracks(Set<String>? trackIds) async =>
+      throw UnsupportedError('Music history requires the app database');
+
+  Future<int> mergeMusicListeningEvents(
+          Iterable<MusicListeningEvent> events) async =>
+      throw UnsupportedError('Music history requires the app database');
 
   Future<void> deletePlaybackHistory(
           PlaybackHistoryOrigin origin, String videoId) async =>

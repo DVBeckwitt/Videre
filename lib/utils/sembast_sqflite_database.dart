@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:clipious/downloads/models/downloaded_video.dart';
 import 'package:clipious/home/models/db/home_layout.dart';
+import 'package:clipious/music/models/music_listening_event.dart';
 import 'package:clipious/offline_subscriptions/models/offline_subscription.dart';
 import 'package:clipious/search/models/db/search_history_item.dart';
 import 'package:clipious/settings/models/db/app_logs.dart';
@@ -34,6 +35,8 @@ import 'backup.dart';
 
 const maxLogs = 1000;
 const singleId = 1;
+const _musicHistoryRecordingPaused = 'music-history-recording-paused';
+const _musicListeningEvents = 'musicListeningEvents';
 
 class _AbandonedAccountSetup implements Exception {}
 
@@ -80,6 +83,8 @@ class SembastSqfDb extends IDbClient {
   StoreRef<String, Map<String, Object?>> playbackHistoryStore(
           PlaybackHistoryOrigin origin) =>
       stringMapStoreFactory.store(_storeName('${origin.name}PlaybackHistory'));
+  StoreRef<String, Map<String, Object?>> get _musicListeningStore =>
+      stringMapStoreFactory.store(_storeName(_musicListeningEvents));
   StoreRef<String, Map<String, Object?>> get progressStore =>
       stringMapStoreFactory.store(_storeName('progress'));
   StoreRef<String, Map<String, Object?>> get offlineSubscriptions =>
@@ -260,6 +265,7 @@ class SembastSqfDb extends IDbClient {
           'historyVideoCache',
           for (final origin in PlaybackHistoryOrigin.values)
             '${origin.name}PlaybackHistory',
+          _musicListeningEvents,
           'progress',
           'offline_subscriptions',
         ]) {
@@ -665,16 +671,27 @@ class SembastSqfDb extends IDbClient {
   List<HistoryVideoCache> getLocalHistory() {
     final entries = _historyByDate([
       historyVideoCacheStore,
-      for (final origin in PlaybackHistoryOrigin.values)
-        playbackHistoryStore(origin),
-    ]);
+      playbackHistoryStore(PlaybackHistoryOrigin.video),
+    ])
+      ..addAll(getPlaybackHistory(PlaybackHistoryOrigin.music));
+    entries.sort((a, b) => b.created.compareTo(a.created));
     final ids = <String>{};
     return entries.where((entry) => ids.add(entry.videoId)).toList();
   }
 
   @override
-  List<HistoryVideoCache> getPlaybackHistory(PlaybackHistoryOrigin origin) =>
-      _historyByDate([playbackHistoryStore(origin)]);
+  List<HistoryVideoCache> getPlaybackHistory(PlaybackHistoryOrigin origin) {
+    if (origin != PlaybackHistoryOrigin.music) {
+      return _historyByDate([playbackHistoryStore(origin)]);
+    }
+    final ids = <String>{};
+    return [
+      for (final event in getMusicListeningEvents())
+        if (event.source != MusicListeningSource.device &&
+            ids.add(event.trackId))
+          event.entry,
+    ];
+  }
 
   List<HistoryVideoCache> _historyByDate(
           List<StoreRef<String, Map<String, Object?>>> stores) =>
@@ -687,6 +704,13 @@ class SembastSqfDb extends IDbClient {
   @override
   HistoryVideoCache? getPlaybackHistoryVideo(
       PlaybackHistoryOrigin origin, String videoId) {
+    if (origin == PlaybackHistoryOrigin.music) {
+      final entry = getMusicListeningEvents(trackId: videoId)
+          .where((event) => event.source != MusicListeningSource.device)
+          .firstOrNull
+          ?.entry;
+      return entry?..origin = origin;
+    }
     final row = playbackHistoryStore(origin).record(videoId).getSync(db);
     return row == null
         ? null
@@ -700,23 +724,199 @@ class SembastSqfDb extends IDbClient {
 
   @override
   PlaybackHistoryWrite beginPlaybackHistory(
-      PlaybackHistoryOrigin origin, String videoId) {
+          PlaybackHistoryOrigin origin, String videoId) =>
+      _newHistoryWrite(origin, videoId, (owner, txn, entry, _, current) async {
+        if (origin == PlaybackHistoryOrigin.music &&
+            await owner._musicRecordingPausedIn(txn)) {
+          return false;
+        }
+        if (!current()) return false;
+        await owner
+            .playbackHistoryStore(origin)
+            .record(videoId)
+            .put(txn, entry.toJson());
+        return true;
+      });
+
+  PlaybackHistoryWrite _newHistoryWrite(
+      PlaybackHistoryOrigin origin,
+      String videoId,
+      Future<bool> Function(SembastSqfDb, Transaction, HistoryVideoCache,
+              PlaylistReference?, bool Function())
+          write,
+      {bool notify = false}) {
     final owner = forProfile(profileId);
-    final pending = PlaybackHistoryWrite(
-        owner.profileId,
-        origin,
-        videoId,
-        (entry, current) => owner._writeProfile((owner, txn) async {
-              if (current()) {
-                await owner
-                    .playbackHistoryStore(origin)
-                    .record(videoId)
-                    .put(txn, entry.toJson());
-              }
-            }),
-        onFinish: _pendingHistory.remove);
+    final pending = PlaybackHistoryWrite(owner.profileId, origin, videoId,
+        (entry, playlist, current) async {
+      final stored = await owner._writeProfile(
+          (owner, txn) => write(owner, txn, entry, playlist, current));
+      if (notify && stored) playbackHistoryRevision.value++;
+    }, onFinish: _pendingHistory.remove);
     _pendingHistory.add(pending);
     return pending;
+  }
+
+  @override
+  bool get musicHistoryRecordingPaused =>
+      getSettings(_musicHistoryRecordingPaused)?.value == 'true';
+
+  Future<bool> _musicRecordingPausedIn(Transaction txn) async =>
+      (await settingsStore
+          .record(_musicHistoryRecordingPaused)
+          .get(txn))?['value'] ==
+      'true';
+
+  @override
+  Future<void> setMusicHistoryRecordingPaused(bool paused) async {
+    final profile = forProfile(profileId);
+    if (paused) {
+      profile._cancelPendingHistory(origin: PlaybackHistoryOrigin.music);
+    }
+    await profile._writeProfile((owner, txn) async {
+      final setting = SettingsValue(_musicHistoryRecordingPaused, '$paused');
+      await owner.settingsStore.record(setting.name).put(txn, setting.toJson());
+    });
+    if (paused) {
+      profile._cancelPendingHistory(origin: PlaybackHistoryOrigin.music);
+    }
+    playbackHistoryRevision.value++;
+  }
+
+  @override
+  PlaybackHistoryWrite? beginMusicListening(String trackId) {
+    if (musicHistoryRecordingPaused) return null;
+    return _newHistoryWrite(PlaybackHistoryOrigin.music, trackId,
+        (owner, txn, entry, playlist, current) async {
+      if (await owner._musicRecordingPausedIn(txn) || !current()) return false;
+      final event = MusicListeningEvent(
+        id: const Uuid().v4(),
+        entry: entry,
+        source: trackId.startsWith('device:')
+            ? MusicListeningSource.device
+            : entry.playedFromDownload
+                ? MusicListeningSource.download
+                : MusicListeningSource.catalog,
+        playlist: playlist?.profileId == owner.profileId ? playlist : null,
+      );
+      await owner._musicListeningStore
+          .record(event.id)
+          .put(txn, event.toJson());
+      return true;
+    }, notify: true);
+  }
+
+  @override
+  List<MusicListeningEvent> getMusicListeningEvents({String? trackId}) {
+    final legacy = playbackHistoryStore(PlaybackHistoryOrigin.music);
+    final previous = trackId == null
+        ? legacy.findSync(db).map((row) => row.value)
+        : [if (legacy.record(trackId).getSync(db) case final row?) row];
+    final events = [
+      for (final row in _musicListeningStore.findSync(db,
+          finder: trackId == null
+              ? null
+              : Finder(filter: Filter.equals('trackId', trackId))))
+        MusicListeningEvent.fromJson(row.value),
+      for (final row in previous)
+        MusicListeningEvent.legacy(HistoryVideoCache.fromJson(row)),
+    ]..sort((a, b) {
+        final dateOrder = b.playedAt.compareTo(a.playedAt);
+        return dateOrder != 0 ? dateOrder : b.id.compareTo(a.id);
+      });
+    final confirmed = {
+      for (final event in events)
+        if (!event.isLegacy) (event.trackId, event.playedAt),
+    };
+    final seen = <String>{};
+    return [
+      for (final event in events)
+        if ((!event.isLegacy ||
+                !confirmed.contains((event.trackId, event.playedAt))) &&
+            seen.add(event.id))
+          event,
+    ];
+  }
+
+  @override
+  Future<int> mergeMusicListeningEvents(
+      Iterable<MusicListeningEvent> events) async {
+    final input = events.toList();
+    if (input.isEmpty) return 0;
+    final added = await _writeProfile((owner, txn) async {
+      final store = owner._musicListeningStore;
+      var count = 0;
+      // A legacy snapshot can refer to a confirmed event in the same import.
+      for (final event in [
+        ...input.where((event) => !event.isLegacy),
+        ...input.where((event) => event.isLegacy),
+      ]) {
+        final record = store.record(event.id);
+        if (await record.exists(txn) ||
+            (event.isLegacy && await owner._hasListeningAt(txn, event))) {
+          continue;
+        }
+        await record.put(txn, owner._ownListeningEvent(event.toJson()));
+        count++;
+      }
+      return count;
+    });
+    if (added > 0) playbackHistoryRevision.value++;
+    return added;
+  }
+
+  Future<bool> _hasListeningAt(
+      Transaction txn, MusicListeningEvent event) async {
+    final previous = await playbackHistoryStore(PlaybackHistoryOrigin.music)
+        .record(event.trackId)
+        .get(txn);
+    if (previous != null &&
+        HistoryVideoCache.fromJson(previous).created.toUtc() ==
+            event.playedAt) {
+      return true;
+    }
+    return await _musicListeningStore.findFirst(txn,
+            finder: Finder(
+              filter: Filter.and([
+                Filter.equals('trackId', event.trackId),
+                Filter.equals('playedAt', event.playedAt.toIso8601String()),
+              ]),
+            )) !=
+        null;
+  }
+
+  Map<String, dynamic> _ownListeningEvent(Map<String, dynamic> row) {
+    final playlist = PlaylistReference.tryParse(row['playlist']);
+    if (playlist == null || playlist.profileId == profileId) return row;
+    final owned = {...row}..remove('playlist');
+    if (playlist.kind != PlaylistSourceKind.account) {
+      owned['playlist'] = {...playlist.toJson(), 'profileId': profileId};
+    }
+    return owned;
+  }
+
+  @override
+  Future<void> removeMusicListeningTracks(Set<String>? trackIds) async {
+    final ids = trackIds == null ? null : Set<String>.of(trackIds);
+    if (ids?.isEmpty == true) return;
+    if (ids == null) {
+      _cancelPendingHistory(origin: PlaybackHistoryOrigin.music);
+    } else {
+      for (final id in ids) {
+        _cancelPendingHistory(origin: PlaybackHistoryOrigin.music, videoId: id);
+      }
+    }
+    await _writeProfile((owner, txn) async {
+      final legacy = owner.playbackHistoryStore(PlaybackHistoryOrigin.music);
+      if (ids == null) {
+        await legacy.delete(txn);
+        await owner._musicListeningStore.delete(txn);
+      } else {
+        await legacy.records(ids.toList()).delete(txn);
+        await owner._musicListeningStore.delete(txn,
+            finder: Finder(filter: Filter.inList('trackId', ids.toList())));
+      }
+    });
+    playbackHistoryRevision.value++;
   }
 
   void _cancelPendingHistory({PlaybackHistoryOrigin? origin, String? videoId}) {
@@ -733,6 +933,9 @@ class SembastSqfDb extends IDbClient {
   @override
   Future<void> deletePlaybackHistory(
       PlaybackHistoryOrigin origin, String videoId) {
+    if (origin == PlaybackHistoryOrigin.music) {
+      return removeMusicListeningTracks({videoId});
+    }
     _cancelPendingHistory(origin: origin, videoId: videoId);
     return _writeProfile((owner, txn) =>
         owner.playbackHistoryStore(origin).record(videoId).delete(txn));
@@ -740,6 +943,9 @@ class SembastSqfDb extends IDbClient {
 
   @override
   Future<void> clearPlaybackHistory(PlaybackHistoryOrigin origin) {
+    if (origin == PlaybackHistoryOrigin.music) {
+      return removeMusicListeningTracks(null);
+    }
     _cancelPendingHistory(origin: origin);
     return _writeProfile(
         (owner, txn) => owner.playbackHistoryStore(origin).delete(txn));
@@ -757,6 +963,8 @@ class SembastSqfDb extends IDbClient {
       for (final origin in PlaybackHistoryOrigin.values) {
         await playbackHistoryStore(origin).record(videoId).delete(txn);
       }
+      await _musicListeningStore.delete(txn,
+          finder: Finder(filter: Filter.equals('trackId', videoId)));
       await progressStore.record(videoId).delete(txn);
       await stringMapStoreFactory
           .store('watchState:$profileId')
@@ -784,6 +992,7 @@ class SembastSqfDb extends IDbClient {
       for (final origin in PlaybackHistoryOrigin.values) {
         await playbackHistoryStore(origin).delete(txn);
       }
+      await _musicListeningStore.delete(txn);
       await progressStore.delete(txn);
       for (final name in ['watchState', 'watchMembership', 'watchOutbox']) {
         await stringMapStoreFactory.store('$name:$profileId').delete(txn);
@@ -826,8 +1035,12 @@ class SembastSqfDb extends IDbClient {
       'history':
           historyVideoCacheStore.findSync(db).map((r) => r.value).toList(),
       for (final origin in PlaybackHistoryOrigin.values)
-        '${origin.name}History':
-            getPlaybackHistory(origin).map((video) => video.toJson()).toList(),
+        '${origin.name}History': playbackHistoryStore(origin)
+            .findSync(db)
+            .map((r) => r.value)
+            .toList(),
+      _musicListeningEvents:
+          _musicListeningStore.findSync(db).map((r) => r.value).toList(),
       'playlists': jsonDecode(getSettings('local-playlists')?.value ?? '[]'),
       'savedPlaylists': [
         for (final saved in SavedPlaylist.decodeLibrary(
@@ -857,6 +1070,7 @@ class SembastSqfDb extends IDbClient {
       'history': historyVideoCacheStore,
       for (final origin in PlaybackHistoryOrigin.values)
         '${origin.name}History': playbackHistoryStore(origin),
+      _musicListeningEvents: _musicListeningStore,
     };
     const keys = {
       'settings': 'name',
@@ -866,6 +1080,7 @@ class SembastSqfDb extends IDbClient {
       'history': 'videoId',
       'videoHistory': 'videoId',
       'musicHistory': 'videoId',
+      _musicListeningEvents: 'id',
     };
     // Commit the library together; a failed restore must leave the old data usable.
     await db.transaction((txn) async {
@@ -904,7 +1119,11 @@ class SembastSqfDb extends IDbClient {
             }
           }
           if (!replace && await entry.value.record(key).exists(txn)) continue;
-          await entry.value.record(key).put(txn, row);
+          await entry.value.record(key).put(
+              txn,
+              entry.key == _musicListeningEvents
+                  ? _ownListeningEvent(row)
+                  : row);
         }
       }
       if (!backup.subscriptionsOnly) {

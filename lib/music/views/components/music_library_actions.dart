@@ -34,6 +34,7 @@ import 'package:logging/logging.dart';
 
 import '../screens/music.dart';
 import 'local_music_folder.dart' show renameLocalMusicTrack;
+import 'music_listening_timeline.dart';
 
 void _showActionError(BuildContext context) {
   final message = AppLocalizations.of(context)!.musicLibraryActionError;
@@ -212,7 +213,8 @@ enum _LibraryAction {
   removeBookmark,
   save,
   removeFromPlaylist,
-  download
+  download,
+  timeline,
 }
 
 enum _RecommendationAction { why, more, less, block }
@@ -600,6 +602,11 @@ class MusicLibraryActions extends StatefulWidget {
         PopupMenuItem(
             value: _LibraryAction.download,
             child: Text(locals.musicDownloadAudio)),
+      if (song != null)
+        PopupMenuItem(
+            key: const ValueKey('music-song-listening-timeline'),
+            value: _LibraryAction.timeline,
+            child: Text(locals.musicListeningTimeline)),
     ];
   }
 
@@ -649,6 +656,12 @@ class MusicLibraryActions extends StatefulWidget {
     } else if (action == _LibraryAction.removeFromPlaylist) {
       if (playlistId != null && videos.length == 1) {
         await session.removeFromPlaylist(playlistId, videos.single.videoId);
+      }
+    } else if (action == _LibraryAction.timeline) {
+      final song = _song(videos);
+      if (song != null) {
+        await showMusicListeningTimeline(context,
+            trackId: song.id, title: song.title, inPlayer: inPlayer);
       }
     } else {
       await download(context, videos,
@@ -756,6 +769,10 @@ class MusicLibraryActions extends StatefulWidget {
           PopupMenuItem(
               value: _PlayingSongAction.rename,
               child: Text(locals.localMusicRename)),
+        PopupMenuItem(
+            key: const ValueKey('music-song-listening-timeline'),
+            value: _LibraryAction.timeline,
+            child: Text(locals.musicListeningTimeline)),
       ],
       if (title != null)
         PopupMenuItem(
@@ -792,6 +809,11 @@ class MusicLibraryActions extends StatefulWidget {
                 identical(player.currentLocalPlaylistEntry, playlistEntry));
       } else if (action == _LibraryAction.play) {
         player.play();
+      } else if (action == _LibraryAction.timeline && onDevice) {
+        await showMusicListeningTimeline(context,
+            trackId: localMusicTrackId(entry.videoId),
+            title: music.title,
+            inPlayer: true);
       } else if (song != null && action is _LibraryAction) {
         await _apply(context, session, action, [song], null, null, downloads,
             inPlayer: true, isCurrent: current);

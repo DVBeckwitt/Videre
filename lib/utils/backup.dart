@@ -7,6 +7,7 @@ import '../music/models/music_cover_corners.dart';
 import '../music/models/music_download_order.dart';
 import '../music/models/music_library_entry.dart';
 import '../music/models/music_layout.dart';
+import '../music/models/music_listening_event.dart';
 import '../music/models/music_mini_player_preferences.dart';
 import '../music/models/song_transition.dart';
 import '../player/models/music_audio_quality.dart';
@@ -40,6 +41,9 @@ class UserBackup {
   static const maxBytes = 10 * 1024 * 1024;
   static final _videoId = RegExp(r'^[a-zA-Z0-9_-]{11}$');
   static final _channelId = RegExp(r'^UC[a-zA-Z0-9_-]{22}$');
+  static final _deviceTrackId = RegExp(r'^device:[a-f0-9]{64}$');
+  static final _listeningEventId = RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$');
   static final _relativeImageRoute =
       RegExp(r'^/?(?:vi|vi_webp|s_p|pl_c|tvfilm_banner|ggpht|sb)/');
   static final _ambiguousImagePath =
@@ -50,6 +54,7 @@ class UserBackup {
     'savedPlaylists',
     'videoHistory',
     'musicHistory',
+    'musicListeningEvents',
   ];
   static const sectionNames = [
     'settings',
@@ -187,6 +192,8 @@ class UserBackup {
               return video.toJson()
                 ..remove('playedFromDownload')
                 ..remove('downloadAccountId');
+            case 'musicListeningEvents':
+              return portableMusicListeningEvent(value);
             case 'filters':
               final filter = VideoFilter.fromJson(value);
               final id = value['uuid'] as String;
@@ -293,6 +300,44 @@ class UserBackup {
 
   static MusicMetadata? _safeMusicMetadata(MusicMetadata? music) =>
       music?.withThumbnails(_safeThumbnails(music.thumbnails));
+
+  static Map<String, dynamic> portableMusicListeningEvent(
+      Map<String, dynamic> value) {
+    final event = MusicListeningEvent.fromJson(value);
+    final entry = event.entry;
+    final device = event.source == MusicListeningSource.device;
+    final playedAt = event.playedAt.toUtc().toIso8601String();
+    final validId = event.isLegacy
+        ? event.id ==
+            MusicListeningEvent.legacyId(event.trackId, event.playedAt)
+        : _listeningEventId.stringMatch(event.id) == event.id;
+    final trackPattern = device ? _deviceTrackId : _videoId;
+    if (!validId ||
+        trackPattern.stringMatch(event.trackId) != event.trackId ||
+        entry.title.length > 1000 ||
+        value['playedAt'] != playedAt) {
+      throw const FormatException('Invalid music listening event.');
+    }
+    // Preserve the listening source without transferring access to a local
+    // download, account playlist, or signed artwork URL.
+    final thumbnail = _safeThumbnailUrl(entry.thumbnail, videoArtwork: true);
+    final portableEntry = {
+      ...entry.toJson(),
+      'created': playedAt,
+      'thumbnail': thumbnail?.split(RegExp(r'[?#]')).first ?? '',
+      'musicMetadata': _safeMusicMetadata(entry.musicMetadata)?.toJson(),
+    }
+      ..remove('playedFromDownload')
+      ..remove('downloadAccountId');
+    final playlist = event.playlist;
+    return event.toJson()
+      ..['entry'] = portableEntry
+      ..remove('playlist')
+      ..addAll({
+        if (playlist != null && playlist.kind != PlaylistSourceKind.account)
+          'playlist': {...playlist.toJson(), 'profileId': 'portable'},
+      });
+  }
 
   /// Account access and profile ownership are never part of a portable save.
   static Map<String, dynamic> portablePlaylist(SavedPlaylist playlist) {

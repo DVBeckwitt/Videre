@@ -179,6 +179,10 @@ void main() {
     await local.ready;
     expect(local.state.currentlyPlaying, isNull);
     expect(local.state.offlineCurrentlyPlaying, updated);
+    expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music), isEmpty);
+    local.setEvent(
+        const MediaEvent(state: MediaState.playing, type: MediaEventType.play));
+    await (db as SembastSqfDb).db.transaction((_) async {});
     expect(db.getPlaybackHistory(PlaybackHistoryOrigin.music).single.videoId,
         selected.videoId);
     await local.close();
