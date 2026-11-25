@@ -285,6 +285,35 @@ class MusicScreen extends StatefulWidget {
           startIndex: startIndex,
           startAt: startAt);
 
+  static Future<void> playCollectionTracks(
+      BuildContext context, List<Video> videos,
+      {required String queueTitle,
+      bool shuffle = false,
+      bool Function()? isCurrent}) async {
+    if (isCurrent?.call() == false) return;
+    final playable = videos
+        .where((video) =>
+            !video.filtered && !video.filterHide && video.isUpcoming != true)
+        .map(_songEntry)
+        .toList();
+    if (playable.isEmpty) return;
+    if (!isTv) {
+      await context.read<PlayerCubit>().playMusicCollectionQueue(playable,
+          queueTitle: queueTitle, shuffle: shuffle, isCurrent: isCurrent);
+      return;
+    }
+    final session = MusicLibrarySession(context.read<AppCubit>());
+    if (!session.isCurrent) return;
+    // A retry starts with the same collection order as the original request.
+    if (shuffle) playable.shuffle();
+    await Navigator.of(context).push<void>(MaterialPageRoute(
+        builder: (routeContext) =>
+            _MusicTvPlayer(videos: playable, collectionQueue: (
+              title: queueTitle,
+              isCurrent: () => routeContext.mounted && session.isCurrent,
+            ))));
+  }
+
   static Video _songEntry(Video video) => video.musicMetadata != null
       ? video
       : video.copyWith(
@@ -2357,6 +2386,7 @@ class _PlayingMusicSourceRoute extends MaterialPageRoute<void> {
 class _MusicTvPlayer extends StatelessWidget {
   final List<Video> videos;
   final String? queueTitle;
+  final ({String title, bool Function() isCurrent})? collectionQueue;
   final List<LocalMusicTrack>? localTracks;
   final List<OnDeviceMusicEntry>? onDeviceTracks;
   final bool Function()? onDeviceMusicIsCurrent;
@@ -2368,6 +2398,7 @@ class _MusicTvPlayer extends StatelessWidget {
   const _MusicTvPlayer(
       {required this.videos,
       this.queueTitle,
+      this.collectionQueue,
       this.localTracks,
       this.onDeviceTracks,
       this.onDeviceMusicIsCurrent,
@@ -2389,6 +2420,7 @@ class _MusicTvPlayer extends StatelessWidget {
           initialOnDeviceMusic: onDeviceTracks,
           initialOnDeviceMusicIsCurrent: onDeviceMusicIsCurrent,
           initialQueueTitle: queueTitle,
+          initialMusicCollection: collectionQueue,
           playlistReference: reference,
           startIndex: startIndex,
           playlistAudio: true),
@@ -2408,6 +2440,23 @@ class _MusicTvPlayer extends StatelessWidget {
                 final saved = player.savedSession;
                 final pinned = saved != null &&
                     saved.offlineFingerprints.containsKey(saved.currentId);
+                if (collectionQueue case final collection?) {
+                  context.watch<AppCubit>();
+                  if (!collection.isCurrent()) {
+                    return Center(
+                        child: Text(AppLocalizations.of(context)!
+                            .musicSourceUnavailable));
+                  }
+                  if (state.isClosing ||
+                      state.videos.isEmpty ||
+                      (state.currentlyPlaying == null &&
+                          state.mediaEvent.state == MediaState.error)) {
+                    return _MusicPlaybackFailure(
+                        onRetry: () => player.playMusicCollectionQueue(videos,
+                            queueTitle: collection.title,
+                            isCurrent: collection.isCurrent));
+                  }
+                }
                 if (state.offlineCurrentlyPlaying == null &&
                     (tracks != null ||
                         onDevice != null ||

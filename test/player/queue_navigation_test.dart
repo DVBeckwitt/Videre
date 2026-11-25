@@ -1168,6 +1168,49 @@ void main() {
         }
       });
 
+      for (final shuffle in [false, true]) {
+        test(
+            'selected collection playback preserves every copy (shuffle=$shuffle)',
+            () async {
+          player.manualMusicPreparer = null;
+          await settings.setShuffle(true);
+          final tracks = [song('a'), song('b'), song('a'), song('c')];
+
+          await player.playMusicCollectionQueue(tracks,
+              queueTitle: 'Selected collections', shuffle: shuffle);
+
+          final ordered = player.state.videos;
+          final ids = ordered.map(playbackQueueId).toList();
+          if (shuffle) {
+            expect(ordered.map((track) => track.videoId),
+                unorderedEquals(['a', 'b', 'a', 'c']));
+          } else {
+            expect(ordered.map((track) => track.videoId), ['a', 'b', 'a', 'c']);
+          }
+          expect(ids.toSet(), hasLength(tracks.length));
+          expect(player.state.currentQueueId, ids.first);
+          expect(player.state.playQueue, ids.skip(1).toList());
+        });
+      }
+
+      test('a cancelled collection selection cannot replace active playback',
+          () async {
+        final before = player.state;
+        final generation = player.playlistGeneration;
+        var current = true;
+        final switching = player.playMusicCollectionQueue([song('new')],
+            queueTitle: 'Selected collections', isCurrent: () => current);
+        await until(() => preparer.requests.containsKey('new'));
+
+        current = false;
+        preparer.requests['new']!.complete(true);
+        await switching;
+
+        expect(player.playlistGeneration, generation);
+        expect(player.state.currentQueueId, before.currentQueueId);
+        expect(player.state.playQueue, before.playQueue);
+      });
+
       for (final succeeds in [true, false]) {
         test(
             'the media session stays active when the queue ends while a song '

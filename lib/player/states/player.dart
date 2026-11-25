@@ -158,6 +158,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
   final int _initialPlaylistIndex;
   final bool? _initialPlaylistAudio;
   final String? _initialQueueTitle;
+  final ({String title, bool Function() isCurrent})? _initialMusicCollection;
   final bool _initialFromMusic;
   // Origin follows the queue occurrence across mode switches and decoder retries.
   final _musicHistoryEntries = <String>{};
@@ -434,6 +435,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       int startIndex = 0,
       bool? playlistAudio,
       String? initialQueueTitle,
+      ({String title, bool Function() isCurrent})? initialMusicCollection,
       bool fromMusic = false,
       Future<void> Function(Duration)? playbackRecoveryDelay,
       Future<bool> Function()? videoFocusActivation,
@@ -450,6 +452,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
         _initialPlaylistLoader = playlistLoader,
         _initialPlaylistIndex = startIndex,
         _initialQueueTitle = initialQueueTitle,
+        _initialMusicCollection = initialMusicCollection,
         _initialFromMusic = fromMusic,
         _initialPlaylistAudio = playlistAudio {
     _profileDatabase = db.forProfile(db.profileId);
@@ -1868,6 +1871,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       } else {
         await playOfflineVideos([download], fromMusic: _initialFromMusic);
       }
+    } else if (_initialMusicCollection case final collection?
+        when startVideos.isNotEmpty && startupActive()) {
+      if (!collection.isCurrent()) {
+        setEvent(const MediaEvent(state: MediaState.error));
+        return;
+      }
+      await playMusicCollectionQueue(startVideos,
+          queueTitle: collection.title, isCurrent: collection.isCurrent);
     } else if (startVideos.isNotEmpty && startupActive()) {
       final reference = _initialPlaylistReference;
       final switching = reference == null
@@ -3191,10 +3202,10 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
           selected, startAt ?? Duration.zero,
           fromMusic: fromMusic);
       if (prepared == null || request != _musicSelectionRequestRevision) return;
-      if (canCommit != null && !canCommit()) {
-        _abandonMusicSelection();
-        return;
-      }
+    }
+    if (canCommit?.call() == false) {
+      _abandonMusicSelection();
+      return;
     }
     final playingAfterPreparation = _requestedPlaying;
     bindQueue();
@@ -4276,6 +4287,36 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
       _sessionTransitionPending = true;
       _bindPlaylist(null, [], queueTitle: fromMusic ? queueTitle : null);
       _requestedPlaying = playing;
+    });
+  }
+
+  /// Starts a queue with no single collection's playback reference.
+  Future<void> playMusicCollectionQueue(List<Video> tracks,
+      {required String queueTitle,
+      bool shuffle = false,
+      bool Function()? isCurrent}) async {
+    bool current() =>
+        !isClosed &&
+        !_isDisposing &&
+        !_switchingProfile &&
+        _profileDatabase.profileId == db.profileId &&
+        isCurrent?.call() != false;
+    if (!current()) return;
+    final playable = tracks
+        .where((video) =>
+            !video.filtered && !video.filterHide && video.isUpcoming != true)
+        .toList();
+    await _playVideos(playable,
+        fromMusic: true,
+        startAt: Duration.zero,
+        audio: true,
+        shuffleOnce: shuffle,
+        retainQueueOrder: true,
+        canCommit: current, bindQueue: () {
+      _selectedWatchVideoId = null;
+      _sessionTransitionPending = true;
+      _bindPlaylist(null, [], queueTitle: queueTitle);
+      _requestedPlaying = null;
     });
   }
 

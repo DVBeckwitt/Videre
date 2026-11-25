@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:clipious/app/states/app.dart';
@@ -14,10 +15,12 @@ import 'package:clipious/music/models/music_layout.dart';
 import 'package:clipious/music/models/music_playlist_selection.dart';
 import 'package:clipious/music/models/music_search_text.dart';
 import 'package:clipious/music/models/song_artwork.dart';
-import 'package:clipious/music/views/components/community_music_artwork.dart';
+import 'package:clipious/music/services/music_catalog_service.dart';
 import 'package:clipious/music/services/music_library_service.dart';
 import 'package:clipious/music/services/music_playlist_covers.dart';
+import 'package:clipious/music/views/components/community_music_artwork.dart';
 import 'package:clipious/music/views/components/music_collection_panes.dart';
+import 'package:clipious/music/views/components/music_collection_selection_bar.dart';
 import 'package:clipious/music/views/components/music_details_dialog.dart';
 import 'package:clipious/music/views/components/music_download_storage_summary.dart';
 import 'package:clipious/music/views/components/music_duration_label.dart';
@@ -119,6 +122,10 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
   Set<String>? get _savedSongsSelection => _selectionIn(_LibraryFilter.songs);
   Set<String>? get _downloadsSelection =>
       _selectionIn(_LibraryFilter.downloads);
+  Set<String>? get _collectionSelection =>
+      _selectionIn(_LibraryFilter.all) ??
+      _selectionIn(_LibraryFilter.playlists);
+  int _collectionSelectionRevision = 0;
 
   Set<String>? _selectionIn(_LibraryFilter filter) {
     final selection = _librarySelection;
@@ -271,6 +278,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     if (ids == null) return;
     setState(() {
       if (!ids.remove(id)) ids.add(id);
+      if (identical(ids, _collectionSelection)) _collectionSelectionRevision++;
     });
   }
 
@@ -498,10 +506,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             kind: entry.kind, id: entry.id, child: title);
   }
 
-  Widget _bookmark(MusicLibraryEntry entry, Future<void> Function() onOpen) {
-    final selected = _savedSongsSelection?.contains(entry.id);
+  Widget _bookmark(_LibraryItem item, Future<void> Function() onOpen) {
+    final entry = item.bookmark!;
+    final selected =
+        _collectionSelected(item) ?? _savedSongsSelection?.contains(entry.id);
+    final enabled = _collectionSelection == null || selected != null;
     return ListTile(
-        key: ValueKey('music-saved-${entry.kind.name}-${entry.id}'),
+        key: _itemKey(item),
+        enabled: enabled,
         selected: selected ?? false,
         leading: entry.kind == MusicLibraryKind.artist
             ? ChannelAvatar(
@@ -520,14 +532,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
             ? null
             : Text(entry.subtitle,
                 maxLines: 1, overflow: TextOverflow.ellipsis),
-        trailing: selected == null
-            ? _bookmarkActions(entry, onOpen)
-            : ExcludeSemantics(
-                child: Icon(selected
-                    ? Icons.check_box
-                    : Icons.check_box_outline_blank)),
-        onLongPress: _bookmarkLongPress(entry, onOpen),
-        onTap: onOpen);
+        trailing: selected != null
+            ? ExcludeSemantics(
+                child: Icon(
+                    selected ? Icons.check_box : Icons.check_box_outline_blank))
+            : enabled
+                ? _bookmarkActions(entry, onOpen)
+                : null,
+        onLongPress: _itemLongPress(item, onOpen),
+        onTap: enabled ? onOpen : null);
   }
 
   Widget _playlistSearchButton() => IconButton(
@@ -608,10 +621,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     );
   }
 
-  Widget _librarySelectButton(Key key, _LibraryFilter filter) => IconButton(
+  Widget _librarySelectButton(Key key, _LibraryFilter filter,
+          {String? label}) =>
+      IconButton(
         key: key,
         focusNode: _librarySelectFocus,
-        tooltip: AppLocalizations.of(context)!.musicQueueSelect,
+        tooltip: label ?? AppLocalizations.of(context)!.musicQueueSelect,
         icon: const Icon(Icons.checklist_rounded),
         onPressed: () => _startLibrarySelection(filter),
       );
@@ -706,6 +721,103 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       isCurrent: isCurrent,
       onPlay: (tracks) =>
           MusicScreen.playTracks(context, tracks, queueTitle: title),
+    );
+  }
+
+  Widget _collectionSelectionBar(List<_LibraryItem> collections,
+      Set<String> scope, MusicLibraryService library) {
+    final ids = collections.map((item) => _itemKey(item).value).toSet();
+    scope.retainAll(ids);
+    final selected = [
+      for (final item in collections)
+        if (scope.contains(_itemKey(item).value)) item,
+    ];
+    final localSnapshots = {
+      for (final item in selected)
+        if (item.playlist case final playlist?)
+          playlist.playlistId: jsonEncode(playlist),
+    };
+    final allSelected = ids.isNotEmpty && ids.every(scope.contains);
+    final session = MusicLibrarySession(context.read<AppCubit>());
+    final route = ModalRoute.of(context);
+    final revision = _collectionSelectionRevision;
+    bool ownerCurrent() =>
+        mounted &&
+        session.isCurrent &&
+        identical(_collectionSelection, scope) &&
+        _collectionSelectionRevision == revision &&
+        scope.length == selected.length &&
+        route?.isCurrent != false &&
+        TickerMode.of(context);
+
+    bool sourcesCurrent() {
+      final local = localSnapshots.isNotEmpty
+          ? {
+              for (final playlist in session.playlists)
+                playlist.playlistId: playlist
+            }
+          : const <String, Playlist>{};
+      final savedIds = {
+        for (final entry in session.library.entries)
+          if (entry.kind == MusicLibraryKind.playlist) entry.id,
+      };
+      return selected.every((item) => switch (item) {
+            (playlist: final playlist?, bookmark: _) =>
+              jsonEncode(local[playlist.playlistId]) ==
+                      localSnapshots[playlist.playlistId] &&
+                  library.isMusicPlaylist(playlist),
+            (playlist: _, bookmark: final entry?) =>
+              savedIds.contains(entry.id),
+            _ => false,
+          });
+    }
+
+    return MusicCollectionSelectionBar(
+      selectedCount: selected.length,
+      allSelected: allSelected,
+      onToggleAll: ids.isEmpty
+          ? null
+          : () => setState(() {
+                _collectionSelectionRevision++;
+                scope.clear();
+                if (!allSelected) scope.addAll(ids);
+              }),
+      onClose: _exitLibrarySelection,
+      closeFocus: _libraryExitSelectionFocus,
+      isCurrent: () => ownerCurrent() && sourcesCurrent(),
+      loadTracks: () async {
+        final tracks = <Video>[];
+        final covers = library.coversBySongId;
+        final catalog = musicCatalogService;
+        for (final item in selected) {
+          if (!ownerCurrent()) return const [];
+          if (item.playlist case final playlist?) {
+            for (final video in playlist.videos) {
+              final music = video.musicMetadata;
+              if (music == null ||
+                  video.filtered ||
+                  video.filterHide ||
+                  video.isUpcoming == true) {
+                continue;
+              }
+              final savedCover = covers[video.videoId];
+              // The combined queue gets new occurrence IDs for every copy.
+              tracks.add(video.copyWith(
+                queueEntryId: null,
+                indexId: null,
+                index: null,
+                musicMetadata: savedCover == null
+                    ? music
+                    : music.withThumbnails(savedCover),
+              ));
+            }
+          } else {
+            final collection = await catalog.getPlaylist(item.bookmark!.id);
+            tracks.addAll(collection.tracks.map((track) => track.toVideo()));
+          }
+        }
+        return tracks;
+      },
     );
   }
 
@@ -1158,8 +1270,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               ]),
             ),
     );
-    final selectButton = _librarySelectButton(
-        const ValueKey('music-saved-songs-select'), _LibraryFilter.songs);
+    final collections = items.where(_isCollection).toList();
+    final collectionSelection = _collectionSelection;
     final toolbar = Padding(
       padding: EdgeInsetsDirectional.only(start: finding ? 0 : 18, end: 8),
       child: Row(children: [
@@ -1183,7 +1295,15 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               onPressed: () => MusicLibraryActions.createPlaylist(context),
               icon: const Icon(Icons.playlist_add_rounded)),
         if (_filter == _LibraryFilter.songs && !finding) searchButton,
-        if (_filter == _LibraryFilter.songs && items.isNotEmpty) selectButton,
+        if (_filter == _LibraryFilter.songs && items.isNotEmpty)
+          _librarySelectButton(
+              const ValueKey('music-saved-songs-select'), _LibraryFilter.songs),
+        if (collections.isNotEmpty)
+          _librarySelectButton(
+            const ValueKey('music-library-select-collections'),
+            _filter,
+            label: locals.musicSelectCollections,
+          ),
         IconButton(
             key: const ValueKey('music-library-layout'),
             tooltip: _grid
@@ -1225,9 +1345,12 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
       );
     }
     return Column(children: [
-      selection == null
-          ? toolbar
-          : _savedSongsSelectionBar(items, items, selection),
+      if (collectionSelection != null)
+        _collectionSelectionBar(collections, collectionSelection, library)
+      else if (selection != null)
+        _savedSongsSelectionBar(items, items, selection)
+      else
+        toolbar,
       if (selection == null &&
           _filter == _LibraryFilter.songs &&
           entries.any((entry) => entry.needsSongDetails))
@@ -1272,7 +1395,27 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     });
   }
 
+  bool _isCollection(_LibraryItem item) =>
+      item.playlist != null || item.bookmark?.kind == MusicLibraryKind.playlist;
+
+  bool? _collectionSelected(_LibraryItem item) => _isCollection(item)
+      ? _collectionSelection?.contains(_itemKey(item).value)
+      : null;
+
+  VoidCallback? _itemLongPress(
+      _LibraryItem item, Future<void> Function() onOpen) {
+    if (_collectionSelection != null) return null;
+    if (_isCollection(item)) {
+      return () => _startLibrarySelection(_filter, _itemKey(item).value);
+    }
+    return _bookmarkLongPress(item.bookmark, onOpen);
+  }
+
   Future<void> _openItem(_LibraryItem item, List<_LibraryItem> items) async {
+    if (_collectionSelection != null) {
+      if (_isCollection(item)) _toggleLibrarySelection(_itemKey(item).value);
+      return;
+    }
     if (_savedSongsSelection != null &&
         item.bookmark?.kind == MusicLibraryKind.song) {
       _toggleLibrarySelection(item.bookmark!.id);
@@ -1346,28 +1489,44 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           final shortcut = shortcuts[index];
           return ListTile(
               key: _shortcutKey(shortcut),
+              enabled: _collectionSelection == null,
               leading: Icon(_shortcutIcon(shortcut)),
               title: Text(_shortcutTitle(shortcut, locals)),
-              onTap: () => _selectFilter(shortcut));
+              onTap: _collectionSelection == null
+                  ? () => _selectFilter(shortcut)
+                  : null);
         }
         final item = items[index - shortcuts.length];
-        if (item.bookmark case final bookmark?) {
-          return _bookmark(bookmark, () => _openItem(item, allItems));
+        Future<void> open() => _openItem(item, allItems);
+        if (item.bookmark != null) {
+          return _bookmark(item, open);
         }
-        final pinned = pinnedPlaylistIds.contains(item.playlist!.playlistId);
+        final playlistId = item.playlist!.playlistId;
+        final pin = pinnedPlaylistIds.contains(playlistId)
+            ? Icon(Icons.push_pin, semanticLabel: locals.musicPlaylistPinned)
+            : null;
+        final selected = _collectionSelected(item);
         return ListTile(
             key: _itemKey(item),
+            selected: selected ?? false,
             leading: MusicPlaylistCoverImage(
-              encoded: covers.encodedCover(item.playlist!.playlistId),
+              encoded: covers.encodedCover(playlistId),
               fallback: const Icon(Icons.queue_music),
               size: 40,
             ),
             title: Text(_itemTitle(item)),
             subtitle: Text(locals.onDevice),
-            trailing: pinned
-                ? Icon(Icons.push_pin, semanticLabel: locals.musicPlaylistPinned)
-                : const Icon(Icons.chevron_right),
-            onTap: () => _openItem(item, allItems));
+            trailing: selected == null
+                ? pin ?? const Icon(Icons.chevron_right)
+                : Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (pin != null) pin,
+                    ExcludeSemantics(
+                        child: Icon(selected
+                            ? Icons.check_box
+                            : Icons.check_box_outline_blank)),
+                  ]),
+            onLongPress: _itemLongPress(item, open),
+            onTap: open);
       }, childCount: count, findChildIndexCallback: (key) => indices[key]);
       return searchToolbar == null
           ? ListView.custom(
@@ -1438,7 +1597,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
           child: Icon(_shortcutIcon(shortcut),
               size: 64, color: colors.onSurfaceVariant)),
       artworkRadius: 25,
-      onOpen: () => _selectFilter(shortcut),
+      onOpen:
+          _collectionSelection == null ? () => _selectFilter(shortcut) : null,
     );
   }
 
@@ -1464,8 +1624,9 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     final artist = entry?.kind == MusicLibraryKind.artist;
     final playlist = local != null || entry?.kind == MusicLibraryKind.playlist;
     final plays = entry?.kind == MusicLibraryKind.song;
-    final selected =
-        entry == null ? null : _savedSongsSelection?.contains(entry.id);
+    final selected = _collectionSelected(item) ??
+        (entry == null ? null : _savedSongsSelection?.contains(entry.id));
+    final enabled = _collectionSelection == null || selected != null;
     final colors = Theme.of(context).colorScheme;
     final defaultArtwork = _bookmarkArtwork(
         entry,
@@ -1497,14 +1658,14 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
               encoded: covers.encodedCover(local.playlistId),
               fallback: defaultArtwork,
             ),
-      action: entry == null || selected != null
+      action: !enabled || entry == null || selected != null
           ? null
           : _bookmarkActions(entry, onOpen),
       plays: plays,
       selected: selected,
       pinned: pinned,
-      onOpen: onOpen,
-      onLongPress: _bookmarkLongPress(entry, onOpen),
+      onOpen: enabled ? onOpen : null,
+      onLongPress: _itemLongPress(item, onOpen),
     );
   }
 
@@ -1513,7 +1674,7 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
     required String title,
     required Widget artwork,
     required double artworkRadius,
-    required VoidCallback onOpen,
+    required VoidCallback? onOpen,
     VoidCallback? onLongPress,
     String subtitle = '',
     MusicLibraryEntry? bookmark,
@@ -1563,7 +1724,8 @@ class _MusicLibraryPageState extends State<MusicLibraryPage> {
                                             : Icons.check_box_outline_blank)))),
                       if (pinned)
                         PositionedDirectional(
-                            end: 7,
+                            start: selected == null ? null : 7,
+                            end: selected == null ? 7 : null,
                             bottom: 7,
                             child: CircleAvatar(
                               radius: 17,
