@@ -26,31 +26,34 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicLong
 
 class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityResultListener,
     PluginRegistry.RequestPermissionsResultListener {
     private lateinit var context: Context
     private var channel: MethodChannel? = null
     private var activity: ActivityPluginBinding? = null
-    private var picker: MethodChannel.Result? = null
-    private var systemPicker: MethodChannel.Result? = null
+    private var picker: SourcePicker? = null
+    private var systemPicker: SourcePicker? = null
     private var rename: RenameOperation? = null
-    private var scan: CancellationSignal? = null
-    // Written and read only by the catalog worker. A scan signal is cancelled
-    // on the main thread as soon as new source work supersedes it.
-    private var completedCatalog: CompletedCatalog? = null
+    // A scan supersedes only earlier work for the same root. Completed signals
+    // also guard download matching until that root is rescanned or removed.
+    private val scans = mutableMapOf<String, CancellationSignal>()
+    private val completedCatalogs = mutableMapOf<String, CompletedCatalog>()
     private val worker = Executors.newSingleThreadExecutor()
     private val accessWorker = Executors.newSingleThreadExecutor()
-    private val sourceRevision = AtomicLong()
     private val main = Handler(Looper.getMainLooper())
     private val preferences get() = context.getSharedPreferences("videre_local_music", Context.MODE_PRIVATE)
     private val systemSource get() = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
     private val renameArchive get() = LocalMusicRenameArchive(File(context.noBackupFilesDir, "music-rename-events.json"))
 
     private data class CompletedCatalog(
-        val tree: String, val selection: String?, val revision: Long, val signal: CancellationSignal,
+        val selectionId: String?, val signal: CancellationSignal,
     )
+
+    private class SourcePicker(val result: MethodChannel.Result) {
+        val cancellation = CancellationSignal()
+        var waitingForActivity = true
+    }
 
     private class RenameOperation(
         val source: Uri,
@@ -71,68 +74,24 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
 
     private fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "getFolder" -> {
-                // Reading just the preference snapshot also lets an opt-out cancel an active scan.
-                val saved = preferences.all
-                result.success((saved["uri"] as? String)?.let {
-                    mapOf("uri" to it, "name" to saved["name"], "selectionId" to saved["selectionId"])
-                })
-            }
+            "getFolder" -> result.success(roots().channelValue())
             "pickFolder" -> pickFolder(call.argument("initialUri"), result)
             "pickSystem" -> pickSystem(result)
             "checkFolderAccess" -> revalidateAccess(call.argument("treeUri"), result)
-            "listTracks" -> {
-                val tree = call.argument<String>("treeUri")
-                val scanId = call.argument<Int>("scanId")
-                scan?.cancel()
-                val signal = CancellationSignal()
-                scan = signal
-                run(result) {
-                    require(tree != null && tree == preferences.getString("uri", null))
-                    when (checkFolderAccess(tree, signal)) {
-                        null -> throw ProviderTemporarilyUnavailable()
-                        false -> throw SecurityException()
-                        true -> try {
-                            val source = Uri.parse(tree)
-                            val selection = preferences.getString("selectionId", null)
-                            val revision = sourceRevision.get()
-                            val tracks = catalog(source, selection).tracks(source, signal) { batch ->
-                                if (scanId != null) {
-                                    main.post {
-                                        if (scan === signal && !signal.isCanceled) {
-                                            channel?.invokeMethod("trackBatch", mapOf("scanId" to scanId, "tracks" to batch))
-                                        }
-                                    }
-                                }
-                            }
-                            val completed = CompletedCatalog(tree, selection, revision, signal)
-                            if (catalogCurrent(completed)) completedCatalog = completed
-                            tracks
-                        } catch (cancelled: OperationCanceledException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            signal.throwIfCanceled()
-                            // Losing access to a child or failing to read its cursor does not
-                            // revoke the grant. Only a fresh negative root probe establishes that.
-                            if (checkFolderAccess(tree, signal) == false) throw SecurityException()
-                            throw ProviderTemporarilyUnavailable()
-                        }
-                    }
-                }
-            }
+            "listTracks" -> listTracks(call.argument("treeUri"), call.argument("scanId"), result)
             "matchDownloadTracks" -> run(result) {
-                val source = completedCatalog ?: return@run null
-                if (source.tree != call.argument<String>("treeUri") ||
-                    source.selection != call.argument<String>("selectionId") ||
-                    !catalogCurrent(source)) return@run null
+                val tree = call.argument<String>("treeUri") ?: return@run null
+                val completed = completedCatalogs[tree] ?: return@run null
+                if (completed.selectionId != call.argument<String>("selectionId") ||
+                    !catalogCurrent(tree, completed)) return@run null
                 val slots = call.argument<List<*>>("files") ?: return@run null
                 if (slots.size > 64) return@run null
                 try {
-                    if (checkFolderAccess(source.tree, source.signal) != true) return@run null
+                    if (checkFolderAccess(tree, completed.signal) != true) return@run null
+                    val source = Uri.parse(tree)
                     val candidates = slots.mapNotNull(LocalMusicDownloadCandidate::parse)
-                    val matches = catalog(Uri.parse(source.tree), source.selection)
-                        .matchDownloads(Uri.parse(source.tree), candidates, source.signal)
-                    matches.takeIf { catalogCurrent(source) && checkFolderAccess(source.tree, source.signal) == true }
+                    val matches = catalog(source, completed.selectionId).matchDownloads(source, candidates, completed.signal)
+                    matches.takeIf { catalogCurrent(tree, completed) && checkFolderAccess(tree, completed.signal) == true }
                 } catch (_: OperationCanceledException) {
                     null
                 }
@@ -150,30 +109,86 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             }
             "forgetFolder" -> {
                 val tree = call.argument<String>("treeUri")
-                scan?.cancel()
-                run(result) {
-                    if (tree != null && tree == preferences.getString("uri", null)) {
-                        val ownsRead = preferences.getBoolean("ownsRead", false)
-                        val selectionId = preferences.getString("selectionId", null)
-                        val source = Uri.parse(tree)
-                        archiveRenames(source, selectionId)
-                        sourceRevision.incrementAndGet()
-                        check(preferences.edit().clear().commit())
-                        releaseRead(source, ownsRead)
-                        clearLibraryCache(source, selectionId)
-                    }
-                    null
-                }
+                if (tree != null) scans.remove(tree)?.cancel()
+                run(result) { forgetRoots { it.uri == tree } }
+            }
+            "forgetFolders" -> {
+                cancelPickers()
+                scans.values.forEach(CancellationSignal::cancel)
+                scans.clear()
+                run(result) { forgetRoots { true } }
             }
             else -> result.notImplemented()
         }
     }
 
-    private fun catalogCurrent(catalog: CompletedCatalog): Boolean {
-        if (catalog.signal.isCanceled || catalog.revision != sourceRevision.get()) return false
-        val saved = preferences.all
-        return catalog.tree == saved["uri"] && catalog.selection == saved["selectionId"] &&
-            saved["needsReapproval"] != true
+    private fun listTracks(tree: String?, scanId: Int?, result: MethodChannel.Result) {
+        if (tree == null || roots().find(tree) == null) {
+            result.error("FOLDER_UNAVAILABLE", "Choose the music folder again.", null)
+            return
+        }
+        val signal = CancellationSignal()
+        scans.put(tree, signal)?.cancel()
+        run(result) {
+            signal.throwIfCanceled()
+            val root = roots().find(tree) ?: throw SecurityException()
+            when (checkFolderAccess(tree, signal)) {
+                null -> throw ProviderTemporarilyUnavailable()
+                false -> throw SecurityException()
+                true -> try {
+                    val source = Uri.parse(tree)
+                    val tracks = catalog(source, root.selectionId).tracks(source, signal) { batch ->
+                        if (scanId != null) {
+                            main.post {
+                                if (scans[tree] === signal && !signal.isCanceled) {
+                                    channel?.invokeMethod("trackBatch", mapOf("scanId" to scanId, "tracks" to batch))
+                                }
+                            }
+                        }
+                    }
+                    signal.throwIfCanceled()
+                    val completed = CompletedCatalog(root.selectionId, signal)
+                    if (catalogCurrent(tree, completed)) completedCatalogs[tree] = completed
+                    tracks
+                } catch (cancelled: OperationCanceledException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    signal.throwIfCanceled()
+                    // Only a fresh negative root probe establishes a lost grant.
+                    if (checkFolderAccess(tree, signal) == false) throw SecurityException()
+                    throw ProviderTemporarilyUnavailable()
+                }
+            }
+        }
+    }
+
+    private fun catalogCurrent(tree: String, catalog: CompletedCatalog): Boolean =
+        !catalog.signal.isCanceled && roots().find(tree)?.let {
+            it.selectionId == catalog.selectionId && !it.needsReapproval
+        } == true
+
+    private fun roots(): LocalMusicRoots = LocalMusicRoots.read(preferences.all)
+
+    private fun saveRoots(configuration: LocalMusicRoots) {
+        val edit = preferences.edit().putString(LocalMusicRoots.KEY, configuration.toJson())
+        listOf("uri", "name", "selectionId", "ownsRead", "needsReapproval").forEach { edit.remove(it) }
+        check(edit.commit())
+    }
+
+    private fun forgetRoots(remove: (LocalMusicRoot) -> Boolean): Map<String, Any?> {
+        val current = roots()
+        val removed = current.entries.filter(remove)
+        if (removed.isEmpty()) return current.channelValue()
+        for (root in removed) archiveRenames(Uri.parse(root.uri), root.selectionId)
+        val updated = current.without(removed)
+        saveRoots(updated)
+        for (root in removed) {
+            val source = Uri.parse(root.uri)
+            completedCatalogs.remove(root.uri)
+            releaseRead(source, root.ownsRead)
+            clearLibraryCache(source, root.selectionId)
+        }
+        return updated.channelValue()
     }
 
     private fun pickFolder(initial: String?, result: MethodChannel.Result) {
@@ -191,7 +206,7 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
                 putExtra(DocumentsContract.EXTRA_INITIAL_URI, Uri.parse(initial))
             }
         }
-        picker = result
+        picker = SourcePicker(result)
         try {
             host.startActivityForResult(intent, FOLDER_REQUEST)
         } catch (_: RuntimeException) {
@@ -213,53 +228,53 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             return true
         }
         if (requestCode != FOLDER_REQUEST) return false
-        val result = picker ?: return true
-        picker = null
-        if (resultCode != Activity.RESULT_OK) {
-            result.success(null)
+        val operation = picker ?: return true
+        if (!operation.waitingForActivity) return true
+        operation.waitingForActivity = false
+        if (operation.cancellation.isCanceled || resultCode != Activity.RESULT_OK) {
+            finishPicker(operation, null)
             return true
         }
-        scan?.cancel()
-        run(result) {
+        runPicker(operation, "FOLDER_UNAVAILABLE", "The music folder could not be opened.") {
             val tree = data?.data ?: throw IOException()
             require(tree.scheme == "content" && DocumentsContract.isTreeUri(tree))
             require(data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
-            selectFolder(tree)
+            selectFolder(tree, operation.cancellation)
         }
         return true
     }
 
-    private fun selectFolder(tree: Uri): Map<String, String?> {
-        val old = preferences.getString("uri", null)
-        val oldSelection = preferences.getString("selectionId", null)
-        val oldOwned = preferences.getBoolean("ownsRead", false)
+    private fun selectFolder(tree: Uri, signal: CancellationSignal): LocalMusicRoots {
+        val current = roots()
+        val previous = current.find(tree.toString())
         val alreadyReadable = grant(tree)?.isReadPermission == true
-        // An uninterrupted older grant has no selection ID. After a folder is
-        // forgotten, replaced, or revoked, even the same URI is a new approval.
-        val selectionId = selectionIdForPick(oldSelection,
-            sameFolder = old == tree.toString(), hasReadGrant = alreadyReadable,
-            needsReapproval = preferences.getBoolean("needsReapproval", false))
+        val selectionId = selectionIdForPick(previous?.selectionId, sameFolder = previous != null,
+            hasReadGrant = alreadyReadable, needsReapproval = previous?.needsReapproval == true)
         context.contentResolver.takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val name = try {
-            val display = folderName(tree, null)
-            if (old != null && (old != tree.toString() || oldSelection != selectionId)) {
-                archiveRenames(Uri.parse(old), oldSelection)
-            }
-            sourceRevision.incrementAndGet()
-            check(preferences.edit().putString("uri", tree.toString()).putString("name", display)
-                .putString("selectionId", selectionId).remove("needsReapproval")
-                .putBoolean("ownsRead", !alreadyReadable || (old == tree.toString() && oldOwned)).commit())
-            display
+        try {
+            val root = LocalMusicRoot(tree.toString(), folderName(tree, signal), selectionId,
+                ownsRead = !alreadyReadable || previous?.ownsRead == true)
+            return approveRoot(current, previous, root, signal)
         } catch (failure: Exception) {
             releaseRead(tree, !alreadyReadable)
             throw failure
         }
-        if (old != null && (old != tree.toString() || oldSelection != selectionId)) {
-            val previous = Uri.parse(old)
-            if (previous != tree) releaseRead(previous, oldOwned)
-            clearLibraryCache(previous, oldSelection)
+    }
+
+    private fun approveRoot(
+        current: LocalMusicRoots, previous: LocalMusicRoot?, root: LocalMusicRoot, signal: CancellationSignal,
+    ): LocalMusicRoots {
+        val old = previous?.takeIf { it.selectionId != root.selectionId }
+        val source = Uri.parse(root.uri)
+        if (old != null) archiveRenames(source, old.selectionId)
+        signal.throwIfCanceled()
+        val updated = current.withRoot(root)
+        saveRoots(updated)
+        if (old != null) {
+            completedCatalogs.remove(root.uri)
+            clearLibraryCache(source, old.selectionId)
         }
-        return mapOf("uri" to tree.toString(), "name" to name, "selectionId" to selectionId)
+        return updated
     }
 
     private fun promptPending() = picker != null || systemPicker != null || rename != null
@@ -277,9 +292,10 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             result.error("PICKER_UNAVAILABLE", "The music source chooser is unavailable.", null)
             return
         }
-        systemPicker = result
+        val operation = SourcePicker(result)
+        systemPicker = operation
         if (mayReadSystemAudio()) {
-            completeSystemPick(result)
+            completeSystemPick(operation)
             return
         }
         try {
@@ -290,45 +306,48 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         }
     }
 
-    private fun completeSystemPick(result: MethodChannel.Result) {
-        scan?.cancel()
+    private fun completeSystemPick(operation: SourcePicker) {
+        operation.waitingForActivity = false
+        runPicker(operation, "AUDIO_PERMISSION_DENIED", "Music and audio access is unavailable.") {
+            check(mayReadSystemAudio())
+            val source = systemSource.toString()
+            val current = roots()
+            val previous = current.find(source)
+            val selectionId = selectionIdForPick(previous?.selectionId, sameFolder = previous != null,
+                hasReadGrant = true, needsReapproval = previous?.needsReapproval == true)
+            approveRoot(current, previous, LocalMusicRoot(source, "Android music library", selectionId),
+                operation.cancellation)
+        }
+    }
+
+    private fun runPicker(operation: SourcePicker, code: String, message: String, action: () -> LocalMusicRoots) {
         worker.execute {
             try {
-                check(mayReadSystemAudio())
-                val source = systemSource.toString()
-                val old = preferences.getString("uri", null)
-                val oldSelection = preferences.getString("selectionId", null)
-                val oldOwned = preferences.getBoolean("ownsRead", false)
-                val selectionId = oldSelection?.takeIf {
-                    old == source && !preferences.getBoolean("needsReapproval", false)
-                } ?: UUID.randomUUID().toString()
-                val name = "Android music library"
-                if (old != null && (old != source || oldSelection != selectionId)) {
-                    archiveRenames(Uri.parse(old), oldSelection)
-                }
-                sourceRevision.incrementAndGet()
-                check(preferences.edit().putString("uri", source).putString("name", name)
-                    .putString("selectionId", selectionId).remove("needsReapproval")
-                    .remove("ownsRead").commit())
-                if (old != null && (old != source || oldSelection != selectionId)) {
-                    val previous = Uri.parse(old)
-                    releaseRead(previous, oldOwned)
-                    clearLibraryCache(previous, oldSelection)
-                }
-                main.post {
-                    if (systemPicker === result) {
-                        systemPicker = null
-                        result.success(mapOf("uri" to source, "name" to name, "selectionId" to selectionId))
-                    }
-                }
+                operation.cancellation.throwIfCanceled()
+                val updated = action()
+                main.post { finishPicker(operation, updated.channelValue()) }
             } catch (_: Exception) {
-                main.post {
-                    if (systemPicker === result) {
-                        systemPicker = null
-                        result.error("AUDIO_PERMISSION_DENIED", "Music and audio access is unavailable.", null)
-                    }
-                }
+                main.post { finishPicker(operation, null, code, message) }
             }
+        }
+    }
+
+    private fun finishPicker(operation: SourcePicker, value: Any?, code: String? = null, message: String? = null) {
+        if (picker !== operation && systemPicker !== operation) return
+        if (picker === operation) picker = null
+        if (systemPicker === operation) systemPicker = null
+        if (operation.cancellation.isCanceled) return
+        if (code == null) operation.result.success(value)
+        else operation.result.error(code, message, null)
+    }
+
+    private fun cancelPickers() {
+        for (operation in listOfNotNull(picker, systemPicker)) {
+            if (operation.cancellation.isCanceled) continue
+            operation.cancellation.cancel()
+            operation.result.success(null)
+            // Keep an outstanding platform request reserved until its callback arrives.
+            if (!operation.waitingForActivity) finishPicker(operation, null)
         }
     }
 
@@ -349,13 +368,18 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             return true
         }
         if (requestCode != AUDIO_PERMISSION_REQUEST) return false
-        val result = systemPicker ?: return true
+        val operation = systemPicker ?: return true
+        if (!operation.waitingForActivity) return true
+        operation.waitingForActivity = false
+        if (operation.cancellation.isCanceled) {
+            finishPicker(operation, null)
+            return true
+        }
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            completeSystemPick(result)
+            completeSystemPick(operation)
         } else {
-            systemPicker = null
-            if (grantResults.isEmpty()) result.success(null)
-            else result.error("AUDIO_PERMISSION_DENIED", "Music and audio access was declined.", null)
+            if (grantResults.isEmpty()) finishPicker(operation, null)
+            else finishPicker(operation, null, "AUDIO_PERMISSION_DENIED", "Music and audio access was declined.")
         }
         return true
     }
@@ -368,12 +392,12 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         val tree = call.argument<String>("treeUri")
         val uri = call.argument<String>("uri")
         val name = call.argument<String>("name")
-        val saved = preferences.all
-        if (tree == null || tree != saved["uri"] || uri == null || name == null) {
+        val root = roots().find(tree)
+        if (root == null || root.needsReapproval || uri == null || name == null) {
             result.error("RENAME_FAILED", "The selected song could not be renamed.", null)
             return
         }
-        val operation = RenameOperation(Uri.parse(tree), saved["selectionId"] as? String,
+        val operation = RenameOperation(Uri.parse(root.uri), root.selectionId,
             Uri.parse(uri), name, result)
         rename = operation
         runRename(operation)
@@ -388,7 +412,8 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             val source = operation.source
             val uri = operation.uri
             try {
-                if (preferences.getString("selectionId", null) != operation.selectionId ||
+                val root = roots().find(source.toString())
+                if (root == null || root.selectionId != operation.selectionId ||
                     checkFolderAccess(source.toString()) != true) {
                     throw LocalMusicRename.Failure("RENAME_FAILED")
                 }
@@ -464,50 +489,42 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     private fun grant(tree: Uri) = context.contentResolver.persistedUriPermissions.firstOrNull { it.uri == tree }
 
     private fun revalidateAccess(selected: String?, result: MethodChannel.Result) {
-        val revision = sourceRevision.get()
-        val snapshot = preferences.all
-        if (selected == null || selected != snapshot["uri"] || snapshot["needsReapproval"] == true) {
+        val root = roots().find(selected)
+        if (root == null || root.needsReapproval) {
             result.success(false)
             return
         }
-        val source = Uri.parse(selected)
-        val selectionId = snapshot["selectionId"] as? String
         // Keep grant checks responsive while the catalog worker reads slow tags.
         accessWorker.execute {
-            val accessible = probeAccess(source)
+            val accessible = probeAccess(Uri.parse(root.uri))
             main.post {
                 if (channel == null) return@post
-                val current = preferences.all
+                val current = roots().find(root.uri)
                 when {
-                    sourceRevision.get() != revision ||
-                        current["uri"] != selected || current["selectionId"] != selectionId ->
-                        result.success(null)
-                    current["needsReapproval"] == true ->
-                        result.success(false)
-                    else -> {
-                        if (accessible == false) {
-                            scan?.cancel()
-                            worker.execute {
-                                val active = preferences.all
-                                if (sourceRevision.get() == revision &&
-                                    active["uri"] == selected && active["selectionId"] == selectionId) {
-                                    invalidateAccess(source, selectionId)
-                                }
-                            }
+                    current == null || current.selectionId != root.selectionId -> result.success(null)
+                    current.needsReapproval -> result.success(false)
+                    accessible == false -> {
+                        scans.remove(root.uri)?.cancel()
+                        run(result) {
+                            // Confirm again after any picker work already queued for this root.
+                            val active = roots().find(root.uri)
+                            if (active == null || active.selectionId != root.selectionId) null
+                            else checkFolderAccess(root.uri)
                         }
-                        result.success(accessible)
                     }
+                    else -> result.success(accessible)
                 }
             }
         }
     }
 
-    private fun checkFolderAccess(selected: String?, signal: CancellationSignal? = null): Boolean? {
-        if (selected == null || selected != preferences.getString("uri", null)) return false
-        if (preferences.getBoolean("needsReapproval", false)) return false
-        val source = Uri.parse(selected)
+    private fun checkFolderAccess(selected: String, signal: CancellationSignal? = null): Boolean? {
+        val current = roots()
+        val root = current.find(selected) ?: return false
+        if (root.needsReapproval) return false
+        val source = Uri.parse(root.uri)
         return probeAccess(source, signal).also {
-            if (it == false) invalidateAccess(source, preferences.getString("selectionId", null))
+            if (it == false) invalidateAccess(current, root, source)
         }
     }
 
@@ -545,14 +562,14 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             // An interrupted provider or a temporarily unavailable cursor proves no loss.
             null
         }
-    private fun invalidateAccess(source: Uri, selectionId: String?) {
-        sourceRevision.incrementAndGet()
-        preferences.edit().putBoolean("needsReapproval", true).apply()
+    private fun invalidateAccess(current: LocalMusicRoots, root: LocalMusicRoot, source: Uri) {
+        completedCatalogs.remove(root.uri)
         // If durable storage is unavailable, retain the index until rename
         // events can be archived. The revoked source still fails access checks.
         try {
-            archiveRenames(source, selectionId)
-            clearLibraryCache(source, selectionId)
+            saveRoots(current.withRoot(root.copy(needsReapproval = true)))
+            archiveRenames(source, root.selectionId)
+            clearLibraryCache(source, root.selectionId)
         } catch (_: Exception) { }
     }
 
@@ -581,13 +598,11 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
         return LocalMusicCatalog(context, coverDirectory(key), indexFile(key), visibilityAliases)
     }
 
-    private fun activeRenameEvents(): List<Map<String, String>> {
-        val source = preferences.getString("uri", null)?.let(Uri::parse) ?: return emptyList()
-        return catalog(source, preferences.getString("selectionId", null)).pendingRenames(source)
-    }
-
     private fun pendingRenames(): List<Map<String, String>> =
-        (renameArchive.read() + activeRenameEvents()).distinctBy { it.getValue("id") }
+        (renameArchive.read() + roots().entries.flatMap { root ->
+            val source = Uri.parse(root.uri)
+            catalog(source, root.selectionId).pendingRenames(source)
+        }).distinctBy { it.getValue("id") }
 
     private fun archiveRenames(source: Uri, selectionId: String?) {
         renameArchive.retain(catalog(source, selectionId).pendingRenames(source))
@@ -598,8 +613,9 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
             it["oldUri"] == oldUri && it["newUri"] == newUri && (id == null || it["id"] == id)
         } ?: return
         val eventId = event.getValue("id")
-        preferences.getString("uri", null)?.let(Uri::parse)?.let { source ->
-            catalog(source, preferences.getString("selectionId", null)).acknowledgeRename(
+        for (root in roots().entries) {
+            val source = Uri.parse(root.uri)
+            catalog(source, root.selectionId).acknowledgeRename(
                 source, Uri.parse(oldUri), Uri.parse(newUri), eventId)
         }
         renameArchive.remove(eventId)
@@ -645,15 +661,16 @@ class LocalMusicPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRe
     }
     override fun onDetachedFromActivity() {
         onDetachedFromActivityForConfigChanges()
-        picker?.error("PICKER_UNAVAILABLE", "The music folder picker was interrupted.", null)
-        picker = null
-        systemPicker?.error("PICKER_UNAVAILABLE", "The music source chooser was interrupted.", null)
-        systemPicker = null
+        for (operation in listOfNotNull(picker, systemPicker)) {
+            finishPicker(operation, null, "PICKER_UNAVAILABLE", "The music source chooser was interrupted.")
+            operation.cancellation.cancel()
+        }
         rename?.let { completeRename(it, null) }
     }
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         onDetachedFromActivity()
-        scan?.cancel()
+        scans.values.forEach(CancellationSignal::cancel)
+        scans.clear()
         accessWorker.shutdownNow()
         worker.shutdownNow()
         channel?.setMethodCallHandler(null)

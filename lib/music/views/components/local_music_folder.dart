@@ -22,6 +22,7 @@ import '../../services/local_music_library.dart';
 import '../../services/on_device_music_downloads.dart';
 import '../screens/music.dart';
 import 'local_music_exclusions.dart';
+import 'local_music_locations.dart';
 
 bool get supportsLocalMusicFolders =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -253,9 +254,11 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
     try {
       final locals = AppLocalizations.of(context)!;
       if (visible.every((entry) => entry.deviceTrack != null)) {
-        final source = _library.isSystem
-            ? locals.localMusicAndroidLibrary
-            : _library.folderName;
+        final source = _library.roots.length > 1
+            ? locals.onDevice
+            : _library.isSystem
+                ? locals.localMusicAndroidLibrary
+                : _library.folderName;
         await MusicScreen.playLocalTracks(
             context, visible.map((entry) => entry.deviceTrack!).toList(),
             startIndex: startIndex, queueTitle: source);
@@ -503,9 +506,20 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
           final sourceAvailable = _ready && !_library.busy;
           final enabled = _library.enabled;
           final system = _library.isSystem;
-          final name =
-              system ? locals.localMusicAndroidLibrary : _library.folderName;
-          final status = _sourceStatus(locals);
+          final roots = _library.roots;
+          final singleRoot = roots.length == 1 ? roots.single : null;
+          final systemRoot = roots.where((root) => root.isSystem).firstOrNull;
+          final reconnectFolder = singleRoot != null &&
+                  !singleRoot.isSystem &&
+                  _library.isRootUnavailable(singleRoot)
+              ? singleRoot
+              : null;
+          final name = roots.length > 1
+              ? locals.localMusicLocationCount(roots.length)
+              : system
+                  ? locals.localMusicAndroidLibrary
+                  : _library.folderName;
+          final status = localMusicSourceStatus(_library, locals);
           if (widget._settings) {
             return _buildSettings(locals,
                 sourceAvailable: sourceAvailable, name: name, status: status);
@@ -578,24 +592,36 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Wrap(children: [
                     TextButton.icon(
-                      onPressed: sourceAvailable ? _library.chooseFolder : null,
+                      onPressed: sourceAvailable
+                          ? () =>
+                              _library.chooseFolder(reconnect: reconnectFolder)
+                          : null,
                       icon: const Icon(Icons.folder_open),
-                      label: Text(system || _library.unavailable
-                          ? locals.localMusicChooseFolder
-                          : locals.localMusicChangeFolder),
+                      label: Text(reconnectFolder == null
+                          ? locals.localMusicAddFolder
+                          : locals.localMusicChooseFolder),
                     ),
-                    if (!system || _library.unavailable)
+                    if (systemRoot == null ||
+                        _library.isRootUnavailable(systemRoot))
                       TextButton.icon(
                         onPressed:
                             sourceAvailable ? _library.chooseSystem : null,
                         icon: const Icon(Icons.library_music_outlined),
                         label: Text(locals.localMusicUseAndroidLibrary),
                       ),
-                    TextButton(
-                      onPressed: _ready ? _library.disable : null,
-                      child: Text(system
-                          ? locals.localMusicForgetAndroidLibrary
-                          : locals.localMusicForgetFolder),
+                    if (singleRoot != null)
+                      TextButton(
+                        onPressed: _ready ? _library.disable : null,
+                        child: Text(system
+                            ? locals.localMusicForgetAndroidLibrary
+                            : locals.localMusicForgetFolder),
+                      ),
+                    TextButton.icon(
+                      onPressed: _ready
+                          ? () => showLocalMusicLocations(context, _library)
+                          : null,
+                      icon: const Icon(Icons.folder_copy_outlined),
+                      label: Text(locals.localMusicManageLocations),
                     ),
                     exclusions,
                     if (hiddenFiles != null) hiddenFiles,
@@ -634,37 +660,15 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                   child: Text(status ??
                       (_library.tracks.isNotEmpty
                           ? locals.localMusicNoVisibleFiles
-                          : system
-                              ? locals.localMusicAndroidLibraryEmpty
-                              : locals.localMusicFolderEmpty)),
+                          : roots.length > 1
+                              ? locals.localMusicLocationsEmpty
+                              : system
+                                  ? locals.localMusicAndroidLibraryEmpty
+                                  : locals.localMusicFolderEmpty)),
                 ),
             ]),
           );
         }));
-  }
-
-  String? _sourceStatus(AppLocalizations locals) {
-    if (_library.unavailable) {
-      return _library.isSystem
-          ? locals.localMusicAndroidLibraryUnavailable
-          : locals.localMusicFolderUnavailable;
-    }
-    return switch (_library.error) {
-      'AUDIO_PERMISSION_DENIED' => locals.localMusicAndroidLibraryUnavailable,
-      'PICKER_UNAVAILABLE' => locals.localMusicPickerUnavailable,
-      'RENAME_FAILED' ||
-      'RENAME_CHANGED' ||
-      'RENAME_ACCESS' ||
-      'RENAME_INVALID_NAME' ||
-      'RENAME_UNSUPPORTED' ||
-      'RENAME_COLLISION' ||
-      'SCAN_CANCELLED' ||
-      null =>
-        null,
-      _ => _library.isSystem
-          ? locals.localMusicAndroidLibraryError
-          : locals.localMusicFolderError,
-    };
   }
 
   Widget _buildSettings(AppLocalizations locals,
@@ -684,20 +688,15 @@ class _LocalMusicFolderState extends State<LocalMusicFolder>
                 }
               }
             : null);
-    if (!_library.unavailable) return toggle;
+    if (!_library.enabled) return toggle;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       toggle,
       Padding(
         padding: const EdgeInsetsDirectional.only(start: 16),
         child: TextButton(
-          onPressed: sourceAvailable
-              ? (_library.isSystem
-                  ? _library.chooseSystem
-                  : _library.chooseFolder)
-              : null,
-          child: Text(_library.isSystem
-              ? locals.localMusicUseAndroidLibrary
-              : locals.localMusicChooseFolder),
+          onPressed:
+              _ready ? () => showLocalMusicLocations(context, _library) : null,
+          child: Text(locals.localMusicManageLocations),
         ),
       ),
     ]);

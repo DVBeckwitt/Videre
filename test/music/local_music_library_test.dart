@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clipious/music/models/local_music_track.dart';
 import 'package:clipious/music/services/local_music_library.dart';
 import 'package:clipious/utils/sembast_sqflite_database.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast_memory.dart';
@@ -12,8 +14,15 @@ void main() {
   const channel = MethodChannel('com.github.dvbeckwitt.videre/local_music');
   const codec = StandardMethodCodec();
   const tree = 'content://documents/tree/primary%3AMusic';
+  const secondTree = 'content://documents/tree/1234%3AAlbums';
   const folder = {'uri': tree, 'name': 'Music'};
+  const secondFolder = {
+    'uri': secondTree,
+    'name': 'Albums',
+    'selectionId': 'albums-grant',
+  };
   const uri = '$tree/document/primary%3AMusic%2Ftrack.flac';
+  const secondUri = '$secondTree/document/1234%3AAlbums%2Ftrack.flac';
   const doc = {
     'uri': uri,
     'title': 'Title',
@@ -22,6 +31,10 @@ void main() {
     'durationMs': 12345,
     'artPath': '/data/cache/art.jpg',
   };
+  Map<String, Object> selection(List<Map<String, String>> roots) => {
+        'roots': roots,
+        'selectionId': 'library-session',
+      };
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late LocalMusicLibrary library;
@@ -121,6 +134,62 @@ void main() {
     expect(library.enabled, isFalse);
     expect(library.tracks, isEmpty);
     expect(calls, ['getFolder', 'pickFolder']);
+  });
+
+  test('overlapping SAF roots show one file and keep it hidden after removal',
+      () async {
+    const nestedTree = 'content://documents/tree/primary%3AMusic%2FJazz';
+    const documentId = 'primary%3AMusic%2FJazz%2Ftrack.flac';
+    final grants = [
+      folder,
+      {'uri': nestedTree, 'name': 'Jazz'}
+    ];
+    final factory = newDatabaseFactoryMemory();
+    final database =
+        SembastSqfDb(await factory.openDatabase('overlapping-saf'));
+    addTearDown(database.close);
+    await database.getProfiles();
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      final root = (call.arguments as Map?)?['treeUri'];
+      switch (call.method) {
+        case 'getFolder':
+          return selection(grants);
+        case 'listTracks':
+          final uri = '$root/document/$documentId';
+          const modified = 1234567;
+          const size = 800;
+          final proof = ['document', uri, '$modified', '$size']
+              .map((part) => '${part.length}:$part')
+              .join();
+          return [
+            {
+              ...doc,
+              'uri': uri,
+              'modifiedMs': modified,
+              'sizeBytes': size,
+              'visibilityKey': sha256.convert(utf8.encode(proof)).toString(),
+            },
+          ];
+        case 'forgetFolder':
+          grants.removeWhere((grant) => grant['uri'] == root);
+          return selection(grants);
+      }
+      throw MissingPluginException();
+    });
+
+    await library.refresh();
+    expect(library.visibleTracks.single.sourceUri, Uri.parse(tree));
+    final hidden = await library.hideTrack(library.visibleTracks.single);
+    expect(hidden, isNotNull);
+    expect(await library.removeRoot(library.roots.first), isTrue);
+    expect(library.tracks.single.sourceUri, Uri.parse(nestedTree));
+    expect(library.visibleTracks, isEmpty);
+    expect(library.hiddenTracks.single.isAvailable, isTrue);
+    expect(await library.restoreTrack(library.hiddenTracks.single), isTrue);
+    expect(library.visibleTracks.single.sourceUri, Uri.parse(nestedTree));
   });
 
   test('pick, resume and forget a folder without storing track paths in IDs',
@@ -549,6 +618,176 @@ void main() {
     expect(library.visibleTracks.map((track) => track.uri), unaffected);
     await library.setFolderExcluded(location, false);
     expect(library.visibleTracks, hasLength(5));
+  });
+
+  test(
+      'added locations share a session and losing one keeps the other playable',
+      () async {
+    final configured = [folder];
+    final scans = <String>[];
+    final secondScanStarted = Completer<void>();
+    final pending = Completer<List<Object?>>();
+    var revokeSecond = false;
+    var pauseSecond = false;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return selection(configured);
+        case 'pickFolder':
+          if (!configured.contains(secondFolder)) configured.add(secondFolder);
+          return selection(configured);
+        case 'listTracks':
+          final source = call.arguments['treeUri'] as String;
+          scans.add(source);
+          if (source == tree) return [doc];
+          expect(source, secondTree);
+          if (pauseSecond) {
+            scanId = call.arguments['scanId'] as int;
+            secondScanStarted.complete();
+            return pending.future;
+          }
+          return [
+            const {'uri': secondUri, 'title': 'Other'}
+          ];
+        case 'checkFolderAccess':
+          return !(revokeSecond && call.arguments['treeUri'] == secondTree);
+        case 'forgetFolder':
+          expect(call.arguments['treeUri'], secondTree);
+          configured.remove(secondFolder);
+          return selection(configured);
+        case 'forgetFolders':
+          configured.clear();
+          return {'roots': [], 'selectionId': null};
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+
+    await library.initialize();
+    final session = library.selectionId;
+    expect(library.roots.map((root) => root.uri.toString()), [tree]);
+    expect(library.roots.single.selectionId, isNull);
+    expect(scans, isEmpty);
+    await library.refresh();
+    final originalId = library.tracks.single.playbackId;
+
+    expect(await library.chooseFolder(), isTrue);
+    expect(library.acceptsSessionSelection(session), isTrue);
+    expect(
+        library.roots.map((root) => root.uri.toString()), [tree, secondTree]);
+    expect(library.tracks.map((track) => track.uri), [uri, secondUri]);
+    expect(library.tracks.map((track) => track.sourceUri.toString()),
+        [tree, secondTree]);
+    expect(scans, [tree, tree, secondTree]);
+
+    pauseSecond = true;
+    final refresh = library.refresh();
+    await secondScanStarted.future;
+    revokeSecond = true;
+    await library.revalidate();
+    final secondRoot = library.roots.last;
+    expect(library.isRootUnavailable(secondRoot), isTrue);
+    expect(library.unavailable, isFalse);
+    expect(library.acceptsSessionSelection(session), isTrue);
+    expect(library.trackById(originalId)?.uri, uri);
+    expect(library.containsUri(secondUri), isFalse);
+
+    const staleDocument = {'uri': secondUri, 'title': 'Stale'};
+    await emitBatch([staleDocument]);
+    pending.complete([staleDocument]);
+    await refresh;
+    expect(library.tracks.map((track) => track.uri), [uri]);
+
+    expect(await library.removeRoot(secondRoot), isTrue);
+    expect(library.roots.map((root) => root.uri.toString()), [tree]);
+    expect(library.acceptsSessionSelection(session), isTrue);
+    expect(library.trackById(originalId)?.uri, uri);
+    await library.disable();
+    expect(configured, isEmpty);
+    expect(library.roots, isEmpty);
+    expect(library.acceptsSessionSelection(session), isFalse);
+  });
+
+  test('inclusions and exact hides persist per profile across library reopen',
+      () async {
+    final database = await SembastSqfDb.createInMemory();
+    addTearDown(database.close);
+    await database.getProfiles();
+    final owner = database.profileId;
+    final other = await database.createProfile('Other profile');
+    final included = {'key': 'a' * 64, 'label': 'Music'};
+    final nested = {'key': 'b' * 64, 'label': 'Music / Live'};
+    final otherFolder = {'key': 'c' * 64, 'label': 'Albums'};
+    const nestedUri = '$tree/document/primary%3AMusic%2FLive%2Ftrack.flac';
+    final documents = {
+      tree: [
+        {
+          ...doc,
+          'visibilityKey': '1' * 64,
+          'folderLocations': [included],
+        },
+        {
+          ...doc,
+          'uri': nestedUri,
+          'visibilityKey': '2' * 64,
+          'folderLocations': [included, nested],
+        },
+      ],
+      secondTree: [
+        {
+          ...doc,
+          'uri': secondUri,
+          'visibilityKey': '3' * 64,
+          'folderLocations': [otherFolder],
+        },
+      ],
+    };
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return selection([folder, secondFolder]);
+        case 'listTracks':
+          return documents[call.arguments['treeUri']];
+        default:
+          fail('Unexpected ${call.method}');
+      }
+    });
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    await library.refresh();
+    final parent = library.tracks.first.folderLocations.single;
+    final child = library.tracks[1].folderLocations.last;
+    final outside = library.tracks.last;
+
+    expect(await library.setFolderIncluded(parent, true), isTrue);
+    expect(library.visibleTracks.map((track) => track.uri), [uri, nestedUri]);
+    expect(library.isExcludedByInclusion(outside), isTrue);
+    expect(await library.setFolderExcluded(child, true), isTrue);
+    expect(library.visibleTracks.map((track) => track.uri), [uri]);
+    expect(await library.setExclusionOverride(outside, true), isTrue);
+    expect(await library.hideTrack(outside), isNotNull);
+    expect(library.visibleTracks.map((track) => track.uri), [uri]);
+
+    library.dispose();
+    library = LocalMusicLibrary(visibilityDatabase: () => database);
+    await library.refresh();
+    expect(library.inclusionFolders.single.key, parent.key);
+    expect(library.visibleTracks.map((track) => track.uri), [uri]);
+    expect(library.hiddenTracks.single.isAvailable, isTrue);
+
+    await database.useProfile(other.id);
+    library.visibilityProfileChanged();
+    expect(library.roots, hasLength(2));
+    expect(library.inclusionFolders, isEmpty);
+    expect(library.hiddenTracks, isEmpty);
+    expect(library.visibleTracks.map((track) => track.uri),
+        [uri, nestedUri, secondUri]);
+
+    await database.useProfile(owner);
+    library.visibilityProfileChanged();
+    expect(library.visibleTracks.map((track) => track.uri), [uri]);
+    expect(await library.restoreTrack(library.hiddenTracks.single), isTrue);
+    expect(library.visibleTracks.map((track) => track.uri), [uri, secondUri]);
   });
 
   test('denying the Android library preserves a selected folder', () async {

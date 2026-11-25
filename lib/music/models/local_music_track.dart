@@ -19,6 +19,10 @@ class LocalMusicTrack {
   static final _folderLabelControls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
 
   final String uri;
+  final Uri? sourceUri;
+
+  /// The provider and its verified document ID for a SAF track.
+  final (String, String)? documentIdentity;
   final String title;
   final String? artist;
   final String? album;
@@ -40,12 +44,15 @@ class LocalMusicTrack {
   /// Verified ancestors in order, ending with the exact containing folder.
   final List<LocalMusicFolderLocation> folderLocations;
   final String? visibilityKey;
+  final String? documentVisibilityKey;
   final String? _identityUri;
   final String? _identityKey;
 
   const LocalMusicTrack({
     required this.uri,
     required this.title,
+    this.sourceUri,
+    this.documentIdentity,
     this.artist,
     this.album,
     this.albumArtist,
@@ -60,6 +67,7 @@ class LocalMusicTrack {
     this.isRecording = false,
     this.folderLocations = const [],
     this.visibilityKey,
+    this.documentVisibilityKey,
     String? identityUri,
     String? identityKey,
   })  : _identityUri = identityUri,
@@ -89,8 +97,17 @@ class LocalMusicTrack {
     final name = value['fileName'];
     final albumKey = value['albumKey'];
     final visibilityKey = value['visibilityKey'];
+    final validVisibilityKey =
+        visibilityKey is String && _identityPattern.hasMatch(visibilityKey)
+            ? visibilityKey
+            : null;
+    final documentIdentity = source == systemSource
+        ? null
+        : (source.authority, Uri.parse(uri).pathSegments.last);
     return LocalMusicTrack(
       uri: uri,
+      sourceUri: source,
+      documentIdentity: documentIdentity,
       title: title,
       artist: value['artist'] is String ? value['artist'] as String : null,
       album: value['album'] is String ? value['album'] as String : null,
@@ -109,13 +126,41 @@ class LocalMusicTrack {
       canRename: value['canRename'] == true,
       isRecording: source == systemSource && value['isRecording'] == true,
       folderLocations: _parseFolderLocations(value['folderLocations']),
-      visibilityKey:
-          visibilityKey is String && _identityPattern.hasMatch(visibilityKey)
-              ? visibilityKey
-              : null,
+      visibilityKey: validVisibilityKey,
+      documentVisibilityKey: documentIdentity == null
+          ? null
+          : _documentVisibilityKey(uri, documentIdentity, value['modifiedMs'],
+              value['sizeBytes'], validVisibilityKey),
       identityUri: identityUri as String?,
       identityKey: identityKey as String?,
     );
+  }
+
+  static String? _documentVisibilityKey(String uri, (String, String) identity,
+      Object? modified, Object? size, String? key) {
+    if (key == null ||
+        modified is! int ||
+        modified <= 0 ||
+        size is! int ||
+        size <= 0) {
+      return null;
+    }
+    String fingerprint(List<String> parts) => sha256
+        .convert(
+            utf8.encode(parts.map((part) => '${part.length}:$part').join()))
+        .toString();
+    // A rename alias or protected reused URI has stronger native verification
+    // than directory metadata alone. Keep its original scoped proof.
+    if (key != fingerprint(['document', uri, '$modified', '$size'])) {
+      return null;
+    }
+    return fingerprint([
+      'document-across-music-locations',
+      identity.$1,
+      identity.$2,
+      '$modified',
+      '$size',
+    ]);
   }
 
   static DateTime? _date(Object? value) =>

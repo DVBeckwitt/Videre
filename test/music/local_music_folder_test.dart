@@ -427,6 +427,74 @@ void main() {
     expect(find.text('First'), findsNothing);
   });
 
+  testWidgets('manage locations adds, reconnects and removes one folder',
+      (tester) async {
+    const demosTree = 'content://provider/tree/demos';
+    const demos = {'uri': demosTree, 'name': 'Demos'};
+    var added = false;
+    var lostAccess = false;
+    Map<String, Object> selection() => {
+          'selectionId': 'device-library',
+          'roots': [picked, if (added) demos],
+        };
+
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getFolder':
+          return selection();
+        case 'pickFolder':
+          if (added) expect(call.arguments['initialUri'], demosTree);
+          added = true;
+          lostAccess = false;
+          return selection();
+        case 'checkFolderAccess':
+          return call.arguments['treeUri'] != demosTree || !lostAccess;
+        case 'listTracks':
+          return call.arguments['treeUri'] == demosTree
+              ? [
+                  {'title': 'Demo track', 'uri': '$demosTree/document/Demo'}
+                ]
+              : [first];
+        case 'forgetFolder':
+          expect(call.arguments['treeUri'], demosTree);
+          added = false;
+          return selection();
+        default:
+          throw MissingPluginException(call.method);
+      }
+    });
+
+    await show(tester, settings: false);
+    final manage = find.text('Manage music locations');
+    await tester.tap(manage);
+    await tester.pumpAndSettle();
+    final sheet = find.byType(BottomSheet);
+    final add =
+        find.descendant(of: sheet, matching: find.text('Add music folder'));
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    expect(find.text('Demos'), findsOneWidget);
+    expect(library.tracks.map((track) => track.title), ['First', 'Demo track']);
+
+    lostAccess = true;
+    await library.revalidate();
+    await tester.pumpAndSettle();
+    expect(library.tracks.map((track) => track.title), ['First']);
+    await tester.tap(find.text('Reconnect to restore access'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reconnect to restore access'), findsNothing);
+    expect(library.tracks.map((track) => track.title), ['First', 'Demo track']);
+
+    await tester.tap(find.byTooltip('Remove Demos from music locations'));
+    await tester.pumpAndSettle();
+    expect(find.text('Demos'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('My albums'), findsOneWidget);
+    expect(find.text('First'), findsOneWidget);
+    expect(find.text('Demo track'), findsNothing);
+  });
+
   testWidgets('early rows play the visible snapshot while indexing continues',
       (tester) async {
     consent = picked;
@@ -875,6 +943,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Scratch demo'), findsOneWidget);
     expect(find.text('Labeled memo'), findsNothing);
+
+    await tester.enterText(search, '');
+    await tester.pumpAndSettle();
+    await openRules();
+    await tapSheet('Include a folder');
+    await tapSheet('Music / Drafts');
+    expect(find.text('Included folders'), findsOneWidget);
+    await tapSheet('Excluded files');
+    final outsideFolder = find.descendant(
+        of: find.byType(BottomSheet).last,
+        matching: find.widgetWithText(ListTile, 'Voice memo song'));
+    expect(
+        find.descendant(
+            of: outsideFolder, matching: find.text('Outside included folders')),
+        findsOneWidget);
+    await closeSheet();
+    await closeSheet();
+    expect(find.text('Scratch demo'), findsOneWidget);
+    expect(find.text('Voice memo song'), findsNothing);
+
+    await openRules();
+    await tapSheet('Remove');
+    await closeSheet();
+    expect(find.text('Voice memo song'), findsOneWidget);
   });
 
   testWidgets('artist and album filters scope the playable list as tags arrive',

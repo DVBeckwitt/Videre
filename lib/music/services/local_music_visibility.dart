@@ -10,6 +10,7 @@ typedef LocalMusicVisibilityOwner = ({IDbClient database, String profileId});
 typedef _ExclusionRules = ({
   bool recordings,
   Map<String, LocalMusicFolderLocation> folders,
+  Map<String, LocalMusicFolderLocation> included,
   Set<String> kept,
 });
 
@@ -40,9 +41,10 @@ class _HiddenFile {
   final String? artist;
   final String? fileName;
   final String? storageProof;
+  final String? documentProof;
 
   const _HiddenFile(this.key, this.revision, this.title, this.artist,
-      this.fileName, this.storageProof);
+      this.fileName, this.storageProof, this.documentProof);
 
   factory _HiddenFile.fromTrack(
       String key, LocalMusicTrack track, String? storageProof) {
@@ -54,11 +56,15 @@ class _HiddenFile {
       _text(track.artist),
       name,
       _proof(storageProof),
+      track.documentVisibilityKey,
     );
   }
 
   _HiddenFile withStorageProof(String proof) =>
-      _HiddenFile(key, revision, title, artist, fileName, proof);
+      _HiddenFile(key, revision, title, artist, fileName, proof, documentProof);
+
+  _HiddenFile withDocumentProof(String proof) =>
+      _HiddenFile(key, revision, title, artist, fileName, storageProof, proof);
 
   static String? _proof(Object? value) =>
       value is String && keyPattern.stringMatch(value) == value ? value : null;
@@ -75,8 +81,14 @@ class _HiddenFile {
         title == null) {
       return null;
     }
-    return _HiddenFile(key, revision, title, _text(row['artist']),
-        _name(row['fileName']), _proof(row['storageProof']));
+    return _HiddenFile(
+        key,
+        revision,
+        title,
+        _text(row['artist']),
+        _name(row['fileName']),
+        _proof(row['storageProof']),
+        _proof(row['documentProof']));
   }
 
   static String? _text(Object? value) {
@@ -100,16 +112,19 @@ class _HiddenFile {
         'artist': artist,
         'fileName': fileName,
         if (storageProof != null) 'storageProof': storageProof,
+        if (documentProof != null) 'documentProof': documentProof,
       };
 }
 
 class _HiddenChanges {
   String? stored;
   Map<String, _HiddenFile> files = const {};
+  Set<String> hiddenDocuments = const {};
   String? storedExclusions;
   _ExclusionRules exclusions = const (
     recordings: false,
     folders: <String, LocalMusicFolderLocation>{},
+    included: <String, LocalMusicFolderLocation>{},
     kept: <String>{},
   );
   Future<void> writes = Future.value();
@@ -124,8 +139,9 @@ class LocalMusicVisibility {
   final LocalMusicVisibilityOwner owner;
   final IDbClient _database;
   final _HiddenChanges _changes;
+  final Iterable<LocalMusicTrack> Function(LocalMusicTrack) _copies;
 
-  LocalMusicVisibility(this.owner)
+  LocalMusicVisibility(this.owner, this._copies)
       : _database = owner.database.forProfile(owner.profileId),
         _changes = (_byDatabase[owner.database] ??= {})
             .putIfAbsent(owner.profileId, _HiddenChanges.new);
@@ -146,10 +162,17 @@ class LocalMusicVisibility {
       // A damaged preference cannot hide a file.
     }
     _changes.stored = stored;
+    _changes.hiddenDocuments =
+        files.values.map((f) => f.documentProof).nonNulls.toSet();
     return _changes.files = files;
   }
 
-  bool contains(String? key) => _read().containsKey(key);
+  bool isHidden(LocalMusicTrack track) => _isHidden(track, _read());
+
+  bool _isHidden(LocalMusicTrack track, Map<String, _HiddenFile> files) =>
+      _copies(track).any((copy) =>
+          files.containsKey(copy.visibilityKey) ||
+          _changes.hiddenDocuments.contains(copy.documentVisibilityKey));
 
   Set<String> get hiddenStorageProofs =>
       _read().values.map((file) => file.storageProof).nonNulls.toSet();
@@ -158,20 +181,14 @@ class LocalMusicVisibility {
     final stored = _database.getSettings(_exclusionSetting)?.value;
     if (stored == _changes.storedExclusions) return _changes.exclusions;
     var recordings = false;
-    final folders = <String, LocalMusicFolderLocation>{};
+    var folders = const <String, LocalMusicFolderLocation>{};
+    var included = const <String, LocalMusicFolderLocation>{};
     final kept = <String>{};
     try {
       if (jsonDecode(stored ?? 'null') case final Map data) {
         recordings = data['recordings'] == true;
-        if (data['folders'] case final Map saved) {
-          for (final entry in saved.entries) {
-            final key = _HiddenFile._proof(entry.key);
-            final label = _HiddenFile._text(entry.value);
-            if (key != null && label != null) {
-              folders[key] = LocalMusicFolderLocation(key, label);
-            }
-          }
-        }
+        folders = _folderRules(data['folders']);
+        included = _folderRules(data['included']);
         if (data['kept'] case final List saved) {
           kept.addAll(saved.map(_HiddenFile._proof).nonNulls);
         }
@@ -183,8 +200,19 @@ class LocalMusicVisibility {
     return _changes.exclusions = (
       recordings: recordings,
       folders: folders,
+      included: included,
       kept: kept,
     );
+  }
+
+  static Map<String, LocalMusicFolderLocation> _folderRules(Object? value) {
+    if (value is! Map) return const {};
+    return {
+      for (final entry in value.entries)
+        if (_HiddenFile._proof(entry.key) case final String key)
+          if (_HiddenFile._text(entry.value) case final String label)
+            key: LocalMusicFolderLocation(key, label),
+    };
   }
 
   bool get excludesRecordings => _readExclusions().recordings;
@@ -192,71 +220,116 @@ class LocalMusicVisibility {
   Iterable<LocalMusicFolderLocation> get savedFolders =>
       _readExclusions().folders.values;
 
+  Iterable<LocalMusicFolderLocation> get savedInclusions =>
+      _readExclusions().included.values;
+
   bool isFolderExcluded(String key) =>
       _readExclusions().folders.containsKey(key);
 
+  bool isFolderIncluded(String key) =>
+      _readExclusions().included.containsKey(key);
+
   bool hasOverride(LocalMusicTrack track) =>
-      _readExclusions().kept.contains(track.visibilityKey);
+      _trackProofs(track).any(_readExclusions().kept.contains);
+
+  Iterable<String> _trackProofs(LocalMusicTrack track) sync* {
+    for (final copy in _copies(track)) {
+      if (copy.visibilityKey case final String key) yield key;
+      if (copy.documentVisibilityKey case final String key) yield key;
+    }
+  }
 
   bool isExcluded(LocalMusicTrack track) =>
-      !_read().containsKey(track.visibilityKey) &&
-      _isExcluded(track, _readExclusions());
+      !isHidden(track) && _isExcluded(track, _readExclusions());
 
   bool _isExcluded(LocalMusicTrack track, _ExclusionRules rules) =>
-      !rules.kept.contains(track.visibilityKey) &&
+      !_trackProofs(track).any(rules.kept.contains) &&
       (rules.recordings && track.isRecording ||
-          track.folderLocations
+          _outsideInclusions(track, rules) ||
+          _folders(track)
               .any((folder) => rules.folders.containsKey(folder.key)));
+
+  bool isExcludedByInclusion(LocalMusicTrack track) =>
+      _outsideInclusions(track, _readExclusions());
+
+  bool _outsideInclusions(LocalMusicTrack track, _ExclusionRules rules) =>
+      rules.included.isNotEmpty &&
+      !_folders(track).any((folder) => rules.included.containsKey(folder.key));
+
+  Iterable<LocalMusicFolderLocation> _folders(LocalMusicTrack track) =>
+      _copies(track).expand((copy) => copy.folderLocations);
 
   List<LocalMusicTrack> excluded(List<LocalMusicTrack> tracks) {
     final rules = _readExclusions();
-    if (!rules.recordings && rules.folders.isEmpty) return const [];
+    if (!rules.recordings && rules.folders.isEmpty && rules.included.isEmpty) {
+      return const [];
+    }
     final files = _read();
-    return List.unmodifiable(tracks.where((track) =>
-        !files.containsKey(track.visibilityKey) && _isExcluded(track, rules)));
+    return List.unmodifiable(tracks.where(
+        (track) => !_isHidden(track, files) && _isExcluded(track, rules)));
   }
 
   List<LocalMusicTrack> visible(List<LocalMusicTrack> tracks) {
     final files = _read();
     final rules = _readExclusions();
-    if (files.isEmpty && !rules.recordings && rules.folders.isEmpty) {
+    if (files.isEmpty &&
+        !rules.recordings &&
+        rules.folders.isEmpty &&
+        rules.included.isEmpty) {
       return tracks;
     }
-    return List.unmodifiable(tracks.where((track) =>
-        !files.containsKey(track.visibilityKey) && !_isExcluded(track, rules)));
+    return List.unmodifiable(tracks.where(
+        (track) => !_isHidden(track, files) && !_isExcluded(track, rules)));
   }
 
   bool isVisible(LocalMusicTrack track) =>
-      !_read().containsKey(track.visibilityKey) &&
-      !_isExcluded(track, _readExclusions());
+      !isHidden(track) && !_isExcluded(track, _readExclusions());
 
   Future<bool> setExcludeRecordings(bool value, bool Function() active) =>
       _serialize(() async {
         if (!active()) return false;
         final rules = _readExclusions();
         if (rules.recordings == value) return false;
-        await _saveExclusions(
-            (recordings: value, folders: rules.folders, kept: rules.kept));
+        await _saveExclusions((
+          recordings: value,
+          folders: rules.folders,
+          included: rules.included,
+          kept: rules.kept
+        ));
         return true;
       });
 
   Future<bool> setFolderExcluded(LocalMusicFolderLocation folder, bool value,
           bool Function() eligible) =>
+      _setFolderRule(folder, value, eligible, inclusion: false);
+
+  Future<bool> setFolderIncluded(LocalMusicFolderLocation folder, bool value,
+          bool Function() eligible) =>
+      _setFolderRule(folder, value, eligible, inclusion: true);
+
+  Future<bool> _setFolderRule(
+          LocalMusicFolderLocation folder, bool value, bool Function() eligible,
+          {required bool inclusion}) =>
       _serialize(() async {
         if (!eligible()) return false;
         final key = _HiddenFile._proof(folder.key);
         final label = _HiddenFile._text(folder.label);
         if (key == null || label == null) return false;
         final rules = _readExclusions();
-        if (rules.folders.containsKey(key) == value) return false;
-        final folders = Map.of(rules.folders);
+        final existing = inclusion ? rules.included : rules.folders;
+        if (existing.containsKey(key) == value) return false;
+        final folders = Map.of(existing);
         if (value) {
           folders[key] = LocalMusicFolderLocation(key, label);
         } else {
           folders.remove(key);
         }
-        await _saveExclusions(
-            (recordings: rules.recordings, folders: folders, kept: rules.kept));
+        await _saveExclusions((
+          recordings: rules.recordings,
+          folders: inclusion ? rules.folders : folders,
+          included: inclusion ? folders : rules.included,
+          kept: rules.kept
+        ));
         return true;
       });
 
@@ -266,18 +339,23 @@ class LocalMusicVisibility {
         final key = _HiddenFile._proof(track?.visibilityKey);
         if (track == null || key == null) return false;
         final rules = _readExclusions();
-        if (rules.kept.contains(key) == value ||
+        final proofs = _trackProofs(track);
+        if (proofs.any(rules.kept.contains) == value ||
             (value && !isExcluded(track))) {
           return false;
         }
         final kept = {...rules.kept};
         if (value) {
-          kept.add(key);
+          kept.add(track.documentVisibilityKey ?? key);
         } else {
-          kept.remove(key);
+          kept.removeAll(proofs);
         }
-        await _saveExclusions(
-            (recordings: rules.recordings, folders: rules.folders, kept: kept));
+        await _saveExclusions((
+          recordings: rules.recordings,
+          folders: rules.folders,
+          included: rules.included,
+          kept: kept
+        ));
         return true;
       });
 
@@ -290,12 +368,16 @@ class LocalMusicVisibility {
               for (final entry in rules.folders.entries)
                 entry.key: entry.value.label
             },
+            'included': {
+              for (final entry in rules.included.entries)
+                entry.key: entry.value.label
+            },
             'kept': rules.kept.toList(),
           })));
 
   List<HiddenLocalMusicTrack> records(Map<String, LocalMusicTrack> available) =>
-      List.unmodifiable(_read().values.map(
-          (file) => HiddenLocalMusicTrack._(file, owner, available[file.key])));
+      List.unmodifiable(_read().values.map((file) => HiddenLocalMusicTrack._(
+          file, owner, available[file.key] ?? available[file.documentProof])));
 
   Future<HiddenLocalMusicTrack?> hide(LocalMusicTrack? Function() eligible,
           {String? storageProof}) =>
@@ -304,7 +386,7 @@ class LocalMusicVisibility {
         final key = track?.visibilityKey;
         if (track == null || key == null) return null;
         final files = _read();
-        if (files.containsKey(key)) return null;
+        if (_isHidden(track, files)) return null;
         final file = _HiddenFile.fromTrack(key, track, storageProof);
         await _save({...files, key: file});
         return HiddenLocalMusicTrack._(file, owner, track);
@@ -326,6 +408,20 @@ class LocalMusicVisibility {
         }
         if (changed) await _save(files);
         return changed;
+      });
+
+  Future<void> rememberDocumentProofs(
+          Map<String, LocalMusicTrack> Function() indexed) =>
+      _serialize(() async {
+        final files = _read();
+        final tracks = indexed();
+        final upgraded = <String, _HiddenFile>{};
+        for (final file in files.values) {
+          if (file.documentProof != null) continue;
+          final proof = tracks[file.key]?.documentVisibilityKey;
+          if (proof != null) upgraded[file.key] = file.withDocumentProof(proof);
+        }
+        if (upgraded.isNotEmpty) await _save({...files, ...upgraded});
       });
 
   Future<bool> restore(HiddenLocalMusicTrack record, bool Function() active) =>

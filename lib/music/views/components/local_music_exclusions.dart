@@ -13,6 +13,7 @@ Future<void> showLocalMusicExclusions(
   await _showSheet<void>(context, library, profile, locals.localMusicExclusions,
       (context) {
     final folders = library.exclusionFolders;
+    final included = library.inclusionFolders;
     final excluded = folders.where(library.isFolderExcluded);
     return ListView(
       shrinkWrap: true,
@@ -26,11 +27,33 @@ Future<void> showLocalMusicExclusions(
               profile, () => library.setExcludeRecordings(value)),
         ),
         ListTile(
+          leading: const Icon(Icons.folder_open_outlined),
+          title: Text(locals.localMusicIncludeFolder),
+          subtitle: Text(locals.localMusicIncludeFolderDescription),
+          onTap: folders.any((folder) => !library.isFolderIncluded(folder))
+              ? () => _chooseFolder(context, library, profile, include: true)
+              : null,
+        ),
+        if (included.isNotEmpty)
+          ListTile(
+            title: Semantics(
+                header: true, child: Text(locals.localMusicIncludedFolders)),
+          ),
+        for (final folder in included)
+          _folderRule(
+            locals,
+            folder,
+            tooltip:
+                locals.localMusicRemoveFolderInclusionTooltip(folder.label),
+            onRemove: () => updateLocalMusicExclusions(context, library,
+                profile, () => library.setFolderIncluded(folder, false)),
+          ),
+        ListTile(
           leading: const Icon(Icons.folder_off_outlined),
           title: Text(locals.localMusicExcludeFolder),
           subtitle: Text(locals.localMusicExcludeFolderDescription),
           onTap: folders.any((folder) => !library.isFolderExcluded(folder))
-              ? () => _chooseFolder(context, library, profile)
+              ? () => _chooseFolder(context, library, profile, include: false)
               : null,
         ),
         if (excluded.isNotEmpty)
@@ -39,18 +62,13 @@ Future<void> showLocalMusicExclusions(
                 header: true, child: Text(locals.localMusicExcludedFolders)),
           ),
         for (final folder in excluded)
-          ListTile(
-            key: ValueKey(folder.key),
-            title: Text(folder.label),
-            trailing: Tooltip(
-              message:
-                  locals.localMusicRemoveFolderExclusionTooltip(folder.label),
-              child: TextButton(
-                onPressed: () => updateLocalMusicExclusions(context, library,
-                    profile, () => library.setFolderExcluded(folder, false)),
-                child: Text(locals.localMusicRemoveFolderExclusion),
-              ),
-            ),
+          _folderRule(
+            locals,
+            folder,
+            tooltip:
+                locals.localMusicRemoveFolderExclusionTooltip(folder.label),
+            onRemove: () => updateLocalMusicExclusions(context, library,
+                profile, () => library.setFolderExcluded(folder, false)),
           ),
         ListTile(
           leading: const Icon(Icons.visibility_off_outlined),
@@ -63,13 +81,33 @@ Future<void> showLocalMusicExclusions(
   });
 }
 
+Widget _folderRule(AppLocalizations locals, LocalMusicFolderLocation folder,
+    {required String tooltip, required VoidCallback onRemove}) {
+  return ListTile(
+    key: ValueKey((folder.key, tooltip)),
+    title: Text(folder.label),
+    trailing: Tooltip(
+      message: tooltip,
+      child: TextButton(
+        onPressed: onRemove,
+        child: Text(locals.localMusicRemoveFolderExclusion),
+      ),
+    ),
+  );
+}
+
 Future<void> _chooseFolder(
-    BuildContext context, LocalMusicLibrary library, Object? profile) async {
+    BuildContext context, LocalMusicLibrary library, Object? profile,
+    {required bool include}) async {
   final locals = AppLocalizations.of(context)!;
+  final title =
+      include ? locals.localMusicIncludeFolder : locals.localMusicExcludeFolder;
+  final configured =
+      include ? library.isFolderIncluded : library.isFolderExcluded;
   final picked = await _showSheet<LocalMusicFolderLocation>(
-      context, library, profile, locals.localMusicExcludeFolder, (context) {
+      context, library, profile, title, (context) {
     final options = library.exclusionFolders
-        .where((folder) => !library.isFolderExcluded(folder))
+        .where((folder) => !configured(folder))
         .toList(growable: false);
     if (options.isEmpty) {
       return ListTile(title: Text(locals.localMusicNoIndexedFolders));
@@ -90,7 +128,12 @@ Future<void> _chooseFolder(
   });
   if (picked == null || !context.mounted) return;
   await updateLocalMusicExclusions(
-      context, library, profile, () => library.setFolderExcluded(picked, true));
+      context,
+      library,
+      profile,
+      () => include
+          ? library.setFolderIncluded(picked, true)
+          : library.setFolderExcluded(picked, true));
 }
 
 Future<void> _showExcludedFiles(
@@ -119,6 +162,8 @@ Future<void> _showExcludedFiles(
             locals.localMusicRecordingReason,
           if (track.folderLocations.any(library.isFolderExcluded))
             locals.localMusicFolderReason,
+          if (library.isExcludedByInclusion(track))
+            locals.localMusicOutsideIncludedFolders,
         ].join(' • ');
         return ListTile(
           key: ValueKey(track.playbackId),

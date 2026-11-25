@@ -7,14 +7,16 @@ import '../../downloads/services/download_rename.dart';
 import '../../downloads/services/download_storage.dart';
 import '../../globals.dart';
 import '../../utils/interfaces/db.dart';
+import '../models/local_music_root.dart';
 import '../models/local_music_track.dart';
 import 'local_music_visibility.dart';
 
+export '../models/local_music_root.dart';
 export 'local_music_visibility.dart' show HiddenLocalMusicTrack;
 
-typedef _SelectedFolder = ({Uri uri, String name, String? selectionId});
+typedef _Selection = ({List<LocalMusicRoot> roots, String? id});
 
-/// Library for the Android music source the listener has approved.
+/// Library for the Android music sources the listener has approved.
 class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   static final instance = LocalMusicLibrary(visibilityDatabase: () => db);
   static const _channel =
@@ -27,38 +29,50 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
 
   final IDbClient Function()? _visibilityDatabase;
   LocalMusicVisibility? _profileVisibility;
-  _SelectedFolder? _folder;
+  _Selection _selection = (roots: const [], id: null);
+  bool _usesMultipleRoots = false;
+  final _unavailableRoots = <Uri>{};
+  final _rootRevisions = <Uri, int>{};
+  final _loadedRoots = <Uri>{};
+  final _tracksByRoot = <Uri, Map<String, LocalMusicTrack>>{};
   List<LocalMusicTrack> _tracks = const [];
   Map<String, LocalMusicTrack> _byId = const {};
   Map<String, LocalMusicTrack> _byVisibilityKey = const {};
-  Set<String> _uris = const {};
+  Map<String, LocalMusicTrack> _representativeByUri = const {};
+  Map<(String, String), List<LocalMusicTrack>> _documents = const {};
   Future<void>? _initialization;
   Future<bool>? _choosing;
   Future<dynamic>? _picker;
   Future<void>? _scanning;
+  Future<bool>? _removing;
   Future<bool>? _renaming;
   Future<void> _downloadRenameSync = Future.value();
   Future<void>? _disabling;
   int _revision = 0;
-  bool _loaded = false;
-  bool _unavailable = false;
   bool _disposed = false;
   String? _error;
 
-  bool get enabled => _folder != null;
+  List<LocalMusicRoot> get roots => _selection.roots;
+  bool get enabled => roots.isNotEmpty;
   bool get busy =>
-      _choosing != null || scanning || _renaming != null || _disabling != null;
+      _choosing != null ||
+      scanning ||
+      _renaming != null ||
+      _removing != null ||
+      _disabling != null;
   bool get scanning => _scanning != null;
-  bool get loaded => _loaded;
-  bool get unavailable => _unavailable;
-  bool get isSystem => _folder?.uri == LocalMusicTrack.systemSource;
-  String? get folderName => _folder?.name;
-  String? get selectionId => _folder?.selectionId;
+  bool get loaded => _loadedRoots.isNotEmpty;
+  bool get unavailable => enabled && roots.every(isRootUnavailable);
+  bool isRootUnavailable(LocalMusicRoot root) =>
+      _unavailableRoots.contains(root.uri);
+  bool get isSystem => roots.length == 1 && roots.single.isSystem;
+  String? get folderName => roots.firstOrNull?.name;
+  String? get selectionId => _selection.id;
   bool acceptsSessionSelection(String? id) =>
       enabled && !unavailable && id == selectionId;
   String? get error => _error;
   List<LocalMusicTrack> get tracks => _tracks;
-  bool containsUri(String uri) => _uris.contains(uri);
+  bool containsUri(String uri) => _representativeByUri.containsKey(uri);
   LocalMusicTrack? trackById(String id) => _byId[id];
 
   LocalMusicVisibility? get _visibility {
@@ -67,14 +81,33 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     final owner = (database: database, profileId: database.profileId);
     final current = _profileVisibility;
     if (current?.owner == owner) return current;
-    return _profileVisibility = LocalMusicVisibility(owner);
+    return _profileVisibility = LocalMusicVisibility(owner, _copies);
   }
+
+  Iterable<LocalMusicTrack> _copies(LocalMusicTrack track) =>
+      _documents[track.documentIdentity] ?? [track];
 
   Object? get visibilityProfile => _visibility?.owner;
 
   /// Session publication refreshes listeners even if the device source stayed
   /// the same across a profile switch.
-  void visibilityProfileChanged() => _notify();
+  void visibilityProfileChanged() {
+    _notify();
+    unawaited(_rememberDocumentProofs());
+  }
+
+  Future<void> _rememberDocumentProofs() async {
+    final visibility = _visibility;
+    if (visibility == null || _byVisibilityKey.isEmpty) return;
+    try {
+      await visibility.rememberDocumentProofs(() =>
+          !_disposed && identical(_visibility, visibility)
+              ? _byVisibilityKey
+              : const {});
+    } on Exception {
+      // The original, tree-scoped hide remains in force if saving fails.
+    }
+  }
 
   List<LocalMusicTrack> get visibleTracks =>
       _visibility?.visible(_tracks) ?? _tracks;
@@ -94,12 +127,16 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   List<LocalMusicTrack> get excludedTracks =>
       _visibility?.excluded(_tracks) ?? const [];
 
+  List<LocalMusicFolderLocation> get inclusionFolders => List.unmodifiable(
+      _visibility?.savedInclusions ?? const <LocalMusicFolderLocation>[]);
+
   List<LocalMusicFolderLocation> get exclusionFolders {
     final folders = {
       for (final folder
           in _visibility?.savedFolders ?? const <LocalMusicFolderLocation>[])
         folder.key: folder,
-      for (final track in _tracks)
+      for (final folder in inclusionFolders) folder.key: folder,
+      for (final track in _byId.values)
         for (final folder in track.folderLocations) folder.key: folder,
     }.values.toList();
     return folders
@@ -109,6 +146,12 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
 
   bool isFolderExcluded(LocalMusicFolderLocation folder) =>
       _visibility?.isFolderExcluded(folder.key) ?? false;
+
+  bool isFolderIncluded(LocalMusicFolderLocation folder) =>
+      _visibility?.isFolderIncluded(folder.key) ?? false;
+
+  bool isExcludedByInclusion(LocalMusicTrack track) =>
+      _visibility?.isExcludedByInclusion(track) ?? false;
 
   bool hasExclusionOverride(LocalMusicTrack track) =>
       _visibility?.hasOverride(track) ?? false;
@@ -123,13 +166,15 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<bool> setFolderExcluded(LocalMusicFolderLocation folder, bool value) =>
       _changeExclusion((visibility, active) => visibility.setFolderExcluded(
-          folder,
-          value,
-          () =>
-              active() &&
-              (!value ||
-                  _tracks.any((track) => track.folderLocations
-                      .any((candidate) => candidate.key == folder.key)))));
+          folder, value, () => active() && (!value || _hasFolder(folder))));
+
+  Future<bool> setFolderIncluded(LocalMusicFolderLocation folder, bool value) =>
+      _changeExclusion((visibility, active) => visibility.setFolderIncluded(
+          folder, value, () => active() && (!value || _hasFolder(folder))));
+
+  bool _hasFolder(LocalMusicFolderLocation folder) =>
+      _byId.values.any((track) => track.folderLocations
+          .any((candidate) => candidate.key == folder.key));
 
   Future<bool> setExclusionOverride(LocalMusicTrack track, bool value) =>
       _changeExclusion((visibility, active) => visibility.setOverride(
@@ -150,7 +195,7 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     final visibility = _visibility;
     return visibility != null &&
         _eligibleForHiding(track) != null &&
-        !visibility.contains(track.visibilityKey);
+        !visibility.isHidden(track);
   }
 
   LocalMusicTrack? _eligibleForHiding(LocalMusicTrack track) {
@@ -160,6 +205,7 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
             !unavailable &&
             _choosing == null &&
             _renaming == null &&
+            _removing == null &&
             _disabling == null &&
             track.visibilityKey != null &&
             current?.visibilityKey == track.visibilityKey
@@ -210,10 +256,9 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   Future<Map<String, List<LocalMusicTrack>>?> verifiedDownloadAliases(
       List<MusicFileProbe> files,
       {bool Function()? isCurrent}) async {
-    final folder = _folder;
-    if (folder == null ||
-        !acceptsSessionSelection(folder.selectionId) ||
-        !_loaded ||
+    final selection = _selection;
+    if (!acceptsSessionSelection(selection.id) ||
+        !loaded ||
         scanning ||
         isCurrent?.call() == false) {
       return null;
@@ -224,38 +269,41 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
         .toList(growable: false);
     if (documents.isEmpty || snapshot.isEmpty) return {};
 
-    final indexed = {for (final track in snapshot) track.uri: track};
-    final matches = <String, List<LocalMusicTrack>>{};
+    final indexed = _representativeByUri;
+    final matches = <String, Set<LocalMusicTrack>>{};
     try {
-      for (var start = 0; start < documents.length; start += 64) {
-        final result = await _channel
-            .invokeMapMethod<String, dynamic>('matchDownloadTracks', {
-          'treeUri': folder.uri.toString(),
-          'selectionId': folder.selectionId,
-          'files': [
-            for (final file in documents.skip(start).take(64))
-              {
-                'key': file.download.videoId,
-                'uri': file.uri,
-                'folderUri': file.download.folderUri,
-                'identity': file.identity,
-                'byteLength': file.byteLength,
-              },
-          ],
-        });
-        if (result == null ||
-            !identical(_folder, folder) ||
-            !identical(snapshot, _tracks) ||
-            !acceptsSessionSelection(folder.selectionId) ||
-            isCurrent?.call() == false) {
-          return null;
-        }
-        for (final entry in result.entries) {
-          if (entry.value is! List) continue;
-          matches[entry.key] = [
-            for (final uri in entry.value as List)
-              if (indexed[uri] case final track?) track,
-          ];
+      for (final root in selection.roots.where((r) => !isRootUnavailable(r))) {
+        if (!_loadedRoots.contains(root.uri)) return null;
+        for (var start = 0; start < documents.length; start += 64) {
+          final result = await _channel
+              .invokeMapMethod<String, dynamic>('matchDownloadTracks', {
+            'treeUri': root.uri.toString(),
+            'selectionId': root.selectionId,
+            'files': [
+              for (final file in documents.skip(start).take(64))
+                {
+                  'key': file.download.videoId,
+                  'uri': file.uri,
+                  'folderUri': file.download.folderUri,
+                  'identity': file.identity,
+                  'byteLength': file.byteLength,
+                },
+            ],
+          });
+          if (result == null ||
+              !identical(selection.roots, roots) ||
+              !identical(snapshot, _tracks) ||
+              !acceptsSessionSelection(selection.id) ||
+              isCurrent?.call() == false) {
+            return null;
+          }
+          for (final entry in result.entries) {
+            if (entry.value is! List) continue;
+            matches.putIfAbsent(entry.key, () => {}).addAll([
+              for (final uri in entry.value as List)
+                if (indexed[uri] case final track?) track,
+            ]);
+          }
         }
       }
     } on PlatformException {
@@ -263,7 +311,9 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     } on MissingPluginException {
       return null;
     }
-    return matches;
+    return {
+      for (final entry in matches.entries) entry.key: entry.value.toList()
+    };
   }
 
   Future<bool> restoreTrack(HiddenLocalMusicTrack record) async {
@@ -283,8 +333,10 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     final revision = _revision;
     try {
-      final folder = await _readFolder();
-      if (_revision == revision && _disabling == null) _folder = folder;
+      final selection = await _readSelection();
+      if (_revision == revision && _disabling == null) {
+        _applySelection(selection);
+      }
     } catch (e) {
       if (_revision == revision) _recordError(e);
     } finally {
@@ -293,8 +345,8 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     unawaited(_reconcileDownloadRenames());
   }
 
-  Future<_SelectedFolder?> _readFolder() async =>
-      _parseFolder(await _channel.invokeMethod<dynamic>('getFolder'));
+  Future<_Selection> _readSelection() async =>
+      _parseSelection(await _channel.invokeMethod<dynamic>('getFolder'));
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -302,7 +354,7 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Android can revoke a grant while the Activity is in the background.
-  /// A negative result invalidates scans and notifies the active audio player.
+  /// A negative result removes this root's tracks and notifies the player.
   Future<void> revalidate() async {
     final picker = _picker;
     if (picker != null) {
@@ -312,44 +364,67 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
         // If the chooser failed, the previous source still needs checking.
       }
     }
-    final folder = _folder;
-    if (_disposed || folder == null || _disabling != null) {
+    if (_disposed || !enabled || _removing != null || _disabling != null) {
       return;
     }
     final revision = _revision;
+    await Future.wait(roots.map((root) => _revalidateRoot(root, revision)));
+  }
+
+  Future<void> _revalidateRoot(LocalMusicRoot root, int revision) async {
     bool? available;
     try {
       available = await _channel.invokeMethod<bool>(
-          'checkFolderAccess', {'treeUri': folder.uri.toString()});
+          'checkFolderAccess', {'treeUri': root.uri.toString()});
     } on PlatformException {
       return;
     } on MissingPluginException {
       return;
     }
-    if (available == null || _revision != revision || _disposed) return;
+    if (available == null || !_current(revision)) return;
     if (available) {
-      if (_unavailable) {
-        _unavailable = false;
-        _error = null;
+      if (_unavailableRoots.remove(root.uri)) {
+        if (_error == 'FOLDER_UNAVAILABLE') _error = null;
         _notify();
       }
       return;
     }
-    if (_unavailable) return;
     if (_picker != null) {
-      // The pending picker may replace this tree or leave its grant unchanged.
+      // The pending picker may reconnect this tree.
       await revalidate();
       return;
     }
-    ++_revision;
-    _clearTracks();
-    _unavailable = true;
-    _error = 'FOLDER_UNAVAILABLE';
+    _loseAccess(root);
+  }
+
+  bool _current(int revision) => _revision == revision && !_disposed;
+
+  void _loseAccess(LocalMusicRoot root) {
+    if (!_unavailableRoots.add(root.uri)) return;
+    _rootRevisions.update(root.uri, (value) => value + 1, ifAbsent: () => 1);
+    _loadedRoots.remove(root.uri);
+    _tracksByRoot.remove(root.uri);
+    if (unavailable) _error = 'FOLDER_UNAVAILABLE';
+    _publish();
     _notify();
   }
 
-  static _SelectedFolder? _parseFolder(dynamic result) {
-    if (result == null) return null;
+  _Selection _parseSelection(dynamic result) {
+    if (result == null) return (roots: const [], id: null);
+    if (result is Map && result['roots'] is List) {
+      final selected = (result['roots'] as List).map(_parseRoot).toList();
+      if (selected.map((root) => root.uri).toSet().length != selected.length) {
+        throw const FormatException('Duplicate local music location');
+      }
+      final id = result['selectionId'] as String?;
+      _usesMultipleRoots = true;
+      return (roots: List.unmodifiable(selected), id: id);
+    }
+    final root = _parseRoot(result);
+    return (roots: List.unmodifiable([root]), id: root.selectionId);
+  }
+
+  static LocalMusicRoot _parseRoot(dynamic result) {
     if (result is Map && result['uri'] is String && result['name'] is String) {
       final uri = Uri.tryParse(result['uri'] as String);
       if (uri != null &&
@@ -361,24 +436,47 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
               (uri.pathSegments.length == 2 &&
                   uri.pathSegments.first == 'tree' &&
                   uri.pathSegments.last.isNotEmpty))) {
-        return (
+        return LocalMusicRoot(
           uri: uri,
           name: result['name'] as String,
-          selectionId: result['selectionId'] as String?
+          selectionId: result['selectionId'] as String?,
+          needsReapproval: result['needsReapproval'] == true,
         );
       }
     }
     throw const FormatException('Invalid local music folder');
   }
 
-  Future<bool> chooseFolder() => _select('pickFolder');
+  void _applySelection(_Selection selection) {
+    final previous = {for (final root in roots) root.uri: root};
+    final retained = {
+      for (final root in selection.roots)
+        if (previous[root.uri]?.selectionId == root.selectionId &&
+            !root.needsReapproval)
+          root.uri,
+    };
+    _loadedRoots.retainAll(retained);
+    _tracksByRoot.removeWhere((uri, _) => !retained.contains(uri));
+    _unavailableRoots
+      ..clear()
+      ..addAll(selection.roots
+          .where((root) => root.needsReapproval)
+          .map((root) => root.uri));
+    _selection = selection;
+    _publish();
+  }
+
+  Future<bool> chooseFolder({LocalMusicRoot? reconnect}) =>
+      _select('pickFolder', initialUri: reconnect?.uri);
   Future<bool> chooseSystem() => _select('pickSystem');
 
-  /// Cancellation leaves the previous source and its tracks intact.
-  Future<bool> _select(String method) {
-    if (_disabling != null || _renaming != null) return Future.value(false);
+  /// Cancellation leaves the approved sources and their tracks intact.
+  Future<bool> _select(String method, {Uri? initialUri}) {
+    if (_disabling != null || _renaming != null || _removing != null) {
+      return Future.value(false);
+    }
     if (_choosing != null) return _choosing!;
-    final result = _choosing = _choose(method).whenComplete(() {
+    final result = _choosing = _choose(method, initialUri).whenComplete(() {
       _choosing = null;
       _notify();
     });
@@ -386,26 +484,22 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     return result;
   }
 
-  Future<bool> _choose(String method) async {
+  Future<bool> _choose(String method, Uri? initialUri) async {
     final revision = _revision;
     await initialize();
-    if (_revision != revision) return false;
+    if (!_current(revision)) return false;
     try {
+      final folder = roots.where((root) => !root.isSystem).firstOrNull;
       _picker = _channel.invokeMethod<dynamic>(
-          method, {'initialUri': isSystem ? null : _folder?.uri.toString()});
-      final selection = _parseFolder(await _picker);
+          method, {'initialUri': (initialUri ?? folder?.uri)?.toString()});
+      final result = await _picker;
       _picker = null;
-      if (_revision != revision || selection == null) return false;
-      if (selection.uri != _folder?.uri ||
-          selection.selectionId != selectionId) {
-        _clearTracks();
-      }
-      _folder = selection;
+      if (!_current(revision) || result == null) return false;
+      _applySelection(_parseSelection(result));
       _error = null;
-      _unavailable = false;
       final newRevision = ++_revision;
-      await _startScan(selection, newRevision);
-      return _revision == newRevision;
+      await _startScan(newRevision);
+      return _current(newRevision);
     } catch (e) {
       _picker = null;
       if (_revision == revision) _recordError(e);
@@ -415,18 +509,22 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> refresh() async {
     await initialize();
-    final folder = _folder;
-    if (folder == null || _disabling != null || _renaming != null) return;
+    if (!enabled ||
+        _disabling != null ||
+        _renaming != null ||
+        _removing != null) {
+      return;
+    }
     if (_choosing != null) {
       await _choosing;
       return;
     }
     if (_scanning != null) return _scanning;
-    await _startScan(folder, _revision);
+    await _startScan(_revision);
   }
 
-  Future<void> _startScan(_SelectedFolder folder, int revision) async {
-    final scan = _scanning = _scan(folder, revision);
+  Future<void> _startScan(int revision) async {
+    final scan = _scanning = _scanRoots(revision);
     _notify();
     try {
       await scan;
@@ -460,34 +558,50 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _scan(_SelectedFolder folder, int revision) async {
+  Future<void> _scanRoots(int revision) async {
+    if (!unavailable) _error = null;
+    for (final root in roots) {
+      if (!_current(revision)) return;
+      if (!isRootUnavailable(root)) await _scan(root, revision);
+    }
+    if (_current(revision)) {
+      unawaited(_rememberDocumentProofs());
+      unawaited(_reconcileDownloadRenames());
+    }
+  }
+
+  Future<void> _scan(LocalMusicRoot root, int revision) async {
+    final rootRevision = _rootRevisions[root.uri];
+    bool active() =>
+        _current(revision) && _rootRevisions[root.uri] == rootRevision;
     final scanId = ++_nextScanId;
     _channel.setMethodCallHandler(_handleNativeCall);
     _batchCallbacks[scanId] = (documents) {
-      if (_revision != revision || _disposed) return;
-      final merged = Map.of(_byId);
-      _collectTracks(documents, folder.uri, merged);
-      _publish(merged);
+      if (!active()) return;
+      final merged =
+          Map<String, LocalMusicTrack>.of(_tracksByRoot[root.uri] ?? const {});
+      _collectTracks(documents, root.uri, merged);
+      _tracksByRoot[root.uri] = merged;
+      _publish();
       _notify();
     };
     try {
       final documents = await _channel.invokeListMethod<dynamic>(
-          'listTracks', {'treeUri': folder.uri.toString(), 'scanId': scanId});
-      if (_revision != revision || _disposed) return;
+          'listTracks', {'treeUri': root.uri.toString(), 'scanId': scanId});
+      if (!active()) return;
       if (documents == null) throw const FormatException('No scan result');
       final tracks = <String, LocalMusicTrack>{};
-      _collectTracks(documents, folder.uri, tracks);
-      _publish(tracks);
-      _loaded = true;
-      _error = null;
-      _unavailable = false;
-      unawaited(_reconcileDownloadRenames());
+      _collectTracks(documents, root.uri, tracks);
+      _tracksByRoot[root.uri] = tracks;
+      _loadedRoots.add(root.uri);
+      _publish();
+      _notify();
     } catch (e) {
-      if (_revision != revision) return;
-      _recordError(e);
-      if (_error == 'FOLDER_UNAVAILABLE') {
-        _clearTracks();
-        _unavailable = true;
+      if (!active()) return;
+      if (e is PlatformException && e.code == 'FOLDER_UNAVAILABLE') {
+        _loseAccess(root);
+      } else {
+        _recordError(e);
       }
     } finally {
       _batchCallbacks.remove(scanId);
@@ -509,24 +623,49 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  void _publish(Map<String, LocalMusicTrack> tracks) {
-    _byId = tracks;
-    _tracks = List.unmodifiable(tracks.values);
-    _byVisibilityKey = {
-      for (final track in _tracks)
-        if (track.visibilityKey case final String key) key: track,
+  void _publish() {
+    final tracks = {
+      for (final root in roots) ...?_tracksByRoot[root.uri],
     };
-    _uris = _tracks.map((track) => track.uri).toSet();
+    final displayed = <LocalMusicTrack>[];
+    final byUri = <String, LocalMusicTrack>{};
+    final documents = <(String, String), List<LocalMusicTrack>>{};
+    for (final track in tracks.values) {
+      final identity = track.documentIdentity;
+      if (identity == null) {
+        displayed.add(track);
+        byUri[track.uri] = track;
+      } else {
+        final copies = documents.putIfAbsent(identity, () {
+          displayed.add(track);
+          return [];
+        });
+        copies.add(track);
+        byUri[track.uri] = copies.first;
+      }
+    }
+    _byId = tracks;
+    _tracks = List.unmodifiable(displayed);
+    _documents = documents;
+    _representativeByUri = byUri;
+    _byVisibilityKey = {
+      for (final track in tracks.values) ...{
+        if (track.visibilityKey case final String key) key: track,
+        if (track.documentVisibilityKey case final String key) key: track,
+      },
+    };
   }
 
   Future<bool> renameTrack(LocalMusicTrack track, String fullName) async {
-    final folder = _folder;
     final current = _byId[track.playbackId];
-    if (folder == null || current == null || !current.canRename || busy) {
+    if (current == null || !current.canRename || busy) {
       return false;
     }
+    final root =
+        roots.where((root) => root.uri == current.sourceUri).firstOrNull;
+    if (root == null || isRootUnavailable(root)) return false;
     final revision = _revision;
-    final rename = _renaming = _rename(folder, current, fullName, revision);
+    final rename = _renaming = _rename(root, current, fullName, revision);
     _notify();
     try {
       return await rename;
@@ -536,26 +675,34 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<bool> _rename(_SelectedFolder folder, LocalMusicTrack current,
+  Future<bool> _rename(LocalMusicRoot root, LocalMusicTrack current,
       String name, int revision) async {
     _error = null;
     try {
       final result = await _channel.invokeMethod<dynamic>('renameTrack', {
-        'treeUri': folder.uri.toString(),
+        'treeUri': root.uri.toString(),
         'uri': current.uri,
         'name': name,
       });
       if (result == null) return false;
       final reconcile = _reconcileDownloadRenames();
-      if (_disposed || _revision != revision) {
+      if (!_current(revision) || isRootUnavailable(root)) {
         await reconcile;
         return false;
       }
-      final track = LocalMusicTrack.fromDocument(result, folder.uri);
+      final track = LocalMusicTrack.fromDocument(result, root.uri);
       if (track == null || track.playbackId != current.playbackId) {
         throw const FormatException('Invalid rename result');
       }
-      _publish({..._byId, track.playbackId: track});
+      if (track.uri != current.uri) {
+        for (final copy in _copies(current)) {
+          if (copy.sourceUri != root.uri) {
+            _tracksByRoot[copy.sourceUri]?.remove(copy.playbackId);
+          }
+        }
+      }
+      _tracksByRoot[root.uri]?[track.playbackId] = track;
+      _publish();
       _notify();
       await reconcile;
       return true;
@@ -593,14 +740,53 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  /// Forget one grant while keeping the other locations and their tracks.
+  Future<bool> removeRoot(LocalMusicRoot root) {
+    if (!roots.contains(root) ||
+        _choosing != null ||
+        _renaming != null ||
+        _disabling != null ||
+        _removing != null) {
+      return Future.value(false);
+    }
+    if (!_usesMultipleRoots) return disable().then((_) => error == null);
+    final result = _removing = _remove(root).whenComplete(() {
+      _removing = null;
+      _notify();
+    });
+    _notify();
+    return result;
+  }
+
+  Future<bool> _remove(LocalMusicRoot root) async {
+    final revision = _revision;
+    try {
+      await _rememberDocumentProofs();
+      if (!_current(revision)) return false;
+      final result = await _channel.invokeMethod<dynamic>(
+          'forgetFolder', {'treeUri': root.uri.toString()});
+      if (!_current(revision)) return false;
+      final selection = _parseSelection(result);
+      if (selection.roots.any((selected) => selected.uri == root.uri)) {
+        throw const FormatException('Music location was not removed');
+      }
+      ++_revision;
+      _applySelection(selection);
+      _error = unavailable ? 'FOLDER_UNAVAILABLE' : null;
+      if (scanning) await _startScan(_revision);
+      return true;
+    } catch (error) {
+      if (_current(revision)) _recordError(error);
+      return false;
+    }
+  }
+
   /// Drop membership before waiting on a picker, scan or Android grant release.
   Future<void> disable() {
     if (_disabling != null) return _disabling!;
     ++_revision;
-    _folder = null;
-    _clearTracks();
+    _applySelection((roots: const [], id: null));
     _error = null;
-    _unavailable = false;
     final result = _disabling = _forget().whenComplete(() {
       _disabling = null;
       _notify();
@@ -611,28 +797,26 @@ class LocalMusicLibrary extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _forget() async {
     try {
+      if (_usesMultipleRoots) {
+        await _channel.invokeMethod<void>('forgetFolders');
+        return;
+      }
       // A picker can finish after opt-out and already hold a new native grant.
       try {
         await _picker;
       } on PlatformException {
         // The old grant may still exist when the pending picker failed.
       }
-      final saved = await _readFolder();
-      if (saved != null) {
+      final saved = await _readSelection();
+      if (_usesMultipleRoots) {
+        await _channel.invokeMethod<void>('forgetFolders');
+      } else if (saved.roots.isNotEmpty) {
         await _channel.invokeMethod<void>(
-            'forgetFolder', {'treeUri': saved.uri.toString()});
+            'forgetFolder', {'treeUri': saved.roots.single.uri.toString()});
       }
     } catch (e) {
       _recordError(e);
     }
-  }
-
-  void _clearTracks() {
-    _tracks = const [];
-    _byId = const {};
-    _byVisibilityKey = const {};
-    _uris = const {};
-    _loaded = false;
   }
 
   void _recordError(Object e) {
