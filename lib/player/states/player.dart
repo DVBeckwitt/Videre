@@ -5805,6 +5805,7 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
     final deviceEntries =
         videos.where((video) => isLocalMusicPlaybackId(video.videoId));
     final loader = _playsOnlyTappedSong(songTap) ? null : playlistLoader;
+    int? boundGeneration;
     loader?.retain();
     try {
       await _playVideos(videos,
@@ -5831,10 +5832,14 @@ class PlayerCubit extends Cubit<PlayerState> with WidgetsBindingObserver {
                         .where((v) => !isLocalMusicPlaybackId(v.videoId))
                         .toList(),
                 loader: loader);
+            boundGeneration = _playlistGeneration;
           });
-      if (loader != null && identical(_loader, loader)) {
+      final generation = boundGeneration;
+      if (generation != null &&
+          loader != null &&
+          identical(_playlistLoader, loader)) {
         appendPlaylistVideos(loader.playlist.videos,
-            reference: reference, generation: _playlistGeneration);
+            reference: reference, generation: generation);
       }
     } finally {
       loader?.release();

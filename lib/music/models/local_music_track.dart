@@ -58,7 +58,6 @@ class LocalMusicTrack {
   /// Private cached image from the same permitted folder as this track.
   final String? adjacentArtPath;
   final String? fileName;
-  final int? sizeBytes;
   final DateTime? dateAdded;
   final DateTime? dateModified;
   final bool firstSeen;
@@ -100,7 +99,6 @@ class LocalMusicTrack {
     this.artPath,
     this.adjacentArtPath,
     this.fileName,
-    this.sizeBytes,
     this.dateAdded,
     this.dateModified,
     this.firstSeen = false,
@@ -151,7 +149,6 @@ class LocalMusicTrack {
     final art = value['artPath'];
     final adjacentArt = value['adjacentArtPath'];
     final name = value['fileName'];
-    final size = value['sizeBytes'];
     final albumKey = value['albumKey'];
     final genre = value['genre'];
     final visibilityKey = value['visibilityKey'];
@@ -200,7 +197,6 @@ class LocalMusicTrack {
           ? adjacentArt
           : null,
       fileName: name is String && name.isNotEmpty ? name : null,
-      sizeBytes: size is int && size > 0 ? size : null,
       dateAdded: _date(value['addedMs']),
       dateModified: _date(value['modifiedMs']),
       firstSeen: value['firstSeen'] == true,
